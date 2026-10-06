@@ -34,8 +34,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from pydantic import BaseModel
 
 from modulo.api.constants import MSG_NOT_FOUND
+from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.stripe_fulfilment import fulfil_team_purchase
 from modulo.core.trigger_engine import TimestampExpiredError, verify_timestamp
+from modulo.db.models.organisation import ORPHAN_ORG_ID
 from modulo.settings import Settings, get_settings
 
 _log = logging.getLogger(__name__)
@@ -127,7 +129,23 @@ def _extract_customer(event: dict[str, Any]) -> tuple[str | None, str]:
     return email, org_name
 
 
-@router.post("/stripe")
+# FAR-1516: signature-verified ingress with no tenant at the request boundary
+# (the org is resolved later, inside the fulfilment background task), so the
+# receipt is recorded with a SYSTEM actor under the orphan org. The org is
+# published only AFTER the signature verifies — an event must never claim
+# signature_verified for a request that failed verification.
+@router.post(
+    "/stripe",
+    dependencies=[
+        Depends(
+            audited_system(
+                "stripe_webhook_received",
+                "stripe_event",
+                actor_source="signature_verified",
+            )
+        )
+    ],
+)
 async def stripe_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -144,6 +162,7 @@ async def stripe_webhook(
     if not verify_stripe_signature(settings.stripe_webhook_secret, signature_header, raw_body):
         _log.warning("stripe.webhook.invalid_signature")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid signature")
+    bind_audit_org(request, ORPHAN_ORG_ID)
 
     try:
         event = json.loads(raw_body)

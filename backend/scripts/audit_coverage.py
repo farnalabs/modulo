@@ -34,8 +34,9 @@ BASELINE_PATH = BACKEND_DIR / "tests" / "architecture" / "audit_coverage_baselin
 #: HTTP methods that mutate state (``GET``/``HEAD``/``OPTIONS`` never do).
 MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
 
-#: The dependency factory from ``modulo.core.audit_coverage``.
-AUDITED_CALL_NAME = "audited"
+#: The dependency factories from ``modulo.core.audit_coverage`` that count as
+#: an audit annotation: the principal-bound one and its actor-less variant.
+AUDITED_CALL_NAMES = frozenset({"audited", "audited_system"})
 
 _BASELINE_HEADER = """\
 # Audit-coverage baseline: mutating REST routes deliberately left WITHOUT an
@@ -63,7 +64,7 @@ def _called_name(func: ast.expr) -> str | None:
 
 def _mentions_audited(node: ast.AST) -> bool:
     """True when the subtree contains a call to ``audited(...)``."""
-    return any(isinstance(sub, ast.Call) and _called_name(sub.func) == AUDITED_CALL_NAME for sub in ast.walk(node))
+    return any(isinstance(sub, ast.Call) and _called_name(sub.func) in AUDITED_CALL_NAMES for sub in ast.walk(node))
 
 
 def _is_mutating_route_decorator(node: ast.expr) -> bool:

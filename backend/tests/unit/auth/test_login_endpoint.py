@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,10 +17,29 @@ from modulo.api.routes.auth import router as auth_router
 from modulo.api.routes.health import router as health_router
 from modulo.auth.passwords import hash_password
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: the fail-closed ``audited_system(...)`` dependency writes its
+    event on a fresh ``audit_session`` (a real engine — no database in the unit
+    tier), so stub that seam; the dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _override(admin_password: str = "testpass") -> Settings:

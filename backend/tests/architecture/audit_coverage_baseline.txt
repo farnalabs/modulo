@@ -36,10 +36,6 @@ assistant.py:submit_ui_command_results
 assistant.py:undo_last_action
 audit.py:batch_detail_endpoint
 auth.py:accept_invite
-auth.py:demo_login
-auth.py:login
-auth.py:logout
-auth.py:refresh
 composite_templates.py:detect_params_endpoint
 connectors.py:create_connector_endpoint
 connectors.py:delete_connector_endpoint
@@ -70,7 +66,6 @@ error_notification_rules.py:delete_notification_rule
 error_notification_rules.py:update_notification_rule
 errors.py:create_session_key
 errors.py:ingest_errors
-errors.py:ingest_errors_public
 errors.py:patch_error_group
 evals.py:compare_evals
 evals.py:create_eval_dataset
@@ -200,10 +195,6 @@ schemas.py:migration_plan_endpoint
 schemas.py:move_schema_to_folder_endpoint
 schemas.py:update_schema_endpoint
 schemas.py:validate_schema_endpoint
-slack.py:receive_slack_event
-sso.py:saml_acs
-sso.py:saml_acs_provider
-stripe_webhook.py:stripe_webhook
 teams.py:add_member_endpoint
 teams.py:change_member_role_endpoint
 teams.py:create_team_endpoint
@@ -234,5 +225,3 @@ views.py:delete_view_endpoint
 views.py:restore_view_endpoint
 views.py:update_view_endpoint
 webhooks.py:cleanup_expired
-webhooks.py:receive_webhook
-webhooks.py:replay_webhook

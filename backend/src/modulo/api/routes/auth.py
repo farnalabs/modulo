@@ -41,7 +41,7 @@ from modulo.auth.passwords import (
     validate_password_strength,
 )
 from modulo.auth.ws_token import create_ws_token
-from modulo.core.audit_coverage import audited
+from modulo.core.audit_coverage import audited, audited_system, bind_audit_org
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
 from modulo.core.rate_limiter import AuthRateLimiter
@@ -73,7 +73,7 @@ from modulo.db.crud.token_family import (
 from modulo.db.models.account import Account
 from modulo.db.models.invitation import Invitation
 from modulo.db.models.org_membership import OrgMembership
-from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation import ORPHAN_ORG_ID, Organisation
 from modulo.db.models.token_family import TokenFamily
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -491,12 +491,20 @@ def _mint_login_response(ctx: _LoginContext, settings: Settings) -> JSONResponse
     return response
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route —
-# the password is verified inside the handler, so no principal exists when a
-# dependency would resolve, and audited(principal_dep=...) requires one.
-# Covering it needs an actor-less variant of audited() in modulo.core
-# (deliberately out of scope for this sweep).
-@router.post("/login")
+# FAR-1516: PRE-AUTH route — the password is verified inside the handler, so
+# audited(principal_dep=...) has no principal to resolve. The actor-less variant
+# records the attempt with a SYSTEM actor and no fabricated user; the org starts
+# as the unattributed sentinel (no tenant yet) and is rebound to the account's
+# org the moment the login resolves it. A sign-in is a security event -> fail closed.
+@router.post(
+    "/login",
+    dependencies=[
+        Depends(
+            audited_system("login_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors("auth.login")
 async def login(
     req: LoginRequest,
@@ -504,6 +512,7 @@ async def login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
+    bind_audit_org(request, ORPHAN_ORG_ID)
     ip = _client_ip(request)
     limiter = get_auth_rate_limiter(settings)
 
@@ -548,6 +557,10 @@ async def login(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
+    # The account's org is known now — rebind away from the sentinel so the
+    # sign-in event lands in the tenant it belongs to (FAR-1516). A None org
+    # (system admin with no memberships) keeps the sentinel: never fabricate.
+    bind_audit_org(request, ctx.org_id)
     return _mint_login_response(ctx, settings)
 
 
@@ -565,11 +578,19 @@ def _demo_not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
-# browser sends NO credentials, so there is no principal to attribute an event
-# to before the handler resolves the demo account. Same actor-less gap as
-# /auth/login (needs a core audited() variant that records a system actor).
-@router.post("/demo")
+# FAR-1516: PRE-AUTH route — the browser sends NO credentials, so there is no
+# principal to attribute an event to before the handler resolves the demo
+# account. Same actor-less shape as /auth/login: SYSTEM actor, sentinel org
+# until the demo org is known. A sign-in is a security event -> fail closed.
+@router.post(
+    "/demo",
+    dependencies=[
+        Depends(
+            audited_system("demo_login_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",
+        )
+    ],
+)
 @handle_db_errors("auth.demo_login")
 async def demo_login(
     request: Request,
@@ -601,6 +622,9 @@ async def demo_login(
     of /login; the demo abuse cap is the per-IP RateLimitMiddleware rule
     (10/hour, with the process-local token-bucket floor when Redis is absent).
     """
+    # FAR-1516: no tenant exists until the demo org resolves — start with the
+    # unattributed sentinel so the attempt is still recorded.
+    bind_audit_org(request, ORPHAN_ORG_ID)
     config = demo_login_config(settings)
     if config is None:
         raise _demo_not_found()
@@ -642,6 +666,8 @@ async def demo_login(
 
     # Structured audit log for the demo-login event (login's logging pattern);
     # the token itself is minted only after the transaction committed.
+    # FAR-1516: the demo org is known — rebind so the event lands there.
+    bind_audit_org(request, org_id)
     _log.info(
         "auth.demo_login",
         extra={"account_id": str(account.id), "org_id": str(org_id)},
@@ -1127,17 +1153,28 @@ def _mint_refresh_response(
     return response
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
-# refresh token is parsed inside the handler, so there is no principal for
-# audited(principal_dep=...) to resolve before it runs. Actor-less core variant
-# needed to cover token rotation.
-@router.post("/refresh", dependencies=[Depends(_require_csrf_double_submit)])
+# FAR-1516: PRE-AUTH route — the refresh token is parsed inside the handler, so
+# audited(principal_dep=...) has no principal to resolve before it runs. The
+# actor-less variant records the rotation attempt with a SYSTEM actor; the org is
+# the unattributed sentinel until the refresh claims name one. Token refresh is a
+# security event -> fail closed.
+@router.post(
+    "/refresh",
+    dependencies=[
+        Depends(_require_csrf_double_submit),
+        Depends(
+            audited_system("token_refresh_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",
+        ),
+    ],
+)
 @handle_db_errors(_CODE_AUTH_REFRESH)
 async def refresh(
     request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
+    bind_audit_org(request, ORPHAN_ORG_ID)
     cookie_token = request.cookies.get(REFRESH_COOKIE)
     if not cookie_token:
         # The SPA cannot read the httpOnly cookie, so it cannot send the token;
@@ -1149,6 +1186,9 @@ async def refresh(
             detail="Invalid or expired refresh token",
         )
     claims = _parse_refresh_token(cookie_token, settings)
+    # FAR-1516: the token names its org — record the attempt there, not in the
+    # sentinel (an empty claim leaves the sentinel published).
+    bind_audit_org(request, claims.org_id)
 
     try:
         live_org_role, new_sequence, theft_detected, _reuse_replay = await _advance_refresh_sequence(
@@ -1256,16 +1296,27 @@ def _clear_account_session_approvals(claims: dict[str, object]) -> None:
         clear_session_approvals_for_account(account_id_val)
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
-# refresh-cookie identity is established inside the handler, so audited() has no
-# principal to resolve. Actor-less core variant needed to cover session end.
-@router.post("/logout", dependencies=[Depends(_require_csrf_double_submit)])
+# FAR-1516: PRE-AUTH route — the refresh-cookie identity is established inside
+# the handler, so audited() has no principal to resolve. Actor-less variant:
+# SYSTEM actor, sentinel org until the cookie names one. Session end is a
+# security event -> fail closed.
+@router.post(
+    "/logout",
+    dependencies=[
+        Depends(_require_csrf_double_submit),
+        Depends(
+            audited_system("logout_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",
+        ),
+    ],
+)
 @handle_db_errors(_CODE_AUTH_LOGOUT)
 async def logout(
     request: Request,
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_db_session),
 ) -> JSONResponse:
+    bind_audit_org(request, ORPHAN_ORG_ID)
     cookie_token = request.cookies.get(REFRESH_COOKIE)
     if not cookie_token:
         _log.warning("auth.logout_cookie_missing")
@@ -1280,6 +1331,8 @@ async def logout(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         ) from exc
+    org_claim = claims.get("organisation_id")
+    bind_audit_org(request, org_claim if isinstance(org_claim, str) else None)
 
     await _blacklist_refresh_family(session, claims)
     _clear_account_session_approvals(claims)

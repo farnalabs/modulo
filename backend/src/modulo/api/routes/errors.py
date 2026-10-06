@@ -35,6 +35,7 @@ from modulo.api.models.error import (
     SessionKeyResponse,
 )
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
     count_error_events_by_group,
@@ -237,7 +238,15 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
-@router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+# FAR-1516: unauthenticated public ingress — no principal exists, so the
+# actor-less variant records a SYSTEM actor under the orphan org (the same
+# sentinel this route RLS-pins its event writes to: there is no tenant).
+@router.post(
+    "/ingest/public",
+    response_model=ErrorIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited_system("error_ingest_public", "error_event", actor_source="unauthenticated"))],
+)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
 async def ingest_errors_public(
     request: Request,
@@ -256,6 +265,10 @@ async def ingest_errors_public(
       policies), so unattributed frontend errors never leak across tenancy.
     * A future cleanup job will prune events older than 48 hours (TTL).
     """
+    # FAR-1516: this endpoint has no tenant by design — attribute the audit
+    # event to the orphan org so the attempt (413, rate-limit, cap and all)
+    # is still recorded.
+    bind_audit_org(request, ORPHAN_ORG_ID)
     client_ip = request.client.host if request.client else "unknown"
 
     # Body size check

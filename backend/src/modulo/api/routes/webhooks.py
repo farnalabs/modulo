@@ -43,6 +43,7 @@ from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_deliver
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.audit_coverage import audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
@@ -139,6 +140,9 @@ def _bind_webhook_org_context(request: Request, org_id: uuid.UUID) -> None:
     org = str(org_id)
     org_id_var.set(org)
     request.state.organisation_id = org
+    # FAR-1516: the same published org feeds the actor-less audit dependency —
+    # this is the point where a valid trigger has named its tenant.
+    bind_audit_org(request, org_id)
 
 
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
@@ -197,6 +201,10 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
 @router.post(
     "/{trigger_id}/webhook",
     status_code=status.HTTP_202_ACCEPTED,
+    # FAR-1516: HMAC is per-trigger (some triggers are public by design), so the
+    # actor-less variant records a SYSTEM actor as unauthenticated by default and
+    # the handler promotes to signature_verified once the HMAC check passes.
+    dependencies=[Depends(audited_system("webhook_received", "trigger", actor_source="unauthenticated"))],
     responses={
         400: {"description": "Bad request"},
         401: {"description": "Unauthorized"},
@@ -311,6 +319,9 @@ async def receive_webhook(
                 ts = verify_timestamp(modulo_timestamp)
                 if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError
+                # FAR-1516: provenance promotion — this delivery authenticated,
+                # so record signature_verified instead of the default.
+                bind_audit_actor_source(request, "signature_verified")
             else:
                 _log.warning(
                     "webhooks.receive_webhook: unauthenticated delivery accepted "
@@ -602,6 +613,10 @@ async def receive_webhook(
 @router.post(
     "/{trigger_id}/webhook/replay/{event_id}",
     status_code=status.HTTP_202_ACCEPTED,
+    # FAR-1516: replay admits either a tenant principal or an HMAC-signed
+    # caller — default to unauthenticated provenance and let the handler
+    # promote once one of those bases is established.
+    dependencies=[Depends(audited_system("webhook_replayed", "trigger", actor_source="unauthenticated"))],
     responses={
         400: {"description": "Bad request"},
         401: {"description": "Unauthorized"},
@@ -652,6 +667,9 @@ async def replay_webhook(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Permission 'run.trigger' requires 'runner' role",
             ) from exc
+        # FAR-1516: provenance promotion — the caller authenticated as a tenant
+        # principal (recorded before the org is resolved, read at teardown).
+        bind_audit_actor_source(request, "authenticated")
 
     trigger: Trigger | None = None
     org_id: uuid.UUID | None = None
@@ -723,6 +741,9 @@ async def replay_webhook(
                     raise ReplayNotFoundError(event_id)
                 if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
                     raise HmacValidationError
+                # FAR-1516: provenance promotion — the replay authenticated by
+                # HMAC over the stored payload.
+                bind_audit_actor_source(request, "signature_verified")
 
             try:
                 # Pause pre-check AFTER principal auth / trigger load, BEFORE the
