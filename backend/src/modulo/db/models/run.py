@@ -50,6 +50,11 @@ TERMINAL_STATUSES: frozenset[str] = frozenset(
         "router_no_match",
         "cost_ceiling_exceeded",
         "compensation_failed",
+        # FAR-1487: a HITL rejection with no reject route ENDS the run here
+        # (neither ``failed`` — nothing broke — nor ``cancelled`` — no operator
+        # stopped it). Also the home of coalesced-supersede system rejections
+        # (error_code ``hitl.superseded``).
+        "rejected",
     }
 )
 
@@ -199,7 +204,7 @@ class Run(OrgScoped):
         CheckConstraint(
             "status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', "
             "'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', "
-            "'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')",
+            "'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected')",
             name="ck_runs_status",
         ),
         UniqueConstraint("organisation_id", "run_number", name="uq_runs_org_run_number"),
@@ -263,17 +268,19 @@ class Run(OrgScoped):
         # ordered scan stopping at LIMIT 200. Migration 0278; parity with the
         # sweep predicate is guarded by
         # tests/unit/db/test_migration_0278_runs_workspace_drift_sweep_index.py.
+        # FAR-1487 (migration 0284) re-created it with ``rejected`` in the IN
+        # list so the widened TERMINAL_STATUSES sweep still matches the predicate.
         Index(
             "ix_runs_workspace_drift_sweep",
             "id",
             postgresql_where=text(
                 "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
+                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
                 "AND workspace_inputs_drift_detected IS NULL"
             ),
             sqlite_where=text(
                 "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
+                "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
                 "AND workspace_inputs_drift_detected IS NULL"
             ),
         ),

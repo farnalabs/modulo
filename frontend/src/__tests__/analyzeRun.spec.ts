@@ -43,11 +43,13 @@ describe('analyzable failure statuses', () => {
   it('never treats success or a deliberate cancellation as analyzable', () => {
     expect(isAnalyzableFailure('complete')).toBe(false)
     expect(isAnalyzableFailure('cancelled')).toBe(false)
+    // FAR-1487: a reviewer's reject (or a superseded review) is a decision, not a failure.
+    expect(isAnalyzableFailure('rejected')).toBe(false)
     expect(isAnalyzableFailure('running')).toBe(false)
     expect(isAnalyzableFailure('pending')).toBe(false)
   })
 
-  it('covers every current terminal status except complete and cancelled', () => {
+  it('covers every current terminal status except complete, cancelled and rejected', () => {
     // Guard against a new terminal status shipping without an Analyze decision.
     const terminal = [
       'complete',
@@ -59,8 +61,9 @@ describe('analyzable failure statuses', () => {
       'router_no_match',
       'cost_ceiling_exceeded',
       'compensation_failed',
+      'rejected',
     ]
-    const expected = terminal.filter(s => s !== 'complete' && s !== 'cancelled')
+    const expected = terminal.filter(s => s !== 'complete' && s !== 'cancelled' && s !== 'rejected')
     expect([...ANALYZABLE_FAILURE_STATUSES].sort()).toEqual([...expected].sort())
   })
 })

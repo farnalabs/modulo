@@ -18,9 +18,11 @@ with contextlib.suppress(FileNotFoundError, OSError):
 # tagged @far-1487 and their steps below are MOCKED — the approve/reject POST
 # never leaves this module (a MagicMock response and a no-op
 # rejection_reason step), so `the run status becomes "rejected"` asserts a
-# canned payload, NOT a real run status. Real assertions (actual run
-# terminalisation on rejection) land with FAR-1487; until then these scenarios
-# must not be read as evidence of shipped behaviour. Do not delete them.
+# canned payload, NOT a real run status. FAR-1487 shipped the real behaviour
+# (terminal `rejected` status); its real assertions live in
+# tests/integration/test_hitl_resume_roundtrip.py and
+# tests/unit/pipeline_engine/test_hitl_reject_terminate.py, so these scenarios
+# must still not be read as evidence of it. Do not delete them.
 
 
 @given(parsers.parse('I am authenticated as an approver in org "{org}"'))

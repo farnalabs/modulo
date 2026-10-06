@@ -1,18 +1,20 @@
 /**
  * Centralized run-status classification constants shared across run views.
- * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed')
+ * These match the DB CHECK constraint: status IN ('pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked', 'complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected')
  * Used by RunsListView (non-terminal → show the Cancel/Stop action) and RunDetailView (terminal → hide Cancel / stop polling).
  * 'stalled' is terminal: a sandbox agent that went silent past the idle watchdog had its sandbox killed.
  * 'budget_exceeded' is terminal: the cost controller finalized the run when the per-agent token budget was breached.
  * 'cost_ceiling_exceeded' is terminal: the cost controller finalized the run when the org-wide spend ceiling was breached.
  * 'router_no_match' is terminal (FAR-402 P1): a Router node had no matching rule and no default.
+ * 'rejected' is terminal (FAR-1487): a HITL rejection with no reject route ended the run - neither a failure nor an operator
+ * cancel. error_code 'hitl.superseded' marks the bookkeeping variant (a newer version replaced the waiting review).
  * 'compensation_failed' is terminal: a watched node AND its compensation path both failed (FAR-402 P5).
  * 'unknown' is NON-terminal: the run's outcome could not be determined but it is not finalised (recovery status, FAR-410).
  * 'hitl_parked' is NON-terminal (FAR-604 D2): the run's HITL gate expired unanswered and the park sweep moved it
  * out of 'awaiting_human'; the gate stays open and claimable and a decision (or the dispatcher reconcile)
  * re-enters the run into normal admission.
  */
-export const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed'] as const
+export const TERMINAL_STATUSES = ['complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected'] as const
 
 export const NON_TERMINAL_STATUSES = ['pending', 'running', 'awaiting_human', 'claimed', 'unknown', 'hitl_parked'] as const
 

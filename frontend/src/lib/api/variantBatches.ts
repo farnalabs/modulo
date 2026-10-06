@@ -29,6 +29,7 @@ export type VariantRunStatus =
   | 'eval_failed'
   | 'stalled'
   | 'budget_exceeded'
+  | 'rejected'
 
 export type VariantBatchStatus = 'pending' | 'running' | 'partial' | 'complete' | 'failed' | 'cancelled'
 

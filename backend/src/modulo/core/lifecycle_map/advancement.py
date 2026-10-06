@@ -97,6 +97,8 @@ _log = logging.getLogger(__name__)
 
 # Terminal statuses that ADVANCE a journey (evidence + run_count). Cancelled
 # and stalled are deliberately excluded — they mean "the work did not happen".
+# ``rejected`` (FAR-1487: a HITL reject ended the run, incl. supersede) is
+# excluded for the same reason: a rejected run must NOT advance a journey.
 _ADVANCING_TERMINAL_STATUSES: frozenset[str] = frozenset(
     {
         "complete",

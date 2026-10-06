@@ -4671,7 +4671,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
     description=(
         "Get read-only detail for one HITL review: run status, the review config AS "
         "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
-        "claim_expiry_minutes, reject_target, required_team_id), and the review's "
+        "claim_expiry_minutes, reject_target, on_reject, required_team_id), and the review's "
         "claim/decision state. Decide via review_hitl or the browser UI."
     ),
 )
@@ -4733,6 +4733,7 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
             "human_only": human_only_effective(config),
             "claim_expiry_minutes": config.get("claim_expiry_minutes"),
             "reject_target": config.get("reject_target"),
+            "on_reject": config.get("on_reject"),
             "required_team_id": str(required_team) if required_team else None,
         }
     return result

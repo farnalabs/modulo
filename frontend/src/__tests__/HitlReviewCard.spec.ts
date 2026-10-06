@@ -157,7 +157,7 @@ describe('HitlReviewCard', () => {
     expect(decidedEvents![0][0]).toMatchObject({ type: 'success' })
   })
 
-  it('tells the reviewer the run continues normally when no reject route is configured (FAR-1486)', async () => {
+  it('never claims a route or a continuation when the briefing carries no reject disposition (FAR-1486)', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.POST as any).mockImplementation((url: string) => {
       if (url.endsWith('/claim')) {
@@ -179,9 +179,59 @@ describe('HitlReviewCard', () => {
     // fails this assertion.
     expect(decidedEvents![0][0]).toMatchObject({
       type: 'success',
-      text: 'Gate rejected. The run continues along the normal path.',
+      text: 'Gate rejected. The rejection was recorded.',
     })
     expect(wrapper.find('[data-testid="hitl-gate-message"]').text()).not.toContain('reject target')
+  })
+
+  it('tells the reviewer the run ENDED when the gate terminates on reject (FAR-1487)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+    wrapper = mount(HitlReviewCard, {
+      props: { gate: gate({ context: { consequences: { reject: { disposition: 'terminate' } } } }) },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
+    await flushPromises()
+
+    const decidedEvents = wrapper.emitted('decided')
+    expect(decidedEvents).toHaveLength(1)
+    expect(decidedEvents![0][0]).toMatchObject({
+      type: 'success',
+      text: 'Gate rejected. The run has ended with status Rejected.',
+    })
+  })
+
+  it('says the run continues only when the gate explicitly proceeds on reject (FAR-1487)', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.POST as any).mockImplementation((url: string) => {
+      if (url.endsWith('/claim')) {
+        return Promise.resolve({ data: { claim_token: 'tok-1', expires_at: '2025-06-30T10:20:00Z' }, error: undefined })
+      }
+      return Promise.resolve({ data: { ok: true }, error: undefined })
+    })
+    wrapper = mount(HitlReviewCard, {
+      props: { gate: gate({ context: { consequences: { reject: { disposition: 'proceed' } } } }) },
+      global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } },
+    })
+
+    await wrapper.find('[data-testid="hitl-gate-claim"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="hitl-gate-reject"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('decided')![0][0]).toMatchObject({
+      type: 'success',
+      text: 'Gate rejected. The run continues along the normal path (on_reject: proceed).',
+    })
   })
 
   it('names the target when the reject route exists (FAR-1486)', async () => {
@@ -224,10 +274,10 @@ describe('HitlReviewCard', () => {
   })
 
   it('never claims a reject route when the gate has none (FAR-1486)', () => {
-    // No configured reject route: the run continues along the normal path,
-    // so the banner must say exactly that — not "routed to the reject target".
+    // No reject consequence in the briefing: the banner must not claim a
+    // route (or a continuation) — not "routed to the reject target".
     wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', decision_at: '2025-06-30T11:00:00Z' }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
-    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path.')
+    expect(wrapper.text()).toContain('Gate was rejected. The rejection was recorded.')
     expect(wrapper.text()).not.toContain('reject target')
     expect(wrapper.find('[data-testid="hitl-gate-reject"]').exists()).toBe(false)
   })
@@ -239,9 +289,17 @@ describe('HitlReviewCard', () => {
     ['reject entry not an object', { consequences: { reject: 'nope' as unknown } }],
     ['node_id not a string', { consequences: { reject: { node_id: 123 } } }],
     ['node_id blank', { consequences: { reject: { node_id: '   ' } } }],
-  ])('falls back to the normal-path copy for a malformed reject consequence (%s) (FAR-1486)', (_name, context) => {
+  ])('falls back to the neutral copy for a malformed reject consequence (%s) (FAR-1486)', (_name, context) => {
     wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
-    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path.')
+    expect(wrapper.text()).toContain('Gate was rejected. The rejection was recorded.')
+  })
+
+  it('renders the terminate and proceed banners from the briefing disposition (FAR-1487)', () => {
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context: { consequences: { reject: { disposition: 'terminate' } } } }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run ended with status Rejected.')
+    wrapper.unmount()
+    wrapper = mount(HitlReviewCard, { props: { gate: gate({ decision: 'rejected', context: { consequences: { reject: { disposition: 'proceed' } } } }) }, global: { stubs: { RouterLink: { template: '<a :href="to"><slot /></a>', props: ['to'] } } } })
+    expect(wrapper.text()).toContain('Gate was rejected. The run continues along the normal path (this gate is set to proceed on reject).')
   })
 
   it('names the reject node id when the route has no usable label (FAR-1486)', () => {

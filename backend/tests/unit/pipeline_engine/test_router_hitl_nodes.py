@@ -217,9 +217,12 @@ def test_hitl_node_compiles_like_edge_gate():
     assert "B" in new_nodes
     assert all("B" in t for (_, t) in legacy_edges)
     assert all("B" in t for (_, t) in new_edges)
-    # Same number of edges (source->gate, gate->target).
+    # Same number of edges in both shapes. FAR-1487: with no reject route the
+    # gate's outgoing hop is a CONDITIONAL edge (router returns END on a stamped
+    # rejection, else the target); an un-mapped conditional edge is drawn to
+    # END only, so the drawn graph carries just source->gate here.
     assert len(legacy_edges) == len(new_edges)
-    assert len(new_edges) == 2
+    assert len(new_edges) == 1
 
 
 # ---------------------------------------------------------------------------

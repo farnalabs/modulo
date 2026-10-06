@@ -272,6 +272,7 @@ const STATUS_LABEL_KEY: Record<string, string> = {
   [RUN_STATUS.COST_CEILING_EXCEEDED]: 'views.RunsListView.status_cost_ceiling_exceeded',
   [RUN_STATUS.ROUTER_NO_MATCH]: 'views.RunsListView.status_router_no_match',
   [RUN_STATUS.COMPENSATION_FAILED]: 'views.RunsListView.status_compensation_failed',
+  [RUN_STATUS.REJECTED]: 'views.RunsListView.status_rejected',
 }
 
 const dateFrom = ref('')
@@ -486,7 +487,7 @@ function pipelineName(id: string): string {
 function statusBadge(status: string): string {
   if (status === 'complete') return 'bg-success/15 text-success'
   if (status === 'failed') return 'bg-destructive/15 text-destructive'
-  if (status === 'cancelled' || status === 'stalled') return 'bg-muted text-muted-foreground'
+  if (status === 'cancelled' || status === 'stalled' || status === 'rejected') return 'bg-muted text-muted-foreground'
   return 'bg-secondary text-secondary-foreground'
 }
 
