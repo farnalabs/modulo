@@ -227,7 +227,7 @@ def execution_resumes_from(node_id: str, request, ctx):
 
 
 # ============================================================================
-# Reject — stops run
+# Reject - records the decision and resumes (routes to the reject route when configured)
 # ============================================================================
 
 

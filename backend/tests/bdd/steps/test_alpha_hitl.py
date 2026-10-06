@@ -14,6 +14,14 @@ from pytest_bdd import given, parsers, scenarios, then, when
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/hitl/reject.feature")
 
+# FAR-1486 / FAR-1487: the reject scenarios in features/hitl/reject.feature are
+# tagged @far-1487 and their steps below are MOCKED — the approve/reject POST
+# never leaves this module (a MagicMock response and a no-op
+# rejection_reason step), so `the run status becomes "rejected"` asserts a
+# canned payload, NOT a real run status. Real assertions (actual run
+# terminalisation on rejection) land with FAR-1487; until then these scenarios
+# must not be read as evidence of shipped behaviour. Do not delete them.
+
 
 @given(parsers.parse('I am authenticated as an approver in org "{org}"'))
 def i_am_approver_in_org(org: str, request):

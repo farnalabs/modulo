@@ -168,7 +168,8 @@ class TestRotationGuardRedisLock:
 
         settings = _make_settings()
         result = await _acquire_rotation_lock(settings)
-        assert isinstance(result, str) and result
+        assert isinstance(result, str)
+        assert result
 
         # The stored value must be the returned owner token, with NX + TTL.
         stored_value = mock_r.set.call_args[0][1]
@@ -293,7 +294,8 @@ class TestRotationGuardInMemoryFallback:
 
         settings = _make_settings(redis_url="")
         first = await _acquire_rotation_lock(settings)
-        assert isinstance(first, str) and first
+        assert isinstance(first, str)
+        assert first
         # While the guard is held the second caller must be refused.
         assert await _acquire_rotation_lock(settings) is None
 

@@ -175,6 +175,29 @@ describe('RunsListView', () => {
     expect(wrapper.text()).toContain('No runs found')
   })
 
+  // STATE-3 (ux-conformance): the list page renders a determinate table
+  // skeleton, NOT an indeterminate spinner, while the first page loads.
+  it('renders the table skeleton (not a spinner) while loading', async () => {
+    const getMock = api.GET as any
+    const original = getMock.getMockImplementation()
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs') return new Promise(() => {})
+      return original
+        ? original(url)
+        : Promise.resolve({ data: mockResponses.default, error: undefined })
+    })
+    try {
+      const wrapper = mountView()
+      await nextTick()
+      expect(wrapper.find('[data-testid="runs-list-loading"]').exists()).toBe(true)
+      expect(wrapper.find('.animate-pulse').exists()).toBe(true)
+      expect(wrapper.find('.animate-spin').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(original)
+    }
+  })
+
   it('shows Start, End and Duration columns instead of Created / Last Run', async () => {
     mockResponses['/api/v1/runs'] = listWith([baseRun])
     const wrapper = mountView()
@@ -832,6 +855,22 @@ describe('RunsListView', () => {
     const badge = wrapper.find('[data-testid="runs-list-queued-run1"]')
     expect(badge.exists()).toBe(true)
     expect(badge.text()).toContain('queued')
+    expect(badge.attributes('title')).toBe(t('common.queue.waiting_slot', { active: 3, limit: 5 }))
+    expect(badge.attributes('aria-label')).toBe(t('common.queue.waiting_slot', { active: 3, limit: 5 }))
+    wrapper.unmount()
+  })
+
+  it('explains a queued run with no concurrency limit as starting soon', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'pending', capacity: { active_runs: 0, concurrency_limit: null, waiting: true } },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const badge = wrapper.find('[data-testid="runs-list-queued-run1"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toBe(t('common.queue.starting_soon'))
+    expect(badge.attributes('aria-label')).toBe(t('common.queue.starting_soon'))
     wrapper.unmount()
   })
 

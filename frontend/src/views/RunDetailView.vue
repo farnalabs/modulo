@@ -80,18 +80,18 @@
         v-if="run.status === 'pending' && run.capacity?.waiting"
         data-testid="run-detail-queue-banner"
         aria-live="polite"
-        :aria-label="$t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' })"
+        :aria-label="queuedCapacityReason(run.capacity, t)"
         class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
       >
-        {{ $t('views.RunDetailView.queued_waiting_slot', { active: run.capacity.active_runs, limit: run.capacity.concurrency_limit ?? '∞' }) }}
+        {{ queuedCapacityReason(run.capacity, t) }}
       </output>
       <output
         v-else-if="run.status === 'pending'"
         data-testid="run-detail-queued-starting"
-        :aria-label="$t('views.RunDetailView.queued_starting_soon')"
+        :aria-label="queuedCapacityReason(run.capacity, t)"
         class="mb-4 block text-xs text-muted-foreground"
       >
-        {{ $t('views.RunDetailView.queued_starting_soon') }}
+        {{ queuedCapacityReason(run.capacity, t) }}
       </output>
 
       <!-- HITL Gate -->
@@ -878,7 +878,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isHitlActionableStatus, isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel, queuedCapacityReason, type RunCapacity } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'
@@ -922,12 +922,6 @@ interface ChildRunRef {
   run_number?: number | null
   status?: string
   pipeline_name?: string | null
-}
-
-interface RunCapacity {
-  active_runs: number
-  concurrency_limit: number | null
-  waiting: boolean
 }
 
 interface CostBreakdownEntry {

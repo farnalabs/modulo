@@ -250,7 +250,7 @@
       {{ $t('hitl.gate.approved_banner') }}
     </div>
     <div v-if="status === 'rejected'" class="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-      {{ $t('hitl.gate.rejected_banner') }}
+      {{ rejectedBannerText }}
     </div>
     <div v-if="status === 'claimed' && claimToken" class="rounded-lg bg-muted p-3 text-xs">
       <p class="font-medium text-muted-foreground mb-1">{{ $t('hitl.gate.claim_token_label') }}</p>
@@ -386,6 +386,48 @@ const claimedByDisplay = computed(() => {
 })
 
 const pipelineName = computed(() => props.gate.pipeline_name || '')
+
+/**
+ * FAR-1486: the gate's REJECT consequence from the fire-time briefing —
+ * `{ node_id, label }` only when the snapshot graph actually wires a reject
+ * route (config `reject_target` or a reject-typed edge), absent otherwise.
+ * Same source and shape the reviewer briefing renders (HitlBriefing), so the
+ * reject copy can never claim a route that does not exist: with no reject
+ * route a rejection simply resumes the run along its normal path.
+ */
+interface RejectConsequence {
+  node_id: string
+  label: string | null
+}
+
+const rejectConsequence = computed<RejectConsequence | null>(() => {
+  const ctx = props.gate.context
+  if (!ctx || typeof ctx !== 'object' || Array.isArray(ctx)) return null
+  const consequences = (ctx as Record<string, unknown>).consequences
+  if (!consequences || typeof consequences !== 'object' || Array.isArray(consequences)) return null
+  const reject = (consequences as Record<string, unknown>).reject
+  if (!reject || typeof reject !== 'object' || Array.isArray(reject)) return null
+  const entry = reject as Record<string, unknown>
+  const nodeId = typeof entry.node_id === 'string' ? entry.node_id.trim() : ''
+  if (!nodeId) return null
+  const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label : null
+  return { node_id: nodeId, label }
+})
+
+/** Target name for the routed copy: the snapshot label, else the node id. */
+function rejectTargetName(consequence: RejectConsequence): string {
+  return consequence.label || consequence.node_id
+}
+
+/**
+ * FAR-1486: the rejected banner is truthful in BOTH directions — routed to
+ * the reject target when one exists, otherwise the run continues normally.
+ */
+const rejectedBannerText = computed(() => {
+  const consequence = rejectConsequence.value
+  if (!consequence) return t('hitl.gate.rejected_banner_no_route')
+  return t('hitl.gate.rejected_banner', { target: rejectTargetName(consequence) })
+})
 
 /**
  * FAR-860: the gate's response contract from the fire-time briefing.
@@ -598,10 +640,6 @@ async function decideGate(decision: 'approve' | 'reject') {
   message.value = null
   const reason = decision === 'reject' ? notes.value || t('hitl.gate.rejected_by_reviewer') : null
   const errorKey = decision === 'approve' ? 'hitl.gate.approve_failed' : 'hitl.gate.reject_failed'
-  const successKey =
-    decision === 'approve'
-      ? 'hitl.gate.gate_approved_pipeline_resuming'
-      : 'hitl.gate.gate_rejected_pipeline_routed_to_reject_target'
   try {
     const { error: err } = await api.POST(
       decision === 'approve'
@@ -628,7 +666,17 @@ async function decideGate(decision: 'approve' | 'reject') {
       // stale session state is left behind (FAR-686).
       reviewState.clear()
       claimedByYou.value = false
-      const payload: HitlMessage = { type: 'success', text: t(successKey) }
+      // FAR-1486: the reject outcome is only "routed to the reject target"
+      // when the gate actually HAS a reject route; without one the rejection
+      // records the decision and the run continues along its normal path.
+      const consequence = rejectConsequence.value
+      const successText =
+        decision === 'approve'
+          ? t('hitl.gate.gate_approved_pipeline_resuming')
+          : consequence
+            ? t('hitl.gate.gate_rejected_pipeline_routed_to_reject_target', { target: rejectTargetName(consequence) })
+            : t('hitl.gate.gate_rejected_no_reject_route')
+      const payload: HitlMessage = { type: 'success', text: successText }
       showMessage(payload)
       emit('decided', payload)
     }

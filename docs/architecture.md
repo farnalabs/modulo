@@ -127,7 +127,7 @@ Features:
 
 Interrupt payloads carry the same identity: the gate node interrupts with its `review_id`, a manual node with `review_id: <node_id>`, a conformance block with the block's guardrail gate id. The executor keys the pending `hitl_claims` row on that `review_id` verbatim. The dispatcher reconcile resumes an `awaiting_human`/`claimed` run ONLY per this scoping matrix: claimed-undecided, skip (under the `uq_hitl_claims_run_gate` `UNIQUE (run_id, review_id)` constraint a claimed-undecided row and a committed decision for the same gate cannot coexist; crash recovery for claimed runs routes through the no-undecided-rows branch once the decision commits); unclaimed undecided row, conservative skip; no undecided rows, crash-recovery resume when the decision's stamp routes it to a consumer that accepts it. `hitl_review_*`/guardrail identities accept only the verdict actions; MANUAL-node identities also accept a committed `manual_output` with its `output` (legacy pre-stamping rows are stranded by design, at most the 2026-09-02 incident cohort; ops remedy is a manual DB stamp or ticket, no backfill migration). Recover-node refuses HITL gate targets (422), gate decisions must go through approve/reject; user node ids squatting the reserved `hitl_review_` prefix are rejected at graph-validation time.
 
-**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery terminalises it through the normal reject path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
+**Gate coalescing (FAR-604 D4):** when a run reaches a HITL gate and an OPEN gate (undecided + unclaimed, same gate id) already covers the same work item on ANOTHER run of the pipeline, matched via the webhook coalesce key stamped on `runs.input_payload`, the gate is NOT raised twice. If the entity SHA (`runs.input_hash`) is unchanged, the duplicate run is terminalised `failed`/`executor_superseded` and the existing gate decides for the work item (the model does not support multiple runs per gate, `uq_hitl_claims_run_gate`, so reuse means skipping the duplicate gate). If the SHA changed, the old gate is auto-closed with a system-committed `rejected` decision (loudly audited as `hitl.gate_superseded`) and the old run, if parked, un-parks so the committed-decision resume machinery routes it through the gate's reject route when one is configured — or, with no reject route, continues it along the normal path, while the new run raises fresh. Claimed gates are never superseded (a human holding the claim is mid-review; the claim TTL + a later raise close the loop).
 
 ### Connector Hub (`modulo/connectors/`)
 
@@ -333,7 +333,7 @@ The reference-integrity guard test (`tests/architecture/test_feature_flag_refere
    g. If eval fails with `block` behaviour, run enters `failed` state
    h. If the outgoing edge has a HITL gate, `interrupt()` pauses the run
 
-5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node (or produces a FeedbackRecord).
+5. **HITL** – A human claims the gate (atomic DB lock), inspects context, and approves or rejects. Approval continues to the next node; rejection routes to the reject-target node when a reject route is configured (`reject_target` or a reject edge) or produces a FeedbackRecord, and with no reject route it continues the run along the normal path.
 
 6. **Complete** – After the terminal node, the run transitions to `complete` or `failed`. OTel spans, audit events, and run metrics are persisted. Notifications are dispatched.
 
@@ -393,8 +393,11 @@ org triggers pause). Several independent mechanisms keep those gates healthy:
   (a claim takes a fresh TTL), and the moment a decision commits
   (`HITLManager._decide`, API or MCP) the run un-parks to `awaiting_human` and
   re-enters normal admission: approve resumes from the checkpoint through the
-  normal resume path, reject terminalises via the reject path. Each park is
-  logged loudly (`hitl_park.parked`).
+  normal resume path; reject routes to the gate's `reject_target`/reject edge
+  when one is configured, and when the gate declares no reject route the run
+  continues along the normal edge (the default will change so a rejection
+  terminates the run, FAR-1487, Backlog). Each park is logged loudly
+  (`hitl_park.parked`).
 - **Queue coalescing (latest-wins):** for webhook deliveries with a stable
   work-item key (GitHub: `repository.full_name` + `pull_request.number`, or
   `issue.number`; anything else, no key, no coalescing), a new delivery folds
@@ -616,6 +619,61 @@ minting is REST-JWT-only, gated by the org `user_scoped_mcp_keys` flag
 account and are denied under org-wide/run-scoped keys. Key lifecycle events
 are audited (`api_key_created` / `api_key_revoked`) on both the REST and MCP
 surfaces with `auth_type` / `key_scope` / masked-prefix payload stamps.
+
+**Grant-sets on API keys (FAR-1477, ADR 058; flag `api_key_grants`, default OFF).**
+`org_api_keys.grants` is a nullable, space-joined list of `PERMISSIONS` keys,
+tri-state: `NULL` = legacy role-bundle behaviour (unchanged), empty = explicit
+deny-all, a list = the exact set. Enforcement is
+`effective = grants ∩ bundle(live_role)` on both the REST resolver
+(`_assert_tenant_permission`) and the MCP chokepoint (`resolve_tool_access`);
+the grant leg only ever narrows and is not lifted by the authz kill switch.
+Minting (`POST /api/v1/api-keys` with `grants`) caps requested grants to the
+caller's LIVE capability and rejects non-delegable keys. Delegability is a
+single registry-level flag, `modulo.auth.permissions.is_delegable`, read live
+at enforcement and mint time (never-grantable: human_only HITL, `api_key.*`,
+`oauth.client.*`, `system.*`, `org.delete`, break-glass controls); OAuth
+scopes and principals must consume it rather than keep a second list. With the
+flag OFF a grant-bearing key is denied (401), never widened to its role, and
+`grants` on mint is rejected (422). With the flag ON, user-scoped keys default
+to and are capped at 90 days. Grants are immutable after mint. The MCP
+`create_api_key` tool accepts the same optional `grants` (always an org-scoped
+key, so no 90-day user-key TTL) and runs the same mint cap and flag gate as
+REST. The Settings > MCP create-key dialog offers a grant picker, sourced from
+`GET /api/v1/api-keys/grantable-permissions` (delegable permissions only,
+empty with the flag OFF); it omits `grants` unless the user restricts the key.
+Privilege helpers that gate admin/operator-only extras inside a route (cost
+breaker, guardrail strip, HITL weakening, In-Dev reveal) also require the
+matching permission (`cost.manage`, `guardrail.manage`, `pipeline.graph.update`,
+`*.list.in_dev`) in the grant-set when the key carries one; a malformed
+grant value is denied, never read as unrestricted. The grant decision is carried
+into the service layer: for REST callers `replace_pipeline_graph` and
+`rollback_to_snapshot` compute the final HITL-privilege and guardrail-admin
+flags exactly as before (the live role re-read under the row lock stays
+authoritative for REST callers, including upgrading a stale-low flag), then
+apply the explicit `grants_deny_privilege` / `grants_deny_guardrail_admin`
+parameters, which can only NARROW the result and so a live admin role never
+overrides a grants denial (an admin-owned key holding only
+`pipeline.graph.update` cannot strip a guardrail binding). The grant flag and
+grant-set are resolved after the key-validation DB session closes (never nested
+inside it, to avoid holding two pooled connections per request). A transient
+failure reading the flag for a grant-bearing key (the strict read propagates the
+registry's org-override read error instead of treating it as OFF) answers 503
+(not 401) on REST and a retryable denial on MCP; NULL-grants keys never read the
+flag. Long-lived MCP connections re-run the grant resolver on every
+re-validation. **Rollback caveat:** a key minted with grants (non-NULL
+`grants`, including the empty deny-all) becomes a full-role key if code older
+than this change ignores the column or if the column is dropped. Migration
+0281's downgrade therefore refuses to run while any grant-bearing key exists.
+Before rolling code back below this change, turn the `api_key_grants` flag off
+and revoke every grant-bearing key. Minting reads the flag strictly: a transient
+read failure answers a retryable 503 instead of silently skipping the grants
+gate or the 90-day user-key cap. A grant above the key's own minted/live role has no effect,
+since `effective = grants ∩ bundle(role)`; the mint cap checks the minter's
+capability, not the new key's role. **Known REST/MCP asymmetry (open design question):** over MCP
+every read-only tool is gated by the single coarse `resource.read_only` key,
+not the fine-grained REST read keys (`pipeline.list`, `pipeline.graph.read`,
+...), so MCP reads are all-or-nothing per grant-set; REST enforces the fine keys.
+
 
 ### Row-Level Security
 

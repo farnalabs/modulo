@@ -138,6 +138,19 @@ class TestFunctionsWiring:
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
         assert "connector_health_checks" in names
+        assert "health_readiness_alert" in names
+
+    def test_health_readiness_alert_delegates_to_core_check(self) -> None:
+        """The cron wrapper is a thin delegate — all logic lives in
+        ``modulo.core.health_alerts.run_health_alert_check`` (FAR-1446)."""
+        expected = {"status": "healthy", "action": "none"}
+        with patch(
+            "modulo.core.health_alerts.run_health_alert_check",
+            new=AsyncMock(return_value=expected),
+        ) as check:
+            result = asyncio.run(sw.health_readiness_alert({}))
+        assert result == expected
+        assert check.await_count == 1
 
     def test_system_cron_knobs_explicit(self) -> None:
         # _system_cron_jobs derives the library_sync cadence from settings, so
@@ -167,6 +180,7 @@ class TestFunctionsWiring:
             "library_sync",
             "metrics_dump",
             "connector_health_checks",
+            "health_readiness_alert",
             "memory_monitor_cron",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
@@ -292,6 +306,17 @@ class TestFunctionsWiring:
         assert ch.retries == 1
         assert ch.ttl == 900
         assert ch.unique is True
+
+        # health_readiness_alert: every 5 min (FAR-1446), unique so overlapping
+        # fleet ticks cannot double-notify (the Redis dedup state assumes one
+        # execution per slot); failures re-raise so retries=2 engages.
+        hra = jobs["health_readiness_alert"]
+        assert hra.cron == "*/5 * * * *"
+        assert hra.timeout == 120
+        assert hra.retries == 2
+        assert hra.heartbeat == 30
+        assert hra.ttl == 300
+        assert hra.unique is True
 
     def test_sync_interval_to_cron_maps_seconds_to_5_field_cron(self) -> None:
         assert sw._sync_interval_to_cron(300) == "*/5 * * * *"

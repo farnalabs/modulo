@@ -1535,6 +1535,7 @@ class TestSaqWorkerSettings:
         # + the hitl_overdue notification sweep
         # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry)
         # + memory_monitor_cron (FAR-776) — advisory guest-memory telemetry cron.
+        # + health_readiness_alert (FAR-1446) — readiness-degradation alert cron.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
@@ -1560,6 +1561,7 @@ class TestSaqWorkerSettings:
             "memory_monitor_cron",
             "runner_marker_sweep",
             "runner_health_probe",
+            "health_readiness_alert",
         }
         assert settings["after_process"] is not None
 

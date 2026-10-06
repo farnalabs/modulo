@@ -12,6 +12,19 @@ jobs:
   check-prod-health:
     name: Check app.modulo.run health
     runs-on: ubicloud-standard-2
+    env:
+      # FAR-1446: the single definition of "open" shared by the dedup search
+      # (Open Linear ticket on outage) and the recovery search (Resolve Linear
+      # ticket on recovery), so the two steps can never disagree about what
+      # "open" means and no state type is silently skipped. Linear's
+      # non-terminal WorkflowStateType values are triage, backlog, unstarted
+      # and started; the terminal values (completed, canceled, duplicate) are
+      # deliberately omitted. A positive `in` list is used (not `nin`) because
+      # it is the proven repo pattern (deploy-staleness-check.yml,
+      # audit-chain-monitor.yml) and, unlike a `nin` filter, a rejected filter
+      # cannot be mistaken for "no existing ticket" and silently file a
+      # duplicate.
+      OPEN_STATE_TYPES: '["triage","backlog","unstarted","started"]'
     steps:
       - name: Probe /healthz/ready
         id: probe
@@ -118,6 +131,11 @@ jobs:
 
           echo "all non-advisory sub-checks ok"
 
+      # FAR-1446: dedup. Every failing run used to open a NEW ticket (15 open
+      # OUTAGE + 36 open DEGRADED duplicates at the time of writing, all going
+      # back weeks). Now: search Linear for an OPEN ticket with this exact
+      # title first, and comment the new observation (timestamp + detail) on
+      # it instead of filing a duplicate. Only create when none is open.
       - name: Open Linear ticket on outage
         if: failure()
         shell: bash
@@ -140,6 +158,54 @@ jobs:
             TITLE="OUTAGE: app.modulo.run down (uptime monitor)"
             DESC="Automated uptime monitor detected app.modulo.run/healthz/ready failing at ${TS}. Investigate Fly app status + recent deploys (FAR-400)."
           fi
+
+          # Dedup search (read-only): open = workflow state type in the shared
+          # OPEN_STATE_TYPES list. Exact title match on the FAR team.
+          SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" --argjson states "$OPEN_STATE_TYPES" '{
+            query: "query($team: ID!, $title: String!, $states: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ in: $states } } }, orderBy: createdAt, first: 1){ nodes { id identifier } } }",
+            variables: { team: $team, title: $title, states: $states }
+          }')
+          SEARCH_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$SEARCH_BODY" 2>/dev/null || true)
+          OPEN_ID=$(printf '%s' "$SEARCH_RESP" | jq -r '.data.issues.nodes[0].id // empty' 2>/dev/null || true)
+          OPEN_REF=$(printf '%s' "$SEARCH_RESP" | jq -r '.data.issues.nodes[0].identifier // empty' 2>/dev/null || true)
+
+          if [ -n "$OPEN_ID" ]; then
+            # Dedup hit: record this observation on the existing ticket
+            # instead of creating a second one (FAR-1446).
+            OBS="Uptime monitor observed the same condition again at ${TS}. ${DESC} Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            COMMENT_BODY=$(jq -n --arg id "$OPEN_ID" --arg body "$OBS" '{
+              query: "mutation($i: CommentCreateInput!){ commentCreate(input:$i){ success comment { id } } }",
+              variables: { i: { issueId: $id, body: $body } }
+            }')
+            # Linear returns HTTP 200 with an "errors" body for runtime
+            # failures (entity/permission errors), so -f alone is not enough
+            # to detect a failed write - inspect the body too (FAR-1446).
+            COMMENT_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$COMMENT_BODY" 2>/dev/null) || COMMENT_RESP=""
+            if [ -n "$COMMENT_RESP" ] && printf '%s' "$COMMENT_RESP" | jq -e '.errors == null' >/dev/null 2>&1; then
+              echo "Commented new observation on existing open ticket ${OPEN_REF} (dedup, FAR-1446)"
+            else
+              echo "::warning::Failed to comment on existing Linear ticket ${OPEN_REF} - this observation was not recorded"
+            fi
+            exit 0
+          fi
+
+          # Distinguish "searched, none open" (create normally) from "search
+          # itself failed" (warn, then still create - the evidence must not be
+          # dropped just because the dedup lookup was unavailable). Check
+          # `.errors == null` explicitly: Linear can return HTTP 200 with a
+          # partial `{data:{issues:null}, errors:[...]}` body, which a bare
+          # `.data != null` guard would wrongly accept as "searched, none
+          # open" and silently file a duplicate.
+          if [ -z "$SEARCH_RESP" ] || ! printf '%s' "$SEARCH_RESP" | jq -e '.errors == null and .data.issues.nodes != null' >/dev/null 2>&1; then
+            echo "::warning::Linear dedup search failed - creating the ticket without dedup (a duplicate may result)"
+          fi
+
           BODY=$(jq -n --arg ts "$TS" --arg title "$TITLE" --arg desc "$DESC" '{
             query: "mutation($i: IssueCreateInput!){ issueCreate(input:$i){ success issue { identifier url } } }",
             variables: { i: {
@@ -148,7 +214,123 @@ jobs:
               description: $desc
             } }
           }')
-          curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+          CREATE_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
             -H "Content-Type: application/json" \
             -H "Authorization: $LINEAR_API_KEY" \
-            -d "$BODY" || echo "::warning::Failed to create Linear ticket"
+            -d "$BODY" 2>/dev/null) || CREATE_RESP=""
+          if [ -z "$CREATE_RESP" ] || ! printf '%s' "$CREATE_RESP" | jq -e '.errors == null' >/dev/null 2>&1; then
+            echo "::warning::Failed to create Linear ticket"
+          else
+            echo "Created $(printf '%s' "$CREATE_RESP" | jq -r '.data.issueCreate.issue.identifier // "ticket"')"
+          fi
+
+      # FAR-1446: recovery. The success counterpart to the ticket step above.
+      # When the probe and the body-level sub-check check both pass, any open
+      # ticket this monitor left open (either title) is stale: comment the
+      # recovery timestamp on it and move it to Done, so an outage has a
+      # visible end. A healthy run with nothing open is silent - the only
+      # Linear traffic here is read-only searches. Every Linear failure
+      # surfaces as a ::warning:: annotation, never a swallowed no-op and
+      # never a hard crash that would mask the (successful) probe result.
+      - name: Resolve Linear ticket on recovery
+        if: success()
+        shell: bash
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "LINEAR_API_KEY not set - skipping recovery check."
+            exit 0
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RECOVERY="Uptime monitor: condition RECOVERED at ${TS} - /healthz/ready responding and every non-advisory sub-check ok. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Resolve the team's Done state by id (type=completed, name Done
+          # preferred) so the transition never depends on a name match.
+          STATE_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" '{
+            query: "query($team: String!){ team(id:$team){ states { nodes { id name type } } } }",
+            variables: { team: $team }
+          }')
+          STATE_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -d "$STATE_BODY" 2>/dev/null || true)
+          DONE_ID=$(printf '%s' "$STATE_RESP" | jq -r '
+            ([.data.team.states.nodes[] | select(.type == "completed" and .name == "Done")][0].id)
+            // ([.data.team.states.nodes[] | select(.type == "completed")][0].id)
+            // empty' 2>/dev/null || true)
+          if [ -z "$DONE_ID" ]; then
+            echo "::warning::Could not resolve the team's Done state id - recovery comments will post but tickets will not be transitioned"
+          fi
+
+          # Both monitor titles: a probe success means BOTH the full-outage
+          # and the degraded-sub-check conditions have recovered.
+          for TITLE in \
+            "OUTAGE: app.modulo.run down (uptime monitor)" \
+            "DEGRADED: app.modulo.run health sub-check(s) not ok (FAR-1156)"; do
+            # Same shared OPEN_STATE_TYPES definition as the dedup search, so
+            # the two steps can never disagree about what "open" means.
+            SEARCH_BODY=$(jq -n --arg team "ae855baf-6439-4980-97fb-38da80129485" --arg title "$TITLE" --argjson states "$OPEN_STATE_TYPES" '{
+              query: "query($team: ID!, $title: String!, $states: [String!]!){ issues(filter:{ team:{ id:{ eq: $team } }, title:{ eq: $title }, state:{ type:{ in: $states } } }, orderBy: createdAt, first: 100){ nodes { id identifier } } }",
+              variables: { team: $team, title: $title, states: $states }
+            }')
+            SEARCH_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -d "$SEARCH_BODY" 2>/dev/null || true)
+
+            if [ -z "$SEARCH_RESP" ] || ! printf '%s' "$SEARCH_RESP" | jq -e '.errors == null and .data.issues.nodes != null' >/dev/null 2>&1; then
+              echo "::warning::Linear recovery search failed for \"${TITLE}\" - open tickets (if any) were not resolved this run"
+              continue
+            fi
+
+            NODES=$(printf '%s' "$SEARCH_RESP" | jq -r '.data.issues.nodes[]? | "\(.id)\t\(.identifier)"' 2>/dev/null || true)
+            if [ -z "$NODES" ]; then
+              # Nothing open for this title - a healthy run stays silent.
+              continue
+            fi
+
+            # Enumerate exactly what is about to be mutated (FAR-1446).
+            echo "Recovering open uptime-monitor ticket(s) for \"${TITLE}\":"
+            printf '%s\n' "$NODES"
+
+            while IFS=$'\t' read -r ID REF; do
+              if [ -z "$ID" ]; then
+                continue
+              fi
+              COMMENT_BODY=$(jq -n --arg id "$ID" --arg body "$RECOVERY" '{
+                query: "mutation($i: CommentCreateInput!){ commentCreate(input:$i){ success comment { id } } }",
+                variables: { i: { issueId: $id, body: $body } }
+              }')
+              # Linear returns HTTP 200 with an "errors" body for runtime
+              # failures - inspect the body, do not trust the exit code alone.
+              COMMENT_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: $LINEAR_API_KEY" \
+                -d "$COMMENT_BODY" 2>/dev/null) || COMMENT_RESP=""
+              if [ -n "$COMMENT_RESP" ] && printf '%s' "$COMMENT_RESP" | jq -e '.errors == null' >/dev/null 2>&1; then
+                echo "Posted recovery comment on ${REF}"
+              else
+                echo "::warning::Failed to post recovery comment on ${REF}"
+              fi
+
+              if [ -n "$DONE_ID" ]; then
+                # issueUpdate takes the target as a TOP-LEVEL id: String!
+                # argument (id is NOT a field of IssueUpdateInput) - verified
+                # against the Linear schema by introspection (FAR-1446).
+                UPDATE_BODY=$(jq -n --arg id "$ID" --arg state "$DONE_ID" '{
+                  query: "mutation($id: String!, $i: IssueUpdateInput!){ issueUpdate(id: $id, input:$i){ success issue { identifier state { name } } } }",
+                  variables: { id: $id, i: { stateId: $state } }
+                }')
+                UPDATE_RESP=$(curl -sS -f --max-time 20 -X POST "https://api.linear.app/graphql" \
+                  -H "Content-Type: application/json" \
+                  -H "Authorization: $LINEAR_API_KEY" \
+                  -d "$UPDATE_BODY" 2>/dev/null) || UPDATE_RESP=""
+                if [ -n "$UPDATE_RESP" ] && printf '%s' "$UPDATE_RESP" | jq -e '.errors == null' >/dev/null 2>&1; then
+                  echo "Moved ${REF} to Done"
+                else
+                  echo "::warning::Failed to transition ${REF} to Done - it stays open and will be retried on the next healthy run"
+                fi
+              fi
+            done <<< "$NODES"
+          done

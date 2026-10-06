@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
 from modulo.api.main import app
@@ -49,6 +50,22 @@ def _slack_sig(body: bytes, secret: str, timestamp: str) -> str:
     return "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
 
 
+def _lock_engine_stub() -> MagicMock:
+    """Stub for the DEDICATED NullPool lock engine (FAR-1287).
+
+    The snapshot's advisory lock is resolved by ``_dedicated_lock_engine`` and
+    drawn from that engine — never from the session's pool — so a test whose
+    session reaches ``create_snapshot_from_live_graph`` must stub the resolver.
+    """
+    lock_result = MagicMock()
+    lock_result.scalar_one.return_value = True
+    lock_conn = AsyncMock()
+    lock_conn.execute.side_effect = [lock_result, MagicMock()]  # try-lock, then unlock
+    engine = MagicMock(spec=AsyncEngine)
+    engine.connect = AsyncMock(return_value=lock_conn)
+    return engine
+
+
 def _make_trigger_session() -> AsyncMock:
     """Session whose trigger carries a signing_secret so route-level signature
     validation runs against the real secret."""
@@ -57,6 +74,15 @@ def _make_trigger_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1287: create_snapshot_from_live_graph allocates the snapshot version
+    # inside a ``session.begin_nested()`` SAVEPOINT. A bare AsyncMock's
+    # begin_nested() returns a plain coroutine, which is not an async context
+    # manager, so the route would 500 with TypeError. Stub it the same way
+    # ``begin`` is stubbed above.
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
 
     trigger_mock = MagicMock()
     trigger_mock.pipeline_id = uuid.uuid4()
@@ -68,6 +94,10 @@ def _make_trigger_session() -> AsyncMock:
     session.execute = AsyncMock(return_value=execute_result)
     session.add = MagicMock()
     session.flush = AsyncMock()
+    # FAR-1287: the route creates the pipeline snapshot before dispatch; without
+    # a bound AsyncEngine the snapshot creation refuses to start (RuntimeError),
+    # so wire the derivation contract even though tests stub the resolver.
+    session.bind = _lock_engine_stub()
     return session
 
 
@@ -390,6 +420,9 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack.record_busy_delivery", new_callable=AsyncMock) as record,
         patch("modulo.api.routes.slack.set_rls_org"),
+        # FAR-1287: the route snapshots the pipeline before dispatch, and the
+        # snapshot's advisory lock is resolved onto a dedicated engine.
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
     ):
         m.side_effect = TriggerBusyError(_TRIGGER_ID)
         resp = client.post(

@@ -868,7 +868,7 @@ async def test_mark_catchup_fired_swallows_redis_failure(caplog):
     assert any("catchup_marker_write_failed" in m for m in caplog.messages)
 
 
-_DAILY_CRON = "0 0 * * * *"
+_DAILY_CRON = "0 0 * * *"
 
 
 def _catchup_row(now: datetime, *, hours_since_fire: float = 30.0) -> SimpleNamespace:
