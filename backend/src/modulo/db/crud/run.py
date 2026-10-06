@@ -3678,12 +3678,17 @@ async def count_active_sandbox_runs_for_org(
 # default-cap bucket must not undercount).
 # ---------------------------------------------------------------------------
 RUNNER_TOMBSTONE_EXCLUSION_SQL = 'runs.sandbox_dispatch_state NOT LIKE \'%"state": "cleared_at_hitl"%\''
+# The IN-list is the SQL face of ``core.runner_capacity.HOST_RESOURCE_PROVIDERS``
+# (FAR-1051 added 'kubernetes' there so a Kubernetes dispatch counts toward the
+# absent-key default cap instead of being silently uncounted); the two must be
+# changed together — the Python set is the gate's membership test, this filter
+# is the count's scope.
 RUNNER_HOST_RESOURCE_FILTER_SQL = (
     "COALESCE("
     "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
     "THEN substring(runs.sandbox_dispatch_state from "
     '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
-    "'runner_docker') IN ('runner_docker', 'local')"
+    "'runner_docker') IN ('runner_docker', 'local', 'kubernetes')"
 )
 
 
@@ -3719,7 +3724,8 @@ async def count_active_runner_dispatches_for_org(
     self-block.
 
     ``host_resource_only=True`` scopes the count to the host-resource
-    providers (Docker + Local) for the absent-key Docker-tier default; the
+    providers (Docker + Local + Kubernetes — FAR-1051) for the absent-key
+    Docker-tier default; the
     provider is attributed from the marker's JSON ``"provider"`` key, with
     legacy tier-less markers attributed to ``runner_docker`` (fail-safe — see
     ``modulo.core.runner_capacity``).
