@@ -71,7 +71,9 @@ export function runStatusDescription(
   // FAR-1487: a superseded run is bookkeeping, not a reviewer decision.
   const key = isSupersededRun(status, errorCode) ? 'statusDescriptions.superseded' : `statusDescriptions.${status}`
   const translated = t(key)
-  return translated === key ? runStatusLabel(status) : translated
+  // Pass errorCode through: the fallback must preserve the superseded phrasing
+  // for a `rejected` run whose locale lacks the `statusDescriptions.superseded` key.
+  return translated === key ? runStatusLabel(status, errorCode) : translated
 }
 
 const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {

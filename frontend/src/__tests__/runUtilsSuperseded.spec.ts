@@ -24,6 +24,12 @@ describe('rejected / superseded run labelling (FAR-1487)', () => {
     expect(runStatusDescription('rejected', t, 'hitl.rejected')).toBe('REJECTED DESC')
   })
 
+  it('keeps the superseded phrasing when the locale lacks the superseded description', () => {
+    const untranslated = (key: string) => key
+    expect(runStatusDescription('rejected', untranslated, 'hitl.superseded')).toBe('superseded by a newer version')
+    expect(runStatusDescription('rejected', untranslated, 'hitl.rejected')).toBe('rejected')
+  })
+
   it('renders rejected as a neutral (non-destructive) badge', () => {
     expect(runStatusBadgeClass('rejected')).toBe('bg-muted text-muted-foreground')
   })

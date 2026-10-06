@@ -278,6 +278,7 @@ import { api } from '../../lib/api/client'
 import { formatApiError } from '../../lib/api/formatError'
 import { claimFailureMessage } from '../../lib/hitlClaimFailure'
 import { shortId } from '../../utils/format'
+import { asRejectDisposition, type RejectDisposition } from '../../utils/rejectDisposition'
 import { formatDateShortWithTime } from '../../lib/formatDate'
 import { useHitlReviewState } from '../../composables/useHitlReviewState'
 import Button from 'primevue/button'
@@ -399,8 +400,8 @@ const pipelineName = computed(() => props.gate.pipeline_name || '')
 interface RejectConsequence {
   node_id: string
   label: string | null
-  /** FAR-1487: `route` | `terminate` | `proceed`; null on briefings captured before FAR-1487. */
-  disposition: 'route' | 'terminate' | 'proceed' | null
+  /** FAR-1487: null on briefings captured before FAR-1487. */
+  disposition: RejectDisposition | null
 }
 
 const rejectConsequence = computed<RejectConsequence | null>(() => {
@@ -414,7 +415,7 @@ const rejectConsequence = computed<RejectConsequence | null>(() => {
   const nodeId = typeof entry.node_id === 'string' ? entry.node_id.trim() : ''
   const label = typeof entry.label === 'string' && entry.label.trim() ? entry.label : null
   const raw = entry.disposition
-  const disposition = raw === 'route' || raw === 'terminate' || raw === 'proceed' ? raw : null
+  const disposition = asRejectDisposition(raw)
   if (nodeId) return { node_id: nodeId, label, disposition: 'route' }
   if (!disposition || disposition === 'route') return null
   return { node_id: '', label, disposition }

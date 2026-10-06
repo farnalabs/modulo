@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { asRejectDisposition, type RejectDisposition } from '../utils/rejectDisposition'
 
 const props = defineProps<{
   /** The gate config's human description (null for legacy gates → muted fallback). */
@@ -68,14 +69,6 @@ interface ConsequenceTarget {
   label: string | null
 }
 
-/**
- * FAR-1487: what a rejection does — `route` (a reject destination exists),
- * `terminate` (the default: the run ENDS `rejected`) or `proceed` (explicit
- * `on_reject: proceed` / a correction target: the run continues down the
- * approve path). Absent on briefings captured before FAR-1487.
- */
-type RejectDisposition = 'route' | 'terminate' | 'proceed'
-
 interface RejectConsequenceEntry extends ConsequenceTarget {
   disposition: RejectDisposition | null
 }
@@ -83,10 +76,6 @@ interface RejectConsequenceEntry extends ConsequenceTarget {
 interface Consequences {
   approve?: ConsequenceTarget
   reject?: RejectConsequenceEntry
-}
-
-function asDisposition(value: unknown): RejectDisposition | null {
-  return value === 'route' || value === 'terminate' || value === 'proceed' ? value : null
 }
 
 const consequences = computed<Consequences | null>(() => {
@@ -103,7 +92,7 @@ const consequences = computed<Consequences | null>(() => {
     result.reject = {
       node_id: asString(r.node_id) ?? '',
       label: asString(r.label),
-      disposition: asDisposition(r.disposition),
+      disposition: asRejectDisposition(r.disposition),
     }
   }
   return result.approve || result.reject ? result : null
