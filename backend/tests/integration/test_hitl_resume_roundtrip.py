@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 import modulo.core.pipeline_execution as pe
 from modulo.core.model_backend_hub import ModelBackendHub
 from modulo.core.pipeline_engine.decorator import set_model_backend_hub
+from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.model_backends.base import ModelBackendBase
 from modulo.model_backends.stub.backend import StubModelBackend
 
@@ -308,10 +309,17 @@ async def _resume_and_complete(
     resume_data: dict[str, Any],
     *,
     expected_status: str = "complete",
+    live_events: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> None:
-    """Dispatch resume_run with the reconstructed payload; the run must end ``expected_status``."""
+    """Dispatch resume_run with the reconstructed payload; the run must end ``expected_status``.
+
+    When *live_events* is given, an SSE-style broker subscriber is attached
+    before the resume and every ``(event_type, payload)`` it received (up to the
+    close sentinel) is appended to it (FAR-1534).
+    """
     setup_hub = _run_executor_hub(backend_id, fixtures)
     hub = await setup_hub()
+    subscriber = get_registry().get_or_create(run_id).subscribe() if live_events is not None else None
     try:
         outcome = await pe.resume_run(
             async_engine=db_engine,
@@ -322,6 +330,11 @@ async def _resume_and_complete(
     finally:
         set_model_backend_hub(None)
         await hub.__aexit__(None, None, None)
+        if subscriber is not None and live_events is not None:
+            while not subscriber.empty():
+                event = subscriber.get_nowait()
+                if event is not None:
+                    live_events.append((event.event_type, event.payload))
 
     if outcome.get("status") != expected_status:
         async with db_engine.connect() as conn:
@@ -456,9 +469,24 @@ async def test_hitl_resume_roundtrip_committed_rejection_resumes_as_rejected(
     # committed human rejection ENDS the run ``rejected`` (error_code
     # ``hitl.rejected``) - NOT ``complete`` (the graph END is a normal stream
     # exit that finalize must downgrade) and NOT ``failed``/``cancelled``.
+    live_events: list[tuple[str, dict[str, Any]]] = []
     await _resume_and_complete(
-        db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures, reconstructed, expected_status="rejected"
+        db_engine,
+        migrated_db_url,
+        org_id,
+        run_id,
+        backend_id,
+        fixtures,
+        reconstructed,
+        expected_status="rejected",
+        live_events=live_events,
     )
+
+    # FAR-1534: live SSE clients must see the FINAL status - exactly one
+    # ``run_completed`` carrying ``rejected`` and never a bare (``complete``)
+    # one published before finalize downgraded the run.
+    completed_events = [payload for event_type, payload in live_events if event_type == "run_completed"]
+    assert completed_events == [{"status": "rejected"}]
 
     status, completed_at = await _run_status(db_engine, run_id)
     assert status == "rejected"
@@ -479,6 +507,7 @@ async def _reject_roundtrip(
     *,
     reason: str,
     expected_status: str,
+    live_events: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> tuple[str, str | None]:
     """Run a gate to a committed rejection and resume it; return ``(status, error_code)``."""
     from modulo.core.cron_helpers import _committed_decision_resume_data
@@ -513,7 +542,15 @@ async def _reject_roundtrip(
         reconstructed = await _committed_decision_resume_data(session, org_id, run_id)
 
     await _resume_and_complete(
-        db_engine, migrated_db_url, org_id, run_id, backend_id, fixtures, reconstructed, expected_status=expected_status
+        db_engine,
+        migrated_db_url,
+        org_id,
+        run_id,
+        backend_id,
+        fixtures,
+        reconstructed,
+        expected_status=expected_status,
+        live_events=live_events,
     )
     status, _ = await _run_status(db_engine, run_id)
     return status, await _run_error_code(db_engine, run_id)
@@ -547,6 +584,7 @@ async def test_hitl_reject_on_reject_proceed_still_completes(
 ) -> None:
     """FAR-1487: an explicit ``on_reject: proceed`` keeps the pre-FAR-1487
     behaviour - the rejection is recorded but the run continues and completes."""
+    live_events: list[tuple[str, dict[str, Any]]] = []
     status, error_code = await _reject_roundtrip(
         db_engine,
         migrated_db_url,
@@ -554,6 +592,10 @@ async def test_hitl_reject_on_reject_proceed_still_completes(
         {"on_reject": "proceed"},
         reason="not good",
         expected_status="complete",
+        live_events=live_events,
     )
     assert status == "complete"
     assert error_code is None
+    # FAR-1534: a genuine ``complete`` is unchanged - one bare ``run_completed``.
+    completed_events = [payload for event_type, payload in live_events if event_type == "run_completed"]
+    assert completed_events == [{}]

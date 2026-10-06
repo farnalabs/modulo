@@ -3790,13 +3790,16 @@ class PipelineExecutor:
             set_model_backend_hub(None)
             if model_backend_hub is not None:
                 await _teardown_hub(model_backend_hub)
-            if final_status != "awaiting_human":
+            # FAR-1534: a ``complete`` keeps the broker open until finalize
+            # has committed the (possibly downgraded) status.
+            if final_status not in ("awaiting_human", "complete"):
                 get_registry().close(run_id)
 
         # Mark terminal/awaiting_human — the SINGLE finalization path (PR A2).
         # (The eval_blocked audit + work_intact + finalize_cost tail live in
         # ``_finalize_run_after_stream``.)
-        return await self._finalize_run_after_stream(
+        return await self._finalize_then_publish_completed(
+            defer_close=final_status == "complete",
             run_id=run_id,
             org_id=org_id,
             pipeline_id=pipeline_id,
@@ -4051,6 +4054,39 @@ class PipelineExecutor:
         if superseded_only:
             return "rejected", "hitl.superseded", "Superseded by a newer version of the work item."
         return "rejected", "hitl.rejected", "Rejected by a reviewer at a HITL gate; the run ended."
+
+    async def _finalize_then_publish_completed(self, *, defer_close: bool, **finalize_kwargs: Any) -> Run:
+        """Run ``_finalize_run_after_stream`` then publish ``run_completed`` (FAR-1534).
+
+        ``defer_close`` is True when the stream ended ``complete``: the broker
+        was deliberately left open so the event is only emitted once finalize
+        has committed the terminal status — a would-be ``complete`` that
+        finalize downgrades (FAR-1487 ``rejected``, FAR-510 ``failed``) never
+        shows live clients ``complete``. The payload stays ``{}`` for a genuine
+        ``complete`` and carries ``{"status": <final>}`` for a downgraded run.
+        The broker is always closed (even when finalize raises) so SSE
+        subscribers are released.
+        """
+        run_id: uuid.UUID = finalize_kwargs["run_id"]
+        try:
+            final_run = await self._finalize_run_after_stream(**finalize_kwargs)
+            if defer_close:
+                self._publish_run_completed(run_id, final_run.status)
+            return final_run
+        finally:
+            if defer_close:
+                get_registry().close(run_id)
+
+    @staticmethod
+    def _publish_run_completed(run_id: uuid.UUID, final_status: str) -> None:
+        """Best-effort ``run_completed`` publish carrying the committed status."""
+        broker = get_registry().get_or_create(run_id)
+        try:
+            broker.publish("run_completed", {} if final_status == "complete" else {"status": final_status})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.exception("pipeline.run_completed_publish_failed", extra={"run_id": str(run_id)})
 
     async def _finalize_run_after_stream(
         self,
@@ -4577,7 +4613,8 @@ class PipelineExecutor:
         # completed-node artifacts + the full DAG ran. NOT from the async
         # evidence probe. Written atomically inside the same terminalization
         # transaction (restores the false-failure banner for #1/#3).
-        return await self._finalize_run_after_stream(
+        return await self._finalize_then_publish_completed(
+            defer_close=final_status == "complete",
             run_id=run_id,
             org_id=org_id,
             pipeline_id=pipeline_id,
@@ -5656,13 +5693,9 @@ class PipelineExecutor:
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
                     )
-            if gate_suppressed:
-                # FAR-228: a gated run completed WITHOUT re-executing the node
-                # (guard B suppressed the transient retry). Publish run_completed
-                # after the eval-skip point and BEFORE the post-stream cleanup
-                # closes the broker below — the broker is provably open here
-                # (run_failed publishes at the retries-exhausted branch today).
-                broker.publish("run_completed", {})
+            # FAR-228 / FAR-1534: a gated run (``gate_suppressed``) completes
+            # without re-executing the node; its ``run_completed`` is published
+            # post-finalize like every other complete run.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -5692,6 +5725,7 @@ class PipelineExecutor:
         semantics in ``execute``. Returns the (possibly mutated) triplet from
         the tail.
         """
+        tail_ok = False
         try:
             final_status, error_code, error_detail = await self._run_post_stream_tail(
                 run_id=run_id,
@@ -5704,6 +5738,7 @@ class PipelineExecutor:
                 broker=broker,
                 gate_suppressed=gate_suppressed,
             )
+            tail_ok = True
         finally:
             # Close broker after all post-stream work (suite checks, signals).
             set_cancellation_check(None)
@@ -5714,7 +5749,10 @@ class PipelineExecutor:
                 await _teardown_hub(model_backend_hub)
             if connector_hub is not None:
                 await _teardown_hub(connector_hub)
-            if final_status != "awaiting_human":
+            # FAR-1534: a clean ``complete`` keeps the broker open — the
+            # finalize step may still downgrade it and then publishes
+            # ``run_completed`` (final status) and closes the broker.
+            if final_status != "awaiting_human" and not (final_status == "complete" and tail_ok):
                 get_registry().close(run_id)
         return final_status, error_code, error_detail
 
@@ -6476,7 +6514,12 @@ class PipelineExecutor:
             terminal = _stream_terminal_reason(state, broker, run_id)
             if terminal is not None:
                 return terminal
-            broker.publish("run_completed", {})
+            # FAR-1534: ``run_completed`` is NOT published here. The finalize
+            # step can still downgrade this would-be ``complete`` (HITL
+            # terminate-rejection -> ``rejected``, masked sandbox failure ->
+            # ``failed``), so the event is published by
+            # ``_finalize_then_publish_completed`` AFTER the terminal status
+            # commit, carrying the final status.
             return "complete", None, None, state.node_token_usage or None
         except Exception as exc:
             # CancelledError / NodeCancelledError / SandboxNodeFailedError
