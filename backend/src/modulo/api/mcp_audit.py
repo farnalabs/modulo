@@ -157,6 +157,7 @@ async def _record(
     extra_org = {**extra, "org_id": str(org_id)}
 
     stack = AsyncExitStack()
+    append_succeeded = False
     try:
         # Segment 1: establish the audit transaction (fresh session, BEGIN,
         # RLS context). Always logged-and-continued for both policies.
@@ -172,8 +173,9 @@ async def _record(
             _log.warning(log_key, extra={**extra_org, "stage": "session_setup"}, exc_info=True)
             return
 
-        # Segment 2: append the event to the chain (the commit happens when
-        # the stack unwinds below). Here the caller's failure policy applies.
+        # Segment 2: append the event to the chain. The COMMIT happens when the
+        # stack unwinds below and is part of the same outcome. Here the caller's
+        # failure policy applies.
         try:
             await append_audit_event(
                 session,
@@ -183,6 +185,7 @@ async def _record(
                 resource_type=resource_type,
                 payload_json=payload,
             )
+            append_succeeded = True
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -191,12 +194,16 @@ async def _record(
             _log.warning(log_key, extra=extra_org, exc_info=True)
     finally:
         # COMMIT on the success path; rollback/close otherwise. A close failure
-        # must never mask the append result (or replace a fail-closed raise).
+        # must never mask an append error already propagating — but a COMMIT that
+        # fails after a clean append IS the audit write failing, so under
+        # fail_closed it raises the same way the append itself would.
         try:
             await stack.aclose()
         except asyncio.CancelledError:
             raise
         except Exception:
+            if apply_fail_closed and append_succeeded:
+                raise
             _log.warning(f"{log_key}.close_failed", extra=extra, exc_info=True)
 
 

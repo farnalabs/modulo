@@ -176,3 +176,37 @@ class TestFailurePolicy(_AuthContext):
 
         assert append.await_count == 1
         assert append.await_args.kwargs["actor_user_id"] is None
+
+
+class TestCommitOutcome(_AuthContext):
+    """The COMMIT is part of the append's outcome, not a separate step."""
+
+    @pytest.fixture
+    def failing_commit_env(self, monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+        """Fresh session whose COMMIT raises after a clean append."""
+        session = _audit_session_mock()
+        session.begin.return_value.__aexit__ = AsyncMock(side_effect=RuntimeError("commit down"))
+
+        @asynccontextmanager
+        async def _fresh() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        monkeypatch.setattr(mcp_audit, "_fresh_session", _fresh)
+        monkeypatch.setattr(mcp_audit, "append_audit_event", AsyncMock())
+        monkeypatch.setattr(mcp_audit, "set_rls_org", AsyncMock())
+        monkeypatch.setattr(mcp_audit, "set_rls_user_context", AsyncMock())
+        return session
+
+    async def test_fail_closed_raises_when_the_commit_fails(self, failing_commit_env) -> None:
+        with pytest.raises(RuntimeError, match="commit down"):
+            await _fail_closed_tool()
+
+    async def test_fail_open_returns_the_result_when_the_commit_fails(
+        self, failing_commit_env, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING", logger=mcp_audit.__name__):
+            result = await _fail_open_tool()
+
+        assert result == {"id": "w1"}
+        messages = [record.getMessage() for record in caplog.records]
+        assert "mcp_audit.widget_created.append_failed.close_failed" in messages
