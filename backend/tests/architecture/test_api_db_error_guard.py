@@ -34,12 +34,15 @@ Scope notes:
   503-only scanner, so it gets its own predicate and its own violation text.
 * Two guard shapes exist, one per surface, and both are recognised as
   "leads with the guard" (see ``_leads_with_guard``): the REST/HTTP form
-  ``raise_session_contract_error(exc, key)`` as a bare statement, and the MCP
+  ``raise_session_contract_error(exc, key)`` as a bare statement, and the
   payload form ``if (err := _tool_session_contract_error(exc, key)) is not
   None: return err`` — where the call sits in the ``if`` test so it evaluates
-  before any database-unavailable reply. Both delegate to the SAME shared
-  classifier in ``db_error_handling``; only the rendering differs (500 vs
-  payload), which is why accepting either satisfies both predicates.
+  before any database-unavailable reply. The payload rendering is exposed under
+  two names: the MCP-surface name ``_tool_session_contract_error`` and the
+  surface-neutral ``session_contract_error_payload`` (FAR-1502 review) used by
+  the run WebSocket surface. Both delegate to the SAME shared classifier in
+  ``db_error_handling``; only the rendering differs (500 vs payload), which is
+  why accepting either satisfies both predicates.
 * Helper resolution is CROSS-MODULE across the scanned ``modulo.api`` +
   ``modulo.auth`` trees (iteration-2 fix): a helper reached via
   ``from modulo.api.<...> import <name>``
@@ -104,9 +107,12 @@ _EXEMPT = {
 
 #: REST/HTTP rendering of the shared classifier: raises 500, never returns.
 _HTTP_GUARD_NAME = "raise_session_contract_error"
-#: MCP payload rendering of the SAME classifier: returns the payload, else None.
+#: MCP tool-payload rendering of the SAME classifier: returns the payload, else None.
 _MCP_GUARD_NAME = "_tool_session_contract_error"
-_GUARD_NAMES = frozenset({_HTTP_GUARD_NAME, _MCP_GUARD_NAME})
+#: Surface-neutral payload rendering of the SAME classifier, used by the run
+#: WebSocket surface so it need not import ``mcp_server`` (FAR-1502 review).
+_PAYLOAD_GUARD_NAME = "session_contract_error_payload"
+_GUARD_NAMES = frozenset({_HTTP_GUARD_NAME, _MCP_GUARD_NAME, _PAYLOAD_GUARD_NAME})
 
 #: MCP tool-error shapes the same misclassification takes when there is no
 #: status code to carry it (FAR-1482).
@@ -166,9 +172,11 @@ def _logs_db_transient(node: ast.Call) -> bool:
 def _returns_mcp_db_unavailable(node: ast.Return) -> bool:
     """``return {"error": "database_unavailable", ...}`` (FAR-1482).
 
-    Also matches ``return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)``, whose
-    code is already ``internal_error`` but whose DETAIL still claims a database
-    outage — the same misreport in a different wrapper.
+    Also matches ``return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, ...)``:
+    the wrapper's DETAIL claims a database outage whatever code it carries
+    (``internal_error`` before FAR-1502, ``database_unavailable`` after), so
+    the same misreport — a session-contract violation answered as an outage —
+    applies and the arm must lead with the guard either way.
     """
     value = node.value
     if isinstance(value, ast.Call) and _name_of(value.func) == "_tool_error":

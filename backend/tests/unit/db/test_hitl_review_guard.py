@@ -850,3 +850,306 @@ def test_denial_detail_names_affected_node() -> None:
     )
     detail = denial_detail(diff)
     assert "node n1 (hitl_node): human_only" in detail
+
+
+# ---------------------------------------------------------------------------
+# FAR-1532: on_reject -> proceed is a weakening change
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("old_cfg", "new_cfg", "expected"),
+    [
+        ({}, {"on_reject": "proceed"}, ["on_reject"]),
+        ({"on_reject": None}, {"on_reject": "proceed"}, ["on_reject"]),
+        ({"on_reject": "terminate"}, {"on_reject": "proceed"}, ["on_reject"]),
+        ({"reject_target": "n2"}, {"reject_target": "n2", "on_reject": "proceed"}, ["on_reject"]),
+        ({"on_reject": "proceed"}, {"on_reject": "proceed"}, []),
+        ({"on_reject": "proceed"}, {"on_reject": "terminate"}, []),
+        ({"on_reject": "proceed"}, {}, []),
+        ({"on_reject": "terminate"}, {"on_reject": "terminate"}, []),
+        ({}, {"on_reject": "terminate"}, []),
+        ({}, {}, []),
+    ],
+    ids=[
+        "unset_to_proceed",
+        "none_to_proceed",
+        "terminate_to_proceed",
+        "route_to_proceed",
+        "proceed_unchanged",
+        "proceed_to_terminate",
+        "proceed_to_unset",
+        "terminate_unchanged",
+        "unset_to_terminate",
+        "both_unset",
+    ],
+)
+async def test_edge_level_on_reject_transitions(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE, **old_cfg})],
+        [_new_edge("a", "b", cfg={**_GATE, **new_cfg})],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.has_weakening is bool(expected)
+    if expected:
+        assert diff.weakened_edges[0].weakening_types == expected
+    else:
+        assert not diff.weakened_edges
+
+
+async def test_edge_level_on_reject_proceed_denied_for_non_privileged() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE, "on_reject": "terminate"})],
+        [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed"})],
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_edge_level_on_reject_proceed_denied_for_mcp() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE})],
+        [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed"})],
+        is_privileged=True,
+        caller_type="mcp",
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_MCP_NOT_PERMITTED
+
+
+async def test_edge_level_on_reject_combined_with_human_only() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE})],
+        [_new_edge("a", "b", cfg={**_GATE, "human_only": False, "on_reject": "proceed"})],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.weakened_edges[0].weakening_types == ["human_only", "on_reject"]
+
+
+@pytest.mark.parametrize(
+    ("old_cfg", "new_cfg", "expected"),
+    [
+        ({"human_only": True}, {"human_only": True, "on_reject": "proceed"}, ["on_reject"]),
+        ({"on_reject": "terminate"}, {"on_reject": "proceed"}, ["on_reject"]),
+        (None, {"on_reject": "proceed"}, ["on_reject"]),
+        ({"on_reject": "proceed"}, {"on_reject": "proceed"}, []),
+        ({"on_reject": "proceed"}, {"on_reject": "terminate"}, []),
+        ({"on_reject": "proceed"}, None, []),
+        ({"on_reject": "terminate"}, {"on_reject": "terminate"}, []),
+    ],
+    ids=[
+        "unset_to_proceed",
+        "terminate_to_proceed",
+        "no_config_to_proceed",
+        "proceed_unchanged",
+        "proceed_to_terminate",
+        "proceed_to_no_config",
+        "terminate_unchanged",
+    ],
+)
+async def test_node_level_on_reject_transitions(
+    old_cfg: dict | None, new_cfg: dict | None, expected: list[str]
+) -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", old_cfg)],
+        new_nodes=[_hitl_node("n1", new_cfg)],
+    )
+    assert diff.has_weakening is bool(expected)
+    if expected:
+        assert diff.weakened_nodes[0].weakening_types == expected
+        assert diff.weakened_nodes[0].correlation_key == ("n1", "n1", "hitl_node")
+    else:
+        assert not diff.weakened_nodes
+
+
+async def test_node_level_on_reject_proceed_denied_for_non_privileged() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"on_reject": "terminate"})],
+        new_nodes=[_hitl_node("n1", {"on_reject": "proceed"})],
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_node_creation_with_on_reject_proceed_is_not_weakening() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[],
+        new_nodes=[_hitl_node("n1", {"on_reject": "proceed"})],
+    )
+    assert diff.has_weakening is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-1532: ADDING a correction_target is the automated parallel weakening.
+# ``resolve_reject_disposition`` makes a truthy correction_target win over
+# terminating, so adding one is the same continue-on-reject relaxation as
+# flipping on_reject to proceed — and must not be a guard bypass.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("old_cfg", "new_cfg", "expected"),
+    [
+        ({}, {"correction_target": "n2"}, ["correction_target"]),
+        ({"correction_target": None}, {"correction_target": "n2"}, ["correction_target"]),
+        ({"correction_target": ""}, {"correction_target": "n2"}, ["correction_target"]),
+        ({"correction_target": "n2"}, {"correction_target": "n2"}, []),
+        ({"correction_target": "n2"}, {"correction_target": "n3"}, []),
+        ({"correction_target": "n2"}, {}, []),
+        ({"correction_target": "n2"}, {"correction_target": None}, []),
+        ({"correction_target": None}, {"correction_target": None}, []),
+        ({"correction_target": ""}, {"correction_target": ""}, []),
+        ({}, {}, []),
+    ],
+    ids=[
+        "unset_to_target",
+        "none_to_target",
+        "falsy_to_target",
+        "target_unchanged",
+        "target_changed",
+        "target_removed",
+        "target_to_none",
+        "none_unchanged",
+        "falsy_unchanged",
+        "both_unset",
+    ],
+)
+async def test_edge_level_correction_target_transitions(old_cfg: dict, new_cfg: dict, expected: list[str]) -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE, **old_cfg})],
+        [_new_edge("a", "b", cfg={**_GATE, **new_cfg})],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.has_weakening is bool(expected)
+    if expected:
+        assert diff.weakened_edges[0].weakening_types == expected
+    else:
+        assert not diff.weakened_edges
+
+
+async def test_edge_level_correction_target_added_denied_for_non_privileged() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE})],
+        [_new_edge("a", "b", cfg={**_GATE, "correction_target": "n2"})],
+        is_privileged=False,
+        caller_type="rest",
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_edge_level_correction_target_added_denied_for_mcp() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE})],
+        [_new_edge("a", "b", cfg={**_GATE, "correction_target": "n2"})],
+        is_privileged=True,
+        caller_type="mcp",
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_MCP_NOT_PERMITTED
+
+
+async def test_edge_level_correction_target_combined_with_on_reject() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [_old_edge("a", "b", cfg={**_GATE})],
+        [_new_edge("a", "b", cfg={**_GATE, "on_reject": "proceed", "correction_target": "n2"})],
+        is_privileged=True,
+        caller_type="rest",
+    )
+    assert diff.weakened_edges[0].weakening_types == ["on_reject", "correction_target"]
+
+
+@pytest.mark.parametrize(
+    ("old_cfg", "new_cfg", "expected"),
+    [
+        ({"human_only": True}, {"human_only": True, "correction_target": "n2"}, ["correction_target"]),
+        ({"correction_target": None}, {"correction_target": "n2"}, ["correction_target"]),
+        (None, {"correction_target": "n2"}, ["correction_target"]),
+        ({"correction_target": "n2"}, {"correction_target": "n2"}, []),
+        ({"correction_target": "n2"}, {}, []),
+        ({"correction_target": "n2"}, None, []),
+        ({}, {}, []),
+    ],
+    ids=[
+        "unset_to_target",
+        "none_to_target",
+        "no_config_to_target",
+        "target_unchanged",
+        "target_removed",
+        "target_to_no_config",
+        "both_unset",
+    ],
+)
+async def test_node_level_correction_target_transitions(
+    old_cfg: dict | None, new_cfg: dict | None, expected: list[str]
+) -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=True,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", old_cfg)],
+        new_nodes=[_hitl_node("n1", new_cfg)],
+    )
+    assert diff.has_weakening is bool(expected)
+    if expected:
+        assert diff.weakened_nodes[0].weakening_types == expected
+        assert diff.weakened_nodes[0].correlation_key == ("n1", "n1", "hitl_node")
+    else:
+        assert not diff.weakened_nodes
+
+
+async def test_node_level_correction_target_added_denied_for_non_privileged() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[_hitl_node("n1", {"human_only": True})],
+        new_nodes=[_hitl_node("n1", {"human_only": True, "correction_target": "n2"})],
+    )
+    assert diff.denied is True
+    assert diff.reason_code == REASON_INSUFFICIENT_ROLE
+
+
+async def test_node_creation_with_correction_target_is_not_weakening() -> None:
+    diff = await apply_gated_edge_diff(
+        _SESSION,
+        [],
+        [],
+        is_privileged=False,
+        caller_type="rest",
+        old_nodes=[],
+        new_nodes=[_hitl_node("n1", {"correction_target": "n2"})],
+    )
+    assert diff.has_weakening is False

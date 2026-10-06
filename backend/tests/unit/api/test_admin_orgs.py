@@ -10,9 +10,8 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
-from modulo.api.dependencies import get_db_session, get_plan_context
+from modulo.api.dependencies import get_db_session, get_plan_context, resolve_audit_principal
 from modulo.api.main import app
-from modulo.api.routes.admin_orgs import resolve_audit_principal
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.models.organisation import Organisation

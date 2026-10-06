@@ -46,7 +46,7 @@ org/`days` to keep the landing page fast.
       are asserted by `hitl_trends.feature`
 - [x] Saved Views ship end to end as the admin CRUD surface: `/admin/views` renders
       `AdminViewsView.vue` over `GET/POST/PATCH/DELETE /api/v1/views` (gated by the plan
-      `view_modes` feature flag) — name, view type, custom filters (JSON), column
+      `view_modes` feature flag) – name, view type, custom filters (JSON), column
       layouts, and sort-by/order configuration for create/edit/delete, locked by
       `views.feature` BDD + `test_view_endpoint.py`. The route is a `private_preview`
       surface (hidden from the sidebar nav, FAR-546) and the plan `saved_views` toggle
@@ -57,12 +57,12 @@ org/`days` to keep the landing page fast.
 
 ## Known Gaps
 
-- **Eval pass rate is derived from non-guardrail eval results** — guardrail evals are
+- **Eval pass rate is derived from non-guardrail eval results**: guardrail evals are
   deliberately excluded from the ratio (`non_guardrail_eval_results_clause`), so the
   headline pass rate does not reflect guardrail-blocked runs.
 
 ## QA History
-- 2026-09-26: **Improve Architecture product-map walk** — closed `feat-dashboard`'s
+- 2026-09-26: **Improve Architecture product-map walk**: closed `feat-dashboard`'s
   stale "Saved Views are configurable with custom filters and column layouts" gap:
   the surface ships as the admin CRUD page `AdminViewsView.vue` over the full
   `GET/POST/PATCH/DELETE /api/v1/views` API (gated by the `view_modes` feature),
@@ -73,21 +73,21 @@ org/`days` to keep the landing page fast.
   the shipped-but-orphaned `ViewToggle` component is not yet wired into the
   runs/pipelines list pages (saved views are created/edited from `/admin/views` rather
   than applied in-context).
-- 2026-09-18: **product-map review pass** — closed the "No BDD for
+- 2026-09-18: **product-map review pass**: closed the "No BDD for
   `/summary` / `/trends` / `/daily-run-counts`" gap: registered
   `dashboard/dashboard_summary.feature` (+ colocated steps
   `features/dashboard/test_dashboard_summary_steps.py`) and
   `dashboard/daily_run_counts.feature` (+ colocated steps
   `features/dashboard/test_daily_run_counts_steps.py`) into the executing BDD
   suite, driving the real `dashboard_summary` /
-  `daily_run_counts` route handlers (mock-session dispatch on SQL text) — summary
+  `daily_run_counts` route handlers (mock-session dispatch on SQL text) – summary
   widget shape, per-team metrics, eval pass-rate detail, 7-day trend, config
   warnings, idle folding of `pending`/`claimed` into `idle` with single-counted
   `total_runs`, the additive `days` `period` block, and the 1..90 `days` bound; plus
   day/status-keyed daily counts, cross-status accumulation, default 30 and custom
   `days` windows, and the 1..365 `days` bound. Removed the tracked known gap;
   `/trends` was already covered by `hitl_trends.feature`.
-- 2026-09-15: **product-map review pass** — closed the dashboard
+- 2026-09-15: **product-map review pass**: closed the dashboard
   notifications-panel product-map gap: the `DashboardNotificationsPanel.vue` paging
   controls ship static `data-testid`s (`panel-prev-page` / `panel-next-page`) on the
   home page while the `/` manifest `elements:` inventory registered only its
@@ -97,13 +97,13 @@ org/`days` to keep the landing page fast.
   Registered both buttons in the `/` inventory and wired
   `components/DashboardNotificationsPanel.vue` into the guard as an owned view of the
   dashboard, so the panel surface can no longer drift unguarded.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   `PageHeader` right-slot surface (`components/shared/PageHeader.vue`, static testid
   `page-header-right`) in the manifest `elements:` inventory for the home dashboard
   (`/`), which renders the header's `#right` action slot, and wired the component into
   the reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
   so the header action surface stays visible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/views`
   and wired the two components into the reverse testid-coverage guard
@@ -111,8 +111,8 @@ org/`days` to keep the landing page fast.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-08-28: **product-map review pass** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behaviour-tracker
   for the registered manifest feature `feat-dashboard`, which previously had no
-  `docs/product-map/` entry. Behaviours verified against `api/routes/dashboard.py`,
-  `api/routes/views.py`, `api/routes/daily_run_counts.py` and the dashboard/views
+  `docs/product-map/` entry. Behaviours verified against `api/routes/dashboard.py`
+  and `api/routes/views.py` and the dashboard/views
   unit+BDD suites. Status: covered.
