@@ -58,7 +58,7 @@ class TestCreateAgentErrors(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
-    async def test_invalid_model_backend_id_returns_server_error(
+    async def test_invalid_model_backend_id_returns_internal_error(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,

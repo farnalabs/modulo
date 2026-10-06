@@ -370,7 +370,7 @@ class TestGetRunStatus(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server.get_run")
     @patch("modulo.api.mcp_server._session")
-    async def test_server_error(
+    async def test_internal_error(
         self,
         mock_session: AsyncMock,
         mock_get_run: AsyncMock,

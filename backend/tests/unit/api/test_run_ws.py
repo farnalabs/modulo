@@ -364,7 +364,7 @@ async def test_ws_programming_error_sends_migration_msg():
 
 
 @pytest.mark.asyncio
-async def test_ws_sqlalchemy_error_sends_database_unavailable():
+async def test_ws_sqlalchemy_error_sends_db_unavailable():
     from sqlalchemy.exc import SQLAlchemyError
 
     ws = _FakeWebSocket()
@@ -425,7 +425,7 @@ async def test_ws_session_contract_error_sends_specific_frame():
 
 
 @pytest.mark.asyncio
-async def test_ws_generic_exception_sends_server_error():
+async def test_ws_generic_exception_sends_internal_error():
     ws = _FakeWebSocket()
     payload = {
         "sub": "u",

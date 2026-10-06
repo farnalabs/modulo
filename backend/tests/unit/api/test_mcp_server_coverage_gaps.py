@@ -1128,7 +1128,7 @@ class TestMcpAsgiApp:
 
 
 class TestSimpleToolErrorHandlers(_AuthContext):
-    async def test_list_pipelines_server_error(self) -> None:
+    async def test_list_pipelines_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.pipeline.list_pipelines", side_effect=RuntimeError("boom")),
@@ -1136,7 +1136,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await list_pipelines_tool()
         assert result["error"] == "server_error"
 
-    async def test_create_pipeline_server_error(self) -> None:
+    async def test_create_pipeline_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.pipeline.create_pipeline", side_effect=RuntimeError("boom")),
@@ -1160,7 +1160,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await get_pipeline_graph_tool(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
 
-    async def test_get_pipeline_graph_server_error(self) -> None:
+    async def test_get_pipeline_graph_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.pipeline.get_pipeline_graph", side_effect=RuntimeError("boom")),
@@ -1168,7 +1168,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await get_pipeline_graph_tool(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
-    async def test_copy_library_primitive_server_error(self) -> None:
+    async def test_copy_library_primitive_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "library_copy_to_adapt", side_effect=RuntimeError("boom")),
@@ -1192,7 +1192,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_agent(name="a", prompt_template="p")
         assert result["error"] == "migration_required"
 
-    async def test_get_integration_status_server_error(self) -> None:
+    async def test_get_integration_status_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
@@ -1200,7 +1200,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await get_integration_status()
         assert result["error"] == "server_error"
 
-    async def test_get_org_config_server_error(self) -> None:
+    async def test_get_org_config_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.system_config.list_config", side_effect=RuntimeError("boom")),
@@ -1220,7 +1220,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         assert result["count"] == 1
         assert "..." in result["results"]
 
-    async def test_get_available_features_server_error(self) -> None:
+    async def test_get_available_features_internal_error(self) -> None:
         org = MagicMock()
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
@@ -1245,7 +1245,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_schema(name="s")
         assert result["error"] == "server_error"
 
-    async def test_list_schemas_server_error(self) -> None:
+    async def test_list_schemas_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "db_list_schemas", side_effect=RuntimeError("boom")),
@@ -1286,7 +1286,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
         assert result["error"] == "server_error"
 
-    async def test_list_housekeeping_server_error(self) -> None:
+    async def test_list_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
@@ -1318,7 +1318,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         assert result["deleted_count"] == 1
         assert not result["errors"]
 
-    async def test_perform_housekeeping_server_error(self) -> None:
+    async def test_perform_housekeeping_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
@@ -1371,22 +1371,22 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await get_run_output(run_id=str(uuid.uuid4()), node_id="n")
         assert result["error"] == "server_error"
 
-    async def test_get_run_evals_server_error(self) -> None:
+    async def test_get_run_evals_internal_error(self) -> None:
         with patch.object(ms, "_get_run_evals_impl", side_effect=RuntimeError("boom")):
             result = await get_run_evals(run_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
-    async def test_cancel_run_server_error(self) -> None:
+    async def test_cancel_run_internal_error(self) -> None:
         with patch.object(ms, "_cancel_run_impl", side_effect=RuntimeError("boom")):
             result = await cancel_run(run_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
-    async def test_list_pending_hitl_server_error(self) -> None:
+    async def test_list_pending_hitl_internal_error(self) -> None:
         with patch.object(ms, "_list_pending_hitl_impl", side_effect=RuntimeError("boom")):
             result = await ms.list_pending_hitl()
         assert result["error"] == "server_error"
 
-    async def test_list_eval_definitions_server_error(self) -> None:
+    async def test_list_eval_definitions_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch(
@@ -1455,7 +1455,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
         assert result["status"] == "pending_setup"
 
-    async def test_delete_pipeline_server_error(self) -> None:
+    async def test_delete_pipeline_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.team_scope.pipeline_owner_team_id", new=AsyncMock(return_value=None)),
@@ -1464,7 +1464,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await delete_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"
 
-    async def test_delete_connector_server_error(self) -> None:
+    async def test_delete_connector_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch("modulo.db.crud.connector_instance.delete_connector_instance", side_effect=RuntimeError("boom")),
@@ -1490,7 +1490,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await create_secret(key="k", value="v")
         assert result["error"] == "server_error"
 
-    async def test_list_secrets_server_error(self) -> None:
+    async def test_list_secrets_internal_error(self) -> None:
         session = _mock_session()
         session.execute.side_effect = RuntimeError("boom")
         with (
@@ -1518,7 +1518,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             result = await delete_secret(key="k")
         assert result["error"] == "server_error"
 
-    async def test_create_connector_server_error(self) -> None:
+    async def test_create_connector_internal_error(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
             patch.object(ms, "get_settings", side_effect=RuntimeError("boom")),
@@ -1887,7 +1887,7 @@ class TestTriggerPipelinePaths(_AuthContext):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "migration_required"
 
-    async def test_server_error_mapping(self) -> None:
+    async def test_internal_error_mapping(self) -> None:
         with patch.object(ms, "_trigger_pipeline_impl", side_effect=RuntimeError("boom")):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "server_error"

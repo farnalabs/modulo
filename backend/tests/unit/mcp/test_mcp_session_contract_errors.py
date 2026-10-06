@@ -90,7 +90,7 @@ class TestToolDbShellSessionContract:
     A bare decorator over a local handler — no auth/contextvars involved.
     """
 
-    async def test_invalid_request_error_is_session_contract_error(self) -> None:
+    async def test_invalid_request_error_is_internal_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
             raise InvalidRequestError(_SESSION_CONTRACT_MSG)
@@ -98,7 +98,7 @@ class TestToolDbShellSessionContract:
         result = await handler()
         _assert_session_contract(result)
 
-    async def test_missing_greenlet_is_session_contract_error(self) -> None:
+    async def test_missing_greenlet_is_internal_error(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail")
         async def handler() -> dict[str, Any]:
             raise MissingGreenlet
@@ -144,7 +144,7 @@ class TestToolDbShellSessionContract:
 class TestToolPayloadSessionContract(_McpContext):
     """Hand-rolled per-tool ``except SQLAlchemyError`` ladders."""
 
-    async def test_create_schema_reports_session_contract_error(self) -> None:
+    async def test_create_schema_reports_internal_error(self) -> None:
         with _tool_env(db_create_schema=InvalidRequestError(_SESSION_CONTRACT_MSG)):
             result = await create_schema(name="s")
         _assert_session_contract(result)
@@ -159,7 +159,7 @@ class TestToolPayloadSessionContract(_McpContext):
             result = await create_schema(name="s")
         assert result["error"] == "database_unavailable", result
 
-    async def test_list_api_keys_reports_session_contract_error(self) -> None:
+    async def test_list_api_keys_reports_internal_error(self) -> None:
         """Covers the ``_tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)`` arm shape."""
         with _tool_env(auth_list_api_keys=InvalidRequestError(_SESSION_CONTRACT_MSG)):
             result = await list_api_keys()

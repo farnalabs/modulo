@@ -327,7 +327,7 @@ class TestListTriggersErrors(_AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.trigger.list_triggers")
-    async def test_server_error_on_generic_exception(
+    async def test_internal_error_on_generic_exception(
         self,
         mock_db_list: AsyncMock,
         mock_session: AsyncMock,

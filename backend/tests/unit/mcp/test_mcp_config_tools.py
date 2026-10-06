@@ -333,7 +333,7 @@ class TestSearchDocumentationErrors(AuthContext):
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._get_doc_index")
-    async def test_search_failure_returns_server_error(
+    async def test_search_failure_returns_internal_error(
         self,
         mock_get_index: MagicMock,
         mock_validate_auth: AsyncMock,

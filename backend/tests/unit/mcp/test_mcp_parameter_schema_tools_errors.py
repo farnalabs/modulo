@@ -79,7 +79,7 @@ class TestCreateParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.create_schema")
-    async def test_session_contract_error_returns_specific_code(self, mock_create, mock_session, mock_validate):
+    async def test_session_contract_error_returns_internal_error(self, mock_create, mock_session, mock_validate):
         mock_create.side_effect = InvalidRequestError("Autobegin is disabled on this Session")
         mock_session.return_value = _session()
         result = await create_parameter_schema(name="test")
@@ -158,7 +158,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.update_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get, mock_update, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -226,7 +226,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.soft_delete_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get, mock_delete, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -283,7 +283,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_schema.restore_schema")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get, mock_restore, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -484,7 +484,7 @@ class TestCreateParameterSetErrors(AuthContext):
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.parameter_set.create_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get, mock_create, mock_session, mock_validate
     ):
         mock_get.return_value = _make_mock_schema()
@@ -578,7 +578,7 @@ class TestUpdateParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.update_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get_schema, mock_get_set, mock_update, mock_session, mock_validate
     ):
         sid = uuid.uuid4()
@@ -665,7 +665,7 @@ class TestDeleteParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.soft_delete_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get_schema, mock_get_set, mock_delete, mock_session, mock_validate
     ):
         sid = uuid.uuid4()
@@ -752,7 +752,7 @@ class TestRestoreParameterSetErrors(AuthContext):
     @patch("modulo.db.crud.parameter_set.restore_set")
     @patch("modulo.db.crud.parameter_set.get_set")
     @patch("modulo.db.crud.parameter_schema.get_schema")
-    async def test_session_contract_error_returns_specific_code(
+    async def test_session_contract_error_returns_internal_error(
         self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
     ):
         sid = uuid.uuid4()

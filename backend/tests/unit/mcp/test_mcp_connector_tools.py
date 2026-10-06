@@ -58,7 +58,7 @@ class TestCreateConnectorErrors(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.db.crud.connector_instance.create_connector_instance")
-    async def test_generic_error_returns_server_error(
+    async def test_generic_error_returns_internal_error(
         self,
         mock_create: AsyncMock,
         mock_session: AsyncMock,

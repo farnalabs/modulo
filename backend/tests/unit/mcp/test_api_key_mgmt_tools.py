@@ -580,7 +580,7 @@ class TestApiKeySessionContract(AuthContext):
 
         _ctx_role.set("admin")
 
-    async def test_create_api_key_session_contract_error_is_specific(self) -> None:
+    async def test_create_api_key_session_contract_error_is_internal(self) -> None:
         from modulo.api.mcp_server import create_api_key
 
         mock_crud = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
@@ -602,7 +602,7 @@ class TestApiKeySessionContract(AuthContext):
         assert result["error"] == "database_unavailable", result
         assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
 
-    async def test_revoke_api_key_session_contract_error_is_specific(self) -> None:
+    async def test_revoke_api_key_session_contract_error_is_internal(self) -> None:
         from modulo.api.mcp_server import revoke_api_key
 
         mock_revoke = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
