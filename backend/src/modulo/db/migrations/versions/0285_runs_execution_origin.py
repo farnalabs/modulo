@@ -1,13 +1,14 @@
 """FAR-1141: run-level execution origin provenance for dispatched runs.
 
-Revision ID: 0284_runs_execution_origin
-Revises: 0283_runs_drop_unused_indexes
+Revision ID: 0285_runs_execution_origin
+Revises: 0284_add_rejected_run_status
 Create Date: 2026-10-05
 
-Originally numbered ``0283_runs_execution_origin``; main landed
-``0283_runs_drop_unused_indexes`` in the same slot, so this was renumbered
-onto the next free one and now chains onto that head (single linear head
-preserved for ``check-migration-heads``).
+Originally numbered ``0283_runs_execution_origin``; ``main`` landed
+``0283_runs_drop_unused_indexes`` and then ``0284_add_rejected_run_status``
+in the intervening slots, so this was renumbered twice onto the next free one
+and now chains onto that head (single linear head preserved for
+``check-migration-heads``).
 
 ADR-042 requires that no claim-ready surface lets a run containing
 externally-dispatched work read indistinguishably from a run Modulo executed
@@ -45,8 +46,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0284_runs_execution_origin"
-down_revision: str | None = "0283_runs_drop_unused_indexes"
+revision: str = "0285_runs_execution_origin"
+down_revision: str | None = "0284_add_rejected_run_status"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

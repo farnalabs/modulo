@@ -125,6 +125,7 @@ export const RUN_STATUSES = [
   "cost_ceiling_exceeded",
   "router_no_match",
   "compensation_failed",
+  "rejected",
 ] as const;
 
 export const TIMESPANS: AnalyticsTimespanOption[] = [

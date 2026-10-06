@@ -26,10 +26,11 @@ from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, cast
 
 import jmespath
-from langgraph.graph import StateGraph
+from langgraph.graph import END, StateGraph
 
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+from modulo.core.pipeline_engine.hitl_context import REJECT_DISPOSITION_TERMINATE, resolve_reject_disposition
 from modulo.core.pipeline_engine.jmespath_eval import evaluate_jmespath_condition
 from modulo.core.pipeline_engine.node_runner import (
     make_connector_fn,
@@ -252,6 +253,40 @@ def _make_gate_kickback_router(
             and decision.get("action") == "rejected"
         ):
             return reject_target_str
+        return normal_target
+
+    return _router
+
+
+def _make_gate_terminate_router(
+    normal_target: str,
+    *,
+    review_id: str,
+) -> Callable[[dict[str, Any]], str]:
+    """Build a router that ENDS the run on a stamped HITL rejection (FAR-1487).
+
+    The gate has no reject destination and no explicit ``on_reject: proceed``
+    (nor a ``correction_target``), so a rejection must terminate instead of
+    silently continuing to the approve target. Uses the SAME FAR-541
+    gate-identity stamp check as :func:`_make_gate_kickback_router` - a
+    stale/foreign/missing stamp (the gate was skipped and ``_hitl_decision``
+    belongs to an earlier gate) routes to the normal target, never END.
+
+    Returns LangGraph ``END``; the stream then exits NORMALLY, so
+    ``executor._finalize_run_after_stream`` is responsible for downgrading the
+    run to ``rejected`` (keyed on the gate artifact AND the committed
+    ``hitl_claims`` row) rather than ``complete``.
+    """
+
+    def _router(state: dict[str, Any]) -> str:
+        decision = state.get("_hitl_decision")
+        if (
+            decision
+            and isinstance(decision, dict)
+            and decision.get("review_id") == review_id
+            and decision.get("action") == "rejected"
+        ):
+            return END
         return normal_target
 
     return _router
@@ -896,6 +931,15 @@ def _add_hitl_review_edge(
     """
     review_id = _make_review_id(source, target)
     hitl_config["review_id"] = review_id
+    # Kick-back target for HITL rejection routing.
+    # Priority: gate config reject_target > reject edge target.
+    reject_target: str | None = hitl_config.get("reject_target")
+    if reject_target is None:
+        reject_target = reject_targets_by_source.get(source)
+    # FAR-1487: stamp the compile-time disposition onto the gate config BEFORE
+    # the gate fn is built, so the gate node's rejected artifact carries it
+    # (the executor finalize keys its ``rejected`` downgrade on it).
+    hitl_config["reject_disposition"] = resolve_reject_disposition(hitl_config, has_reject_route=bool(reject_target))
     node_evals = eval_definitions_by_node.get(source) if eval_definitions_by_node is not None else None
     graph.add_node(
         review_id,
@@ -909,12 +953,6 @@ def _add_hitl_review_edge(
     )
     graph.add_edge(source, review_id)
 
-    # Determine kick-back target for HITL rejection routing.
-    # Priority: gate config reject_target > reject edge target.
-    reject_target: str | None = hitl_config.get("reject_target")
-    if reject_target is None:
-        reject_target = reject_targets_by_source.get(source)
-
     if reject_target:
         reject_target_str = str(reject_target)
         gate_router = _make_gate_kickback_router(
@@ -924,7 +962,14 @@ def _add_hitl_review_edge(
         )
         graph.add_conditional_edges(review_id, gate_router)
         target_ids.add(reject_target_str)
+    elif resolve_reject_disposition(hitl_config, has_reject_route=False) == REJECT_DISPOSITION_TERMINATE:
+        # FAR-1487: no reject route, no correction_target, no explicit
+        # ``on_reject: proceed`` -> a stamped rejection ENDS the run. The
+        # approve target stays reachable via the same conditional edge.
+        graph.add_conditional_edges(review_id, _make_gate_terminate_router(target, review_id=review_id))
     else:
+        # Explicit ``on_reject: proceed`` (or an automated correction_target):
+        # a rejection continues to the approve target, as before FAR-1487.
         graph.add_edge(review_id, target)
 
     gate_node_ids.add(review_id)
