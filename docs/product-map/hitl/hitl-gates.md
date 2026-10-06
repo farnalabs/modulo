@@ -42,6 +42,7 @@ bdd:
   - backend/tests/bdd/features/hitl/claim.feature
   - backend/tests/bdd/features/hitl/approve.feature
   - backend/tests/bdd/features/hitl/reject.feature
+  - backend/tests/integration/test_hitl_reject_bdd.py
   - backend/tests/bdd/features/hitl/deliver_manual.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/hitl/gate_policies.feature

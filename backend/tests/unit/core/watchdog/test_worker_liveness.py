@@ -251,7 +251,7 @@ class TestWorkerLivenessWatchdog:
         client.post.side_effect = httpx.ConnectError("boom")
 
         with patch.object(wl.httpx, "AsyncClient", return_value=client):
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         client.__aenter__.assert_awaited()
 
@@ -262,7 +262,7 @@ class TestWorkerLivenessWatchdog:
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
 
         with patch.object(wl.httpx, "AsyncClient", return_value=client) as ctor:
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         ctor.assert_called_once_with(timeout=wl._WEBHOOK_TIMEOUT_SECONDS)
         call = client.post.await_args
@@ -798,8 +798,9 @@ class TestEdgeTriggeredAlertRecovery:
         assert "no live SAQ worker" in send.call_args.args[3]
 
     def test_recovery_text_includes_duration_and_prior_conditions(self) -> None:
+        settings = _make_settings()
         state = {"conditions": ["no live SAQ worker"], "started_at": time.time() - 120}
-        text = wl._recovery_text(state)
+        text = wl._recovery_text(settings, state)
         assert "worker-liveness recovered" in text
         assert "no live SAQ worker" in text
         assert "120s" in text
@@ -873,13 +874,13 @@ class TestWebhookErrorPaths:
     async def test_generic_webhook_no_url_logs_and_returns(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings()  # no webhook URL
         with caplog.at_level(logging.WARNING, logger="modulo.watchdog"):
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
         assert "watchdog.webhook_no_url" in caplog.text
 
     async def test_teams_webhook_no_url_logs_and_returns(self, caplog: pytest.LogCaptureFixture) -> None:
         settings = _make_settings()  # no Teams webhook URL
         with caplog.at_level(logging.WARNING, logger="modulo.watchdog"):
-            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
         assert "watchdog.teams_webhook_no_url" in caplog.text
 
     async def test_generic_webhook_http_error_status_logs(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -892,7 +893,7 @@ class TestWebhookErrorPaths:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         assert "watchdog.webhook_http_error" in caplog.text
         assert "500" in caplog.text
@@ -903,7 +904,7 @@ class TestWebhookErrorPaths:
         client = AsyncMock()
         client.__aenter__.return_value = client
         client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
-        alert_text = wl._alert_text(["no live SAQ worker"])
+        alert_text = wl._alert_text(settings, ["no live SAQ worker"])
 
         with patch.object(wl.httpx, "AsyncClient", return_value=client):
             await wl._post_generic_webhook(settings, alert_text)
@@ -927,7 +928,7 @@ class TestWebhookErrorPaths:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         assert "watchdog.teams_webhook_http_error" in caplog.text
         assert "503" in caplog.text
@@ -942,7 +943,7 @@ class TestWebhookErrorPaths:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         assert "watchdog.teams_webhook_request_failed" in caplog.text
 
@@ -956,7 +957,7 @@ class TestWebhookErrorPaths:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         assert "watchdog.webhook_unknown_failure" in caplog.text
 
@@ -970,7 +971,7 @@ class TestWebhookErrorPaths:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
         ):
-            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
         assert "watchdog.teams_webhook_unknown_failure" in caplog.text
 
@@ -1017,7 +1018,7 @@ class TestEmailErrorPaths:
         assert "watchdog.email_no_recipients" in caplog.text
 
     def test_recovery_text_without_started_at_omits_duration(self) -> None:
-        text = wl._recovery_text({"conditions": ["no live SAQ worker"]})
+        text = wl._recovery_text(_make_settings(), {"conditions": ["no live SAQ worker"]})
         assert "for" not in text
 
 
@@ -1046,7 +1047,7 @@ class TestCancelledErrorReRaise:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             pytest.raises(asyncio.CancelledError),
         ):
-            await wl._post_generic_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_generic_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
     async def test_teams_webhook_reraises_cancelled_error(self) -> None:
         settings = _make_settings(ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t")
@@ -1057,7 +1058,7 @@ class TestCancelledErrorReRaise:
             patch.object(wl.httpx, "AsyncClient", return_value=client),
             pytest.raises(asyncio.CancelledError),
         ):
-            await wl._post_teams_webhook(settings, wl._alert_text(["no live SAQ worker"]))
+            await wl._post_teams_webhook(settings, wl._alert_text(settings, ["no live SAQ worker"]))
 
     async def test_send_email_alert_reraises_cancelled_error(self) -> None:
         settings = _make_settings(ALERT_EMAIL_TO="ops@example.com", smtp_host="smtp.example.com")
@@ -1447,3 +1448,168 @@ class TestStdoutStamp:
         assert send.await_count == 1
         assert wl._ALERT_STATE_KEY not in fake._data  # the GETDEL survived the failed stamp
         assert "watchdog.stamp_print_failed" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FAR-1499: the alert context rides the webhook channels too. The generic
+# Slack-compatible webhook and the Microsoft Teams MessageCard both render
+# through the SAME single text renderer as the email text part
+# (_alert_text / _recovery_text), so each carries `Environment: <MODULO_ENV>`
+# and every ALERT_CONTEXT line exactly once - never twice.
+# ---------------------------------------------------------------------------
+
+
+def _webhook_context_settings(*, email: bool = True) -> Settings:
+    """Webhook channels configured (email too unless ``email=False``), with a
+    deployment environment and an operator ``ALERT_CONTEXT``."""
+    overrides: dict[str, Any] = {
+        "ALERT_WEBHOOK_URL": "https://hooks.slack.com/services/T/X/B",
+        "ALERT_TEAMS_WEBHOOK_URL": "https://outlook.office.com/webhook/abc",
+        "MODULO_ENV": "staging",
+        "ALERT_CONTEXT": "runbook: https://example.com/runbook\npage the on-call",
+    }
+    if email:
+        overrides["ALERT_EMAIL_TO"] = "ops@example.com"
+        overrides["smtp_host"] = "smtp.example.com"
+    return _make_settings(**overrides)
+
+
+def _posted_texts_by_url(client: AsyncMock) -> dict[str, str]:
+    """Map each POSTed webhook URL to the ``text`` it carried.
+
+    Both payload shapes expose their body under ``text`` (the generic
+    Slack-compatible ``{"text": ...}`` and the Teams MessageCard).
+    """
+    return {call.args[0]: json.loads(call.kwargs["content"])["text"] for call in client.post.await_args_list}
+
+
+class TestAlertContextOnWebhookChannels:
+    async def test_alert_payloads_carry_environment_and_context_exactly_once(self) -> None:
+        # email=False: these tests assert only the webhook/Teams payloads, and
+        # leaving the email channel armed would dispatch the REAL send_email on
+        # a thread (DNS-retry sleeps, up to ~92s on a slow runner).
+        settings = _webhook_context_settings(email=False)
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+        assert client.post.await_count == 2
+        texts = _posted_texts_by_url(client)
+        assert set(texts) == {
+            "https://hooks.slack.com/services/T/X/B",
+            "https://outlook.office.com/webhook/abc",
+        }
+        for payload_text in texts.values():
+            assert "no live SAQ worker" in payload_text
+            assert payload_text.count("Environment: staging") == 1
+            assert payload_text.count("runbook: https://example.com/runbook") == 1
+            assert payload_text.count("page the on-call") == 1
+            # The context follows the detection stamp, never precedes it.
+            assert payload_text.index("Detected at") < payload_text.index("Environment: staging")
+
+    async def test_recovery_payloads_carry_environment_and_context_exactly_once(self) -> None:
+        # email=False for the same reason as the alert test above: only the
+        # webhook/Teams channels are under test here.
+        settings = _webhook_context_settings(email=False)
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+
+        with patch.object(wl.httpx, "AsyncClient", return_value=client):
+            await wl._send_alerts(
+                settings,
+                [],
+                recovery_state={"conditions": ["no live SAQ worker"], "started_at": time.time() - 60},
+            )
+
+        assert client.post.await_count == 2
+        texts = _posted_texts_by_url(client)
+        assert set(texts) == {
+            "https://hooks.slack.com/services/T/X/B",
+            "https://outlook.office.com/webhook/abc",
+        }
+        for payload_text in texts.values():
+            assert "worker-liveness recovered" in payload_text
+            assert payload_text.count("Environment: staging") == 1
+            assert payload_text.count("runbook: https://example.com/runbook") == 1
+            assert payload_text.count("page the on-call") == 1
+            assert payload_text.index("Resolved at") < payload_text.index("Environment: staging")
+
+    async def test_webhook_payloads_are_the_shared_text_renderer_output(self) -> None:
+        """Both webhook bodies are byte-for-byte _alert_text's output: ONE
+        renderer, called once, fanned out to both channels — not a per-channel
+        copy that could drift or double-append the context."""
+        settings = _webhook_context_settings(email=False)
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = SimpleNamespace(is_success=True, status_code=200)
+        real_renderer = wl._alert_text
+        rendered: list[str] = []
+
+        def _spy(renderer_settings: Settings, conditions: list[str]) -> str:
+            text = real_renderer(renderer_settings, conditions)
+            rendered.append(text)
+            return text
+
+        with (
+            patch.object(wl.httpx, "AsyncClient", return_value=client),
+            patch.object(wl, "_alert_text", side_effect=_spy),
+        ):
+            await wl._send_alerts(settings, ["no live SAQ worker"])
+
+        assert len(rendered) == 1  # rendered once, shared by both channels
+        texts = _posted_texts_by_url(client)
+        assert len(texts) == 2
+        assert texts["https://hooks.slack.com/services/T/X/B"] == rendered[0]
+        assert texts["https://outlook.office.com/webhook/abc"] == rendered[0]
+
+    async def test_email_text_part_carries_context_exactly_once(self) -> None:
+        """Regression guard for the double-context hazard: the text renderer
+        now includes the context itself, so _send_email_alert must NOT append
+        it a second time."""
+        settings = _webhook_context_settings()
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(settings, ["no live SAQ worker"])
+
+        send.assert_called_once()
+        text_body = send.call_args.args[4]
+        assert text_body.count("Environment: staging") == 1
+        assert text_body.count("runbook: https://example.com/runbook") == 1
+        assert text_body.count("page the on-call") == 1
+        # The HTML part keeps its own single rendering via the shared helper.
+        html_body = send.call_args.args[3]
+        assert html_body.count("Environment: staging") == 1
+        assert html_body.count("runbook: https://example.com/runbook") == 1
+
+    async def test_recovery_email_text_part_carries_context_exactly_once(self) -> None:
+        settings = _webhook_context_settings()
+        send = MagicMock(return_value=True)
+        to_thread = AsyncMock(side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs))
+
+        with (
+            patch.object(wl, "send_email", send),
+            patch.object(wl.asyncio, "to_thread", to_thread),
+        ):
+            await wl._send_email_alert(
+                settings,
+                [],
+                recovery_state={"conditions": ["no live SAQ worker"], "started_at": time.time() - 60},
+            )
+
+        send.assert_called_once()
+        text_body = send.call_args.args[4]
+        assert text_body.count("Environment: staging") == 1
+        assert text_body.count("runbook: https://example.com/runbook") == 1
+        assert text_body.count("page the on-call") == 1
+        html_body = send.call_args.args[3]
+        assert html_body.count("Environment: staging") == 1
+        assert html_body.count("runbook: https://example.com/runbook") == 1
