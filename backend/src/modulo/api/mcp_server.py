@@ -7487,6 +7487,143 @@ async def set_hitl_email_alerts(
         return _tool_error("Failed to set HITL email alert preferences")
 
 
+class _CreateApiKeyParsed(NamedTuple):
+    """Parsed arguments for ``create_api_key``."""
+
+    name: str
+    expires_at: datetime | None
+    team_id: uuid.UUID | None
+
+
+async def _validate_api_key_args(
+    *,
+    name: str,
+    role: str,
+    expires_at: str | None,
+    team_id: str | None,
+    grants: list[str] | None,
+    org_id: uuid.UUID,
+) -> _CreateApiKeyParsed | dict[str, Any]:
+    """Validate ``create_api_key``'s arguments before it touches the database.
+
+    Runs, in order: the role/name check, the optional expiry parse, the
+    optional team parse (admin-gated for team keys), and the FAR-1477 grants
+    gate — grants are accepted ONLY with the org flag ON (OFF => 422, never a
+    silent downgrade to a legacy full-role key). The flag read is STRICT so a
+    transient flag-read failure is not mistaken for "flag OFF" — it must
+    surface as a retryable 503, matching the REST mint path (and this
+    server's own grant-enforcement auth path).
+
+    Returns the parsed arguments on success, or the first error envelope.
+    """
+    validation_error = _validate_api_key_role_and_name(name, role)
+    if validation_error is not None:
+        return validation_error
+
+    name = name.strip()
+
+    parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
+    if expires_error is not None:
+        return expires_error
+
+    team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
+    if team_error is not None:
+        return team_error
+
+    if grants is not None:
+        try:
+            grants_on = await api_key_grants_enabled(org_id, strict=True)
+        except ApiKeyGrantsUnavailableError:
+            _log.warning("mcp.create_api_key_grants_unavailable")
+            return {
+                "error": "service_unavailable",
+                "status": 503,
+                "detail": "API key grant settings are temporarily unavailable; retry shortly",
+            }
+        if not grants_on:
+            return {
+                "error": "validation_error",
+                "status": 422,
+                "detail": "API key grant-sets are not enabled for this organisation",
+            }
+
+    return _CreateApiKeyParsed(name, parsed_expires_at, team_uuid)
+
+
+async def _mint_api_key_txn(
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    name: str,
+    role: str,
+    team_uuid: uuid.UUID | None,
+    parsed_expires_at: datetime | None,
+    grants: list[str] | None,
+) -> tuple[Any, str] | dict[str, Any]:
+    """Mint the API key inside its own session (caps + break-glass denial).
+
+    Returns ``(key, full_key)`` on success, or an error envelope when a mint
+    cap refuses the request.
+    """
+    async with _session(org_id) as s:
+        await _deny_break_glass_mint(s, account_id)
+        await _enforce_api_key_mint_cap(s, account_id, org_id, role)
+        if grants is not None:
+            try:
+                await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
+            except FastAPIHTTPException as exc:
+                if exc.status_code == 422:
+                    return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
+                raise MCPAuthorizationError(str(exc.detail)) from None
+        key, full_key = await auth_create_api_key(
+            s,
+            org_id=org_id,
+            name=name,
+            role=role,
+            account_id=account_id,
+            team_id=team_uuid,
+            expires_at=parsed_expires_at,
+            grants=grants,
+        )
+    return key, full_key
+
+
+def _api_key_created_audit_payload(
+    *,
+    key: Any,
+    name: str,
+    role: str,
+    team_uuid: uuid.UUID | None,
+    grants: list[str] | None,
+) -> dict[str, Any]:
+    """Build the FAR-620 ``api_key_created`` audit payload stamps."""
+    return {
+        "name": name,
+        "role": role,
+        "team_id": str(team_uuid) if team_uuid else None,
+        "auth_type": _ctx_auth_type.get(None) or "unknown",
+        # MCP minting is org-only (caller-scope org-only pin) — the
+        # tool can never produce a user-scoped key.
+        "key_scope": "org",
+        "lookup_prefix": f"mk_{key.lookup_prefix}****",
+        **({"grants": sorted(grants)} if grants is not None else {}),
+    }
+
+
+def _api_key_created_response(key: Any, full_key: str, grants: list[str] | None) -> dict[str, Any]:
+    """Serialize a freshly minted API key to the ``create_api_key`` shape."""
+    return {
+        "id": str(key.id),
+        "name": key.name,
+        "role": key.role,
+        "key_value": full_key,
+        "lookup_prefix": f"mk_{key.lookup_prefix}****",
+        "created_at": key.created_at.isoformat() if key.created_at else None,
+        "team_id": str(key.team_id) if key.team_id else None,
+        "grants": sorted(grants) if grants is not None else None,
+    }
+
+
 @mcp.tool(
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
@@ -7519,92 +7656,42 @@ async def create_api_key(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        validation_error = _validate_api_key_role_and_name(name, role)
-        if validation_error is not None:
-            return validation_error
+        args = await _validate_api_key_args(
+            name=name,
+            role=role,
+            expires_at=expires_at,
+            team_id=team_id,
+            grants=grants,
+            org_id=org_id,
+        )
+        if isinstance(args, dict):
+            return args
 
-        name = name.strip()
-
-        parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
-        if expires_error is not None:
-            return expires_error
-
-        team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
-        if team_error is not None:
-            return team_error
-
-        # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422,
-        # never a silent downgrade to a legacy full-role key). Read STRICT so a
-        # transient flag-read failure is not mistaken for "flag OFF" — it must
-        # surface as a retryable 503, matching the REST mint path (and this
-        # server's own grant-enforcement auth path).
-        if grants is not None:
-            try:
-                grants_on = await api_key_grants_enabled(org_id, strict=True)
-            except ApiKeyGrantsUnavailableError:
-                _log.warning("mcp.create_api_key_grants_unavailable")
-                return {
-                    "error": "service_unavailable",
-                    "status": 503,
-                    "detail": "API key grant settings are temporarily unavailable; retry shortly",
-                }
-            if not grants_on:
-                return {
-                    "error": "validation_error",
-                    "status": 422,
-                    "detail": "API key grant-sets are not enabled for this organisation",
-                }
-
-        async with _session(org_id) as s:
-            await _deny_break_glass_mint(s, account_id)
-            await _enforce_api_key_mint_cap(s, account_id, org_id, role)
-            if grants is not None:
-                try:
-                    await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
-                except FastAPIHTTPException as exc:
-                    if exc.status_code == 422:
-                        return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
-                    raise MCPAuthorizationError(str(exc.detail)) from None
-            key, full_key = await auth_create_api_key(
-                s,
-                org_id=org_id,
-                name=name,
-                role=role,
-                account_id=account_id,
-                team_id=team_uuid,
-                expires_at=parsed_expires_at,
-                grants=grants,
-            )
+        outcome = await _mint_api_key_txn(
+            org_id=org_id,
+            account_id=account_id,
+            name=args.name,
+            role=role,
+            team_uuid=args.team_id,
+            parsed_expires_at=args.expires_at,
+            grants=grants,
+        )
+        if isinstance(outcome, dict):
+            return outcome
+        key, full_key = outcome
 
         # FAR-620: parity with the REST mint audit (PRD §8.12) + payload stamps.
         await _emit_mcp_api_key_audit(
             org_id=org_id,
             resource_id=key.id,
             event_type="api_key_created",
-            payload={
-                "name": name,
-                "role": role,
-                "team_id": str(team_uuid) if team_uuid else None,
-                "auth_type": _ctx_auth_type.get(None) or "unknown",
-                # MCP minting is org-only (caller-scope org-only pin) — the
-                # tool can never produce a user-scoped key.
-                "key_scope": "org",
-                "lookup_prefix": f"mk_{key.lookup_prefix}****",
-                **({"grants": sorted(grants)} if grants is not None else {}),
-            },
+            payload=_api_key_created_audit_payload(
+                key=key, name=args.name, role=role, team_uuid=args.team_id, grants=grants
+            ),
             log_context="mcp.create_api_key_audit_failed",
         )
 
-        return {
-            "id": str(key.id),
-            "name": key.name,
-            "role": key.role,
-            "key_value": full_key,
-            "lookup_prefix": f"mk_{key.lookup_prefix}****",
-            "created_at": key.created_at.isoformat() if key.created_at else None,
-            "team_id": str(key.team_id) if key.team_id else None,
-            "grants": sorted(grants) if grants is not None else None,
-        }
+        return _api_key_created_response(key, full_key, grants)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
