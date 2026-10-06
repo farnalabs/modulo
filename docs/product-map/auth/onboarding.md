@@ -17,9 +17,9 @@ status: covered
 # Onboarding
 
 First-run onboarding wizard (`/onboarding`) driven by an action-based checklist with
-DB persistence (`OnboardingProgress`). Six org-scoped actions — log in, add an AI
+DB persistence (`OnboardingProgress`). Six org-scoped actions – log in, add an AI
 model, create first agent, create first schema, create first pipeline, run first
-pipeline — are auto-completed from real org state, or manually completed/skipped, and
+pipeline – are auto-completed from real org state, or manually completed/skipped, and
 the whole wizard can be dismissed. Rapid-start helpers seed a "Truth Classifier"
 example (schema, schema version, agent, pipeline) and create a starter pipeline.
 
@@ -55,30 +55,30 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
       the current preference. `OnboardingWizard.vue` step 6 +
       `frontend/src/__tests__/OnboardingWizard.spec.ts` (load/save/forbidden,
       error envelope + retry, skip). No separate telemetry surface is required on
-      the onboarding REST API — the opt-in preference is an instance-level
+      the onboarding REST API – the opt-in preference is an instance-level
       deployment toggle, distinct from the org-level product-analytics consent.
 
 ## Known Gaps
 
-- **No PRD section reference** — onboarding has no single PRD section mapped in code
+- **No PRD section reference**: onboarding has no single PRD section mapped in code
   or ADRs.
 
 ## QA History
 
-- 2026-09-25: **Improve Architecture product-map walk** — closed the last
+- 2026-09-25: **Improve Architecture product-map walk**: closed the last
   `feat-onboarding` partial: the "telemetry/opt-in preferences not wired into the
   wizard" gap was stale. The wizard ships a Telemetry Opt-In step (step 6,
   FAR-1131) driving `GET`/`PUT /api/v1/admin/telemetry` with load/save/forbidden,
   error-envelope + retry, and skip coverage in `OnboardingWizard.spec.ts`. The
   manifest `feat-onboarding` status is now `covered`.
-- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-25: **Improve Architecture product-map walk**: reconciled the
   manifest `feat-onboarding` registry entry with this tracker: the shipped skip/dismiss
   logic (`POST /actions/{id}/complete|skip`, `POST /dismiss`) is now ticked, leaving
   only the genuinely unshipped onboarding telemetry preferences unchecked (partial).
-- 2026-09-16: **product-map review pass** — closed the "BDD drift"
+- 2026-09-16: **product-map review pass**: closed the "BDD drift"
   gap: `sdlc_onboarding.feature` and its step module described a fictional 5-step
   SDLC wizard (`connect_tools` → `run_inference` → `review_schemas` → …) with a
-  `GET /api/v1/onboarding/step/connect_tools` endpoint that does not exist — none of
+  `GET /api/v1/onboarding/step/connect_tools` endpoint that does not exist – none of
   its steps touched the app, so it was red-herring coverage. The feature now
   describes the shipped product (a persisted 6-action checklist) and every scenario
   drives the real routes through the shared `client` fixture with only the DB layer
@@ -88,7 +88,7 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   now execute against `GET /status`, `POST /actions/{id}/complete|skip`, `POST
   /dismiss`, `POST /seed-examples` and `POST /starter-pipeline`.
 
-- 2026-09-13: **product-map review pass** — closed the "seed
+- 2026-09-13: **product-map review pass**: closed the "seed
   truncation" gap in `POST /seed-examples`: the endpoint previously created the
   schemas + pipeline and silently skipped the agent + pipeline graph when the org
   had no model backend (`agent_id: null` in a 201 response, no lint anywhere).
@@ -97,17 +97,17 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   executable example or nothing. Behaviour bullet updated; unit
   `test_seed_examples_no_model_backend` now asserts the 409 reject-and-refuse
   semantics.
-- 2026-09-13: **product-map review pass** — corrected the
+- 2026-09-13: **product-map review pass**: corrected the
   onboarding action deep links against the manifest (ADR 008 source of truth):
   `add_ai_model` pointed at `/settings/model-backends`, `create_first_agent` at
   `/agents/create`, `create_first_schema` at `/schemas/create` and
-  `create_first_pipeline` at `/pipelines/create` — none of which exist in
+  `create_first_pipeline` at `/pipelines/create` – none of which exist in
   `frontend/src/manifest.yaml`. The onboarding banner's click-to-navigate
   silently swallowed them via the router `/:pathMatch(.*)*` redirect, landing
   users back on the dashboard. Each now targets a shipped route in the registry:
   `/admin/model-backends`, `/pipelines` (agent authoring surface), `/schemas/infer`
   (create/infer first schema) and `/library` (the "new pipeline" affordance).
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/onboarding`: the whole-page view(s) `OnboardingWizard.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -115,7 +115,7 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — registered the
+- 2026-09-11: **product-map review pass**: registered the
   app-layout onboarding surface in the `/` manifest `elements:` inventory: the
   produced/consumed banner (`onboarding/OnboardingBanner.vue` static testids
   `onboarding-banner-trigger`, `onboarding-banner-checklist`,
@@ -125,7 +125,7 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   product-map home. `test_mapped_route_elements_cover_owning_view_testids` now
   maps `/` to both components so a newly shipped banner/spotlight testid cannot
   drift invisible to Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-08-28: **product-map review pass** — added this behaviour-tracker
+- 2026-08-28: **product-map review pass**: added this behaviour-tracker
   for the registered manifest feature `feat-onboarding`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/onboarding.py` and
   `test_onboarding.py`. Status: covered.

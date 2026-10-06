@@ -1910,7 +1910,7 @@ class TestReviewHitl(_AuthContext):
 
         result = await review_hitl(run_id=str(uuid.uuid4()), review_id="gate-1", action="approve", claim_token="tok")
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
