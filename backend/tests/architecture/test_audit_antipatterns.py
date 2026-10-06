@@ -727,47 +727,6 @@ def coarse_rename_landed() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Pre-rename collisions (PR #1339 supersedes these; see module docstring)
-# ---------------------------------------------------------------------------
-
-#: Same-type collisions that pre-date the ``api_access_<verb>`` rename. While the
-#: rename has NOT landed (``coarse_rename_landed()`` is False) these are the
-#: known, unchanged baseline: the guard fails on anything BEYOND this set. Once
-#: the rename lands the latch turns strict (empty set) and this tuple simply
-#: stops matching — it can then be deleted in a hygiene pass.
-#: Computed by ``scan_double_audit_tree()`` on main before PR #1339 (25 handlers).
-_PRE_RENAME_COLLISIONS: frozenset[str] = frozenset(
-    {
-        "admin.py:admin_create_user:user_created_by_admin",
-        "admin.py:admin_deactivate_user:user_deactivated",
-        "admin.py:admin_delete_team:team_deleted",
-        "admin.py:admin_invite_user:invite_created",
-        "admin.py:admin_manual_purge:run_purge",
-        "admin.py:admin_reactivate_user:user_reactivated",
-        "admin.py:admin_reset_password:user_password_reset_by_admin",
-        "admin.py:admin_revoke_invitation:invite_revoked",
-        "admin.py:request_org_deletion:org_deletion_requested",
-        "admin_feature_flags.py:set_org_flag_override:feature_flag_override_set",
-        "admin_feature_flags.py:toggle_feature_flag:feature_flag_override_set",
-        "admin_orgs.py:admin_set_org_guardrails_kill_switch:guardrails_kill_switch",
-        "admin_orgs.py:admin_set_org_triggers_paused:triggers_paused",
-        "admin_rotation.py:rotate_key:fernet_key_rotation_started",
-        "admin_run_retention.py:purge:run_retention_purge",
-        "cost_components.py:create_component:cost_component_created",
-        "cost_components.py:delete_component:cost_component_deleted",
-        "cost_components.py:update_component:cost_component_updated",
-        "me.py:change_password:password_changed",
-        "teams.py:add_member_endpoint:team_member_added",
-        "teams.py:change_member_role_endpoint:team_member_role_changed",
-        "teams.py:create_team_endpoint:team_created",
-        "teams.py:delete_team_endpoint:team_deleted",
-        "teams.py:remove_member_endpoint:team_member_removed",
-        "teams.py:update_team_endpoint:team_updated",
-    }
-)
-
-
-# ---------------------------------------------------------------------------
 # Teeth: each guard must FAIL on a synthetic violation and PASS when clean
 # ---------------------------------------------------------------------------
 
@@ -935,26 +894,21 @@ def test_no_route_handler_deletes_an_organisation_and_carries_audited():
 def test_no_route_double_audits_the_same_event_type():
     """Guard 2: coarse audited() type must not equal an inline append's type."""
     violations = scan_double_audit_tree()
-    expected = set() if coarse_rename_landed() else set(_PRE_RENAME_COLLISIONS)
-    unexpected = violations - expected
-    assert not unexpected, (
-        f"{len(unexpected)} handler(s) append the SAME event type twice per action - the route's "
+    assert not violations, (
+        f"{len(violations)} handler(s) append the SAME event type twice per action - the route's "
         "audited(...) dependency and its own inline append_audit_event(...). Give the coarse event "
         "the secondary api_access_<verb> namespace and leave the rich inline event alone:\n  "
-        + "\n  ".join(sorted(unexpected))
+        + "\n  ".join(sorted(violations))
     )
 
 
-def test_pre_rename_baseline_is_not_needed_once_the_rename_landed():
-    """Documented hand-off: the known-collision list exists only pre-#1339.
-
-    Not a failure on either side — it records which state the tree is in, so a
-    reader of this file never has to guess whether the latch below is armed.
+def test_coarse_rename_has_landed_so_guard_2_is_strict():
+    """Documented hand-off: PR #1339's ``api_access_<verb>`` coarse namespace
+    has landed, so the pre-rename collision baseline is gone and Guard 2 above
+    exempts nothing. Guards against a revert of the rename, which would
+    silently re-arm the double-audit collisions the baseline used to tolerate.
     """
-    if coarse_rename_landed():
-        assert not _PRE_RENAME_COLLISIONS, "PR #1339 landed: delete the now-dead pre-rename baseline"
-    else:
-        assert isinstance(_PRE_RENAME_COLLISIONS, frozenset)
+    assert coarse_rename_landed(), "PR #1339's api_access_<verb> coarse rename has reverted"
 
 
 def test_guard_1_flags_a_synthetic_org_self_delete_with_audited():
