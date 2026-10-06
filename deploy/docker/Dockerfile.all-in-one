@@ -25,10 +25,15 @@ WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --only-binary :all: uv==0.11.13
+# `--extra docker` (FAR-1509): this image is an SAQ system-worker image now -
+# supervisord runs `python -m modulo.core.saq_worker`, whose always-registered
+# crons import `aiodocker` (the `docker` extra, FAR-1201). Without the extra
+# every runner_workspace_reconcile / runner_health_probe tick dies with
+# ModuleNotFoundError and the advisory /healthz/ready checks degrade forever.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev --frozen --no-install-project
+    uv sync --no-dev --frozen --extra docker --no-install-project
 COPY backend/src ./src
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --no-dev --frozen
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --no-dev --frozen --extra docker
 COPY backend/alembic.ini ./alembic.ini
 COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/all-in-one.conf /etc/nginx/conf.d/default.conf
