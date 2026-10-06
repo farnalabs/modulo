@@ -6,6 +6,8 @@ delivery-tasks: []
 code:
   - backend/src/modulo/api/routes/health.py
   - backend/src/modulo/core/health_alerts.py
+  - backend/src/modulo/core/alert_context.py
+  - backend/src/modulo/core/watchdog/worker_liveness.py
   - backend/src/modulo/core/saq_worker.py
   - deploy/watchdog/config.yaml
   - fly.toml
@@ -13,6 +15,8 @@ code:
 unit-tests:
   - backend/tests/unit/api/test_health.py
   - backend/tests/unit/core/test_health_alerts.py
+  - backend/tests/unit/core/test_alert_context.py
+  - backend/tests/unit/core/watchdog/test_worker_liveness.py
   - backend/tests/unit/test_watchdog_config.py
   - backend/tests/docker/test_watchdog_container.py
 bdd:
@@ -25,14 +29,18 @@ status: covered
 # Health Checks
 
 Liveness and readiness endpoints for deployment health monitoring, plus the production
-uptime watchdog that alerts on outage (FAR-400) and two in-band alerting legs: the
-`health_readiness_alert` system-cron email (FAR-1446) and the compose deployment's
-out-of-process Gatus sentinel (PR #1260). Liveness (`/healthz`) is advisory — it
-never flips readiness. Readiness (`/healthz/ready`) aggregates database, Redis,
-checkpointer schema, Alembic migration status, database hygiene (dead-tuple bloat +
-wraparound age, when the probe completes), worker/cron/scheduler liveness and returns
-503 whenever any gate is unavailable. The AI agent can also be
-redirected to this infra-health surface via `feat-infra-health`.
+uptime watchdog that alerts on outage (FAR-400), plus three alerting legs: the
+`health_readiness_alert` system-cron email (FAR-1446), the in-process worker-liveness
+watchdog (ADR 021 worker-resilience) and the compose deployment's out-of-process Gatus
+sentinel (PR #1260). Every operator alert — the readiness cron and the watchdog, across
+email, generic webhook and Teams — identifies the deployment environment and carries the
+operator's `ALERT_CONTEXT` free text through one shared renderer (`core/alert_context.py`,
+FAR-1495 / FAR-1499). Liveness (`/healthz`) is advisory — it never flips readiness.
+Readiness (`/healthz/ready`) aggregates database, Redis, checkpointer schema, Alembic
+migration status, database hygiene (dead-tuple bloat + wraparound age, when the probe
+completes), worker/cron/scheduler liveness and returns 503 whenever any gate is
+unavailable. The AI agent can also be redirected to this infra-health surface via
+`feat-infra-health`.
 
 ## Behaviours
 
@@ -102,6 +110,37 @@ redirected to this infra-health surface via `feat-infra-health`.
       cron depends on, closing the full-outage case the FAR-1446 cron cannot
       cover (`deploy/watchdog/config.yaml`, `deploy/watchdog/Dockerfile`,
       `test_watchdog_config.py`, `test_watchdog_container.py`)
+- [x] In-process worker-liveness watchdog (ADR 021): a plain asyncio task in the
+      web-process FastAPI lifespan — deliberately NOT an SAQ cron, so the alert
+      cannot depend on the worker path it watches — reads SAQ worker_info and the
+      `fire_due_triggers` cron heartbeats DIRECTLY from Redis every
+      `watchdog_tick_seconds` (default 30s). "All workers dead" must hold for
+      `watchdog_worker_stale_seconds` (default 180s = 2x the 90s worker_info TTL)
+      across BOTH conditions before anything fires; a `_WATCHDOG_BOOT_GRACE_SECONDS`
+      (120s) boot grace suppresses alerts AND recoveries on a fresh start. Alerting
+      is edge-triggered and multi-machine safe: the incident edge is claimed with
+      `SET ... NX` and the recovery edge with `GETDEL` (state survives app restarts
+      in Redis with a TTL), so exactly one alert and one recovery email are sent per
+      incident, never one per tick. On fire it fans out to EVERY configured channel
+      in isolation — generic webhook (Slack-compatible JSON), Microsoft Teams
+      MessageCard and email — default-off until at least one channel is set, and
+      fails open on Redis read errors (cannot confirm death => never alert)
+      (`core/watchdog/worker_liveness.py`, `test_worker_liveness.py`)
+- [x] Shared operator-alert context (FAR-1495 / FAR-1499): every operator alert
+      identifies the deployment environment (`Environment: <MODULO_ENV>`, empty ->
+      `unknown`) and appends the operator's `ALERT_CONTEXT` free text (runbook links,
+      escalation notes, ticket pointers — one item per line, blank lines dropped).
+      The format is SINGLE-sourced in `core/alert_context.py` (environment line,
+      text part, escaped HTML list, and the best-effort stdout stamp) so the
+      readiness-degradation cron (`core/health_alerts.py`) and the worker-liveness
+      watchdog (`core/watchdog/worker_liveness.py`) can never drift, and the
+      webhook/Teams channels carry the SAME suffix as the email text part
+      (`_alert_context_suffix`), not just email. The context is bounded
+      (`MAX_CONTEXT_LINES` 20, `MAX_CONTEXT_LINE_CHARS` 300, environment line always
+      survives) and escaped in HTML (operator free text is untrusted); `ALERT_CONTEXT`
+      is `repr=False` so it never enters a log or the stdout stamp
+      (`core/alert_context.py`, `test_alert_context.py`, `test_health_alerts.py`,
+      `test_worker_liveness.py`)
 
 ## Known Gaps
 
@@ -111,6 +150,21 @@ redirected to this infra-health surface via `feat-infra-health`.
 
 ## QA History
 
+- 2026-10-06: **Improve Architecture product-map walk** — closed two untracked
+  sub-surfaces on this tracker, both invisible to the feature graph and to
+  Assistant's `search_documentation` indexer. (1) The in-process worker-liveness
+  watchdog (ADR 021 worker-resilience) shipped with no product-map home at all —
+  the module carries no `feat-*` reference and this entry cited neither it nor its
+  `test_worker_liveness.py` suite; tracked with its sustained-edge alerting, boot
+  grace, multi-machine atomic claim and multi-channel fan-out. (2) The FAR-1495 /
+  FAR-1499 shared operator-alert context (`core/alert_context.py`) that makes every
+  readiness-cron and watchdog alert name the environment and carry `ALERT_CONTEXT`
+  across email, webhook and Teams; tracked and cited. Also corrected the stale
+  claim in `docs/configuration-reference.md` ("readiness and worker-liveness
+  watchdog emails ... do not carry an environment line" — they do since FAR-1495),
+  documented the previously-undocumented `ALERT_CONTEXT` setting there and in
+  `.env.prod.example`, and added the watchdog module + alert-context module to this
+  entry's `code:`/`unit-tests:`. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-05: **Improve Architecture product-map walk** — closed two untracked
   sub-surface gaps on this tracker, both shipped after the last walk and
   invisible to the feature graph / Assistant's `search_documentation` indexer.

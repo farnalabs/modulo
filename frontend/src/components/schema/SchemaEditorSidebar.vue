@@ -12,9 +12,17 @@
     </div>
 
     <div class="flex-1 overflow-y-auto">
-      <LoadingSpinner v-if="loading" />
-      <div v-else-if="schemas.length === 0" class="p-4 text-center text-sm text-muted-foreground">
-        {{ $t('views.SchemaEditorView.no_schemas_yet') }}
+      <div
+        v-if="loading"
+        class="space-y-2 p-4"
+        role="status"
+        :aria-label="$t('common.loading')"
+        data-testid="schema-editor-list-loading"
+      >
+        <SkeletonBlock v-for="n in 5" :key="'schema-skeleton-' + n" height-class="h-12 w-full" />
+      </div>
+      <div v-else-if="schemas.length === 0" class="p-4">
+        <EmptyState :title="$t('views.SchemaEditorView.no_schemas_yet')" />
       </div>
       <template v-else>
         <button
@@ -23,6 +31,7 @@
           :key="schema.id"
           class="w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/50"
           :class="{ 'bg-muted': selectedId === schema.id }"
+          :aria-current="selectedId === schema.id ? 'true' : undefined"
           data-testid="schema-editor-list-item"
           @click="$emit('select', schema.id)"
         >
@@ -48,7 +57,8 @@
 
 <script setup lang="ts">
 import FilterBar from '../shared/FilterBar.vue'
-import LoadingSpinner from '../shared/LoadingSpinner.vue'
+import EmptyState from '../shared/EmptyState.vue'
+import SkeletonBlock from '../shared/SkeletonBlock.vue'
 import Button from 'primevue/button'
 import type { components } from '../../lib/api/client'
 

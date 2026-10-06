@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ParamSpec, cast
+from typing import Any, NamedTuple, ParamSpec, cast
 from urllib.parse import quote, urlencode
 
 from fastapi import HTTPException as FastAPIHTTPException
@@ -58,6 +58,7 @@ from modulo.api.hitl_answer_validation import (
 from modulo.api.hitl_answer_validation import (
     validate_hitl_answer,
 )
+from modulo.api.mcp_audit import mcp_audited
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware as RateLimiterMiddleware
 from modulo.api.middleware.sensitive_mask import (
     is_sensitive_key as _shared_is_sensitive_key,
@@ -175,6 +176,7 @@ from modulo.db.crud.run_node_outputs import RunBlobs, read_run_blobs
 from modulo.db.crud.schema import create_schema as db_create_schema
 from modulo.db.crud.schema import get_schema
 from modulo.db.crud.schema import list_schemas as db_list_schemas
+from modulo.db.models.agent import Agent
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.run import (
@@ -189,10 +191,22 @@ from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
-if TYPE_CHECKING:
-    pass
+# NOTE: a `if TYPE_CHECKING:` block used to sit here as an empty placeholder;
+# it held no imports and was removed as a deliberate no-op (S108). Re-add it
+# together with the first type-only import it is meant to guard.
 
 _log = logging.getLogger(__name__)
+
+# S1192: hoisted duplicated literals (rate-limit bucket fallback + tool error
+# detail shared by the parameter-schema restore/restore-set paths).
+# NOTE: the OR_DELETED suffix is REQUIRED — this module already defines a
+# pre-existing ``_MSG_PARAM_SCHEMA_NOT_FOUND`` ("Parameter schema not found",
+# the lookup/list tools' message) further down, and a same-named second
+# definition would bind LAST, silently shadowing one of the two values at
+# every call site (FAR-1522 regression: the restore payloads briefly emitted
+# the short string).
+_CLIENT_USER_UNKNOWN = "user:unknown"
+_MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED = "Parameter schema not found or not deleted"
 
 _CT_APPLICATION_JSON = "application/json"
 _MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"  # nosec B105 -- user-facing error message string, NOT a secret credential
@@ -635,13 +649,13 @@ def _trigger_pipeline_client_key() -> str:
             # FAR-620: a user-scoped key acts as its creator — rate it per
             # account, mirroring the OAuth/JWT identity bucket.
             uid = _ctx_user_id.get(None)
-            client = f"user:{uid}" if uid is not None else "user:unknown"
+            client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
         else:
             key_id = _ctx_key_id.get(None)
             client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
     else:
         uid = _ctx_user_id.get(None)
-        client = f"user:{uid}" if uid is not None else "user:unknown"
+        client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
     return f"trigger_pipeline:{org_s}:{auth_type}:{client}"
 
 
@@ -679,13 +693,13 @@ def _hitl_decision_client_key() -> str:
     if auth_type == "api_key":
         if _ctx_key_scope.get(None) == "user":
             uid = _ctx_user_id.get(None)
-            client = f"user:{uid}" if uid is not None else "user:unknown"
+            client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
         else:
             key_id = _ctx_key_id.get(None)
             client = f"ak:{key_id}" if key_id is not None else "ak:unknown"
     else:
         uid = _ctx_user_id.get(None)
-        client = f"user:{uid}" if uid is not None else "user:unknown"
+        client = f"user:{uid}" if uid is not None else _CLIENT_USER_UNKNOWN
     return f"hitl_decision:{org_s}:{auth_type}:{client}"
 
 
@@ -1822,6 +1836,108 @@ def _parse_optional_uuid(
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
 
 
+class _DbShellConfig(NamedTuple):
+    """Parameters for the shared DB/tool exception ladder."""
+
+    log_constant: str
+    integrity_detail: str | None
+    fallback: str
+    handle_http_exception: bool = False
+    db_errors_to_fallback: bool = False
+
+
+def _db_shell_integrity_response(exc: IntegrityError, cfg: _DbShellConfig) -> dict[str, Any]:
+    """The ``IntegrityError`` arm of the shared DB/tool exception ladder.
+
+    ``cfg.db_errors_to_fallback`` skips the detail clause and answers
+    ``conflict`` with the ``fallback`` detail (a specific, branchable code —
+    FAR-1502; shells such as ``get_trigger`` had no IntegrityError clause at
+    all); a None ``integrity_detail`` yields the ``SQLAlchemyError``
+    behaviour (log + ``database_unavailable``), which is what shells without
+    an IntegrityError clause did; otherwise the conflict is formatted with
+    ``orig``.
+    """
+    if cfg.db_errors_to_fallback:
+        _log.exception(cfg.log_constant)
+        return _tool_error(cfg.fallback, code="conflict")
+    if cfg.integrity_detail is None:
+        _log.exception(cfg.log_constant)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+    _log.exception(cfg.log_constant)
+    return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
+
+
+async def _run_db_shell[**TOOL_SHELL_P](
+    fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
+    cfg: _DbShellConfig,
+    *args: TOOL_SHELL_P.args,
+    **kwargs: TOOL_SHELL_P.kwargs,
+) -> dict[str, Any]:
+    """Run one MCP tool body under the shared DB/tool exception ladder.
+
+    Reproduces the verbatim per-tool ``try/except`` shells the ladder
+    replaces, keyed by ``cfg`` so the remaining tools can adopt it without
+    hardcoding. Clauses carry specific, branchable codes (FAR-1502):
+
+    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
+    - ``StarletteHTTPException`` → ``validation_failed`` when
+      ``cfg.handle_http_exception`` is True; otherwise the shared exception
+      classifier (``_tool_exception_error``), which renders 4xx as
+      ``validation_failed`` and 5xx as ``server_error`` with the ``cfg.fallback``
+      detail — what shells without the clause did, plus a branchable code.
+    - ``IntegrityError`` → ``conflict`` with ``cfg.integrity_detail``
+      formatted with ``orig``; when ``integrity_detail`` is None the
+      ``SQLAlchemyError`` behaviour (log + ``database_unavailable``), which is
+      what shells without an IntegrityError clause did. When
+      ``cfg.db_errors_to_fallback`` is True the detail clause is skipped and
+      the arm answers ``conflict`` with the ``cfg.fallback`` detail,
+      reproducing shells (e.g. ``get_trigger``) that had no IntegrityError
+      clause at all.
+    - ``ProgrammingError`` → ``migration_required``.
+    - ``SQLAlchemyError`` → the FAR-1482 session-contract classifier first
+      (a programming bug surfaces as ``.session_contract_error``, never as
+      the generic fallback), then ``database_unavailable``; when
+      ``cfg.db_errors_to_fallback`` is True the detail clause is skipped and
+      the arm answers ``database_unavailable`` with the ``cfg.fallback``
+      detail, reproducing shells that had no SQLAlchemyError clause.
+    - ``Exception`` → log + ``_tool_exception_error(cfg.fallback, exc, log_key)``
+      — classified by exception type (FAR-1502), ``server_error`` only when
+      nothing more specific is knowable.
+    """
+    # `fn.__name__` is the only per-tool identity available here —
+    # ``cfg.log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
+    # classifier appends ``.session_contract_error`` itself (FAR-1482).
+    log_key = f"mcp.{fn.__name__}"
+    try:
+        return await fn(*args, **kwargs)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except StarletteHTTPException as exc:
+        if cfg.handle_http_exception:
+            return {"error": "validation_failed", "detail": str(exc.detail)}
+        _log.exception(cfg.log_constant)
+        return _tool_exception_error(cfg.fallback, exc, log_key)
+    except IntegrityError as exc:
+        return _db_shell_integrity_response(exc, cfg)
+    except ProgrammingError:
+        _log.exception(cfg.log_constant)
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except SQLAlchemyError as exc:
+        # FAR-1482: the session-contract guard must run BEFORE the
+        # db_errors_to_fallback split — a programming bug is not the
+        # generic "failed to <tool>" fallback either.
+        if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+            return contract_error
+        if cfg.db_errors_to_fallback:
+            _log.exception(cfg.log_constant)
+            return _tool_error(cfg.fallback, code="database_unavailable")
+        _log.exception(cfg.log_constant)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+    except Exception as exc:
+        _log.exception(cfg.log_constant)
+        return _tool_exception_error(cfg.fallback, exc, log_key)
+
+
 def _tool_db_shell(
     *,
     log_constant: str,
@@ -1835,79 +1951,24 @@ def _tool_db_shell(
 ]:
     """Wrap an async MCP tool body in the shared DB/tool exception ladder.
 
-    Every clause reproduces the verbatim per-tool ``try/except`` shells it
-    replaces, keyed by params so the remaining tools can adopt it without
-    hardcoding:
-
-    - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
-    - ``StarletteHTTPException`` → ``validation_failed`` when
-      ``handle_http_exception`` is True; otherwise the shared exception
-      classifier (``_tool_exception_error``), which renders 4xx as
-      ``validation_failed`` and 5xx as ``server_error`` with the ``fallback``
-      detail — what shells without the clause did, plus a branchable code.
-    - ``IntegrityError`` → ``conflict`` with ``integrity_detail`` formatted
-      with ``orig``; when ``integrity_detail`` is None the ``SQLAlchemyError``
-      behaviour (log + ``database_unavailable``), which is what shells
-      without an IntegrityError clause did. When ``db_errors_to_fallback``
-      is True the ``conflict``-with-detail clause is skipped and the arm
-      answers ``conflict`` with the ``fallback`` detail, reproducing shells
-      (e.g. ``get_trigger``) that had no IntegrityError clause at all.
-    - ``ProgrammingError`` → ``migration_required``.
-    - ``SQLAlchemyError`` → ``database_unavailable``; when
-      ``db_errors_to_fallback`` is True the ``_MSG_DB_OPERATION_FAILED``
-      detail clause is skipped and the arm answers ``database_unavailable``
-      with the ``fallback`` detail, reproducing shells that had no
-      SQLAlchemyError clause.
-    - ``Exception`` → log + ``_tool_exception_error(fallback, exc, log_key)``
-      — classified by exception type (FAR-1502), ``server_error`` only when
-      nothing more specific is knowable.
+    The ladder itself lives in ``_run_db_shell`` (one module-level copy of the
+    exception clauses, keyed by ``_DbShellConfig``); this factory only binds
+    the per-tool parameters and returns the thin decorator that applies it.
     """
+    cfg = _DbShellConfig(
+        log_constant=log_constant,
+        integrity_detail=integrity_detail,
+        fallback=fallback,
+        handle_http_exception=handle_http_exception,
+        db_errors_to_fallback=db_errors_to_fallback,
+    )
 
     def decorator(
         fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
-        # `fn.__name__` is the only per-tool identity available here —
-        # ``log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
-        # classifier appends ``.session_contract_error`` itself (FAR-1482).
-        log_key = f"mcp.{fn.__name__}"
-
         @functools.wraps(fn)
         async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
-            try:
-                return await fn(*args, **kwargs)
-            except MCPAuthorizationError as exc:
-                return {"error": "insufficient_scope", "detail": str(exc)}
-            except StarletteHTTPException as exc:
-                if handle_http_exception:
-                    return {"error": "validation_failed", "detail": str(exc.detail)}
-                _log.exception(log_constant)
-                return _tool_exception_error(fallback, exc, log_key)
-            except IntegrityError as exc:
-                if db_errors_to_fallback:
-                    _log.exception(log_constant)
-                    return _tool_error(fallback, code="conflict")
-                if integrity_detail is None:
-                    _log.exception(log_constant)
-                    return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-                _log.exception(log_constant)
-                return {"error": "conflict", "detail": integrity_detail.format(orig=exc.orig)}
-            except ProgrammingError:
-                _log.exception(log_constant)
-                return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-            except SQLAlchemyError as exc:
-                # FAR-1482: the session-contract guard must run BEFORE the
-                # db_errors_to_fallback split — a programming bug is not the
-                # generic "failed to <tool>" fallback either.
-                if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
-                    return contract_error
-                if db_errors_to_fallback:
-                    _log.exception(log_constant)
-                    return _tool_error(fallback, code="database_unavailable")
-                _log.exception(log_constant)
-                return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-            except Exception as exc:
-                _log.exception(log_constant)
-                return _tool_exception_error(fallback, exc, log_key)
+            return await _run_db_shell(fn, cfg, *args, **kwargs)
 
         return wrapper
 
@@ -2047,43 +2108,45 @@ async def list_pipelines_tool(
         return _tool_exception_error("Failed to list pipelines", exc, "mcp.list_pipelines_tool")
 
 
-@mcp.tool(
-    description="Create a new pipeline in the organisation. Returns the created pipeline details. "
-    "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
-    "pipeline's calendar-month spend would exceed it, runs are rejected and the pipeline's triggers "
-    "pause until an org admin resets it. Omit or pass null for no breaker. "
-    "Optional business_owner_id / reliability_owner_id (account UUIDs) assign the accountability "
-    "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
-    "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
-    "validation error, never silently dropped. Omit or pass null for unassigned. "
-    "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
-    "override. Omit or pass null to inherit the org default, then the instance default."
-)
-@_RETRY_DB
-async def create_pipeline(
-    name: str,
-    description: str | None = None,
-    visibility: str = "org",
-    max_concurrent_runs: int = 5,
-    lock_wait_timeout_seconds: int = 300,
-    node_timeout_seconds: int = 300,
-    hitl_review_window_seconds: int | None = None,
-    default_autonomy_level: str = "manual_approval",
-    max_autonomy_level: str | None = None,
-    folder_id: str | None = None,
-    circuit_breaker_threshold: float | None = None,
-    business_owner_id: str | None = None,
-    reliability_owner_id: str | None = None,
-) -> dict[str, Any]:
+class _CreatePipelineParsed(NamedTuple):
+    """Parsed UUID arguments for ``create_pipeline``."""
+
+    folder_id: uuid.UUID | None
+    business_owner_id: uuid.UUID | None
+    reliability_owner_id: uuid.UUID | None
+
+
+def _validate_create_pipeline_args(
+    *,
+    folder_id: str | None,
+    hitl_review_window_seconds: int | None,
+    circuit_breaker_threshold: float | None,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+    default_autonomy_level: str,
+    max_autonomy_level: str | None,
+) -> _CreatePipelineParsed | dict[str, Any]:
+    """Validate ``create_pipeline``'s arguments before auth (FAR-* checks).
+
+    Returns the parsed UUIDs on success, or the standard error envelope for
+    the first argument that fails validation:
+
+    - ``folder_id`` must be a UUID (``invalid_folder_id``).
+    - ``hitl_review_window_seconds`` must sit in the 60..604800 envelope
+      (FAR-1257: the same envelope as the REST/Pydantic layer and
+      ``ck_pipelines_hitl_review_window`` — validated up front so an
+      out-of-range value is a clean tool error, not a DB IntegrityError).
+    - ``circuit_breaker_threshold`` runs the shared FAR-1182 check.
+    - owner ids must parse as optional UUIDs (FAR-1161).
+    - the autonomy ceiling must be a valid level at or above the default
+      (FAR-1163, same rule as the REST create route).
+    """
     parsed_folder_id: uuid.UUID | None = None
     if folder_id is not None:
         try:
             parsed_folder_id = uuid.UUID(folder_id)
         except ValueError:
             return {"error": "invalid_folder_id", "detail": f"Invalid folder_id UUID: {folder_id}"}
-    # FAR-1257: same 60..604800 envelope as the REST/Pydantic layer and
-    # ck_pipelines_hitl_review_window — validate up front so an out-of-range
-    # value is a clean tool error, not a DB IntegrityError.
     if hitl_review_window_seconds is not None and not (60 <= hitl_review_window_seconds <= 604800):
         return {
             "error": "validation_failed",
@@ -2100,9 +2163,6 @@ async def create_pipeline(
     parsed_reliability_owner, reliability_owner_err = _parse_optional_uuid(reliability_owner_id, "reliability_owner_id")
     if reliability_owner_err is not None:
         return reliability_owner_err
-
-    # FAR-1163: the autonomy ceiling must be a valid level and sit at or
-    # above the default (same rule as the REST create route).
     if max_autonomy_level is not None:
         from modulo.core.run_context.autonomy import validate_autonomy_ceiling
 
@@ -2110,6 +2170,52 @@ async def create_pipeline(
             validate_autonomy_ceiling(default_autonomy_level, max_autonomy_level)
         except ValueError as exc:
             return {"error": "invalid_max_autonomy_level", "detail": str(exc)}
+    return _CreatePipelineParsed(parsed_folder_id, parsed_business_owner, parsed_reliability_owner)
+
+
+@mcp.tool(
+    description="Create a new pipeline in the organisation. Returns the created pipeline details. "
+    "Optional circuit_breaker_threshold (USD, > 0) sets a monthly spend circuit breaker: when the "
+    "pipeline's calendar-month spend would exceed it, runs are rejected and the pipeline's triggers "
+    "pause until an org admin resets it. Omit or pass null for no breaker. "
+    "Optional business_owner_id / reliability_owner_id (account UUIDs) assign the accountability "
+    "owners (FAR-1161); each assignee must be an active member of this organisation and, when "
+    "visibility is 'team', a member of the owner team — an ineligible owner is rejected with a "
+    "validation error, never silently dropped. Omit or pass null for unassigned. "
+    "Optional hitl_review_window_seconds (60-604800) sets the per-pipeline HITL review window "
+    "override. Omit or pass null to inherit the org default, then the instance default."
+)
+@mcp_audited("pipeline_created", "pipeline", fail_closed=False)
+@_RETRY_DB
+async def create_pipeline(
+    name: str,
+    description: str | None = None,
+    visibility: str = "org",
+    max_concurrent_runs: int = 5,
+    lock_wait_timeout_seconds: int = 300,
+    node_timeout_seconds: int = 300,
+    hitl_review_window_seconds: int | None = None,
+    default_autonomy_level: str = "manual_approval",
+    max_autonomy_level: str | None = None,
+    folder_id: str | None = None,
+    circuit_breaker_threshold: float | None = None,
+    business_owner_id: str | None = None,
+    reliability_owner_id: str | None = None,
+) -> dict[str, Any]:
+    args = _validate_create_pipeline_args(
+        folder_id=folder_id,
+        hitl_review_window_seconds=hitl_review_window_seconds,
+        circuit_breaker_threshold=circuit_breaker_threshold,
+        business_owner_id=business_owner_id,
+        reliability_owner_id=reliability_owner_id,
+        default_autonomy_level=default_autonomy_level,
+        max_autonomy_level=max_autonomy_level,
+    )
+    if isinstance(args, dict):
+        return args
+    parsed_folder_id = args.folder_id
+    parsed_business_owner = args.business_owner_id
+    parsed_reliability_owner = args.reliability_owner_id
 
     try:
         if not await validate_current_auth():
@@ -2275,6 +2381,7 @@ async def _append_mcp_threshold_denial_audit(
     "otherwise (FAR-1184). Every change is audited (pipeline.circuit_breaker_threshold_changed); "
     "refusals are audited as pipeline.circuit_breaker_threshold_change_denied. Available on every plan."
 )
+@mcp_audited("pipeline_circuit_breaker_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def set_pipeline_circuit_breaker(
     pipeline_id: str,
@@ -2369,6 +2476,7 @@ async def set_pipeline_circuit_breaker(
         "Every change is audited (pipeline.business_owner_changed / pipeline.reliability_owner_changed)."
     ),
 )
+@mcp_audited("pipeline_owners_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def set_pipeline_owners(
     pipeline_id: str,
@@ -3051,6 +3159,155 @@ async def _append_mcp_hitl_denial_audit(
         _log.exception("mcp.hitl_denial_audit_failed", extra={"org_id": str(org_id)})
 
 
+def _validate_graph_update(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Validate an MCP graph-update payload before it touches the database.
+
+    Covers, in order: the REST-parity Pydantic structural contract, the
+    FAR-296 mode-aware ``sandbox_agent`` gate, and the FAR-613 HITL
+    gate-description requirement. Returns the standard ``validation_failed``
+    envelope on the first failure, else None.
+
+    FAR-613: the MCP path never runs the full graph validator, and a node's
+    ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
+    edge-level ``HitlReviewConfig`` Pydantic contract entirely — so the HITL
+    gate-description requirement is enforced here explicitly. An
+    agent-authored gate is exactly where an unexplained gate most needs its
+    decision briefing: a node-level or edge-level gate without a
+    human-provided description is rejected with the same
+    ``validation_failed`` shape as structural validation failures.
+    The check is single-sourced with the save-time validator via the public
+    helper (deliberately NOT the full ``validate_definition`` — that would
+    surface every pre-existing issue and break MCP flows).
+
+    DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
+    description check; do NOT wire the full ``validate_definition`` here.
+    Rationale for keeping the narrow check: it enforces the one rule an
+    agent-authored graph would most plausibly violate (an unexplained
+    gate) at the only surface that bypasses the Pydantic contract, with
+    zero false positives. Rationale for deferring full validation: the
+    MCP tool writes onto pipelines that may predate any validator rule —
+    running the full validator would reject a write because of PRE-EXISTING
+    unrelated issues (legacy topology, schema drift), blocking legitimate
+    MCP flows for defects this call did not introduce; save-time
+    enforcement for REST writes stays the forcing function, and the
+    editor surfaces legacy violations to the user (PipelineEditorView
+    banner, FAR-688) instead of blocking the read.
+    """
+    # Validate graph structure using Pydantic models (same as REST endpoint)
+    from pydantic import ValidationError as _PydanticValidationError
+
+    from modulo.api.routes.pipelines import PipelineGraphUpdate
+
+    try:
+        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
+    # Pydantic model, node runner, and GraphValidator use, applied to the
+    # raw node dicts so this gate agrees with save-time and run-time
+    # validation even if the Pydantic surface is bypassed.
+    sandbox_err = _validate_sandbox_nodes(nodes)
+    if sandbox_err:
+        return sandbox_err
+
+    from modulo.core.graph_validator import check_hitl_review_descriptions as _check_hitl_descriptions
+
+    hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
+    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
+    if hitl_description_errors:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {'; '.join(hitl_description_errors)}",
+        }
+    return None
+
+
+async def _replace_pipeline_graph_txn(
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    pipeline_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    is_privileged: bool,
+    graph_account_id: uuid.UUID | None,
+    is_guardrail_admin: bool,
+) -> tuple[list[Any], list[Any]] | dict[str, Any]:
+    """Run the MCP graph replacement inside its own bounded-lock session.
+
+    Returns ``(updated_nodes, updated_edges)`` on success or a standard error
+    envelope (``pipeline_not_found`` / team-scope / connector-team-mismatch)
+    when the write must not proceed.
+    """
+    from modulo.api.routes.pipelines import _set_mutation_row_lock_timeout
+    from modulo.core.team_visibility import (
+        CONNECTOR_TEAM_MISMATCH,
+        connector_team_mismatch_detail,
+        extract_connector_bindings,
+        find_connector_team_mismatches,
+    )
+    from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+
+    async with _session(org_id) as s:
+        # FAR-1361: bound every row-lock wait in this transaction BEFORE its
+        # first lock. The MCP graph-update transaction opens its own
+        # ``_session`` and never runs the REST layer's in-txn team gate, so
+        # without this the graph write's ``SELECT ... FOR UPDATE``
+        # (``replace_pipeline_graph``) is an UNBOUNDED wait on a contended
+        # pipeline row - a held lock parks a pooled connection indefinitely.
+        # The helper is transaction-scoped (``set_config(..., is_local =>
+        # true)`` == ``SET LOCAL``) and dialect-gated, so it reverts on
+        # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
+        # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
+        # mutation endpoints use).
+        await _set_mutation_row_lock_timeout(s)
+
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        if _team_scoped_key_mismatch(pipeline.owner_team_id):
+            return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1181: the graph READ masks env_vars/context_files/parameter
+        # values; a full-replace write round-tripping that masked read must
+        # not persist the mask literals over the stored secrets. Echoes are
+        # resolved against the stored graph before the write commits — the
+        # same parity routes/pipelines.py applies on REST graph writes.
+        nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
+        mismatches = await find_connector_team_mismatches(
+            s,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline.owner_team_id,
+            connector_bindings=extract_connector_bindings(nodes),
+        )
+        if mismatches:
+            return {
+                "error": CONNECTOR_TEAM_MISMATCH,
+                "detail": connector_team_mismatch_detail(mismatches),
+            }
+        # FAR-309 PR A review: the guardrail-binding strip guard runs in the
+        # service layer (replace_pipeline_graph, under the row lock) — the
+        # MCP surface inherits it via caller_type="mcp".
+        result = await replace_pipeline_graph(
+            s,
+            pipeline_id=pid,
+            org_id=org_id,
+            nodes=nodes,
+            edges=edges,
+            is_privileged=is_privileged,
+            caller_type="mcp",
+            account_id=graph_account_id,
+            is_guardrail_admin=is_guardrail_admin,
+        )
+        if result is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        updated_nodes, updated_edges = result
+    return updated_nodes, updated_edges
+
+
 async def _update_pipeline_graph_impl(
     pipeline_id: str,
     nodes: list[dict[str, Any]],
@@ -3059,13 +3316,6 @@ async def _update_pipeline_graph_impl(
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_pipeline_graph")
-    from modulo.core.team_visibility import (
-        CONNECTOR_TEAM_MISMATCH,
-        connector_team_mismatch_detail,
-        extract_connector_bindings,
-        find_connector_team_mismatches,
-    )
-    from modulo.db.crud.pipeline import replace_pipeline_graph
 
     org_id = _ctx_org_id_val()
     pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
@@ -3078,11 +3328,7 @@ async def _update_pipeline_graph_impl(
     # guarded function hardcodes is_privileged=False when
     # caller_type=="mcp" (no DB query); the literal below is enforced by a
     # .semgrep/ rule (mcp call site must pass the literal, not a variable).
-    from modulo.api.routes.pipelines import (
-        PipelineGraphUpdate,
-        _is_privileged,
-        _set_mutation_row_lock_timeout,
-    )
+    from modulo.api.routes.pipelines import _is_privileged
 
     is_privileged = _is_privileged(_ctx_role_val(), _ctx_key_grants.get(None))
 
@@ -3110,116 +3356,21 @@ async def _update_pipeline_graph_impl(
     except McpAuthContextError:
         graph_account_id = None
 
-    # Validate graph structure using Pydantic models (same as REST endpoint)
-    from pydantic import ValidationError as _PydanticValidationError
+    validation_err = _validate_graph_update(nodes, edges)
+    if validation_err is not None:
+        return validation_err
 
     try:
-        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
-    except _PydanticValidationError as exc:
-        return {
-            "error": "validation_failed",
-            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
-        }
-
-    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
-    # Pydantic model, node runner, and GraphValidator use, applied to the
-    # raw node dicts so this gate agrees with save-time and run-time
-    # validation even if the Pydantic surface is bypassed.
-    sandbox_err = _validate_sandbox_nodes(nodes)
-    if sandbox_err:
-        return sandbox_err
-
-    # FAR-613: the MCP path never runs the full graph validator, and a node's
-    # ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
-    # edge-level ``HitlReviewConfig`` Pydantic contract entirely — so the HITL
-    # gate-description requirement is enforced HERE explicitly. An
-    # agent-authored gate is exactly where an unexplained gate most needs its
-    # decision briefing: a node-level or edge-level gate without a
-    # human-provided description is rejected with the same
-    # ``validation_failed`` shape as structural validation failures.
-    # The check is single-sourced with the save-time validator via the public
-    # helper (deliberately NOT the full ``validate_definition`` — that would
-    # surface every pre-existing issue and break MCP flows).
-    #
-    # DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
-    # description check; do NOT wire the full ``validate_definition`` here.
-    # Rationale for keeping the narrow check: it enforces the one rule an
-    # agent-authored graph would most plausibly violate (an unexplained
-    # gate) at the only surface that bypasses the Pydantic contract, with
-    # zero false positives. Rationale for deferring full validation: the
-    # MCP tool writes onto pipelines that may predate any validator rule —
-    # running the full validator would reject a write because of PRE-EXISTING
-    # unrelated issues (legacy topology, schema drift), blocking legitimate
-    # MCP flows for defects this call did not introduce; save-time
-    # enforcement for REST writes stays the forcing function, and the
-    # editor surfaces legacy violations to the user (PipelineEditorView
-    # banner, FAR-688) instead of blocking the read.
-    from modulo.core.graph_validator import check_hitl_review_descriptions as _check_hitl_descriptions
-
-    hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
-    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
-    if hitl_description_errors:
-        return {
-            "error": "validation_failed",
-            "detail": f"Graph validation failed: {'; '.join(hitl_description_errors)}",
-        }
-
-    try:
-        async with _session(org_id) as s:
-            from modulo.db.crud.pipeline import get_pipeline
-
-            # FAR-1361: bound every row-lock wait in this transaction BEFORE its
-            # first lock. The MCP graph-update transaction opens its own
-            # ``_session`` and never runs the REST layer's in-txn team gate, so
-            # without this the graph write's ``SELECT ... FOR UPDATE``
-            # (``replace_pipeline_graph``) is an UNBOUNDED wait on a contended
-            # pipeline row - a held lock parks a pooled connection indefinitely.
-            # The helper is transaction-scoped (``set_config(..., is_local =>
-            # true)`` == ``SET LOCAL``) and dialect-gated, so it reverts on
-            # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
-            # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
-            # mutation endpoints use).
-            await _set_mutation_row_lock_timeout(s)
-
-            pipeline = await get_pipeline(s, pid)
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            # FAR-1181: the graph READ masks env_vars/context_files/parameter
-            # values; a full-replace write round-tripping that masked read must
-            # not persist the mask literals over the stored secrets. Echoes are
-            # resolved against the stored graph before the write commits — the
-            # same parity routes/pipelines.py applies on REST graph writes.
-            nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
-            mismatches = await find_connector_team_mismatches(
-                s,
-                org_id=org_id,
-                pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_bindings=extract_connector_bindings(nodes),
-            )
-            if mismatches:
-                return {
-                    "error": CONNECTOR_TEAM_MISMATCH,
-                    "detail": connector_team_mismatch_detail(mismatches),
-                }
-            # FAR-309 PR A review: the guardrail-binding strip guard runs in the
-            # service layer (replace_pipeline_graph, under the row lock) — the
-            # MCP surface inherits it via caller_type="mcp".
-            result = await replace_pipeline_graph(
-                s,
-                pipeline_id=pid,
-                org_id=org_id,
-                nodes=nodes,
-                edges=edges,
-                is_privileged=is_privileged,
-                caller_type="mcp",
-                account_id=graph_account_id,
-                is_guardrail_admin=_mcp_is_guardrail_admin,
-            )
-            if result is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            updated_nodes, updated_edges = result
+        outcome = await _replace_pipeline_graph_txn(
+            org_id,
+            pid,
+            pipeline_id,
+            nodes,
+            edges,
+            is_privileged=is_privileged,
+            graph_account_id=graph_account_id,
+            is_guardrail_admin=_mcp_is_guardrail_admin,
+        )
     except HitlReviewWeakeningDenied as exc:
         await _append_mcp_hitl_denial_audit(org_id, pid, exc)
         return {
@@ -3262,6 +3413,9 @@ async def _update_pipeline_graph_impl(
             }
         raise
 
+    if isinstance(outcome, dict):
+        return outcome
+    updated_nodes, updated_edges = outcome
     return {
         "pipeline_id": pipeline_id,
         # FAR-1181: mask the response so the MCP write surface cannot echo the
@@ -3282,6 +3436,7 @@ async def _update_pipeline_graph_impl(
     "gates lack one is rejected with validation_failed (FAR-613: the MCP path enforces "
     "the HITL description rule specifically). Returns the updated graph."
 )
+@mcp_audited("pipeline_graph_updated", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def update_pipeline_graph(
     pipeline_id: str,
@@ -3360,6 +3515,7 @@ def _apply_node_connector_binding(
     "Updates the node's connector_binding in the pipeline graph. "
     "The connector must already exist in the organisation."
 )
+@mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
 async def bind_connector_to_node(
     pipeline_id: str,
@@ -3546,6 +3702,7 @@ async def _trigger_pipeline_impl(
         "work_item_refs_required error when none are supplied."
     )
 )
+@mcp_audited("run_triggered", "run", fail_closed=False)
 @_RETRY_DB
 async def trigger_pipeline(
     pipeline_id: str,
@@ -4104,6 +4261,7 @@ async def _create_eval_definition_impl(
     "EvalDefinition row scoped to the caller's org and returns its details. "
     "Requires an admin caller; non-admins receive an insufficient_scope error.",
 )
+@mcp_audited("eval_definition_created", "eval_definition", fail_closed=False)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_CREATE_FAILED,
@@ -4297,6 +4455,7 @@ async def _update_eval_definition_impl(
     "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
     "this tool - the REST PUT route must be used to unset them.",
 )
+@mcp_audited("eval_definition_updated", "eval_definition", fail_closed=False)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_UPDATE_FAILED,
@@ -4432,6 +4591,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
     "admin-only hard purge (hard=True) removes the row outright. Non-admins "
     "receive an insufficient_scope error.",
 )
+@mcp_audited("eval_definition_deleted", "eval_definition", fail_closed=True)
 @_RETRY_DB
 @_tool_db_shell(
     log_constant=_MSG_EVAL_DEF_DELETE_FAILED,
@@ -4446,6 +4606,7 @@ async def delete_eval_definition(
 
 
 @mcp.tool(description="Cancel a running pipeline run.")
+@mcp_audited("run_cancelled", "run", fail_closed=False)
 @_RETRY_DB
 async def cancel_run(run_id: str) -> dict[str, Any]:
     try:
@@ -5064,6 +5225,139 @@ async def _validate_mcp_choice_answer(
     return None, validated
 
 
+async def _dispatch_hitl_claim(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    actor_account_id: uuid.UUID | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``claim`` branch of ``_dispatch_hitl_action`` (fails closed without an actor)."""
+    if actor_account_id is None:
+        return {
+            "error": "no_user_context",
+            "detail": "A gate claim requires an authenticated user context; this MCP session has none",
+        }
+    gate = await mgr.claim(
+        s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+    )
+    return {
+        "status": "claimed",
+        "claim_token": gate.claim_token,
+        "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
+    }
+
+
+async def _dispatch_hitl_approve(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    answer: dict[str, Any] | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``approve`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation)."""
+    # FAR-860: validate choice answer before the manager call. The error is
+    # returned out-of-band so a legit answer carrying an "error" key is
+    # never misread as an MCP error dict.
+    answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
+    if answer_error is not None:
+        return answer_error
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
+    if validated_answer is not None:
+        approve_payload["answer"] = validated_answer
+    await mgr.approve(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=actor_account_id,
+        decision_payload=approve_payload,
+        client_type=client_type,
+        answer=validated_answer,
+    )
+    return {"status": "approved", "review_id": review_id}
+
+
+async def _dispatch_hitl_deliver_manual(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    output: dict[str, Any] | None,
+    answer: dict[str, Any] | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The ``deliver_manual`` branch of ``_dispatch_hitl_action`` (FAR-860 answer validation)."""
+    # FAR-860: validate choice answer before the manager call. The error is
+    # returned out-of-band so a legit answer carrying an "error" key is
+    # never misread as an MCP error dict.
+    answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
+    if answer_error is not None:
+        return answer_error
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    manual_payload: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": output or {}}
+    if validated_answer is not None:
+        manual_payload["answer"] = validated_answer
+    await mgr.deliver_manual(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        output=output or {},
+        actor_id=actor_account_id,
+        decision_payload=manual_payload,
+        client_type=client_type,
+        answer=validated_answer,
+    )
+    return {"status": "delivered_manual", "review_id": review_id}
+
+
+async def _dispatch_hitl_reject(
+    mgr: HITLManager,
+    s: AsyncSession,
+    *,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+    claim_token: str | None,
+    actor_account_id: uuid.UUID | None,
+    reason: str | None,
+    client_type: str,
+) -> dict[str, Any]:
+    """The default (``reject``) branch of ``_dispatch_hitl_action``."""
+    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
+    reject_payload: dict[str, Any] = {"action": "rejected", "review_id": review_id}
+    if reason is not None:
+        reject_payload["reason"] = reason
+    await mgr.reject(
+        s,
+        run_id=rid,
+        review_id=review_id,
+        org_id=org_id,
+        claim_token=claim_token or "",
+        actor_id=actor_account_id,
+        reason=reason,
+        decision_payload=reject_payload,
+        client_type=client_type,
+    )
+    return {"status": "rejected", "review_id": review_id}
+
+
 async def _dispatch_hitl_action(
     mgr: HITLManager,
     s: AsyncSession,
@@ -5119,82 +5413,51 @@ async def _dispatch_hitl_action(
         )
         return _hitl_decision_rate_limited_response()
     if action == "claim":
-        if actor_account_id is None:
-            return {
-                "error": "no_user_context",
-                "detail": "A gate claim requires an authenticated user context; this MCP session has none",
-            }
-        gate = await mgr.claim(
-            s, run_id=rid, review_id=review_id, org_id=org_id, claimant_id=actor_account_id, client_type=client_type
+        return await _dispatch_hitl_claim(
+            mgr,
+            s,
+            rid=rid,
+            review_id=review_id,
+            org_id=org_id,
+            actor_account_id=actor_account_id,
+            client_type=client_type,
         )
-        return {
-            "status": "claimed",
-            "claim_token": gate.claim_token,
-            "expires_at": gate.expires_at.isoformat() if gate.expires_at else None,
-        }
     if action == "approve":
-        # FAR-860: validate choice answer before the manager call. The error is
-        # returned out-of-band so a legit answer carrying an "error" key is
-        # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
-        if answer_error is not None:
-            return answer_error
-        # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        approve_payload: dict[str, Any] = {"action": "approved", "review_id": review_id}
-        if validated_answer is not None:
-            approve_payload["answer"] = validated_answer
-        await mgr.approve(
+        return await _dispatch_hitl_approve(
+            mgr,
             s,
-            run_id=rid,
+            rid=rid,
             review_id=review_id,
             org_id=org_id,
-            claim_token=claim_token or "",
-            actor_id=actor_account_id,
-            decision_payload=approve_payload,
+            claim_token=claim_token,
+            actor_account_id=actor_account_id,
+            answer=answer,
             client_type=client_type,
-            answer=validated_answer,
         )
-        return {"status": "approved", "review_id": review_id}
     if action == "deliver_manual":
-        # FAR-860: validate choice answer before the manager call. The error is
-        # returned out-of-band so a legit answer carrying an "error" key is
-        # never misread as an MCP error dict.
-        answer_error, validated_answer = await _validate_mcp_choice_answer(s, rid, review_id, org_id, answer)
-        if answer_error is not None:
-            return answer_error
-        # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-        manual_payload: dict[str, Any] = {"action": "deliver_manual", "review_id": review_id, "output": output or {}}
-        if validated_answer is not None:
-            manual_payload["answer"] = validated_answer
-        await mgr.deliver_manual(
+        return await _dispatch_hitl_deliver_manual(
+            mgr,
             s,
-            run_id=rid,
+            rid=rid,
             review_id=review_id,
             org_id=org_id,
-            claim_token=claim_token or "",
-            output=output or {},
-            actor_id=actor_account_id,
-            decision_payload=manual_payload,
+            claim_token=claim_token,
+            actor_account_id=actor_account_id,
+            output=output,
+            answer=answer,
             client_type=client_type,
-            answer=validated_answer,
         )
-        return {"status": "delivered_manual", "review_id": review_id}
-    # _decide would stamp anyway (FAR-541); kept for writer-contract clarity.
-    reject_payload: dict[str, Any] = {"action": "rejected", "review_id": review_id}
-    if reason is not None:
-        reject_payload["reason"] = reason
-    await mgr.reject(
+    return await _dispatch_hitl_reject(
+        mgr,
         s,
-        run_id=rid,
+        rid=rid,
         review_id=review_id,
         org_id=org_id,
-        claim_token=claim_token or "",
-        actor_id=actor_account_id,
+        claim_token=claim_token,
+        actor_account_id=actor_account_id,
         reason=reason,
-        decision_payload=reject_payload,
         client_type=client_type,
     )
-    return {"status": "rejected", "review_id": review_id}
 
 
 def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dict[str, Any]:
@@ -5318,6 +5581,7 @@ async def _review_hitl_impl(
         "intervention (intended policy)."
     ),
 )
+@mcp_audited("hitl_review_actioned", "hitl_review", fail_closed=False)
 @_RETRY_DB
 async def review_hitl(
     run_id: str,
@@ -5344,6 +5608,7 @@ async def review_hitl(
         "Note: community primitives are maintained by the Modulo team; your copy diverges from upstream on first edit."
     ),
 )
+@mcp_audited("library_primitive_copied", "library_primitive", fail_closed=False)
 @_RETRY_DB
 async def copy_library_primitive(
     primitive_id: str,
@@ -5764,6 +6029,7 @@ def _assert_create_model_backend_provider(provider: str) -> dict[str, Any] | Non
     "Common providers include: openai, anthropic, gemini, deepseek, groq, opencode. "
     "The built-in 'stub' provider is a test double and cannot be created via MCP."
 )
+@mcp_audited("model_backend_created", "model_backend", fail_closed=False)
 @_RETRY_DB
 async def create_model_backend(
     name: str,
@@ -5940,6 +6206,7 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
     description="Create a new connector instance (provider configuration). "
     "Credentials are encrypted at rest. Returns the created connector details."
 )
+@mcp_audited("connector_created", "connector", fail_closed=True)
 @_RETRY_DB
 async def create_connector(
     name: str,
@@ -6149,6 +6416,7 @@ async def _create_trigger_impl(
 
 
 @mcp.tool(description="Create a new trigger for a pipeline.")
+@mcp_audited("trigger_created", "trigger", fail_closed=False)
 @_RETRY_DB
 async def create_trigger(
     pipeline_id: str,
@@ -6423,11 +6691,99 @@ def _recompute_ongoing_next_fire(
             trigger.next_fire_at = datetime.now(UTC)
 
 
+async def _update_trigger_txn(
+    org_id: uuid.UUID,
+    tid: uuid.UUID,
+    *,
+    active: bool | None,
+    max_concurrent_runs: int | None,
+    cron_expression: str | None,
+    cron_timezone: str | None,
+    daily_spend_limit: float | None,
+    clear_daily_spend_limit: bool,
+    config_json: dict[str, Any] | None,
+) -> tuple[Any, int, dict[str, Any], bool] | dict[str, Any]:
+    """Run the trigger update inside its own session (validate-then-mutate).
+
+    Returns ``(trigger, in_flight, updated_streak_status, prev_active)`` on
+    success, or a standard error envelope (team scope / not found / validation)
+    when the write must not proceed. ``prev_active`` is captured before the
+    field updates so the caller can clear the re-enable streak (FAR-190) after
+    the commit.
+    """
+    async with _session(org_id) as s:
+        trigger = await _load_trigger_for_update(s, org_id, tid)
+        if trigger is _TEAM_SCOPE_ERROR:
+            return _team_scope_error("pipeline", str(tid))
+        if trigger is None:
+            return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
+
+        cron_config_requested = cron_expression is not None or cron_timezone is not None
+        if cron_config_requested and trigger.trigger_type != "cron":
+            return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
+
+        ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
+            s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
+        )
+        if ongoing_err:
+            return ongoing_err
+
+        next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
+        if cron_err:
+            return cron_err
+
+        prev_max = trigger.max_concurrent_runs
+        prev_active = trigger.active
+        # Validate the write-time config gate ONLY when config_json was
+        # part of the request (mirrors the REST _apply_trigger_update
+        # semantics): a legacy trigger with an unread key must stay
+        # updatable by any other field via MCP, same as via REST.
+        #
+        # Validate the MERGED config BEFORE mutating the ORM object.
+        # `_session()` wraps the body in `s.begin()`, so a clean early
+        # return COMMITS — validating after mutation would persist an
+        # invalid merged config while reporting a validation error.
+        if config_json is not None:
+            merged_config = merge_masked_config(trigger.config_json, config_json)
+            try:
+                _validate_trigger_config_keys(merged_config, context="merged config_json")
+            except FastAPIHTTPException as exc:
+                return {"error": "validation", "detail": exc.detail}
+        await _apply_trigger_field_updates(
+            s,
+            trigger,
+            active,
+            max_concurrent_runs,
+            daily_spend_limit,
+            clear_daily_spend_limit,
+            config_json,
+            cron_expression,
+            cron_timezone,
+            next_fire_at,
+            prev_active,
+        )
+
+        _recompute_ongoing_next_fire(
+            trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
+        )
+        await s.flush()
+        from modulo.core.cron_helpers import _count_ongoing_runs
+
+        in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
+        # FAR-251 — surface the updated trigger's streak_status exactly as
+        # the REST update serializer does (computed inside the RLS
+        # transaction so a re-enabled trigger reflects its reset streak).
+        updated_streak_status = await _streak_status_for(s, trigger)
+
+    return trigger, in_flight, updated_streak_status, prev_active
+
+
 @mcp.tool(
     description="Update an existing trigger's configuration. "
     "Mirrors PUT /api/v1/triggers/{id}. Setting cron_expression or "
     "cron_timezone is only valid for cron triggers.",
 )
+@mcp_audited("trigger_updated", "trigger", fail_closed=False)
 @_RETRY_DB
 async def update_trigger(
     trigger_id: str,
@@ -6451,69 +6807,20 @@ async def update_trigger(
         if tid is None:
             raise RuntimeError("_validate_trigger_update_inputs returned an error dict but no parsed trigger id")
 
-        async with _session(org_id) as s:
-            trigger = await _load_trigger_for_update(s, org_id, tid)
-            if trigger is _TEAM_SCOPE_ERROR:
-                return _team_scope_error("pipeline", str(tid))
-            if trigger is None:
-                return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-
-            cron_config_requested = cron_expression is not None or cron_timezone is not None
-            if cron_config_requested and trigger.trigger_type != "cron":
-                return {"error": "validation", "detail": "Only cron triggers can have cron configuration"}
-
-            ongoing_scan_interval_changed, ongoing_err = await _validate_ongoing_trigger_update(
-                s, trigger, max_concurrent_runs, daily_spend_limit, config_json, active, clear_daily_spend_limit
-            )
-            if ongoing_err:
-                return ongoing_err
-
-            next_fire_at, cron_err = _validate_cron_update(trigger, cron_expression, cron_timezone)
-            if cron_err:
-                return cron_err
-
-            prev_max = trigger.max_concurrent_runs
-            prev_active = trigger.active
-            # Validate the write-time config gate ONLY when config_json was
-            # part of the request (mirrors the REST _apply_trigger_update
-            # semantics): a legacy trigger with an unread key must stay
-            # updatable by any other field via MCP, same as via REST.
-            #
-            # Validate the MERGED config BEFORE mutating the ORM object.
-            # `_session()` wraps the body in `s.begin()`, so a clean early
-            # return COMMITS — validating after mutation would persist an
-            # invalid merged config while reporting a validation error.
-            if config_json is not None:
-                merged_config = merge_masked_config(trigger.config_json, config_json)
-                try:
-                    _validate_trigger_config_keys(merged_config, context="merged config_json")
-                except FastAPIHTTPException as exc:
-                    return {"error": "validation", "detail": exc.detail}
-            await _apply_trigger_field_updates(
-                s,
-                trigger,
-                active,
-                max_concurrent_runs,
-                daily_spend_limit,
-                clear_daily_spend_limit,
-                config_json,
-                cron_expression,
-                cron_timezone,
-                next_fire_at,
-                prev_active,
-            )
-
-            _recompute_ongoing_next_fire(
-                trigger, max_concurrent_runs, active, prev_max, prev_active, ongoing_scan_interval_changed
-            )
-            await s.flush()
-            from modulo.core.cron_helpers import _count_ongoing_runs
-
-            in_flight = await _count_ongoing_runs(s, trigger.id) if trigger.trigger_type == "ongoing" else 0
-            # FAR-251 — surface the updated trigger's streak_status exactly as
-            # the REST update serializer does (computed inside the RLS
-            # transaction so a re-enabled trigger reflects its reset streak).
-            updated_streak_status = await _streak_status_for(s, trigger)
+        outcome = await _update_trigger_txn(
+            org_id,
+            tid,
+            active=active,
+            max_concurrent_runs=max_concurrent_runs,
+            cron_expression=cron_expression,
+            cron_timezone=cron_timezone,
+            daily_spend_limit=daily_spend_limit,
+            clear_daily_spend_limit=clear_daily_spend_limit,
+            config_json=config_json,
+        )
+        if isinstance(outcome, dict):
+            return outcome
+        trigger, in_flight, updated_streak_status, prev_active = outcome
 
         # FAR-190: clear the config-failure Redis counter only AFTER the commit
         # (the _session context commits on exit); best-effort.
@@ -6532,6 +6839,7 @@ async def update_trigger(
 
 
 @mcp.tool(description="Soft-delete a trigger by ID.")
+@mcp_audited("trigger_deleted", "trigger", fail_closed=True)
 @_RETRY_DB
 async def delete_trigger(trigger_id: str) -> dict[str, Any]:
     try:
@@ -6647,6 +6955,7 @@ async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
+@mcp_audited("pipeline_deleted", "pipeline", fail_closed=True)
 @_RETRY_DB
 async def delete_pipeline(
     pipeline_id: str,
@@ -6685,6 +6994,7 @@ async def delete_pipeline(
 
 
 @mcp.tool(description="Delete a connector instance by ID.")
+@mcp_audited("connector_deleted", "connector", fail_closed=True)
 @_RETRY_DB
 async def delete_connector(
     connector_id: str,
@@ -6901,6 +7211,7 @@ async def list_connector_types() -> dict[str, Any]:
     "Secrets are encrypted at rest and scoped to the organisation. "
     "Returns the created secret details."
 )
+@mcp_audited("secret_created", "secret", fail_closed=True)
 @_RETRY_DB
 async def create_secret(
     key: str,
@@ -7000,6 +7311,7 @@ async def list_secrets(
 
 
 @mcp.tool(description="Delete a secret from the organisation vault by key.")
+@mcp_audited("secret_deleted", "secret", fail_closed=True)
 @_RETRY_DB
 async def delete_secret(
     key: str,
@@ -7287,6 +7599,7 @@ async def get_hitl_email_alerts() -> dict[str, Any]:
         "enabled=true); omitted, the stored overrides are untouched."
     ),
 )
+@mcp_audited("hitl_email_alerts_updated", "hitl_email_preference", fail_closed=False)
 @_RETRY_DB
 async def set_hitl_email_alerts(
     enabled: bool,
@@ -7351,6 +7664,143 @@ async def set_hitl_email_alerts(
         return _tool_exception_error("Failed to set HITL email alert preferences", exc, "mcp.set_hitl_email_alerts")
 
 
+class _CreateApiKeyParsed(NamedTuple):
+    """Parsed arguments for ``create_api_key``."""
+
+    name: str
+    expires_at: datetime | None
+    team_id: uuid.UUID | None
+
+
+async def _validate_api_key_args(
+    *,
+    name: str,
+    role: str,
+    expires_at: str | None,
+    team_id: str | None,
+    grants: list[str] | None,
+    org_id: uuid.UUID,
+) -> _CreateApiKeyParsed | dict[str, Any]:
+    """Validate ``create_api_key``'s arguments before it touches the database.
+
+    Runs, in order: the role/name check, the optional expiry parse, the
+    optional team parse (admin-gated for team keys), and the FAR-1477 grants
+    gate — grants are accepted ONLY with the org flag ON (OFF => 422, never a
+    silent downgrade to a legacy full-role key). The flag read is STRICT so a
+    transient flag-read failure is not mistaken for "flag OFF" — it must
+    surface as a retryable 503, matching the REST mint path (and this
+    server's own grant-enforcement auth path).
+
+    Returns the parsed arguments on success, or the first error envelope.
+    """
+    validation_error = _validate_api_key_role_and_name(name, role)
+    if validation_error is not None:
+        return validation_error
+
+    name = name.strip()
+
+    parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
+    if expires_error is not None:
+        return expires_error
+
+    team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
+    if team_error is not None:
+        return team_error
+
+    if grants is not None:
+        try:
+            grants_on = await api_key_grants_enabled(org_id, strict=True)
+        except ApiKeyGrantsUnavailableError:
+            _log.warning("mcp.create_api_key_grants_unavailable")
+            return {
+                "error": "service_unavailable",
+                "status": 503,
+                "detail": "API key grant settings are temporarily unavailable; retry shortly",
+            }
+        if not grants_on:
+            return {
+                "error": "validation_error",
+                "status": 422,
+                "detail": "API key grant-sets are not enabled for this organisation",
+            }
+
+    return _CreateApiKeyParsed(name, parsed_expires_at, team_uuid)
+
+
+async def _mint_api_key_txn(
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID,
+    name: str,
+    role: str,
+    team_uuid: uuid.UUID | None,
+    parsed_expires_at: datetime | None,
+    grants: list[str] | None,
+) -> tuple[Any, str] | dict[str, Any]:
+    """Mint the API key inside its own session (caps + break-glass denial).
+
+    Returns ``(key, full_key)`` on success, or an error envelope when a mint
+    cap refuses the request.
+    """
+    async with _session(org_id) as s:
+        await _deny_break_glass_mint(s, account_id)
+        await _enforce_api_key_mint_cap(s, account_id, org_id, role)
+        if grants is not None:
+            try:
+                await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
+            except FastAPIHTTPException as exc:
+                if exc.status_code == 422:
+                    return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
+                raise MCPAuthorizationError(str(exc.detail)) from None
+        key, full_key = await auth_create_api_key(
+            s,
+            org_id=org_id,
+            name=name,
+            role=role,
+            account_id=account_id,
+            team_id=team_uuid,
+            expires_at=parsed_expires_at,
+            grants=grants,
+        )
+    return key, full_key
+
+
+def _api_key_created_audit_payload(
+    *,
+    key: Any,
+    name: str,
+    role: str,
+    team_uuid: uuid.UUID | None,
+    grants: list[str] | None,
+) -> dict[str, Any]:
+    """Build the FAR-620 ``api_key_created`` audit payload stamps."""
+    return {
+        "name": name,
+        "role": role,
+        "team_id": str(team_uuid) if team_uuid else None,
+        "auth_type": _ctx_auth_type.get(None) or "unknown",
+        # MCP minting is org-only (caller-scope org-only pin) — the
+        # tool can never produce a user-scoped key.
+        "key_scope": "org",
+        "lookup_prefix": f"mk_{key.lookup_prefix}****",
+        **({"grants": sorted(grants)} if grants is not None else {}),
+    }
+
+
+def _api_key_created_response(key: Any, full_key: str, grants: list[str] | None) -> dict[str, Any]:
+    """Serialize a freshly minted API key to the ``create_api_key`` shape."""
+    return {
+        "id": str(key.id),
+        "name": key.name,
+        "role": key.role,
+        "key_value": full_key,
+        "lookup_prefix": f"mk_{key.lookup_prefix}****",
+        "created_at": key.created_at.isoformat() if key.created_at else None,
+        "team_id": str(key.team_id) if key.team_id else None,
+        "grants": sorted(grants) if grants is not None else None,
+    }
+
+
 @mcp.tool(
     description=(
         "Create a new organisation API key. Returns the full mk_... key value "
@@ -7383,92 +7833,42 @@ async def create_api_key(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        validation_error = _validate_api_key_role_and_name(name, role)
-        if validation_error is not None:
-            return validation_error
+        args = await _validate_api_key_args(
+            name=name,
+            role=role,
+            expires_at=expires_at,
+            team_id=team_id,
+            grants=grants,
+            org_id=org_id,
+        )
+        if isinstance(args, dict):
+            return args
 
-        name = name.strip()
-
-        parsed_expires_at, expires_error = _parse_api_key_expires(expires_at)
-        if expires_error is not None:
-            return expires_error
-
-        team_uuid, team_error = await _parse_api_key_team_id(team_id, org_id)
-        if team_error is not None:
-            return team_error
-
-        # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422,
-        # never a silent downgrade to a legacy full-role key). Read STRICT so a
-        # transient flag-read failure is not mistaken for "flag OFF" — it must
-        # surface as a retryable 503, matching the REST mint path (and this
-        # server's own grant-enforcement auth path).
-        if grants is not None:
-            try:
-                grants_on = await api_key_grants_enabled(org_id, strict=True)
-            except ApiKeyGrantsUnavailableError:
-                _log.warning("mcp.create_api_key_grants_unavailable")
-                return {
-                    "error": "service_unavailable",
-                    "status": 503,
-                    "detail": "API key grant settings are temporarily unavailable; retry shortly",
-                }
-            if not grants_on:
-                return {
-                    "error": "validation_error",
-                    "status": 422,
-                    "detail": "API key grant-sets are not enabled for this organisation",
-                }
-
-        async with _session(org_id) as s:
-            await _deny_break_glass_mint(s, account_id)
-            await _enforce_api_key_mint_cap(s, account_id, org_id, role)
-            if grants is not None:
-                try:
-                    await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
-                except FastAPIHTTPException as exc:
-                    if exc.status_code == 422:
-                        return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
-                    raise MCPAuthorizationError(str(exc.detail)) from None
-            key, full_key = await auth_create_api_key(
-                s,
-                org_id=org_id,
-                name=name,
-                role=role,
-                account_id=account_id,
-                team_id=team_uuid,
-                expires_at=parsed_expires_at,
-                grants=grants,
-            )
+        outcome = await _mint_api_key_txn(
+            org_id=org_id,
+            account_id=account_id,
+            name=args.name,
+            role=role,
+            team_uuid=args.team_id,
+            parsed_expires_at=args.expires_at,
+            grants=grants,
+        )
+        if isinstance(outcome, dict):
+            return outcome
+        key, full_key = outcome
 
         # FAR-620: parity with the REST mint audit (PRD §8.12) + payload stamps.
         await _emit_mcp_api_key_audit(
             org_id=org_id,
             resource_id=key.id,
             event_type="api_key_created",
-            payload={
-                "name": name,
-                "role": role,
-                "team_id": str(team_uuid) if team_uuid else None,
-                "auth_type": _ctx_auth_type.get(None) or "unknown",
-                # MCP minting is org-only (caller-scope org-only pin) — the
-                # tool can never produce a user-scoped key.
-                "key_scope": "org",
-                "lookup_prefix": f"mk_{key.lookup_prefix}****",
-                **({"grants": sorted(grants)} if grants is not None else {}),
-            },
+            payload=_api_key_created_audit_payload(
+                key=key, name=args.name, role=role, team_uuid=args.team_id, grants=grants
+            ),
             log_context="mcp.create_api_key_audit_failed",
         )
 
-        return {
-            "id": str(key.id),
-            "name": key.name,
-            "role": key.role,
-            "key_value": full_key,
-            "lookup_prefix": f"mk_{key.lookup_prefix}****",
-            "created_at": key.created_at.isoformat() if key.created_at else None,
-            "team_id": str(key.team_id) if key.team_id else None,
-            "grants": sorted(grants) if grants is not None else None,
-        }
+        return _api_key_created_response(key, full_key, grants)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except IntegrityError:
@@ -7584,6 +7984,7 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
+@mcp_audited("agent_created", "agent", fail_closed=False)
 @_RETRY_DB
 async def create_agent(
     name: str,
@@ -7718,6 +8119,32 @@ async def list_agents(
         return _tool_exception_error("Failed to list agents", exc, "mcp.list_agents")
 
 
+def _agent_to_dict(agent: Agent) -> dict[str, Any]:
+    """Serialize one ``Agent`` row to the ``get_agent`` MCP response shape."""
+    return {
+        "id": str(agent.id),
+        "name": agent.name,
+        "description": agent.description,
+        "is_executable": agent.is_executable,
+        "prompt_template": agent.prompt_template,
+        "prompt_version_history": agent.prompt_version_history or [],
+        "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
+        "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
+        "input_schema_version": agent.input_schema_version,
+        "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
+        "output_schema_version": agent.output_schema_version,
+        "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
+        "connector_type_refs": agent.connector_type_refs or [],
+        "required_environment_capabilities": agent.required_environment_capabilities or [],
+        "retry_policy": agent.retry_policy or {},
+        "token_budget": agent.token_budget,
+        "max_input_length": agent.max_input_length,
+        "agent_commands": agent.agent_commands,
+        "created_at": agent.created_at.isoformat() if agent.created_at else None,
+        "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
+    }
+
+
 @mcp.tool(description="Get a single agent by ID, including its prompt template and configuration.")
 @_RETRY_DB
 async def get_agent(agent_id: str) -> dict[str, Any]:
@@ -7744,28 +8171,7 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
         if agent is None or agent.organisation_id != org_id:
             return {"error": "not_found", "detail": f"Agent {agent_id} not found"}
 
-        return {
-            "id": str(agent.id),
-            "name": agent.name,
-            "description": agent.description,
-            "is_executable": agent.is_executable,
-            "prompt_template": agent.prompt_template,
-            "prompt_version_history": agent.prompt_version_history or [],
-            "model_backend_id": str(agent.model_backend_id) if agent.model_backend_id else None,
-            "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
-            "input_schema_version": agent.input_schema_version,
-            "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
-            "output_schema_version": agent.output_schema_version,
-            "parameter_schema_id": str(agent.parameter_schema_id) if agent.parameter_schema_id else None,
-            "connector_type_refs": agent.connector_type_refs or [],
-            "required_environment_capabilities": agent.required_environment_capabilities or [],
-            "retry_policy": agent.retry_policy or {},
-            "token_budget": agent.token_budget,
-            "max_input_length": agent.max_input_length,
-            "agent_commands": agent.agent_commands,
-            "created_at": agent.created_at.isoformat() if agent.created_at else None,
-            "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
-        }
+        return _agent_to_dict(agent)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -8071,6 +8477,7 @@ async def get_available_features() -> dict[str, Any]:
     "'latest' version placeholder so agents can reference the schema "
     "immediately. Returns the created schema details.",
 )
+@mcp_audited("schema_created", "schema", fail_closed=False)
 @_RETRY_DB
 async def create_schema(
     name: str,
@@ -8330,6 +8737,7 @@ def _set_to_dict(ps: Any, *, include_updated: bool = True) -> dict[str, Any]:
 @mcp.tool(
     description="Create a new parameter schema. Returns the created schema details.",
 )
+@mcp_audited("parameter_schema_created", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def create_parameter_schema(
     name: str,
@@ -8416,6 +8824,7 @@ async def get_parameter_schema(
 @mcp.tool(
     description="Update a parameter schema. Requires the current version for optimistic concurrency.",
 )
+@mcp_audited("parameter_schema_updated", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def update_parameter_schema(
     schema_id: str,
@@ -8478,6 +8887,7 @@ async def update_parameter_schema(
 @mcp.tool(
     description="Soft-delete a parameter schema by ID.",
 )
+@mcp_audited("parameter_schema_deleted", "parameter_schema", fail_closed=True)
 @_RETRY_DB
 async def delete_parameter_schema(
     schema_id: str,
@@ -8532,6 +8942,7 @@ async def delete_parameter_schema(
 @mcp.tool(
     description="Restore a soft-deleted parameter schema by ID.",
 )
+@mcp_audited("parameter_schema_restored", "parameter_schema", fail_closed=False)
 @_RETRY_DB
 async def restore_parameter_schema(
     schema_id: str,
@@ -8554,12 +8965,12 @@ async def restore_parameter_schema(
         async with _session(org_id) as s:
             existing = await db_get_ps(s, sid)
             if existing is None or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
             schema = await db_restore_ps(s, sid)
 
         if schema is None:
-            return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
         return {
             "data": {
@@ -8723,6 +9134,7 @@ async def list_parameter_sets(
 @mcp.tool(
     description="Create a new parameter set under a parameter schema. Returns the created set details.",
 )
+@mcp_audited("parameter_set_created", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def create_parameter_set(
     schema_id: str,
@@ -8824,6 +9236,7 @@ async def get_parameter_set(
 @mcp.tool(
     description="Update a parameter set. Requires the current version for optimistic concurrency.",
 )
+@mcp_audited("parameter_set_updated", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def update_parameter_set(
     schema_id: str,
@@ -8893,6 +9306,7 @@ async def update_parameter_set(
 @mcp.tool(
     description="Soft-delete a parameter set by ID under a parameter schema.",
 )
+@mcp_audited("parameter_set_deleted", "parameter_set", fail_closed=True)
 @_RETRY_DB
 async def delete_parameter_set(
     schema_id: str,
@@ -8954,6 +9368,7 @@ async def delete_parameter_set(
 @mcp.tool(
     description="Restore a soft-deleted parameter set by ID under a parameter schema.",
 )
+@mcp_audited("parameter_set_restored", "parameter_set", fail_closed=False)
 @_RETRY_DB
 async def restore_parameter_set(
     schema_id: str,
@@ -8979,7 +9394,7 @@ async def restore_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": "Parameter schema not found or not deleted"}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
             existing = await db_get_set(s, setid)
             if existing is None or existing.parameter_schema_id != sid or existing.organisation_id != org_id:
@@ -9283,6 +9698,7 @@ async def _delete_housekeeping_groups(
     "org_api_key, sso_provider, team, parameter_schema, schema, lifecycle_map. "
     "Deletions are grouped by entity type with per-group savepoints.",
 )
+@mcp_audited("housekeeping_performed", "housekeeping", fail_closed=True)
 async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -9632,46 +10048,44 @@ async def _hitl_required_team_name(s: AsyncSession, gate: HitlClaim) -> str | No
 _FIRE_CONTEXT_MAX_CHARS = 2048
 
 
-@mcp.resource("modulo://runs/{run_id}/hitl/{review_id}")
-async def resource_hitl_review(run_id: str, review_id: str) -> str:
-    """HITL gate context. Annotated as agent_output — treat as untrusted."""
-    if not await validate_current_auth():
-        return _MSG_ERROR_TOKEN_REVOKED
-    org_id = _ctx_org_id_val()
-    try:
-        rid = uuid.UUID(run_id)
-    except ValueError:
-        return f"error: Invalid UUID format: {run_id}"
-    async with _session(org_id) as s:
-        gate = await _get_hitl_review(s, rid, review_id, org_id)
-        required_team_name = None
-        description: str | None = None
-        context: dict[str, Any] | None = None
-        if gate is not None:
-            # A team-scoped key must not read another team's gate even when
-            # the gate itself is org-level (required_team_id IS NULL).
-            scope_error = await _hitl_review_scope_error(s, rid, gate)
-            if scope_error is not None:
-                return scope_error
-            required_team_name = await _hitl_required_team_name(s, gate)
-            # FAR-613: the fire-time briefing. FAR-688 unified precedence
-            # (context-first, snapshot fallback — the context IS the fire-time
-            # truth): the shared helper in ``hitl_review_config`` is the SAME
-            # rule the REST pending endpoints apply via
-            # ``resolve_review_descriptions``, so every surface renders one
-            # description for the same gate. The snapshot-config fallback
-            # read runs only when the capture carries no usable description
-            # (gates that fired before capture existed).
-            context = gate.context_json if isinstance(gate.context_json, dict) else None
-            from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
+async def _resolve_hitl_review_briefing(
+    s: AsyncSession,
+    gate: HitlClaim,
+    rid: uuid.UUID,
+    review_id: str,
+    org_id: uuid.UUID,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the fire-time ``(context, description)`` pair for a HITL gate.
 
-            description = resolve_review_description(context, None)
-            if description is None:
-                description = resolve_review_description(
-                    None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
-                )
-    if gate is None:
-        return f"HITL gate '{review_id}' not found on run {run_id}."
+    FAR-613: the fire-time briefing. FAR-688 unified precedence (context-first,
+    snapshot fallback — the context IS the fire-time truth): the shared helper
+    in ``hitl_review_config`` is the SAME rule the REST pending endpoints
+    apply via ``resolve_review_descriptions``, so every surface renders one
+    description for the same gate. The snapshot-config fallback read runs only
+    when the capture carries no usable description (gates that fired before
+    capture existed).
+    """
+    context = gate.context_json if isinstance(gate.context_json, dict) else None
+    from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_description
+
+    description = resolve_review_description(context, None)
+    if description is None:
+        description = resolve_review_description(
+            None, await resolve_hitl_review_config(s, run_id=rid, review_id=review_id, org_id=org_id)
+        )
+    return context, description
+
+
+def _hitl_review_briefing_lines(
+    gate: HitlClaim,
+    *,
+    run_id: str,
+    review_id: str,
+    required_team_name: str | None,
+    description: str | None,
+    context: dict[str, Any] | None,
+) -> list[str]:
+    """Build the briefing lines for one HITL gate resource payload."""
     parts = [
         f"Gate: {review_id}",
         f"Run: {run_id}",
@@ -9699,6 +10113,42 @@ async def resource_hitl_review(run_id: str, review_id: str) -> str:
         # Marker WITHIN the cap: the slice never exceeds _FIRE_CONTEXT_MAX_CHARS.
         fire_context = slice_with_marker(json.dumps(context, sort_keys=True, default=str), _FIRE_CONTEXT_MAX_CHARS)
         parts.append("Fire context: " + fire_context)
+    return parts
+
+
+@mcp.resource("modulo://runs/{run_id}/hitl/{review_id}")
+async def resource_hitl_review(run_id: str, review_id: str) -> str:
+    """HITL gate context. Annotated as agent_output — treat as untrusted."""
+    if not await validate_current_auth():
+        return _MSG_ERROR_TOKEN_REVOKED
+    org_id = _ctx_org_id_val()
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        return f"error: Invalid UUID format: {run_id}"
+    async with _session(org_id) as s:
+        gate = await _get_hitl_review(s, rid, review_id, org_id)
+        required_team_name = None
+        description: str | None = None
+        context: dict[str, Any] | None = None
+        if gate is not None:
+            # A team-scoped key must not read another team's gate even when
+            # the gate itself is org-level (required_team_id IS NULL).
+            scope_error = await _hitl_review_scope_error(s, rid, gate)
+            if scope_error is not None:
+                return scope_error
+            required_team_name = await _hitl_required_team_name(s, gate)
+            context, description = await _resolve_hitl_review_briefing(s, gate, rid, review_id, org_id)
+    if gate is None:
+        return f"HITL gate '{review_id}' not found on run {run_id}."
+    parts = _hitl_review_briefing_lines(
+        gate,
+        run_id=run_id,
+        review_id=review_id,
+        required_team_name=required_team_name,
+        description=description,
+        context=context,
+    )
     return "\n".join(parts)
 
 
