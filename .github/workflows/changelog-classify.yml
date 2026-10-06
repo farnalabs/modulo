@@ -26,6 +26,8 @@ on:
 
 permissions:
   contents: read
+  # The live-label read hits GET /repos/{repo}/issues/{n}/labels, so the
+  # precise scope is `issues: read` (a PR is an issue for this endpoint).
   issues: read
 
 # NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
@@ -86,11 +88,18 @@ jobs:
           # label. The event payload is the fallback only while every API call
           # fails, so distinguish success from failure by exit status rather
           # than treating an empty response as an empty label set.
+          #
+          # --paginate: a changelog:* label beyond the first page (the labels
+          # endpoint returns 30 per page) must still be seen. gh applies --jq
+          # per page, so collect the names as newline-separated text and
+          # rebuild a single JSON array locally; --slurp is not available on
+          # this runner's gh. On API failure the event payload stays as the
+          # LABELS_JSON fallback.
           LABELS_JSON="$EVENT_LABELS_JSON"
           HAS_LABEL="false"
           for attempt in 1 2 3; do
-            if LIVE_LABELS_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '[.[].name]' 2>/dev/null)"; then
-              LABELS_JSON="$LIVE_LABELS_JSON"
+            if LIVE_LABELS="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" --jq '.[].name' 2>/dev/null)"; then
+              LABELS_JSON="$(printf '%s\n' "$LIVE_LABELS" | jq -Rsc 'split("\n") | map(select(length>0))')"
             fi
             # Exactly one of the four labels (any label starting with
             # "changelog:") satisfies the gate. Labels arrive as a JSON array

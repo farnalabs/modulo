@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib
 import logging
 import os
 import posixpath
@@ -47,6 +48,7 @@ __all__ = [
     "WorkspaceSpec",
     "build_hub",
     "create_default_hub",
+    "egress_tier_for_provider_type",
     "env_var_for_provider_type",
     "validate_workspace_network",
 ]
@@ -207,6 +209,13 @@ class BackendUnreachableError(RuntimeProviderError):
 
 _DOCKER_ENV_VARS: tuple[str, ...] = ("MODULO_DOCKER_HOST", "DOCKER_HOST")
 _E2B_ENV_VAR = "MODULO_E2B_API_KEY"
+_KUBERNETES_ENV_VAR = "MODULO_KUBERNETES_ENABLED"
+
+# Falsy spellings that deliberately DO NOT register the provider — any other
+# non-empty value does (presence-style opt-in, consistent with the docker
+# signals; the explicit negatives keep ``MODULO_KUBERNETES_ENABLED=false``
+# from opting an operator in by accident).
+_ENV_FLAG_OFF_VALUES = frozenset({"0", "false", "no", "off"})
 
 # Per-command bound for the exec-based file-I/O default bodies (FAR-1050
 # R2a) — mirrors the bundled-runner file helpers' 30s exec bound.
@@ -215,19 +224,69 @@ _FILE_IO_CMD_TIMEOUT = 30
 # Documented unconfigured behaviour (ADR 029 / FAR-587): every
 # ``ck_env_profiles_provider_type`` CHECK value maps either to a provider that
 # is always registered ("local") or to the env var whose presence registers
-# the provider (docker-family types: _DOCKER_ENV_VARS; e2b: _E2B_ENV_VAR).
+# the provider (docker-family types: _DOCKER_ENV_VARS; e2b: _E2B_ENV_VAR;
+# kubernetes: _KUBERNETES_ENV_VAR).
 # Assertion tests pin this mapping against the model's CHECK.
 _PROVIDER_ENV_VARS: dict[str, str] = {
     "e2b": _E2B_ENV_VAR,
     "runner_docker": _DOCKER_ENV_VARS[0],
     "docker": _DOCKER_ENV_VARS[0],
     "local_docker": _DOCKER_ENV_VARS[0],
+    "kubernetes": _KUBERNETES_ENV_VAR,
 }
 
 
 def env_var_for_provider_type(provider_type: str) -> str | None:
     """Return the env var that registers ``provider_type``, if one is documented."""
     return _PROVIDER_ENV_VARS.get(provider_type.strip().lower())
+
+
+# Provider class -> canonical egress-tier sources (FAR-1065 / FAR-1085,
+# FAR-1051). The tier a profile dispatches on is read from the runtime-provider
+# classes THEMSELVES (provider_id + provider_aliases) rather than restated here,
+# so a new provider alias cannot drift from the egress tier it maps to — the
+# same single-source rule ``_PROVIDER_ENV_VARS`` applies to remediation copy.
+_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
+    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
+    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
+    # FAR-1051: without this entry a ``kubernetes`` (or its ``k8s`` alias)
+    # profile falls through to the raw provider_type as the tier, so the alias
+    # reads as an unknown tier and a supported profile refuses.
+    ("modulo.core.runtime_provider.k8s", "KubernetesRuntimeProvider", "kubernetes"),
+)
+
+
+def egress_tier_for_provider_type(provider_type: str) -> str | None:
+    """Return the canonical egress tier for a profile ``provider_type``.
+
+    Single source of truth for the provider_type -> tier mapping (the
+    ``_TIER_ENFORCEMENT`` key a dispatch's egress resolution must run under).
+    An optional provider dependency that cannot be imported is SKIPPED, never
+    fatal: a profile bound to that provider cannot have resolved either, and a
+    later dispatch surfaces the typed config error. Returns ``None`` for an
+    unrecognised provider type; callers fail closed by passing the raw value
+    through as the tier, which :func:`modulo.core.pipeline_engine.egress.resolve_egress`
+    refuses as an unknown tier rather than silently defaulting to an
+    enforceable one.
+    """
+    normalized = (provider_type or "").strip().lower()
+    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
+        try:
+            provider_cls = getattr(importlib.import_module(module_name), class_name)
+        except ImportError:
+            # Optional provider dependency not installed — skip; the provider
+            # cannot have been resolved for this profile anyway.
+            continue
+        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
+            return tier
+    return None
+
+
+def _env_flag_enabled(env_var: str) -> bool:
+    """Return whether an operator opt-in flag env var is set to an enabling value."""
+    value = (os.environ.get(env_var) or "").strip().lower()
+    return bool(value) and value not in _ENV_FLAG_OFF_VALUES
 
 
 @dataclass
@@ -237,16 +296,17 @@ class WorkspaceSpec:
     Field semantics are provider-specific (FAR-595 contract, pinned on the
     :class:`RuntimeProvider` ABC):
 
-    - ``labels``: environment-variable injection — Docker maps it to the
-      container Env. E2B and Local ignore it (they have no env-injection
-      carrier at provision time).
+    - ``labels``: environment-variable injection — Docker and Kubernetes map
+      it to the container Env. E2B and Local ignore it (they have no
+      env-injection carrier at provision time).
     - ``workspace_metadata``: provider-neutral metadata carrier — Docker
-      maps it to container Labels, E2B to sandbox metadata, Local ignores it.
+      maps it to container Labels, Kubernetes to pod annotations (raw) plus
+      sanitised pod labels, E2B to sandbox metadata, Local ignores it.
     - ``repo_url`` / ``repo_ref``: first-class clone inputs (FAR-595) —
       E2B clones into ``/home/user/repo`` and optionally checks out
       ``repo_ref``; Local clones into the workspace directory (``repo_ref``
-      is not honoured on this tier); Docker ignores both (the bundled
-      runner image handles code sync). Deliberately NOT carried in
+      is not honoured on this tier); Docker and Kubernetes ignore both (the
+      bundled runner image handles code sync). Deliberately NOT carried in
       ``labels`` — a consumer setting labels for env-injection on an
       E2B/Local profile must never silently trigger a clone.
     """
@@ -281,7 +341,7 @@ class WorkspaceSpec:
     # non-root user stamp (uid 1001) — for images that genuinely cannot run
     # as an arbitrary uid.  The default is False (non-root), so every
     # workspace runs as a non-root uid unless the profile explicitly opts
-    # in to root.  Used only by the Docker provider; E2B/Local ignore it.
+    # in to root.  Used only by the Docker and Kubernetes providers; E2B/Local ignore it.
     allow_root_user: bool = False
 
 
@@ -443,15 +503,16 @@ class RuntimeProvider(ABC):
 
         WorkspaceSpec semantics every implementation must honour (FAR-595):
 
-        - ``spec.labels``: env-var injection only. Docker maps it to the
-          container Env; E2B and Local ignore it. Never read clone inputs
-          out of it — those are the first-class ``spec.repo_url`` /
+        - ``spec.labels``: env-var injection only. Docker and Kubernetes map
+          it to the container Env; E2B and Local ignore it. Never read clone
+          inputs out of it — those are the first-class ``spec.repo_url`` /
           ``spec.repo_ref`` fields.
         - ``spec.workspace_metadata``: provider-neutral metadata. Docker ->
-          container Labels, E2B -> sandbox metadata, Local -> ignored.
+          container Labels, Kubernetes -> pod annotations (raw) + sanitised
+          pod labels, E2B -> sandbox metadata, Local -> ignored.
         - ``spec.repo_url`` / ``spec.repo_ref``: clone semantics. E2B clones
           into ``/home/user/repo`` (+ optional checkout); Local clones into
-          the workspace directory; Docker ignores both.
+          the workspace directory; Docker and Kubernetes ignore both.
         """
         ...
 
@@ -777,6 +838,12 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
     - ``runner_docker`` (aliases ``docker`` / ``local_docker``) — registered
       when ``MODULO_DOCKER_HOST`` or ``DOCKER_HOST`` is set.  An unrelated
       ``MODULO_RUNNER_*`` variable does NOT register Docker (FAR-996).
+    - ``kubernetes`` (alias ``k8s``) — registered when
+      ``MODULO_KUBERNETES_ENABLED`` is set to an enabling value (any value
+      except ``0``/``false``/``no``/``off``); operator opt-in = consent
+      (FAR-1051). If the ``kubernetes-asyncio`` client SDK is missing, a
+      warning is logged and the provider stays unregistered — boot never
+      crashes.
     """
     if max_local_concurrency < 1:
         _log.warning(
@@ -817,6 +884,15 @@ def build_hub(max_local_concurrency: int = 2) -> RuntimeProviderHub:
             # stays unregistered; a dispatch attempt later raises
             # ProviderNotConfiguredError with remediation).
             _log.warning("Docker provider not registered (TLS required): %s", exc)
+
+    if _env_flag_enabled(_KUBERNETES_ENV_VAR):
+        try:
+            from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+
+            kubernetes_provider = KubernetesRuntimeProvider()
+            hub.register("kubernetes", kubernetes_provider)
+        except ImportError:
+            _log.warning("Kubernetes dependency (kubernetes-asyncio) not installed; skipping Kubernetes provider")
 
     return hub
 

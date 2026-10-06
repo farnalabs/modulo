@@ -11,7 +11,8 @@ import {
   type ProblemDetail,
 } from '../lib/api/formatError'
 import { shortId, formatRun } from '../utils/format'
-import { runStatusBadgeClass, formatRunDate } from '../utils/runUtils'
+import { runStatusBadgeClass, formatRunDate, queuedCapacityReason } from '../utils/runUtils'
+import i18n from '../i18n'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -338,5 +339,26 @@ describe('formatRunDate', () => {
     const result = formatRunDate('2024-03-15T14:05:00')
     expect(result).toMatch(/Mar/)
     expect(result).toMatch(/15/)
+  })
+})
+
+describe('queuedCapacityReason (shared by runs list + run detail)', () => {
+  const t = i18n.global.t
+
+  it('reports slot usage for a waiting run below a known concurrency limit', () => {
+    expect(queuedCapacityReason({ active_runs: 3, concurrency_limit: 5, waiting: true }, t)).toBe(
+      t('common.queue.waiting_slot', { active: 3, limit: 5 }),
+    )
+  })
+
+  it('reports starting soon when not waiting, the limit is unknown, or capacity is absent', () => {
+    expect(queuedCapacityReason({ active_runs: 0, concurrency_limit: 5, waiting: false }, t)).toBe(
+      t('common.queue.starting_soon'),
+    )
+    expect(queuedCapacityReason({ active_runs: 0, concurrency_limit: null, waiting: true }, t)).toBe(
+      t('common.queue.starting_soon'),
+    )
+    expect(queuedCapacityReason(null, t)).toBe(t('common.queue.starting_soon'))
+    expect(queuedCapacityReason(undefined, t)).toBe(t('common.queue.starting_soon'))
   })
 })

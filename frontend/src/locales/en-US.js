@@ -1713,8 +1713,6 @@ export default {
       "cost_so_far": "Cost so far",
       "tokens": "tokens",
       "hitl_review": "HITL Gate",
-      "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
-      "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
       "work_item_kind_github": "GitHub",
       "work_item_kind_github_pr": "PR",
@@ -2242,6 +2240,18 @@ export default {
       "active": "Active",
       "local_only": "Local Only",
       "create_mcp_api_key": "Create MCP API Key",
+      "grants_title": "Permissions",
+      "grants_restrict_label": "Restrict this key to specific permissions",
+      "grants_role_bundle_hint": "Off: the key gets every permission of its role (default).",
+      "grants_loading": "Loading available permissions...",
+      "grants_load_failed": "Could not load the permission list, so the key cannot be created yet.",
+      "grants_retry": "Retry",
+      "grants_restricted_hint": "On: the key can only do the permissions you tick below. A permission above the key's own role has no effect (the key gets the overlap of the ticked permissions and its role). Note: over MCP, all read-only tools are controlled by the single resource.read_only permission, not by the finer read permissions (those apply to the REST API).",
+      "grants_select_at_least_one": "Select at least one permission, or turn restriction off.",
+      "grants_group_pipeline": "Pipelines",
+      "grants_group_run": "Runs",
+      "grants_group_hitl": "Human review",
+      "grants_group_org": "Organisation",
       "generate_new_api_key_description": "Generate a new API key for MCP client authentication",
       "no_api_keys_created_yet": "No API keys created yet.",
       "revoked": "Revoked",
@@ -3530,6 +3540,7 @@ export default {
     "RunnerTier": {
       "bundled_docker": "Bundled Runner (Docker)",
       "external_e2b": "External Runner (E2B)",
+      "external_kubernetes": "External Runner (Kubernetes)",
       "local": "Local"
     },
     "HitlBriefing": {
@@ -4174,6 +4185,10 @@ export default {
       "minutes_seconds_ago": "{m}m {s}s ago",
       "hours_minutes_ago": "{h}h {m}m ago",
       "days_hours_ago": "{d}d {h}h ago"
+    },
+    "queue": {
+      "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
+      "starting_soon": "Queued — starting soon"
     }
   },
   "nav": {
