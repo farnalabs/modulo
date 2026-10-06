@@ -60,6 +60,12 @@ from typing import Any
 import httpx
 import redis.asyncio as aioredis
 
+from modulo.core.alert_context import (
+    alert_context_html,
+    alert_context_text,
+    alert_environment_line,
+    stamp_stdout,
+)
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -343,6 +349,19 @@ def _parse_alert_email_to(alert_email_to: str | None) -> list[str]:
     return [address.strip() for address in alert_email_to.split(",") if address.strip()]
 
 
+def _alert_context_suffix(settings: Settings) -> str:
+    """The context block appended to EVERY alert body (email, generic webhook
+    and Teams alike): a leading blank line plus the shared environment /
+    ``ALERT_CONTEXT`` lines rendered by :mod:`modulo.core.alert_context`.
+
+    Single-sourced here (rather than composed per channel) so the three
+    renderings can never drift: ``alert_context_text`` always yields at least
+    the environment line, so every channel — not just email — names the
+    deployment environment (FAR-1495).
+    """
+    return "\n" + alert_context_text(settings)
+
+
 async def _send_email_alert(
     settings: Settings,
     conditions: list[str],
@@ -362,6 +381,12 @@ async def _send_email_alert(
         _log.warning("watchdog.email_no_smtp_host")
         return
 
+    # FAR-1495: every alert email names the deployment environment and carries
+    # the operator's ALERT_CONTEXT free text (shared renderer, one source of
+    # the format for all alert channels).
+    context_html = alert_context_html(settings)
+    context_text = _alert_context_suffix(settings)
+
     if recovery_state is not None:
         subject = "[Modulo Watchdog] Worker-liveness recovered"
         prior = recovery_state.get("conditions") or []
@@ -371,10 +396,9 @@ async def _send_email_alert(
             "<p>The following worker-liveness conditions have cleared:</p>"
             "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in prior) + "</ul>"
             f"<p>Resolved at {html.escape(datetime.now(UTC).isoformat())} "
-            f"on {html.escape(_hostname())}</p>"
-            "</body></html>"
+            f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _recovery_text(recovery_state)
+        body_text = _recovery_text(recovery_state) + context_text
     else:
         subject = "[Modulo Watchdog] Worker-liveness alert"
         body_html = (
@@ -383,10 +407,9 @@ async def _send_email_alert(
             "<p>The in-process watchdog detected one or more worker-liveness conditions:</p>"
             "<ul>" + "".join(f"<li>{html.escape(condition)}</li>" for condition in conditions) + "</ul>"
             f"<p>Detected at {html.escape(datetime.now(UTC).isoformat())} "
-            f"on {html.escape(_hostname())}</p>"
-            "</body></html>"
+            f"on {html.escape(_hostname())}</p>" + context_html + "</body></html>"
         )
-        body_text = _alert_text(conditions)
+        body_text = _alert_text(conditions) + context_text
     try:
         await asyncio.to_thread(
             send_email,
@@ -432,8 +455,13 @@ async def _send_alerts(
     Each channel is wrapped in its own try/except so one channel's failure
     never prevents the others from delivering (mirrors the error-forwarder
     isolation lesson). Never raises out of the watchdog task.
+
+    Every channel — generic webhook and Teams just as much as email — carries
+    the shared environment / ``ALERT_CONTEXT`` suffix, so a webhook recipient
+    can tell staging from production and the channels cannot drift (FAR-1495).
     """
-    text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
+    base_text = _recovery_text(recovery_state) if recovery_state is not None else _alert_text(conditions)
+    text = base_text + _alert_context_suffix(settings)
     if settings.alert_webhook_url:
         await _dispatch_channel(lambda: _post_generic_webhook(settings, text), "channel_generic_failed")
     if settings.alert_teams_webhook_url:
@@ -468,15 +496,25 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
             # Another machine already claimed this incident — stay silent.
             _log.info("watchdog.alert_already_active conditions=%s", "; ".join(conditions))
             return
-        # JSON-formatter logs are not reliably rendered in `fly logs` — the alert
-        # event needs stdout visibility (repo lesson).
-        print(f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)}", flush=True)  # noqa: T201
+        # Stamp carries only the conditions + the environment line: ALERT_CONTEXT
+        # is repr=False precisely to keep it out of logs, so it never goes to
+        # stdout. Best-effort (see alert_context.stamp_stdout) — it cannot skip
+        # the fan-out below.
+        stamp_stdout(
+            f"[watchdog] ALERT worker-liveness: {'; '.join(conditions)} | {alert_environment_line(settings)}",
+            logger=_log,
+            log_event="watchdog.stamp_print_failed",
+        )
         await _send_alerts(settings, conditions)
     else:
         state = await _claim_recovery(redis)
         if state is None:
             return  # nothing was alerted — healthy state, stay silent
-        print("[watchdog] RECOVERY worker-liveness: conditions cleared", flush=True)  # noqa: T201
+        stamp_stdout(
+            f"[watchdog] RECOVERY worker-liveness: conditions cleared | {alert_environment_line(settings)}",
+            logger=_log,
+            log_event="watchdog.stamp_print_failed",
+        )
         await _send_alerts(settings, [], recovery_state=state)
 
 
