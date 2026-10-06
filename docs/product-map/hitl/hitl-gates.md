@@ -167,7 +167,10 @@ may decide.
       a removed hitl node or an explicit `human_only: false` write on one is
       denied for non-privileged callers and audited for operator+). Legacy
       stored gates whose config lacks the flag become human-only under the
-      default.
+      default. Switching a gate TO `on_reject: proceed` (from terminate,
+      a reject route, or unset) is likewise a weakening change on both gate
+      shapes (FAR-1532) – it restores continue-on-reject – while changing
+      away from `proceed` is not.
       Claim is human_only too – a non-browser credential can neither CLAIM
       nor decide a human_only gate (REST claim route + MCP `review_hitl`
       claim action both enforce it), and reject is NOT an agent escape
