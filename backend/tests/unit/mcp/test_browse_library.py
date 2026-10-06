@@ -273,6 +273,6 @@ class TestSearchLibrary:
             result = await search_library()
 
         assert result == {
-            "error": "internal_error",
+            "error": "server_error",
             "detail": "Failed to search library",
         }

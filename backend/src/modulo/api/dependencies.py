@@ -431,6 +431,56 @@ def require_target_org_role(
     )
 
 
+async def resolve_audit_principal(
+    request: Request,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Audit-event principal for cross-org admin routes.
+
+    ``audited()`` records an ORG-scoped event, so it needs a ``TenantPrincipal``.
+    These routes deliberately authenticate through ``get_current_user``
+    (``require_system_permission`` / ``require_target_org_role``) so a system
+    admin whose JWT carries NO organisation claim can still act on the org in
+    the path - the contract ``TestSystemAdminExplicitOrgParam`` pins as "the
+    JWT org_id is ignored; the path org_id is used". Resolving the audit
+    principal with ``get_current_tenant_user`` instead would 403 that
+    capability, so this derives the acting organisation from the ``{org_id}``
+    path parameter first and falls back to the JWT claim, and skips the identity
+    re-read that neither of those gates performs.
+
+    Access control is unchanged: the route's own ``require_*`` dependency still
+    decides who may act. This only names the organisation the audit event is
+    written against.
+
+    Raises 403 ``Organisation ID required`` - the same refusal the org-scoped
+    handlers raise - when neither the path nor the claim yields an organisation.
+
+    Lives here (the shared dependency module) because both ``admin_orgs`` and
+    ``admin_email`` need it, and a route module importing a sibling route
+    module for a dependency is a cycle waiting to happen.
+    """
+    org_id: uuid.UUID | None = None
+    raw_org = request.path_params.get("org_id")
+    if raw_org is not None:
+        try:
+            org_id = uuid.UUID(str(raw_org))
+        except ValueError:
+            org_id = None
+    if org_id is None:
+        org_id = current_user.organisation_id
+    if org_id is None or current_user.org_role is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organisation ID required")
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=org_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role,
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+    )
+
+
 def require_team_membership_or_admin(resource_team_id_provider: TeamScopeProvider) -> Any:
     """Team-scoped gate matching RLS visibility: membership (any role) OR org-admin.
 

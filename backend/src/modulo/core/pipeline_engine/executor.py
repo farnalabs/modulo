@@ -5446,6 +5446,20 @@ class PipelineExecutor:
                 error_detail = _sanitize_detail(
                     "Sandbox node failed (transient) after retries exhausted: " + str(exc), limit=5000
                 )
+                # FAR-1526: a SandboxNodeFailedError (no-output stall / stream
+                # drop) used to terminal-fail under the GENERIC
+                # ``node_cancelled`` code — whose registry guidance reads "Node
+                # was cancelled." — so a stall was bucketed as a cancellation in
+                # the error dashboard and daily facts, while the SAME exception
+                # escaping through the executor's generic catch canonicalises to
+                # ``sandbox.no_output_json`` (LEGACY_ALIASES). Surface the
+                # exception's own canonical code here too: one failure class, one
+                # code. EXCEPTION: the FAR-136 hang death carries "likely hung"
+                # in the detail and is excluded from ``failure`` retries ONLY
+                # while its code resolves to ``node.cancelled`` — that marker
+                # keeps the generic code.
+                if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
+                    error_code = "sandbox.no_output_json"
                 # FAR-734: scan the retained stdout (embedded in the
                 # exception message) for terminal provider-error
                 # signatures.  When a signature matches, upgrade the

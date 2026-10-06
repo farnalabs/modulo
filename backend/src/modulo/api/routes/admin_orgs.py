@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -21,9 +21,9 @@ from modulo.api.dependencies import (
     get_db_session,
     require_system_permission,
     require_target_org_role,
+    resolve_audit_principal,
 )
-from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
@@ -63,56 +63,6 @@ _MSG_EMAIL_ACCOUNT_EXISTS = (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
-
-
-async def resolve_audit_principal(
-    request: Request,
-    current_user: AuthenticatedPrincipal = Depends(get_current_user),
-) -> TenantPrincipal:
-    """Audit-event principal for cross-org admin routes.
-
-    ``audited()`` records an ORG-scoped event, so it needs a ``TenantPrincipal``.
-    These routes deliberately authenticate through ``get_current_user``
-    (``require_system_permission`` / ``require_target_org_role``) so a system
-    admin whose JWT carries NO organisation claim can still act on the org in
-    the path - the contract ``TestSystemAdminExplicitOrgParam`` pins as "the
-    JWT org_id is ignored; the path org_id is used". Resolving the audit
-    principal with ``get_current_tenant_user`` instead would 403 that
-    capability, so this derives the acting organisation from the ``{org_id}``
-    path parameter first and falls back to the JWT claim, and skips the identity
-    re-read that neither of those gates performs.
-
-    Access control is unchanged: the route's own ``require_*`` dependency still
-    decides who may act. This only names the organisation the audit event is
-    written against.
-
-    Raises 403 ``Organisation ID required`` - the same refusal the org-scoped
-    handlers raise - when neither the path nor the claim yields an organisation.
-
-    Shared with ``admin_email`` (the same path-org system-admin pattern).
-    Promoting it to ``api.dependencies`` is a follow-up: that file is outside
-    this sweep's file allowlist.
-    """
-    org_id: uuid.UUID | None = None
-    raw_org = request.path_params.get("org_id")
-    if raw_org is not None:
-        try:
-            org_id = uuid.UUID(str(raw_org))
-        except ValueError:
-            org_id = None
-    if org_id is None:
-        org_id = current_user.organisation_id
-    if org_id is None or current_user.org_role is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organisation ID required")
-    return TenantPrincipal(
-        username=current_user.username,
-        organisation_id=org_id,
-        account_id=current_user.account_id,
-        org_role=current_user.org_role,
-        is_system_admin=current_user.is_system_admin,
-        via_api_key=current_user.via_api_key,
-        client_kind=current_user.client_kind,
-    )
 
 
 # --- Error helpers ---
@@ -485,20 +435,44 @@ async def admin_create_org_user(
 
 @router.delete(
     "/{org_id}",
-    dependencies=[Depends(audited("organisation_deleted", "organisation", principal_dep=resolve_audit_principal))],
+    # FAR-1517: NO audited() dependency — this handler hard-deletes the org, so
+    # a post-commit org-scoped append can never satisfy the audit_events FK
+    # (fail-open, recording nothing). The durable org-independent record is
+    # written IN-transaction before the delete instead.
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
-    _: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
+    principal: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
+    from modulo.core.system_audit_logger import append_system_audit_event
+
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
+            # FAR-1517: hard-deleting an org cascades away its entire audit
+            # trail, so the record of WHO deleted it goes to the org-independent
+            # ledger BEFORE the org row is removed — same transaction, so it
+            # commits only with the delete (a failed append aborts the delete).
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=org_id,
+                actor_user_id=principal.account_id,
+                resource_type="organisation",
+                resource_id=org_id,
+                payload_json={
+                    "flow": "admin_delete_org",
+                    "immediate": True,
+                    "organisation_name": org.name,
+                    "organisation_slug": org.slug,
+                },
+            )
 
             deleted = await delete_organisation(session, org_id)
             if not deleted:
@@ -795,7 +769,7 @@ class SetOrgTriggersPausedResponse(BaseModel):
 
 @router.put(
     "/{org_id}/triggers/pause",
-    dependencies=[Depends(audited("triggers_paused", "organisation", principal_dep=resolve_audit_principal))],
+    dependencies=[Depends(audited("api_access_put", "organisation", principal_dep=resolve_audit_principal))],
 )
 @handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
 async def admin_set_org_triggers_paused(
@@ -915,7 +889,7 @@ async def admin_get_org_guardrails_kill_switch(
     # guardrail safety control -- a break-glass account must NEVER be able to
     # disable it (or read it) even though it is an admin-scoped endpoint.
     dependencies=[
-        Depends(audited("guardrails_kill_switch", "organisation", principal_dep=resolve_audit_principal)),
+        Depends(audited("api_access_put", "organisation", principal_dep=resolve_audit_principal)),
         Depends(deny_break_glass_mint),
     ],
 )

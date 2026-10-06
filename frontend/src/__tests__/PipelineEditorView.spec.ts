@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
@@ -14,6 +14,101 @@ const useApiFns = vi.hoisted(() => ({
 // chain with the REAL fetcher is covered in PipelineEditorViewLoad.spec.ts
 // (FAR-629 fixed the pageErrorRef TDZ there).
 const useDataLoading = vi.hoisted(() => ({ value: false }))
+
+// FAR-1287: mutable fixture behind the snapshot-lock GET/POST mocks so each
+// case (not-held / held / load-error / release-ok / typed-403) seeds its own
+// server response without re-declaring the whole mock factory.
+const snapshotLockState = vi.hoisted(() => ({
+  status: { held: false, holders: [] } as unknown,
+  loadError: undefined as unknown,
+  releaseResult: { released: 0, pids: [] as number[] } as unknown,
+  releaseError: undefined as unknown,
+  // Transport arm of the release refusal: openapi-fetch reports HTTP status on
+  // `response`, which is independent of whether the body is a problem detail.
+  releaseTransportStatus: undefined as number | undefined,
+  reset() {
+    this.status = { held: false, holders: [] }
+    this.loadError = undefined
+    this.releaseResult = { released: 0, pids: [] }
+    this.releaseError = undefined
+    this.releaseTransportStatus = undefined
+  },
+}))
+
+// Hoisted: the `vi.mock` factory below is hoisted over plain consts, and the
+// snapshot-lock describe re-installs these in its own beforeEach because
+// earlier tests in this file replace `api.GET`/`api.POST` with one-off
+// implementations — its results must never depend on test order.
+const routeGet = vi.hoisted(() => (url: string): Promise<{ data?: unknown; error?: unknown }> => {
+  // The snapshot-lock URL also contains `/pipelines/{pipeline_id}`, so this
+  // branch must come first or it would be answered as pipeline detail.
+  if (url.includes('/snapshot-lock')) {
+    if (snapshotLockState.loadError) {
+      return Promise.resolve({ data: undefined, error: snapshotLockState.loadError })
+    }
+    return Promise.resolve({ data: snapshotLockState.status, error: undefined })
+  }
+  if (url.includes('/pipelines/{pipeline_id}/graph')) {
+    return Promise.resolve({
+      data: {
+        nodes: [
+          {
+            id: 'node-1',
+            node_type: 'agent',
+            agent_id: 'agent-1',
+            label: 'Agent Node',
+            description: '',
+            position: { x: 0, y: 0 },
+            capability_scope: { allowed_connectors: ['conn-1'], allowed_tools: ['tool-a'], context_scope: ['ctx'] },
+          },
+        ],
+        edges: [],
+      },
+      error: undefined,
+    })
+  }
+  if (url.includes('/api/v1/agents')) {
+    return Promise.resolve({
+      data: { items: [{ id: 'agent-1', name: 'Agent One', connector_type_refs: [{ connector_type: 'slack' }] }] },
+      error: undefined,
+    })
+  }
+  if (url.includes('/api/v1/connectors')) {
+    return Promise.resolve({ data: { items: [{ id: 'conn-1', name: 'Slack Dev', connector_type_id: 'slack' }] }, error: undefined })
+  }
+  if (url.includes('/pipelines/{pipeline_id}')) {
+    return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
+  }
+  if (url.includes('/parameter-schemas') && url.includes('/sets')) {
+    return Promise.resolve({ data: [], error: undefined })
+  }
+  return Promise.resolve({ data: { items: [] }, error: undefined })
+})
+
+// FAR-1287: routes the release endpoint through the shared fixture. A
+// successful release also flips the status fixture to "not held", mirroring
+// what the follow-up GET in SnapshotLockCard observes.
+const routePost = vi.hoisted(() => (
+  url: string,
+): Promise<{ data?: unknown; error?: unknown; response?: { status: number } }> => {
+  if (String(url).includes('/snapshot-lock/release')) {
+    if (snapshotLockState.releaseError) {
+      const status = snapshotLockState.releaseTransportStatus
+      return Promise.resolve({
+        data: undefined,
+        error: snapshotLockState.releaseError,
+        // Only present when a test seeds the transport arm; the problem-detail
+        // arm must keep `response` absent so it is the body doing the work.
+        ...(status === undefined ? {} : { response: { status } }),
+      })
+    }
+    const result = snapshotLockState.releaseResult
+    snapshotLockState.status = { held: false, holders: [] }
+    return Promise.resolve({ data: result, error: undefined })
+  }
+  return Promise.resolve({ data: {}, error: undefined })
+})
+
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
   const loadingRef = ref(useDataLoading.value)
@@ -34,56 +129,20 @@ vi.mock('../composables/useApi', () => ({
   useApi: () => useApiFns,
 }))
 
-vi.mock('../lib/api/client', () => {
+vi.mock('../lib/api/client', () => ({
   // The api client substitutes path params internally, so the mock sees the
   // templated route (e.g. `/api/v1/pipelines/{pipeline_id}/graph`).
-  const get = (url: string) => {
-    if (url.includes('/pipelines/{pipeline_id}/graph')) {
-      return Promise.resolve({
-        data: {
-          nodes: [
-            {
-              id: 'node-1',
-              node_type: 'agent',
-              agent_id: 'agent-1',
-              label: 'Agent Node',
-              description: '',
-              position: { x: 0, y: 0 },
-              capability_scope: { allowed_connectors: ['conn-1'], allowed_tools: ['tool-a'], context_scope: ['ctx'] },
-            },
-          ],
-          edges: [],
-        },
-        error: undefined,
-      })
-    }
-    if (url.includes('/api/v1/agents')) {
-      return Promise.resolve({ data: { items: [{ id: 'agent-1', name: 'Agent One', connector_type_refs: [{ connector_type: 'slack' }] }] }, error: undefined })
-    }
-    if (url.includes('/api/v1/connectors')) {
-      return Promise.resolve({ data: { items: [{ id: 'conn-1', name: 'Slack Dev', connector_type_id: 'slack' }] }, error: undefined })
-    }
-    if (url.includes('/pipelines/{pipeline_id}')) {
-      return Promise.resolve({ data: { id: 'test-pipeline-id', name: 'Test Pipeline' }, error: undefined })
-    }
-    if (url.includes('/parameter-schemas') && url.includes('/sets')) {
-      return Promise.resolve({ data: [], error: undefined })
-    }
-    return Promise.resolve({ data: { items: [] }, error: undefined })
-  }
-  return {
-    api: {
-      GET: vi.fn(get),
-      POST: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-      PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-      PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-      DELETE: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
-    },
-    getAccessToken: vi.fn().mockReturnValue('mock-token'),
-  }
-})
+  api: {
+    GET: vi.fn(routeGet),
+    POST: vi.fn(routePost),
+    PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+    DELETE: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+  },
+  getAccessToken: vi.fn().mockReturnValue('mock-token'),
+}))
 
-import { api } from '../lib/api/client'
+import { api, getAccessToken } from '../lib/api/client'
 
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -3094,6 +3153,427 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     // After saveEdgeConfig: loadGraph re-fetches, rawEdges is repopulated,
     // and selectedEdgeData is updated with the refreshed edge
     expect(vm.selectedEdgeData).toBeTruthy()
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// FAR-1287 Part 3: system-admin snapshot-lock card (SnapshotLockCard.vue).
+// System-admin detection goes through the REAL useCurrentUser composable - the
+// JWT is faked by overriding getAccessToken, so the is_system_admin claim is
+// decoded exactly as it is in production.
+// ---------------------------------------------------------------------------
+describe('PipelineEditorView - system-admin snapshot lock (FAR-1287)', () => {
+  const HOLDER = {
+    pid: 4321,
+    application_name: 'modulo-api',
+    state: 'idle',
+    backend_start: '2026-10-01T10:00:00Z',
+    query_start: '2026-10-01T10:05:00Z',
+    granted: true,
+  }
+
+  function systemAdminJwt(): string {
+    const claim = btoa(JSON.stringify({ sub: 'user-1', org_id: 'org-1', is_system_admin: true }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    return `x.${claim}.sig`
+  }
+
+  function snapshotLockGetCalls() {
+    return vi.mocked(api.GET).mock.calls.filter((c) => String(c[0]).includes('/snapshot-lock'))
+  }
+
+  function releasePostCalls() {
+    return vi.mocked(api.POST).mock.calls.filter((c) => String(c[0]).includes('/snapshot-lock/release'))
+  }
+
+  async function mountEditorSettled() {
+    const wrapper = await mountEditorLoaded()
+    await flushPromises()
+    await nextTick()
+    return wrapper
+  }
+
+  // The FormDialog teleports to document.body, so drive it from there.
+  async function openReleaseDialog(wrapper: ReturnType<typeof mountEditor>) {
+    await wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    expect(document.body.textContent).toContain('Release the snapshot lock?')
+  }
+
+  function dialogButton(label: string): HTMLButtonElement {
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find((d) =>
+      d.textContent?.includes('Release the snapshot lock?'),
+    )
+    expect(dialog).toBeTruthy()
+    const button = Array.from(dialog!.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === label,
+    )
+    expect(button, `dialog button not found: ${label}`).toBeTruthy()
+    return button as HTMLButtonElement
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useDataLoading.value = false
+    useApiFns.get.mockReset()
+    useApiFns.post.mockReset()
+    useApiFns.get.mockImplementation((url: string) => {
+      if (url.includes('/lifecycle-maps')) return Promise.resolve([])
+      if (url.includes('/pipeline-folders')) return Promise.resolve([])
+      return Promise.resolve({ items: [] })
+    })
+    useApiFns.post.mockResolvedValue({})
+    // Earlier tests in this file leave one-off implementations on the shared
+    // client mocks; reinstall the shared routes so this block's results never
+    // depend on test order.
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation(routeGet)
+    ;(api.POST as ReturnType<typeof vi.fn>).mockImplementation(routePost)
+    vi.mocked(getAccessToken).mockReturnValue('mock-token')
+    snapshotLockState.reset()
+  })
+
+  afterEach(() => {
+    vi.mocked(getAccessToken).mockReturnValue('mock-token')
+  })
+
+  it('renders nothing for the snapshot lock when the caller is not a system admin', async () => {
+    const wrapper = await mountEditorSettled()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock"]').exists()).toBe(false)
+    // No admin-only probe is issued for a non-admin.
+    expect(snapshotLockGetCalls()).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('fetches the status on view and renders the not-held state', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    const wrapper = await mountEditorSettled()
+
+    const card = wrapper.find('[data-testid="pipeline-editor-snapshot-lock"]')
+    expect(card.exists()).toBe(true)
+
+    const calls = snapshotLockGetCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock')
+    expect(calls[0][1]).toEqual({ params: { path: { pipeline_id: 'test-pipeline-id' } } })
+
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]').text()).toContain('Not held')
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // The manifest claims the card reads the GET into the live region across
+  // loading / not-held / held-by-N. Every other case here settles before it
+  // asserts, so only this one can observe the in-flight arm itself: a wrong
+  // snapshot_lock_checking key, or a dropped v-if="loading", would otherwise
+  // pass all of them.
+  it('observes the loading arm while the status GET is in flight, then settles', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+
+    let resolveGet!: (value: { data?: unknown; error?: unknown }) => void
+    const pendingStatus = new Promise<{ data?: unknown; error?: unknown }>((resolve) => {
+      resolveGet = resolve
+    })
+    // The card's probe is the ONLY api.GET issued at mount in this file (the
+    // page loaders sit behind the mocked useDataFetch, and AgentRunnerBindings
+    // only mounts inside the node panel), so one deferred impl intercepts it.
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementationOnce(() => pendingStatus)
+
+    const wrapper = await mountEditorLoaded()
+
+    // Assert on the call while it is still pending, before it can settle.
+    expect(snapshotLockGetCalls()).toHaveLength(1)
+    expect(snapshotLockGetCalls()[0][0]).toBe('/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock')
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.text()).toContain('Checking snapshot lock...')
+    const refresh = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-refresh"]')
+    expect((refresh.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+
+    resolveGet({ data: { held: false, holders: [] }, error: undefined })
+    await flushPromises()
+    await nextTick()
+
+    // The arm must actually flip - a v-if removed from the loading branch would
+    // leave "Checking..." rendering after the response lands.
+    expect(status.text()).not.toContain('Checking snapshot lock...')
+    expect(status.text()).toContain('Not held')
+    expect((refresh.element as HTMLButtonElement).disabled).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders the holders with pid, application, state and since', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    const wrapper = await mountEditorSettled()
+
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]').text()).toContain(
+      'Held by 1 backend',
+    )
+    const holders = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]')
+    expect(holders.exists()).toBe(true)
+    expect(holders.text()).toContain('4321')
+    expect(holders.text()).toContain('modulo-api')
+    expect(holders.text()).toContain('idle')
+    // backend_start / query_start go through the shared date formatter.
+    expect(holders.text()).toContain('2026')
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps the async status region a polite role=status live region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    const wrapper = await mountEditorSettled()
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.attributes('role')).toBe('status')
+    expect(status.attributes('aria-live')).toBe('polite')
+    wrapper.unmount()
+  })
+
+  it('gives the icon-only refresh control an accessible name', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    const wrapper = await mountEditorSettled()
+
+    const refresh = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-refresh"]')
+    expect(refresh.exists()).toBe(true)
+    expect(refresh.attributes('aria-label')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('surfaces a load failure in the assertive error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.loadError = {
+      type: 'urn:problem:modulo:forbidden',
+      title: 'Forbidden',
+      status: 403,
+      detail: 'system.config.manage required',
+    }
+    const wrapper = await mountEditorSettled()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('aria-live')).toBe('assertive')
+    expect(error.text()).toContain('system.config.manage required')
+    wrapper.unmount()
+  })
+
+  it('confirms before releasing, then POSTs and shows the result', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    snapshotLockState.releaseResult = { released: 1, pids: [4321] }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const posts = releasePostCalls()
+    expect(posts).toHaveLength(1)
+    expect(posts[0][0]).toBe('/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock/release')
+    expect(posts[0][1]).toEqual({ params: { path: { pipeline_id: 'test-pipeline-id' } } })
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.text()).toContain('Released 1 backend')
+    expect(status.text()).toContain('4321')
+    wrapper.unmount()
+  })
+
+  it('does not POST when the confirmation is cancelled', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Cancel').click()
+    await flushPromises()
+    await nextTick()
+
+    expect(releasePostCalls()).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('surfaces the typed 403 from the release endpoint in the error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    snapshotLockState.releaseError = {
+      type: 'urn:problem:modulo:forbidden',
+      title: 'Forbidden',
+      status: 403,
+      detail: 'GRANT pg_signal_backend TO "modulo";',
+    }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    expect(releasePostCalls()).toHaveLength(1)
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('aria-live')).toBe('assertive')
+    expect(error.text()).toContain('Release refused:')
+    expect(error.text()).toContain('GRANT pg_signal_backend')
+    wrapper.unmount()
+  })
+
+  // Second refusal arm: openapi-fetch reports the HTTP status on `response`,
+  // and a bare HTTPException body is NOT a problem detail (no type/title/status
+  // fields), so isProblemDetail() is false here - only response.status === 403
+  // can select the refusal copy. Without this the transport branch is dead code.
+  it('reads a transport-only 403 as refusal copy, not the generic failure copy', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    snapshotLockState.releaseError = {
+      detail:
+        'Snapshot-lock release requires an organisation context so the terminated backends can be recorded.',
+    }
+    snapshotLockState.releaseTransportStatus = 403
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    expect(releasePostCalls()).toHaveLength(1)
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('aria-live')).toBe('assertive')
+    expect(error.text()).toContain('Release refused:')
+    expect(error.text()).toContain('organisation context')
+    expect(error.text()).not.toContain('Failed to release the snapshot lock')
+    wrapper.unmount()
+  })
+
+  // -------------------------------------------------------------------------
+  // Branch-completion cases: the arms the "happy path" cases above cannot
+  // reach. Without them the changed-lines coverage gate fails on the card's
+  // error/fallback copy (observed 91.6% line / 86.0% branch at head 1d6efcad).
+  // -------------------------------------------------------------------------
+
+  it('surfaces a non-403 release failure with the generic copy', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    // A problem detail whose status is NOT 403: isProblemDetail() is true but
+    // neither the typed-403 arm nor a transport 403 selects the refusal copy.
+    snapshotLockState.releaseError = {
+      type: 'urn:problem:modulo:internal_error',
+      title: 'Internal Error',
+      status: 500,
+      detail: 'release exploded',
+    }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('Failed to release the snapshot lock')
+    expect(error.text()).toContain('release exploded')
+    expect(error.text()).not.toContain('Release refused:')
+    wrapper.unmount()
+  })
+
+  it('reports nothing-to-release when the server omits the release result', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    // A 2xx with no body: `data ?? { released: 0, pids: [] }` must manufacture
+    // the empty result, and releaseResultText must take the `released === 0` arm.
+    snapshotLockState.releaseResult = undefined
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.text()).toContain('Nothing to release')
+    wrapper.unmount()
+  })
+
+  it('renders neither held nor not-held when the status payload is absent', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    // A 200 with a null body: `status.value = data ?? null` must keep status
+    // null, so the card knows nothing yet rather than asserting "Not held".
+    snapshotLockState.status = null
+    const wrapper = await mountEditorSettled()
+
+    const status = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-status"]')
+    expect(status.exists()).toBe(true)
+    expect(status.text()).not.toContain('Not held')
+    expect(status.text()).not.toContain('Held by')
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-snapshot-lock-release"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('falls back to the unknown label for a holder with no application or state', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = {
+      held: true,
+      holders: [{ ...HOLDER, application_name: null, state: null }],
+    }
+    const wrapper = await mountEditorSettled()
+
+    const holders = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-holders"]')
+    expect(holders.exists()).toBe(true)
+    // Both `application_name || unknown` and `state || unknown` take their
+    // fallback arm here.
+    expect(holders.text()).toContain('unknown')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown load error (transport failure) in the error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    ;(api.GET as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (String(url).includes('/snapshot-lock')) return Promise.reject(new Error('network down'))
+      return routeGet(url)
+    })
+    const wrapper = await mountEditorSettled()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('network down')
+    wrapper.unmount()
+  })
+
+  it('surfaces a thrown release error (transport failure) in the error region', async () => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminJwt())
+    snapshotLockState.status = { held: true, holders: [HOLDER] }
+    const wrapper = await mountEditorSettled()
+
+    await openReleaseDialog(wrapper)
+    ;(api.POST as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (String(url).includes('/snapshot-lock/release')) {
+        return Promise.reject(new Error('socket reset'))
+      }
+      return routePost(url)
+    })
+    dialogButton('Terminate holder(s)').click()
+    await flushPromises()
+    await nextTick()
+
+    const error = wrapper.find('[data-testid="pipeline-editor-snapshot-lock-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('Failed to release the snapshot lock')
+    expect(error.text()).toContain('socket reset')
     wrapper.unmount()
   })
 })

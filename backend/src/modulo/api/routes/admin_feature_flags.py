@@ -462,7 +462,7 @@ class ToggleFlagRequest(BaseModel):
 
 @router.put(
     "/{flag_name}",
-    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_put", "org", principal_dep=get_current_tenant_user))],
     response_model=None,
 )
 @handle_db_errors("admin.feature_flags.toggle_feature_flag")
@@ -594,7 +594,7 @@ async def get_org_flag_override(
 
 @router.put(
     "/{flag_name}/org-override",
-    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_put", "org", principal_dep=get_current_tenant_user))],
     response_model=None,
 )
 @handle_db_errors("admin.feature_flags.set_org_flag_override")
@@ -657,7 +657,7 @@ async def set_org_flag_override(
     dependencies=[
         Depends(
             audited(
-                "feature_flag_override_cleared",
+                "api_access_delete",
                 "org",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,

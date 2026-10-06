@@ -180,17 +180,6 @@ this investigation's access. Note that they are not mutually exclusive: a
 process that is both starved of CPU and losing its connections produces exactly
 the observed mix.
 
-Separately, `dispatcher_reconcile` already has a per-organisation **row** budget
-(FAR-1425 passes `row_budget=max_rows - rows_processed` into `_reconcile_org`,
-so an organisation's row select and per-row loop are capped) — but it has no
-per-organisation **time** bound. One unresponsive await inside a single
-organisation's pass therefore still consumes the whole 95-second inner
-deadline, so no other organisation is reconciled in that tick (the identical
-`stage=reconcile_org:<org>` and batch counters across seven timeout ticks show
-it). The outer deadline already does the right thing (cancel at a safe
-boundary, persist a truthful failure heartbeat, return), so this is a cadence
-problem rather than a correctness one.
-
 ## Change made
 
 `fly.toml` declares the worker `[[vm]]` block at **2 shared CPU** (was 1), with
@@ -201,31 +190,42 @@ than the clock, and the same database is fast from the other machine
 throughout. Declaring the size makes the intended scale reproducible from the
 repository instead of living only on the machine.
 
-`[[vm]]` applies to new machines only, so the live worker machine keeps 1 CPU
-until the post-merge ops step recorded in the `fly.toml` machine-budget block
-(`flyctl machine update <worker-machine-id> -a app-modulo --vm-size
-shared-cpu-2x`). That step restarts the only started worker, so it needs a quiet
-window — it is an operational action, not part of this change. The stopped cold
-standby is an existing machine too: starting it does not apply the declared
-size, so it stays on 1 CPU until it is updated the same way (safe while stopped)
-or recreated by a deploy. The app machine needed no such step — it was observed
-at 4 shared vCPU on 2026-10-05.
+`[[vm]]` applies to new machines only, so the declared size reached the live
+machine only when a later deploy recreated it: the started worker is now live at
+**2 shared CPU** (deploy run 37414967179), so no resize step is outstanding for
+it. The stopped cold standby is an existing machine too — starting it does not
+apply the declared size, so it keeps its recorded 1-CPU config until it is
+updated (`flyctl machine update <standby-machine-id> -a app-modulo --vm-size
+shared-cpu-2x`, safe while stopped) or recreated by a deploy. The app machine
+needed no such step — it was observed at 4 shared vCPU on 2026-10-05.
+
+The cadence gap described above (no per-organisation **time** bound, only a row
+budget) was closed by FAR-1525 (PR #1342): each org's reconcile pass now runs
+under its own timeout at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30,
+min 1, max 119), clamped to the tick's remaining budget minus a 15 s tail
+reserve for facts/sweeps. On expiry the org's transaction rolls back, a truthful
+`status='timeout'` / `org_timeouts` marker names the org, and the loop
+continues — one hung org can no longer consume the whole inner deadline.
 
 ## Follow-ups
 
+- **Done (FAR-1525, PR #1342):** a per-organisation **time** bound inside
+  `dispatcher_reconcile`. The row budget from FAR-1425 caps *how much* work one
+  organisation can do, but a single hung await could still eat the whole
+  95-second deadline (the seven timeout ticks above) — now each pass is cut at
+  `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30 s), clamped to the
+  tick's remaining budget minus a tail reserve for facts/sweeps, and the tick
+  records a truthful timeout marker and continues.
 - **Needs human:** obtain a Fly metrics token (or read the dashboard) and
   confirm CPU/memory saturation on the worker during a run-heavy window; if it
   is not saturated, the connection-loss hypothesis (item 2 above) becomes the
   primary lead and needs database-side connection counts.
-- **Needs human:** the live worker resize above, in a quiet window.
+- **Needs human:** the stopped cold standby still carries its recorded 1-CPU
+  config; when it is started, either run `flyctl machine update
+  <standby-machine-id> -a app-modulo --vm-size shared-cpu-2x` (safe while
+  stopped) or let a deploy recreate it. The started worker needs no resize.
 - **Considered and not done:** splitting the system-cron worker onto its own
   process group so cron scheduling cannot be delayed by run execution. It is the
   cleaner structural fix for "system crons share a machine with the runs queue",
   but it adds a standing machine to a budget that the `fly.toml` machine block
   explicitly guards, so it is a cost decision rather than a code decision.
-- **Considered and not done:** a per-organisation **time** bound inside
-  `dispatcher_reconcile` (the row budget from FAR-1425 already caps *how much*
-  work one organisation can do; what is missing is a cap on *how long* its pass
-  may take, so a single hung await cannot eat the 95-second deadline). It would
-  restore tick cadence while the underlying stall persists, but without knowing
-  whether the stall is CPU or connection loss it would treat a symptom.

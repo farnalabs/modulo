@@ -116,8 +116,8 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0282_env_profiles_kubernetes chains off 0281_org_api_keys_grants, and
 # 0283_runs_drop_unused_indexes chains off 0282_env_profiles_kubernetes, and
 # 0284_add_rejected_run_status chains off 0283_runs_drop_unused_indexes, and
-# 0285_runs_execution_origin chains off 0284_add_rejected_run_status as the chain head.
-_CHAIN_HEAD_MIGRATION = "0285_runs_execution_origin"
+# 0286_runs_execution_origin chains off 0285_system_audit_events as the chain head.
+_CHAIN_HEAD_MIGRATION = "0286_runs_execution_origin"
 
 
 def _source(name: str) -> str:

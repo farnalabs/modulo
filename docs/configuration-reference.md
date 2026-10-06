@@ -195,6 +195,7 @@ Client sync for the hosted community library of pipeline primitives.
 | `HEARTBEAT_STALE_RETRY_BUDGET` | No | `3` | Heartbeat-stale auto-retry budget for the slot-reconcile sweep: a `running` run swept as heartbeat-stale is reset to `pending` for re-dispatch while its `claim_count` is ≤ this budget; only a claim beyond it terminal-fails (raised 1 → 3 by FAR-812 to absorb a transient dispatch wobble in a zero-node run) |
 | `TRIGGER_BACKPRESSURE_MAX_AGE_SECONDS` | No | `3600` | Max age (seconds) for pending runs before trigger backpressure kicks in |
 | `DISPATCHER_RECONCILE_BUDGET_SECONDS` | No | `95` | Per-tick time budget (seconds) for the dispatcher reconcile loop (min 10, max 119) |
+| `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` | No | `30` | Per-organisation time bound (seconds) inside the dispatcher reconcile loop (min 1, max 119): each org's reconcile pass is bounded by this many seconds, clamped to the tick's remaining budget minus a 15s tail reserve for facts/sweeps; on expiry the org's transaction rolls back, a truthful `status='timeout'` / `org_timeouts` marker naming the org is recorded, and the tick continues |
 | `DISPATCHER_RECONCILE_TERMINALIZE_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile terminalizer SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_FACTS_MAX_PER_TICK` | No | `25` | Per-tick row cap on the dispatcher reconcile daily-facts compensator SQL (min 1, max 1000) |
 | `DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK` | No | `500` | Cross-org row budget per reconcile tick (min 50, max 10000): the TOTAL rows processed across all orgs (terminalisers + the reconcile scan) so one tick always finishes inside `DISPATCHER_RECONCILE_BUDGET_SECONDS`; overflow drains on subsequent ticks |
@@ -375,13 +376,14 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
 
-The same SMTP setup also sends the **error-tracking** alert emails, which identify the deployment environment:
+The same SMTP setup also sends the **error-tracking**, **readiness** and **worker-liveness watchdog** alert emails, which identify the deployment environment and may carry operator-supplied context:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown as `Environment: <value>` on error-tracking alert emails (an empty value renders as `N/A`) and on [readiness health](#readiness-health-alerts) / [worker-liveness watchdog](#worker-liveness-watchdog) alerts (an empty value renders as `unknown`). The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+| `ALERT_CONTEXT` | No | – | Operator-supplied free text appended verbatim to every readiness and [worker-liveness watchdog](#worker-liveness-watchdog) alert — runbook links, escalation notes, ticket pointers. One item per line; blank lines are dropped and the rendering is bounded (at most 20 lines, 300 chars each, the environment line always first). Carried on email, generic webhook and Teams channels alike. Never written to logs (the setting is `repr=False`). |
 
-The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
+The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails, webhooks and Teams messages carry the environment line and `ALERT_CONTEXT`; the out-of-process Gatus sentinel and the error-tracking pipeline do not use `ALERT_CONTEXT`.
 
 ### Readiness health alerts
 

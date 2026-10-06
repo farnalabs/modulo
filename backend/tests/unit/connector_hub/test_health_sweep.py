@@ -168,3 +168,79 @@ async def test_sweep_does_not_mutate_org_data(sweep, tmp_path) -> None:
     # Only the two health columns ever move.
     assert row.last_health_check_at is not None
     assert row.last_health_check_error is None
+
+
+async def test_sweep_binds_org_context_for_real_secrets_backend(tmp_path) -> None:
+    """FAR-1526: the system session factory carries NO org context.
+
+    The prod sweep runs on ``modulo_system`` (BYPASSRLS, never ``set_rls_org``),
+    so ``FernetSecretsBackend.get_secret`` used to raise ``RuntimeError:
+    FernetSecretsBackend: RLS organisation context not set`` for EVERY instance,
+    the hub skipped all of them, and the sweep recorded ``ConnectorNotFoundError``
+    for the whole fleet (observed on all 5 prod connectors, 2026-10-06).
+
+    This exercises the REAL secrets backend (nothing patched): without the
+    per-org ``set_rls_org`` binding in ``_check_instance`` the instance is
+    skipped and ``healthy`` stays 0.
+    """
+    from cryptography.fernet import Fernet
+
+    from modulo.db.models.secret import Secret
+
+    engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'real_secrets.db'}", echo=False)
+
+    from modulo.db.models.base import Base
+
+    tables = [ConnectorInstance.__table__, Secret.__table__]
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+
+    instance = _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})
+    fernet_key = Fernet.generate_key().decode()
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session, session.begin():
+        session.add(
+            Secret(
+                id=uuid.uuid4(),
+                organisation_id=_ORG,
+                key=str(instance.id),
+                encrypted_value=Fernet(fernet_key.encode()).encrypt(b"{}"),
+            )
+        )
+        await session.merge(instance)
+
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+    try:
+        result = await run_connector_health_checks(factory, fernet_key=fernet_key)
+
+        assert result["checked"] == 1
+        assert result["healthy"] == 1, result
+        assert result["unhealthy"] == 0, result
+
+        async with maker() as read_session:
+            rows = (await read_session.execute(select(ConnectorInstance))).scalars().all()
+            (row,) = rows
+            assert row.last_health_check_at is not None
+            assert row.last_health_check_error is None
+    finally:
+        await engine.dispose()
+
+
+async def test_sweep_records_the_skip_reason_not_a_bare_not_found(sweep) -> None:
+    """FAR-1526: a skipped instance records the hub's skip reason.
+
+    Previously the sweep recorded ``ConnectorNotFoundError: 'Connector not
+    found: <uuid>'`` for every failure — the real cause (e.g. an undecryptable
+    secret or an unknown connector type) was only visible in the worker log.
+    """
+    run, seeder, rows = sweep
+    await seeder([_instance(connector_type_id="no-such-connector-type")])
+
+    result = await run()
+
+    assert result["unhealthy"] == 1
+    (row,) = await rows()
+    error = row.last_health_check_error
+    assert error
+    assert not error.startswith("ConnectorNotFoundError"), error

@@ -125,6 +125,12 @@ class _RaisingSession:
     def begin_nested(self) -> _RaisingSession:
         return self
 
+    def in_transaction(self) -> bool:
+        # FAR-1516: pre-auth routes read this sync guard before their first
+        # ``begin()``; report an active transaction so the route's own
+        # session-contract arm (not an early AttributeError) is exercised.
+        return True
+
     async def __aenter__(self) -> Self:
         raise self._exc
 
@@ -789,6 +795,8 @@ async def test_slack_arm_guard_session_contract(monkeypatch: pytest.MonkeyPatch)
 class _FormRequest:
     def __init__(self, form: dict[str, object]) -> None:
         self._form = form
+        # FAR-1516: pre-auth routes publish the audit org onto request.state.
+        self.state = SimpleNamespace()
 
     async def form(self) -> dict[str, object]:
         return self._form

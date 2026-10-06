@@ -87,6 +87,7 @@ def test_initial_schema_contains_required_tables() -> None:
         "spend_anomalies",
         "sso_providers",
         "suite_runs",
+        "system_audit_events",
         "system_config",
         "team_memberships",
         "teams",
@@ -110,6 +111,12 @@ def test_all_resource_tables_are_organisation_scoped() -> None:
             "organisations",
             "accounts",
             "system_config",
+            # system_audit_events (FAR-1517) is the org-independent durable
+            # ledger: it records the org id as a PLAIN ``org_id`` value on
+            # purpose, because the organisation_id column is exactly what the
+            # RLS regime and the ORM tenant filter key on, and both must not
+            # scope the record out once the org is gone.
+            "system_audit_events",
             "tier_catalog",
             "feature_flag_catalog",
             "library_sync_state",

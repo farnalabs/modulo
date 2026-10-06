@@ -56,22 +56,87 @@ class TestCreateAgentErrors(AuthContext):
             result = await create_agent(name="qa", prompt_template="Review PRs")
         assert result["error"] == "insufficient_scope"
 
+    async def _assert_malformed_id_is_rejected_before_db_write(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        field: str,
+        value: str,
+    ) -> None:
+        """FAR-1540: a malformed id-shaped param must come back as the
+        branchable ``invalid_id`` (naming the offending field) and must not
+        open a DB session or reach ``db_create_agent``.
+
+        Pre-fix behaviour this pins: ``model_backend_id`` / ``input_schema_id``
+        / ``output_schema_id`` raised ``ValueError`` out of ``uuid.UUID(...)``,
+        landed in the generic ``except Exception`` arm and returned
+        ``internal_error``; ``template_id`` never raised at all — the CRUD
+        layer's lenient ``coerce_uuid`` silently dropped it and the agent was
+        created with no template and no error.
+        """
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        result = await create_agent(name="qa", prompt_template="Review PRs", **{field: value})
+
+        assert result["error"] == "invalid_id", result
+        assert result["field"] == field, result
+        assert value in result["detail"], result
+        mock_create.assert_not_called()
+        mock_session.assert_not_called()
+
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
-    async def test_invalid_model_backend_id_returns_internal_error(
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_malformed_model_backend_id_returns_invalid_id(
         self,
+        mock_create: AsyncMock,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        mock_session.return_value = make_session_context(AsyncMock())
-
-        result = await create_agent(
-            name="qa",
-            prompt_template="Review PRs",
-            model_backend_id="not-a-uuid",
+        await self._assert_malformed_id_is_rejected_before_db_write(
+            mock_create, mock_session, "model_backend_id", "not-a-uuid"
         )
 
-        assert result["error"] == "internal_error"
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_malformed_input_schema_id_returns_invalid_id(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        await self._assert_malformed_id_is_rejected_before_db_write(
+            mock_create, mock_session, "input_schema_id", "not-a-uuid"
+        )
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_malformed_output_schema_id_returns_invalid_id(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        await self._assert_malformed_id_is_rejected_before_db_write(
+            mock_create, mock_session, "output_schema_id", "not-a-uuid"
+        )
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.agent.create_agent")
+    async def test_malformed_template_id_returns_invalid_id_not_silent_drop(
+        self,
+        mock_create: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """``template_id`` is a UUID FK (composite_templates.id); a non-UUID
+        reference could never resolve, so pre-fix it was silently discarded."""
+        await self._assert_malformed_id_is_rejected_before_db_write(
+            mock_create, mock_session, "template_id", "opencode"
+        )
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -225,18 +290,23 @@ class TestCreateAgentNullableSchemaIds(AuthContext):
 
         schema_id = uuid.uuid4()
         backend_id = uuid.uuid4()
+        template_id = uuid.uuid4()
         await create_agent(
             name="qa-reviewer",
             prompt_template="Review PRs",
             input_schema_id=str(schema_id),
             output_schema_id=str(schema_id),
             model_backend_id=str(backend_id),
+            template_id=str(template_id),
         )
 
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["input_schema_id"] == schema_id
         assert call_kwargs["output_schema_id"] == schema_id
         assert call_kwargs["model_backend_id"] == backend_id
+        # template_id is re-serialised for the CRUD signature (str | None);
+        # a valid UUID must survive the round trip, not be dropped.
+        assert call_kwargs["template_id"] == str(template_id)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +433,7 @@ class TestInferSchemaErrors(AuthContext):
 
         result = await infer_schema(input_sample={"name": "x"})
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "feature_required"
         assert "developer mode" in result.get("detail", "")
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)

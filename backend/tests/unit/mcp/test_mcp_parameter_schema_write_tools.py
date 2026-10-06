@@ -157,7 +157,7 @@ class TestCreateParameterSchema(AuthContext):
         mock_create.side_effect = RuntimeError("boom")
         mock_session.return_value = make_session_context(AsyncMock())
         result = await create_parameter_schema(name="test")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------

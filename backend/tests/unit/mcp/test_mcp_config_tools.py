@@ -344,7 +344,7 @@ class TestSearchDocumentationErrors(AuthContext):
 
         result = await search_documentation(query="pipeline")
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestSearchDocumentationSuccess(AuthContext):

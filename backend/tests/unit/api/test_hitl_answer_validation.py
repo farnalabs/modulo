@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -184,3 +184,98 @@ async def test_require_answer_passes_missing_on_non_choice_gate():
 
 async def test_require_answer_passes_missing_on_no_contract_gate():
     assert await _validate(None, None, require_answer=True) is None
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_hitl_approve / _dispatch_hitl_deliver_manual (the FAR-860 consumers)
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchHitlApproveAnswer:
+    async def test_approve_returns_answer_error_before_manager_call(self):
+        from modulo.api import mcp_server
+
+        mgr = MagicMock()
+        mgr.approve = AsyncMock()
+        error = {"error": "invalid_answer", "detail": "nope"}
+        with patch.object(mcp_server, "_validate_mcp_choice_answer", AsyncMock(return_value=(error, None))):
+            result = await mcp_server._dispatch_hitl_approve(
+                mgr,
+                AsyncMock(),
+                rid=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                claim_token=None,
+                actor_account_id=None,
+                answer={"kind": "choice"},
+                client_type="api_key",
+            )
+        assert result == error
+        mgr.approve.assert_not_awaited()
+
+    async def test_approve_embeds_validated_answer_in_payload(self):
+        from modulo.api import mcp_server
+
+        mgr = MagicMock()
+        mgr.approve = AsyncMock()
+        validated = {"kind": "choice", "option_id": "yes"}
+        with patch.object(mcp_server, "_validate_mcp_choice_answer", AsyncMock(return_value=(None, validated))):
+            result = await mcp_server._dispatch_hitl_approve(
+                mgr,
+                AsyncMock(),
+                rid=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                claim_token="tok",
+                actor_account_id=None,
+                answer=validated,
+                client_type="api_key",
+            )
+        assert result == {"status": "approved", "review_id": _REVIEW_ID}
+        assert mgr.approve.await_args.kwargs["decision_payload"]["answer"] == validated
+
+
+class TestDispatchHitlDeliverManualAnswer:
+    async def test_deliver_manual_returns_answer_error_before_manager_call(self):
+        from modulo.api import mcp_server
+
+        mgr = MagicMock()
+        mgr.deliver_manual = AsyncMock()
+        error = {"error": "invalid_answer", "detail": "nope"}
+        with patch.object(mcp_server, "_validate_mcp_choice_answer", AsyncMock(return_value=(error, None))):
+            result = await mcp_server._dispatch_hitl_deliver_manual(
+                mgr,
+                AsyncMock(),
+                rid=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                claim_token=None,
+                actor_account_id=None,
+                output=None,
+                answer={"kind": "choice"},
+                client_type="api_key",
+            )
+        assert result == error
+        mgr.deliver_manual.assert_not_awaited()
+
+    async def test_deliver_manual_embeds_validated_answer_in_payload(self):
+        from modulo.api import mcp_server
+
+        mgr = MagicMock()
+        mgr.deliver_manual = AsyncMock()
+        validated = {"kind": "choice", "option_id": "yes"}
+        with patch.object(mcp_server, "_validate_mcp_choice_answer", AsyncMock(return_value=(None, validated))):
+            result = await mcp_server._dispatch_hitl_deliver_manual(
+                mgr,
+                AsyncMock(),
+                rid=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                claim_token="tok",
+                actor_account_id=None,
+                output={"k": "v"},
+                answer=validated,
+                client_type="api_key",
+            )
+        assert result == {"status": "delivered_manual", "review_id": _REVIEW_ID}
+        assert mgr.deliver_manual.await_args.kwargs["decision_payload"]["answer"] == validated

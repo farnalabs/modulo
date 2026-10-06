@@ -38,6 +38,7 @@ from modulo.api.dependencies import (
 )
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import TriggersPausedError
@@ -137,6 +138,19 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
 @router.post(
     "/{trigger_id}/slack",
     status_code=status.HTTP_202_ACCEPTED,
+    # FAR-1516: Slack ingress has no tenant principal — the actor-less variant
+    # records a SYSTEM actor; the handler publishes the trigger's org only
+    # AFTER the Slack signature verifies, so a forged delivery is never
+    # recorded as signature_verified.
+    dependencies=[
+        Depends(
+            audited_system(
+                "slack_event_received",
+                "trigger",
+                actor_source="signature_verified",
+            )
+        )
+    ],
     responses={
         400: {"description": "Bad request"},
         401: {"description": "Unauthorized"},
@@ -221,6 +235,9 @@ async def receive_slack_event(
             verify_slack_timestamp(slack_timestamp)
             if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
                 raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
+            # FAR-1516: signature verified — publish the trigger's org so the
+            # audit event records signature_verified provenance for a real tenant.
+            bind_audit_org(request, org_id)
 
             # URL verification handshake — echo the challenge back.
             if raw_payload.get("type") == "url_verification":

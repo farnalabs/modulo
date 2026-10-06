@@ -217,6 +217,19 @@ class TestGetHitlEmailAlerts:
             result = await get_hitl_email_alerts()
         assert result["error"] == "account_not_found"
 
+    @pytest.mark.asyncio
+    async def test_generic_error_returns_server_error(self) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        _set_credential(key_scope="user", auth_type="jwt")
+        session = _mock_session()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch("modulo.db.crud.account.get_account_by_id", new=AsyncMock(side_effect=RuntimeError("boom"))),
+        ):
+            result = await get_hitl_email_alerts()
+        assert result["error"] == "server_error"
+
 
 class TestSetHitlEmailAlerts:
     @pytest.mark.asyncio
@@ -236,6 +249,22 @@ class TestSetHitlEmailAlerts:
         assert result == {"default": True, "pipeline_overrides": {}}
         # pipeline_ids omitted ⇒ overrides untouched (None → helper preserves).
         helper.assert_awaited_once_with(session, _USER_ID, default=True, pipeline_overrides=None)
+
+    @pytest.mark.asyncio
+    async def test_generic_error_returns_server_error(self) -> None:
+        """FAR-1502: the generic arm classifies — reserved code, never internal_error."""
+        _set_credential(key_scope="user", auth_type="jwt")
+        session = _mock_session()
+        with (
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
+            patch(
+                "modulo.db.crud.account.set_hitl_email_preference",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ),
+        ):
+            result = await set_hitl_email_alerts(enabled=True)
+        assert result["error"] == "server_error"
 
     @pytest.mark.asyncio
     async def test_pipeline_ids_atomically_replace_overrides(self) -> None:

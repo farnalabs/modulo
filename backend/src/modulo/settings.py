@@ -671,6 +671,21 @@ class Settings(BaseSettings):
     dispatcher_reconcile_max_rows_per_tick: int = Field(
         default=500, alias="DISPATCHER_RECONCILE_MAX_ROWS_PER_TICK", ge=50, le=10000
     )
+    # FAR-1525: per-ORG TIME bound inside the tick. The row budget (FAR-904 /
+    # FAR-1425) bounds ROWS, not time — a single org whose pass hangs on a
+    # wedged await consumed the ENTIRE inner budget at stage
+    # ``reconcile_org:<org-id>`` and starved every other org plus
+    # record_facts / the compensating sweeps (7 consecutive prod ticks, 2026-10).
+    # Each org's pass is cut at this bound; the org's transaction rolls back
+    # at its safe boundary, the tick records a truthful status='timeout' +
+    # org_timeouts marker naming the org, and the loop continues. The
+    # effective slice is additionally clamped to the tick's REMAINING budget
+    # minus a tail reserve for facts/sweeps, so this field alone never
+    # dictates the tail. ge=1 keeps a usable slice; le=119 mirrors the outer
+    # budget's ceiling (the clamp, not this field, enforces < outer budget).
+    dispatcher_reconcile_org_budget_seconds: int = Field(
+        default=30, alias="DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS", ge=1, le=119
+    )
     # FAR-705: per-run capacity-retry budget for the stale-run sweep's
     # capacity_timeout TTL terminalisation. capacity.* is a RETRYABLE registry
     # class (all four capacity codes carry retryable=True), so a capacity-
@@ -967,7 +982,23 @@ class Settings(BaseSettings):
     # settings can override this per-organisation via the admin email-settings API.
     smtp_timeout: int = Field(30, ge=1, le=120)
 
-    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
+    # populate_by_name (FAR-1500): constructor kwargs may use a field's NAME as
+    # well as its alias. Without it, a name-keyed kwarg for an aliased field is
+    # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``
+    # kept the default while ``Settings(MODULO_ENV="prod")`` worked, a silent
+    # footgun for every caller that constructs Settings in Python.
+    #
+    # What it actually changes: the alias wins when BOTH spellings are present
+    # (init kwargs and env vars alike); the field NAME is ALSO accepted as an
+    # init key AND as an env-var name, so when only the name is present the
+    # name supplies the value. For the 8 fields whose alias is not simply the
+    # upper-cased field name (``environment``, ``runner_machine_id``, the four
+    # ``max_*_usd`` cost knobs, ``product_analytics_endpoint_url``,
+    # ``product_analytics_instance_secret``) this is a real widening; the other
+    # aliased fields are unchanged because their alias already case-folds onto
+    # the name. Risk shape: an unprefixed ambient env var sharing one of those
+    # 8 names would now be read — the alias still wins if it is set too.
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore", "populate_by_name": True}
 
     @field_validator("secret_key")
     @classmethod

@@ -101,7 +101,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
     "/rotate-key",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[
-        Depends(audited("fernet_key_rotation_started", "encryption", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_post", "encryption", principal_dep=get_current_tenant_user)),
         Depends(deny_break_glass_mint),
     ],
     responses={

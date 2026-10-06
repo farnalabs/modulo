@@ -516,9 +516,17 @@ class TestTeamScopeError(_Ctx):
 
 class TestToolErrorHelpers:
     def test_tool_error(self) -> None:
-        result = _tool_error("something broke")
-        assert result["error"] == "internal_error"
+        result = _tool_error("something broke", code="server_error")
+        assert result["error"] == "server_error"
         assert result["detail"] == "something broke"
+
+    def test_tool_error_code_is_required_keyword_only(self) -> None:
+        """FAR-1502: no call site can fall back to a generic default code."""
+        import inspect
+
+        param = inspect.signature(_tool_error).parameters["code"]
+        assert param.default is inspect.Parameter.empty
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY
 
     def test_tool_auth_error(self) -> None:
         result = _tool_auth_error("token expired")
@@ -784,7 +792,7 @@ class TestToolDbShell:
             raise StarletteHTTPException(status_code=400, detail="bad input")
 
         result = await handler()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "validation_failed"
 
     async def test_integrity_error_with_detail(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail="constraint violated: {orig}", fallback="fail")
@@ -824,7 +832,7 @@ class TestToolDbShell:
             raise RuntimeError("oops")
 
         result = await handler()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_integrity_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
@@ -832,7 +840,7 @@ class TestToolDbShell:
             raise IntegrityError("stmt", {}, Exception("orig"))
 
         result = await handler()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "conflict"
 
     async def test_sqlalchemy_error_db_errors_to_fallback(self) -> None:
         @_tool_db_shell(log_constant="test", integrity_detail=None, fallback="fail", db_errors_to_fallback=True)
@@ -840,7 +848,7 @@ class TestToolDbShell:
             raise SQLAlchemyError("down")
 
         result = await handler()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "database_unavailable"
 
 
 # ─── Validate sandbox nodes ────────────────────────────────────────

@@ -1271,7 +1271,31 @@ export default {
       "circuit_breaker_resetting": "Resetting...",
       "failed_to_reset_circuit_breaker": "Failed to reset the circuit breaker: {error}",
       "failed_to_update_max_autonomy": "Failed to update autonomy ceiling: {error}",
-      "max_autonomy_below_default": "Autonomy ceiling cannot be below the pipeline default level: {error}"
+      "max_autonomy_below_default": "Autonomy ceiling cannot be below the pipeline default level: {error}",
+      "snapshot_lock_title": "Snapshot lock",
+      "snapshot_lock_help": "A wedged backend holding this pipeline's snapshot advisory lock blocks every save. Inspect the holders, then release the lock to terminate them.",
+      "snapshot_lock_checking": "Checking snapshot lock...",
+      "snapshot_lock_not_held": "Not held - no backend is blocking this pipeline",
+      "snapshot_lock_held": "Held by {count} backend | Held by {count} backends",
+      "snapshot_lock_holders_caption": "Backends holding this pipeline's snapshot lock",
+      "snapshot_lock_pid": "PID",
+      "snapshot_lock_application": "Application",
+      "snapshot_lock_state": "State",
+      "snapshot_lock_since": "Since (backend start)",
+      "snapshot_lock_query_start": "Query start",
+      "snapshot_lock_unknown": "unknown",
+      "snapshot_lock_refresh": "Refresh snapshot lock status",
+      "snapshot_lock_releasing": "Releasing...",
+      "snapshot_lock_release": "Release lock",
+      "snapshot_lock_release_confirm_title": "Release the snapshot lock?",
+      "snapshot_lock_release_confirm_body": "This terminates every database backend currently holding this pipeline's snapshot advisory lock. Anything those backends have not committed is lost.",
+      "snapshot_lock_release_confirm": "Terminate holder(s)",
+      "snapshot_lock_released_none": "Nothing to release: no backend holds this lock",
+      "snapshot_lock_released": "Released {count} backend | Released {count} backends",
+      "snapshot_lock_released_pids": "Terminated PIDs: {pids}",
+      "snapshot_lock_load_failed": "Failed to load the snapshot lock status: {error}",
+      "snapshot_lock_release_failed": "Failed to release the snapshot lock: {error}",
+      "snapshot_lock_release_forbidden": "Release refused: {error}"
     },
     "AdminPluginsView": {
       "manage_installed_modulo_plugins_and_extensions": "Manage installed Modulo plugins and extensions",
@@ -2616,6 +2640,20 @@ export default {
       "schema_saved_new_version": "Schema saved as new version.",
       "delete_referenced_error": "Cannot delete: schema is referenced by agents or parameter sets.",
       "cloned_set_name": "{name} (clone)"
+    },
+    "ModelBackendSetupView": {
+      "complete_model_backend_setup": "Complete Model Backend Setup",
+      "page_subtitle": "A model backend was created via MCP. Paste the API key below to complete setup.",
+      "backend_now_active": "Backend \"{name}\" is now active.",
+      "view_model_backends": "View Model Backends",
+      "missing_token_hint": "This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.",
+      "api_key": "API Key",
+      "api_key_placeholder": "sk-...",
+      "saving": "Saving...",
+      "complete_setup": "Complete Setup",
+      "error_link_expired": "Setup link expired or already used. Re-run the MCP command to generate a new setup URL.",
+      "error_backend_not_found": "Model backend not found. It may have been deleted.",
+      "error_setup_failed": "Setup failed. Please try again."
     },
   "pipeline": {
     "hide_ports": "Hide Ports"

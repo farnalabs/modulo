@@ -12,6 +12,8 @@ corresponding test.
 
 import logging
 import uuid
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,12 +33,31 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TRIGGER_ID = uuid.uuid4()
 _EVENT_ID = uuid.uuid4()
 _ERROR_REPORTING_LOGGER = "modulo.api.db_error_reporting"
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: stub the fresh ``audit_session`` the ``audited_system(...)``
+    dependency writes on (a real engine — no database in the unit tier); the
+    dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:

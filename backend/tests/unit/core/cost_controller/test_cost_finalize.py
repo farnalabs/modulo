@@ -1463,6 +1463,32 @@ def test_collect_node_emission_sources_skips_malformed_ref() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _canonical_emission
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_emission_missing_kind_or_ref_returns_none() -> None:
+    from modulo.core.cost_controller.finalize import _canonical_emission
+
+    assert _canonical_emission({"kind": None, "ref": "FAR-100"}) is None
+    assert _canonical_emission({"kind": "linear"}) is None
+
+
+def test_canonical_emission_uncanonicalisable_value_returns_none() -> None:
+    from modulo.core.cost_controller.finalize import _canonical_emission
+
+    assert _canonical_emission({"kind": "   ", "ref": "FAR-100"}) is None
+
+
+def test_canonical_emission_valid_returns_tuple() -> None:
+    from modulo.core.cost_controller.finalize import _canonical_emission
+
+    emission = _canonical_emission({"kind": "issue", "ref": "FAR-100"})
+    assert emission is not None
+    assert emission[0] == "issue"
+
+
+# ---------------------------------------------------------------------------
 # _fold_stored_clamped branches
 # ---------------------------------------------------------------------------
 

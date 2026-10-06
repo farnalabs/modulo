@@ -760,7 +760,7 @@ async def _create_or_adopt_account(
 
 @router.post(
     "/users",
-    dependencies=[Depends(audited("user_created_by_admin", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.admin_create_user")
@@ -843,7 +843,7 @@ class AdminCreateTeamResponse(BaseModel):
     "/teams",
     status_code=status.HTTP_201_CREATED,
     dependencies=[
-        Depends(audited("team_created", "team", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_post", "team", principal_dep=get_current_tenant_user)),
         require_feature("team_rbac"),
     ],
 )
@@ -1381,7 +1381,7 @@ def _raise_bg_pgcode(
 
 @router.post(
     "/users/{user_id}/deactivate",
-    dependencies=[Depends(audited("user_deactivated", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
 async def admin_deactivate_user(
@@ -1510,7 +1510,7 @@ async def admin_deactivate_user(
 
 @router.post(
     "/users/{user_id}/reactivate",
-    dependencies=[Depends(audited("user_reactivated", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
 async def admin_reactivate_user(
@@ -1611,7 +1611,7 @@ class AdminResetPasswordResponse(BaseModel):
 
 @router.post(
     "/users/{user_id}/reset-password",
-    dependencies=[Depends(audited("user_password_reset_by_admin", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.admin_reset_password")
 async def admin_reset_password(
@@ -1789,7 +1789,7 @@ async def _append_invite_audit_event_fail_open(
 
 @router.post(
     "/users/invite",
-    dependencies=[Depends(audited("invite_created", "invitation", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "invitation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.admin_invite_user")
@@ -1917,7 +1917,7 @@ async def admin_list_invitations(
     dependencies=[
         Depends(
             audited(
-                "invite_revoked",
+                "api_access_delete",
                 "invitation",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -2092,7 +2092,7 @@ async def _update_team_or_raise(
 @router.put(
     "/teams/{team_id}",
     dependencies=[
-        Depends(audited("team_updated", "team", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_put", "team", principal_dep=get_current_tenant_user)),
         require_feature("team_rbac"),
     ],
 )
@@ -2230,7 +2230,7 @@ async def admin_reassign_all_team_resources(
     dependencies=[
         Depends(
             audited(
-                "team_deleted",
+                "api_access_delete",
                 "team",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -2493,7 +2493,7 @@ class DeletionRequestResponse(BaseModel):
     dependencies=[
         Depends(
             audited(
-                "org_deletion_requested",
+                "api_access_post",
                 "organisation",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -2508,6 +2508,7 @@ async def request_org_deletion(
     session: AsyncSession = Depends(get_db_session),
 ) -> DeletionRequestResponse:
     from modulo.core.audit_logger import append_audit_event
+    from modulo.core.system_audit_logger import append_system_audit_event
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
 
     try:
@@ -2535,6 +2536,27 @@ async def request_org_deletion(
                     "deletion_token": result["token"][:12] + "...",
                     "token_expires_at": result["token_expires_at"],
                     "exported_entities": list(result["export"].keys()),
+                },
+            )
+
+            # FAR-1517: the chained event above dies with the org when the
+            # deletion is confirmed — mirror it into the org-independent
+            # ledger, in this transaction, so the request outlives the delete.
+            _org_row = (result["export"].get("organisation") or [{}])[0]
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_requested",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={
+                    "flow": "deletion_request",
+                    "immediate": False,
+                    "token_expires_at": result["token_expires_at"],
+                    "exported_entities": list(result["export"].keys()),
+                    "organisation_name": _org_row.get("name"),
+                    "organisation_slug": _org_row.get("slug"),
                 },
             )
     except IntegrityError:
@@ -2580,7 +2602,12 @@ class ConfirmDeletionResponse(BaseModel):
 
 @router.post(
     "/org/deletion-confirm",
-    dependencies=[Depends(audited("org_deletion_confirmed", "organisation", principal_dep=get_current_tenant_user))],
+    # FAR-1517: NO audited() dependency here. audited() appends to the
+    # org-scoped chain on a FRESH session AFTER the handler commits — but this
+    # handler hard-deletes the org, so that append can never satisfy
+    # audit_events.organisation_id's FK (it would fail open every time and
+    # record nothing). The durable, org-independent record is written
+    # IN-transaction by the handler instead (see append_system_audit_event).
 )
 @handle_db_errors(_CODE_ADMIN_CONFIRM_ORG_DELETION)
 async def confirm_org_deletion(
@@ -2588,12 +2615,27 @@ async def confirm_org_deletion(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
+    from modulo.core.system_audit_logger import append_system_audit_event
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
 
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
+
+            # FAR-1517: the hard delete destroys this org's audit trail, so the
+            # record of the destructive act goes to the org-independent ledger
+            # FIRST, in the same transaction — it commits only if the delete
+            # commits, and a failed append aborts the delete (fail-closed).
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "deletion_confirm", "immediate": False, "force": req.force},
+            )
 
             try:
                 result = await _confirm_deletion(
@@ -2644,6 +2686,7 @@ async def cancel_org_deletion(
     current_user: TenantPrincipal = require_system_or_org_admin(_CODE_ORG_DELETE),
     session: AsyncSession = Depends(get_db_session),
 ) -> CancelDeletionResponse:
+    from modulo.core.system_audit_logger import append_system_audit_event
     from modulo.db.crud.org_deletion import cancel_org_deletion as _cancel
 
     try:
@@ -2654,6 +2697,18 @@ async def cancel_org_deletion(
                 result = await _cancel(session, org_id=current_user.organisation_id)
             except ValueError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+            # FAR-1517: cancellation of a pending deletion is part of the
+            # org-lifecycle trail — record it durably as well as in the chain.
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_cancelled",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "deletion_cancel"},
+            )
     except IntegrityError:
         logger.exception(_CODE_ADMIN_CANCEL_ORG_DELETION)
         _raise_conflict()
@@ -2711,7 +2766,10 @@ async def export_org_data(
 
 @router.delete(
     "/org",
-    dependencies=[Depends(audited("org_deletion_requested", "organisation", principal_dep=get_current_tenant_user))],
+    # FAR-1517: NO audited() dependency — same reason as /org/deletion-confirm:
+    # this handler hard-deletes the org, so a post-commit org-scoped append can
+    # never satisfy the audit_events FK. Both lifecycle events are written
+    # IN-transaction to the durable ledger instead.
 )
 @handle_db_errors(_CODE_ADMIN_DELETE_ORG_IMMEDIATE)
 async def delete_org_immediate(
@@ -2719,6 +2777,7 @@ async def delete_org_immediate(
     session: AsyncSession = Depends(get_db_session),
 ) -> ConfirmDeletionResponse:
     from modulo.core.audit_logger import append_audit_event
+    from modulo.core.system_audit_logger import append_system_audit_event
     from modulo.db.crud.org_deletion import confirm_org_deletion as _confirm_deletion
     from modulo.db.crud.org_deletion import request_org_deletion as _request_deletion
 
@@ -2744,6 +2803,34 @@ async def delete_org_immediate(
                 resource_type="organisation",
                 resource_id=current_user.organisation_id,
                 payload_json={"immediate": True, "exported_entities": list(req["export"].keys())},
+            )
+
+            # FAR-1517: durable copies of BOTH lifecycle steps — the chained
+            # events above are destroyed by the hard delete that follows.
+            _org_row = (req["export"].get("organisation") or [{}])[0]
+            _org_identity = {
+                "organisation_name": _org_row.get("name"),
+                "organisation_slug": _org_row.get("slug"),
+            }
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_requested",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "delete_org_immediate", "immediate": True, **_org_identity},
+            )
+            # Written BEFORE the org row is removed: same transaction, so it
+            # commits only with the delete and an append failure aborts it.
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=current_user.organisation_id,
+                actor_user_id=current_user.account_id,
+                resource_type="organisation",
+                resource_id=current_user.organisation_id,
+                payload_json={"flow": "delete_org_immediate", "immediate": True, "force": True, **_org_identity},
             )
 
             result = await _confirm_deletion(
@@ -3556,7 +3643,7 @@ class ManualPurgeRequest(BaseModel):
     dependencies=[
         Depends(
             audited(
-                "run_purge",
+                "api_access_post",
                 "run",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,

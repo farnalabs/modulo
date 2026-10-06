@@ -479,7 +479,7 @@ async def list_teams_endpoint(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(audited("team_created", "team", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "team", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("teams.create_team_endpoint")
 async def create_team_endpoint(
@@ -622,7 +622,7 @@ async def get_team_endpoint(
 
 
 @router.patch(
-    "/{team_id}", dependencies=[Depends(audited("team_updated", "team", principal_dep=get_current_tenant_user))]
+    "/{team_id}", dependencies=[Depends(audited("api_access_patch", "team", principal_dep=get_current_tenant_user))]
 )
 @handle_db_errors("teams.update_team_endpoint")
 async def update_team_endpoint(
@@ -718,7 +718,7 @@ async def update_team_endpoint(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(
-            audited("team_deleted", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            audited("api_access_delete", "team", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
@@ -973,7 +973,7 @@ async def list_members_endpoint(
     status_code=status.HTTP_201_CREATED,
     dependencies=[
         Depends(
-            audited("team_member_added", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            audited("api_access_post", "team", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
@@ -1070,7 +1070,7 @@ async def add_member_endpoint(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(
-            audited("team_member_removed", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            audited("api_access_delete", "team", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
@@ -1161,7 +1161,7 @@ async def remove_member_endpoint(
     "/{team_id}/members/{membership_id}",
     dependencies=[
         Depends(
-            audited("team_member_role_changed", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            audited("api_access_patch", "team", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
