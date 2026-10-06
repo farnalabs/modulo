@@ -1810,6 +1810,26 @@ class _DbShellConfig(NamedTuple):
     db_errors_to_fallback: bool = False
 
 
+def _db_shell_integrity_response(exc: IntegrityError, cfg: _DbShellConfig) -> dict[str, Any]:
+    """The ``IntegrityError`` arm of the shared DB/tool exception ladder.
+
+    ``cfg.db_errors_to_fallback`` skips the clause entirely (the exception
+    falls through to the generic ``Exception`` behaviour — shells such as
+    ``get_trigger`` had no IntegrityError clause at all); a None
+    ``integrity_detail`` yields the ``SQLAlchemyError`` behaviour (what
+    shells without an IntegrityError clause did); otherwise the conflict is
+    formatted with ``orig``.
+    """
+    if cfg.db_errors_to_fallback:
+        _log.exception(cfg.log_constant)
+        return _tool_error(cfg.fallback)
+    if cfg.integrity_detail is None:
+        _log.exception(cfg.log_constant)
+        return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
+    _log.exception(cfg.log_constant)
+    return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
+
+
 async def _run_db_shell[**TOOL_SHELL_P](
     fn: Callable[TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     cfg: _DbShellConfig,
@@ -1858,14 +1878,7 @@ async def _run_db_shell[**TOOL_SHELL_P](
         _log.exception(cfg.log_constant)
         return _tool_error(cfg.fallback)
     except IntegrityError as exc:
-        if cfg.db_errors_to_fallback:
-            _log.exception(cfg.log_constant)
-            return _tool_error(cfg.fallback)
-        if cfg.integrity_detail is None:
-            _log.exception(cfg.log_constant)
-            return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-        _log.exception(cfg.log_constant)
-        return {"error": "conflict", "detail": cfg.integrity_detail.format(orig=exc.orig)}
+        return _db_shell_integrity_response(exc, cfg)
     except ProgrammingError:
         _log.exception(cfg.log_constant)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
