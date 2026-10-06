@@ -27,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DATABASE_ERROR_OCCURRED_PLEASE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
 from modulo.core.feedback_manager import (
@@ -140,7 +142,11 @@ def _serialise_record(
     }
 
 
-@router.post("/runs/{run_id}/feedback", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/runs/{run_id}/feedback",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("feedback_created", "feedback", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_FEEDBACK_CREATE_FEEDBACK)
 async def create_feedback(
     run_id: uuid.UUID,
@@ -535,7 +541,11 @@ async def _resolve_publish_context(
     return run, node_id
 
 
-@router.post("/feedback/proposals/{record_id}/publish", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/feedback/proposals/{record_id}/publish",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("eval_proposal_published", "feedback", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_FEEDBACK_PUBLISH_EVAL_PROPOSAL)
 async def publish_eval_proposal(
     record_id: uuid.UUID,
@@ -697,7 +707,11 @@ async def get_feedback(
     return _serialise_record(record)
 
 
-@router.patch("/feedback/{record_id}/status", status_code=status.HTTP_200_OK)
+@router.patch(
+    "/feedback/{record_id}/status",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("feedback_status_updated", "feedback", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_FEEDBACK_UPDATE_FEEDBACK_STATUS)
 async def update_feedback_status(
     record_id: uuid.UUID,
@@ -823,7 +837,11 @@ async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID
     return [_eval_def_to_dto(row, org_id) for row in eval_rows]
 
 
-@router.post("/feedback/{record_id}/detect-gap", status_code=status.HTTP_200_OK)
+@router.post(
+    "/feedback/{record_id}/detect-gap",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("eval_gap_detected", "feedback", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_FEEDBACK_DETECT_EVAL_GAP)
 async def detect_eval_gap(
     record_id: uuid.UUID,
@@ -1012,7 +1030,11 @@ async def _apply_review_action(
     return record, old_status, transitioned_to, correction_run_id
 
 
-@router.post("/feedback/inbox/{record_id}/review", status_code=status.HTTP_200_OK)
+@router.post(
+    "/feedback/inbox/{record_id}/review",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("feedback_reviewed", "feedback", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_FEEDBACK_REVIEW_FEEDBACK)
 async def review_feedback(
     record_id: uuid.UUID,

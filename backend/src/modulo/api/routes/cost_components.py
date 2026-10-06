@@ -27,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.cost_controller.breakdown.constants import (
     MAX_COMPONENTS_PER_ORG,
@@ -258,7 +260,11 @@ async def get_components(
         raise _map_validation_error(exc) from None
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("cost_component_created", "cost_component", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.components.create")
 async def create_component(
     req: CostComponentCreate,
@@ -300,7 +306,10 @@ async def create_component(
         raise _map_validation_error(exc) from None
 
 
-@router.put("/{component_id}")
+@router.put(
+    "/{component_id}",
+    dependencies=[Depends(audited("cost_component_updated", "cost_component", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("costs.components.update")
 async def update_component(
     component_id: uuid.UUID,
@@ -346,7 +355,18 @@ async def update_component(
         raise _map_validation_error(exc) from None
 
 
-@router.delete("/{component_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{component_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "cost_component_deleted", "cost_component", principal_dep=get_current_tenant_user, fail_closed=True
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("costs.components.delete")
 async def delete_component(
     component_id: uuid.UUID,

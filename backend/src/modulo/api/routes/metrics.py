@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.models.web_vital_event import WebVitalEvent
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
@@ -56,7 +58,11 @@ class WebVitalTimeSeriesPoint(BaseModel):
     count: int
 
 
-@router.post("/web-vitals", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/web-vitals",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(audited("web_vitals_ingested", "web_vital", principal_dep=get_current_tenant_user))],
+)
 async def ingest_web_vitals(
     req: WebVitalBatchRequest,
     current_user: TenantPrincipal = require_permission("metrics.ingest"),
