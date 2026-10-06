@@ -34,7 +34,9 @@ from modulo.api.models.error import (
     SchedulerStarvationResponse,
     SessionKeyResponse,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
     count_error_events_by_group,
@@ -47,7 +49,7 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
-from modulo.db.models.organisation import ORPHAN_ORG_ID as _ORPHAN_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -75,11 +77,10 @@ _key_store: SessionKeyStore | None = None
 _public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
 _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
 
-# Orphan org ID for unauthenticated public ingest events — the shared
-# sentinel constant lives on the Organisation model so the ingest path, the
-# admin listing filter and migration tooling cannot drift apart. Re-exported
-# here under the same name for backward compatibility.
-ORPHAN_ORG_ID = _ORPHAN_ORG_ID
+# System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
+# modulo.db.models.organisation at module top — the single canonical
+# definition shared with the admin listing filter and migration tooling
+# (FAR-1505). Do NOT re-type the nil-UUID literal or re-alias it here.
 
 # Breadcrumbs are persisted inside ``context_json`` under this key (PRD §8.25
 # lists breadcrumbs as part of the event context payload).
@@ -137,7 +138,22 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 # only the read/dashboard/management routes are team-gated.
 
 
-@router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/session-key",
+    response_model=SessionKeyResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited(
+                "error_session_key_created",
+                "error_session_key",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("errors.create_session_key")
 async def create_session_key(
     principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
@@ -153,7 +169,12 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
-@router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/ingest",
+    response_model=ErrorIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("error_events_ingested", "error_event", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS)
 async def ingest_errors(
     request: Request,
@@ -237,6 +258,11 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route - the
+# browser sends NO credentials on the public frontend ingest, so no principal
+# exists for audited(principal_dep=...) to resolve before the handler runs.
+# Covering it needs an actor-less variant of audited() in modulo.core
+# (deliberately out of scope for this sweep).
 @router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
 async def ingest_errors_public(
@@ -252,7 +278,7 @@ async def ingest_errors_public(
     * Max request body size 10,000 bytes.
     * Events are stored in a dedicated orphan-org partition: the ingest
       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
-      migration 0171) that tenant sessions can never see (org-only RLS
+      migration 0172) that tenant sessions can never see (org-only RLS
       policies), so unattributed frontend errors never leak across tenancy.
     * A future cleanup job will prune events older than 48 hours (TTL).
     """
@@ -322,12 +348,13 @@ async def ingest_errors_public(
             # ``ingest_batch`` swallows per-event errors (logged server-side),
             # which previously yielded a false-success 201 with an empty
             # results list and nothing persisted. Pin the transaction to the
-            # orphan org (a real organisations row seeded by migration 0171,
-            # satisfying the error_events FK) so the writes pass WITH CHECK
-            # and the dedup/group lookups partition to the orphan rows
-            # exactly as their explicit ``organisation_id`` predicates intend.
-            await set_rls_org(session, ORPHAN_ORG_ID)
-            results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
+            # system sentinel org (SYSTEM_ORG_ID — a real organisations row
+            # seeded by migration 0172, satisfying the error_events FK) so the
+            # writes pass WITH CHECK and the dedup/group lookups partition to
+            # the sentinel rows exactly as their explicit ``organisation_id``
+            # predicates intend.
+            await set_rls_org(session, SYSTEM_ORG_ID)
+            results = await _service.ingest_batch(session, SYSTEM_ORG_ID, events_data)
     except ProgrammingError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         raise HTTPException(
@@ -611,7 +638,14 @@ async def get_error_group_detail(
     }
 
 
-@router.patch("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
+@router.patch(
+    "/{error_id}",
+    response_model=ErrorGroupDetail,
+    dependencies=[
+        Depends(audited("error_group_updated", "error_group", principal_dep=get_current_tenant_user)),
+        require_feature("error_tracking"),
+    ],
+)
 @handle_db_errors("errors.patch_error_group")
 async def patch_error_group(
     error_id: uuid.UUID,

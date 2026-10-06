@@ -20,7 +20,7 @@ from modulo.db.crud.organisation import (
     is_login_active_org,
     list_login_active_orgs,
 )
-from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, ORPHAN_ORG_ID
+from modulo.db.models.organisation import MODULO_REGISTRY_ORG_ID, SYSTEM_ORG_ID
 
 
 def _make_org(
@@ -54,7 +54,7 @@ class TestIsLoginActiveOrg:
         assert is_login_active_org(org) is False
 
     def test_orphan_org_is_not_login_active(self) -> None:
-        org = _make_org(id=ORPHAN_ORG_ID)
+        org = _make_org(id=SYSTEM_ORG_ID)
         assert is_login_active_org(org) is False
 
     def test_registry_org_is_not_login_active(self) -> None:
@@ -71,7 +71,7 @@ class TestSentinelIds:
     """Verify the sentinel set is correctly populated."""
 
     def test_sentinel_ids_contain_both_sentinels(self) -> None:
-        assert ORPHAN_ORG_ID in _SENTINEL_ORG_IDS
+        assert SYSTEM_ORG_ID in _SENTINEL_ORG_IDS
         assert MODULO_REGISTRY_ORG_ID in _SENTINEL_ORG_IDS
 
     def test_sentinel_ids_only_contain_expected(self) -> None:

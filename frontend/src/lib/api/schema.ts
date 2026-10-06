@@ -9325,7 +9325,7 @@ export interface paths {
          *     * Max request body size 10,000 bytes.
          *     * Events are stored in a dedicated orphan-org partition: the ingest
          *       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
-         *       migration 0171) that tenant sessions can never see (org-only RLS
+         *       migration 0172) that tenant sessions can never see (org-only RLS
          *       policies), so unattributed frontend errors never leak across tenancy.
          *     * A future cleanup job will prune events older than 48 hours (TTL).
          */

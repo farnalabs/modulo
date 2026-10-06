@@ -29,6 +29,7 @@ from saq import Status
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.url_utils import split_engine_sslmode
 from modulo.version import get_version
 
@@ -75,7 +76,9 @@ _NOOP_STATUSES = frozenset(
     }
 )
 
-_SYSTEM_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+# System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
+# modulo.db.models.organisation at module top — the single canonical
+# definition. Do NOT re-type the nil-UUID literal here (FAR-1505).
 
 
 def _get_engine() -> AsyncEngine:
@@ -138,7 +141,7 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
         return {
             "action": "fail_run",
             "run_id": str(run_id),
-            "org_id": str(org_id) if org_id else str(_SYSTEM_ORG_ID),
+            "org_id": str(org_id) if org_id else str(SYSTEM_ORG_ID),
             "error": error,
         }
 
@@ -146,7 +149,7 @@ def _classify(function: str, status: Any, error: str | None, kwargs: dict[str, A
     return {
         "action": "ingest_error",
         "function": function,
-        "org_id": str(org_id) if org_id else str(_SYSTEM_ORG_ID),
+        "org_id": str(org_id) if org_id else str(SYSTEM_ORG_ID),
         "message": f"SAQ job {function} failed: {error or 'unknown error'}",
         "error": error,
     }
@@ -307,7 +310,7 @@ async def _ingest_error_event(
     error: str | None,
 ) -> None:
     parsed = uuid.UUID(org_id)
-    if parsed == _SYSTEM_ORG_ID:
+    if parsed == SYSTEM_ORG_ID:
         _log.error(
             "SAQ system error (no tenant context) — skipping DB ingest: function=%s message=%s error=%s",
             function,

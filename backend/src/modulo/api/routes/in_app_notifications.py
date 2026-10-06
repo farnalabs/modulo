@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.events.event_bus import get_event_bus
 from modulo.core.notifier.event_mapper import notification_categories
 from modulo.db.crud.account import AccountNotFoundError, get_account_by_id, update_account_preferences
@@ -370,7 +372,16 @@ async def get_preferences(
     )
 
 
-@router.put("/preferences")
+@router.put(
+    "/preferences",
+    dependencies=[
+        Depends(
+            audited(
+                "notification_preferences_updated", "notification_preference", principal_dep=get_current_tenant_user
+            )
+        )
+    ],
+)
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_UPDATE_PREFERENCES)
 async def update_preferences(
     req: NotificationPreferencesUpdate,
@@ -488,7 +499,13 @@ async def get_notification_detail(
     return _notification_to_response(n, run_states.get(n.id))
 
 
-@router.post("/{notification_id}/review-later", status_code=status.HTTP_200_OK)
+@router.post(
+    "/{notification_id}/review-later",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("in_app_notification_deferred", "in_app_notification", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_REVIEW_LATER)
 async def review_later_endpoint(
     notification_id: uuid.UUID,
@@ -542,7 +559,13 @@ async def review_later_endpoint(
     return {"status": "review_later"}
 
 
-@router.post("/{notification_id}/dismiss", status_code=status.HTTP_200_OK)
+@router.post(
+    "/{notification_id}/dismiss",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("in_app_notification_dismissed", "in_app_notification", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_APP_NOTIFICATIONS_DISMISS_ENDPOINT)
 async def dismiss_endpoint(
     notification_id: uuid.UUID,

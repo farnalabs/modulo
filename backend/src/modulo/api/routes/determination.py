@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ConnectorType
+from modulo.core.audit_coverage import audited
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.db.crud.connector_instance import list_connector_instances
@@ -212,6 +214,9 @@ async def run_determination(
         502: {"description": "Bad Gateway"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[
+        Depends(audited("determination_draft_created", "determination_draft", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors(_CODE_DETERMINATION_CREATE_DETERMINATION_DRAFT)
 async def create_determination_draft(
