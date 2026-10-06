@@ -33,6 +33,7 @@ admin.py:admin_update_work_item_agent_minting
 admin.py:cancel_org_deletion
 admin.py:confirm_org_deletion
 admin.py:delete_org_immediate
+admin.py:release_pipeline_snapshot_lock
 admin.py:request_org_deletion
 admin.py:set_telemetry_status
 admin_assistant.py:create_org_skill
