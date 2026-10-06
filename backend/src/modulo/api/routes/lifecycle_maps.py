@@ -13,9 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE, MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
+from modulo.api.dependencies import (
+    get_db_session,
+    require_permission,
+    require_permission_any_credential,
+    require_team_membership_or_admin,
+    require_team_membership_or_admin_any_credential,
+)
 from modulo.api.models.team_visibility import TeamVisibilityMixin
-from modulo.api.team_scope import validate_owner_team_for_create
+from modulo.api.team_scope import resolve_lifecycle_map_team_scope, validate_owner_team_for_create
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -679,6 +685,9 @@ async def export_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
+    # FAR-1514: request-time team gate, RLS-parity with the DB policy added by
+    # migration 0286 (the resolver 404s a missing row, same as the route).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapTransfer:
     """Export a lifecycle map's active-version content as a portable envelope."""
     try:
@@ -719,6 +728,7 @@ async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapDetailResponse:
     try:
         async with session.begin():
@@ -761,6 +771,7 @@ async def update_lifecycle_map_endpoint(
     req: LifecycleMapUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapResponse:
     updates = req.model_dump(exclude_unset=True)
     try:
@@ -832,6 +843,7 @@ async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("lifecycle_map.delete"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> None:
     try:
         async with session.begin():
@@ -881,6 +893,7 @@ async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_CREATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():
@@ -939,6 +952,7 @@ async def list_lifecycle_map_versions_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> list[LifecycleMapVersionResponse]:
     try:
         async with session.begin():
@@ -984,6 +998,7 @@ async def save_lifecycle_map_version_endpoint(
     req: VersionSaveRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapVersionResponse:
     try:
         async with session.begin():
@@ -1062,6 +1077,7 @@ async def update_lifecycle_map_version_endpoint(
     req: VersionSaveRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapVersionResponse:
     """Update a version. v1 semantics: the active map state is the only version,
     so this behaves identically to save — ``version_id`` is validated as a UUID
@@ -1136,6 +1152,7 @@ async def get_lifecycle_map_version_endpoint(
     version: int = Path(ge=1),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapDetailResponse:
     try:
         async with session.begin():
@@ -1182,6 +1199,7 @@ async def graduate_lifecycle_map_stage_endpoint(
     req: GraduateStageRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapVersionResponse:
     try:
         async with session.begin():
@@ -1298,6 +1316,7 @@ async def list_journeys_endpoint(
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("run.list"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> JourneyListResponse:
     """Map-scoped journeys (keyset-paginated), optionally filtered by exact kind/ref, status, and last-move time."""
     if status_filter is not None and status_filter not in _JOURNEY_STATUS_FILTER_VALUES:
@@ -1365,6 +1384,7 @@ async def get_journey_endpoint(
     ref: str,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("run.list"),
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> JourneyDetailResponse:
     """Single journey detail incl. recent run history.
 
@@ -1448,7 +1468,12 @@ async def self_report_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: JourneySelfReportRequest,
     session: AsyncSession = Depends(get_db_session),
+    # any_credential pair: the permission gate above accepts JWT OR mk_ org API
+    # keys, so the team gate must accept the same credential flavours — the
+    # flavours have to match or an mk_ caller 401s at the team gate (the
+    # pairing rule documented on convert_node_to_agent_endpoint).
     principal: TenantPrincipal = require_permission_any_credential("run.trigger"),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_lifecycle_map_team_scope),
 ) -> JourneySelfReportResponse:
     """Ingest workflow-reported work-item refs to advance existing journeys.
 

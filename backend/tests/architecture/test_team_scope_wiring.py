@@ -74,6 +74,63 @@ MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY: list[tuple[type[Any], str]] = [
     (Journey, "Journey access derives from its parent run/pipeline (ADR 038 §5); org-role-floor-only"),
 ]
 
+# ---------------------------------------------------------------------------
+# 3. Route wiring: who carries the request-time gate, who is DB-RLS-only
+# ---------------------------------------------------------------------------
+# FAR-1514 DECISION, recorded here as well as in ``api.team_scope`` so a future
+# sweep cannot "finish" it by accident:
+#
+# * ``_DB_RLS_ONLY_UNWIRED`` — resolver registered in TEAM_SCOPED_RESOLVERS
+#   (complete registry) but deliberately NOT attached to any route dependency.
+#   DB RLS (``rls_team_isolation``, sole policy since 0109/0110 + 0124) is
+#   their enforcement; wiring them would add a redundant second transaction +
+#   membership query per request, not close a gap.
+# * ``_LIFECYCLE_MAP_GATED_ENDPOINTS`` — the ``{lifecycle_map_id}``-scoped
+#   endpoints that MUST carry the gate (FAR-1514). The three endpoints with no
+#   id path param (list/create/import) must NOT: the path-param resolver would
+#   find no id and the gate would 404 every call.
+_DB_RLS_ONLY_UNWIRED: frozenset[str] = frozenset(
+    {
+        "connector_instances",
+        "model_backends",
+        "environment_profiles",
+        "library_primitives",
+    }
+)
+
+_LIFECYCLE_MAP_GATED_ENDPOINTS: tuple[str, ...] = (
+    "export_lifecycle_map_endpoint",
+    "get_lifecycle_map_endpoint",
+    "update_lifecycle_map_endpoint",
+    "delete_lifecycle_map_endpoint",
+    "restore_lifecycle_map_endpoint",
+    "list_lifecycle_map_versions_endpoint",
+    "save_lifecycle_map_version_endpoint",
+    "update_lifecycle_map_version_endpoint",
+    "get_lifecycle_map_version_endpoint",
+    "graduate_lifecycle_map_stage_endpoint",
+    "list_journeys_endpoint",
+    "get_journey_endpoint",
+    "self_report_journeys_endpoint",
+)
+
+_LIFECYCLE_MAP_UNGATED_ENDPOINTS: tuple[str, ...] = (
+    "list_lifecycle_maps_endpoint",
+    "create_lifecycle_map_endpoint",
+    "import_lifecycle_map_endpoint",
+)
+
+
+def _endpoint_has_team_scope_gate(endpoint: Any) -> bool:
+    """True when any parameter default is a Depends tagged ``team_scope``."""
+    import inspect
+
+    for param in inspect.signature(endpoint).parameters.values():
+        default = param.default
+        if type(default).__name__ == "Depends" and getattr(default, "permission_kind", None) == "team_scope":
+            return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -167,4 +224,87 @@ class TestTeamScopeWiring:
         assert not missing, (
             "Models with owner_team_id that are in neither TEAM_SCOPED_RESOLVERS nor "
             "MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:\n" + "\n".join(missing)
+        )
+
+
+class TestRouteWiring:
+    """The request-time gate on the routes FAR-1514 wired (and those it didn't)."""
+
+    def test_lifecycle_map_id_routes_carry_team_gate(self) -> None:
+        """Every ``{lifecycle_map_id}``-scoped endpoint has the team-scope gate.
+
+        The resolver reads ``lifecycle_map_id`` from the path params, so the
+        gate can only be attached where that param exists. A route here losing
+        its ``team_scope`` tag (a refactor dropping the dependency) fails this
+        test instead of silently exposing team-private maps to any org member.
+        """
+        import modulo.api.routes.lifecycle_maps as lifecycle_routes
+
+        missing: list[str] = []
+        for name in _LIFECYCLE_MAP_GATED_ENDPOINTS:
+            endpoint = getattr(lifecycle_routes, name, None)
+            if endpoint is None:
+                missing.append(f"{name}: endpoint not found on api.routes.lifecycle_maps")
+            elif not _endpoint_has_team_scope_gate(endpoint):
+                missing.append(f"{name}: no require_team_membership_or_admin(...) dependency")
+        assert not missing, "lifecycle_maps endpoints missing the team_scope gate:\n" + "\n".join(missing)
+
+    def test_lifecycle_map_non_id_routes_have_no_team_gate(self) -> None:
+        """List/create/import carry NO id-scoped gate — the resolver would 404 them.
+
+        ``team_scope_resolver`` returns ``None`` when the path param is absent
+        and ``require_team_membership_or_admin`` turns a ``None`` row into a
+        404, so wiring these three would make them permanently unreachable.
+        They stay on the org-role floor; the DB policy (0286) filters their
+        result sets by visibility.
+        """
+        import modulo.api.routes.lifecycle_maps as lifecycle_routes
+
+        wrongly_gated = [
+            name
+            for name in _LIFECYCLE_MAP_UNGATED_ENDPOINTS
+            if _endpoint_has_team_scope_gate(getattr(lifecycle_routes, name))
+        ]
+        assert not wrongly_gated, (
+            "lifecycle_maps endpoints without a {lifecycle_map_id} path param must NOT carry the "
+            f"team_scope gate (the resolver would 404 every call): {wrongly_gated}"
+        )
+
+    def test_db_rls_only_tables_stay_registered_not_wired(self) -> None:
+        """The four core tables keep their resolvers registered, never wired.
+
+        Pins the FAR-1514 DECISION recorded in ``api/team_scope``: these four
+        are enforced by DB RLS alone. If one of them is later wired at the
+        route layer that is a deliberate change — update this set AND the
+        docstring together so the decision stays honest rather than drifting.
+        """
+        expected = {
+            "connector_instances",
+            "model_backends",
+            "environment_profiles",
+            "library_primitives",
+        }
+        assert expected == _DB_RLS_ONLY_UNWIRED
+        # Their resolvers must exist (registry completeness is asserted above);
+        # the decision is about ROUTE wiring, not about dropping the resolver.
+        assert set(TEAM_SCOPED_RESOLVERS) >= _DB_RLS_ONLY_UNWIRED
+
+    def test_db_rls_only_tables_have_a_team_policy_in_the_migration(self) -> None:
+        """Every DB-RLS-only table is covered by a team-policy migration.
+
+        A table that is neither route-wired nor DB-policy'd would be a
+        neither-layer hole — exactly what FAR-1514 closed for
+        ``lifecycle_maps`` / ``eval_datasets`` / ``eval_suites``. Read the
+        migration files as text (no DB needed) and require an
+        ``rls_team_isolation`` creation for each name.
+        """
+        import re
+        from pathlib import Path
+
+        versions = Path(__file__).resolve().parents[2] / "src" / "modulo" / "db" / "migrations" / "versions"
+        corpus = "\n".join(p.read_text(encoding="utf-8") for p in versions.glob("*.py"))
+        missing = [t for t in sorted(_DB_RLS_ONLY_UNWIRED) if not re.search(rf"rls_team_isolation[^\n]*{t}", corpus)]
+        assert not missing, (
+            "Tables enforced by DB RLS alone have no rls_team_isolation policy anywhere in the "
+            f"migration tree: {missing}"
         )

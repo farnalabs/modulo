@@ -114,9 +114,10 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
 
     Expected tables are derived from information_schema (tables with an
     organisation_id column) so this test stays accurate as new tables are added.
-    The five team-scoped tables (0124) intentionally carry ``rls_team_isolation``
-    (which includes the org check) instead of the org-only policy — they are
-    asserted by ``test_team_scoped_tables_have_no_org_only_policy``.
+    The eight team-scoped tables (0124 + 0286) intentionally carry
+    ``rls_team_isolation`` (which includes the org check) instead of the
+    org-only policy — they are asserted by
+    ``test_team_scoped_tables_have_no_org_only_policy``.
     """
     team_scoped = {
         "pipelines",
@@ -124,6 +125,11 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         "model_backends",
         "environment_profiles",
         "library_primitives",
+        # FAR-1514 (0286): the last neither-layer tables moved from the
+        # org-only policy to the team policy.
+        "lifecycle_maps",
+        "eval_datasets",
+        "eval_suites",
     }
 
     async with db_engine.connect() as conn:
@@ -148,8 +154,9 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         }
 
     # organisations table has no organisation_id column — correctly excluded.
-    # The five team-scoped tables carry rls_team_isolation (org check included),
-    # never the org-only policy — excluded here, asserted by the sibling test.
+    # The eight team-scoped tables carry rls_team_isolation (org check
+    # included), never the org-only policy — excluded here, asserted by the
+    # sibling test.
     # The LangGraph checkpoint tables are runtime-managed by
     # ``ModuloPostgresSaver.setup()`` (no migration, no RLS policy — the saver
     # app-scopes its own queries by organisation_id) — excluded here too.
@@ -345,10 +352,12 @@ async def test_register_rls_reset_hook_clears_gucs_on_checkout(db_engine: AsyncE
 
 
 async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None:
-    """Migration 0025 must have created rls_team_isolation on team-scoped tables.
+    """Team-scoped tables carry rls_team_isolation (0025 + 0124 + 0286).
 
-    Checks the tables that should have the policy: pipelines,
-    connector_instances, model_backends, library_primitives.
+    Checks every table in the Phase-1 team-scoped set: pipelines,
+    connector_instances, model_backends, library_primitives (original set),
+    environment_profiles (0124), and lifecycle_maps / eval_datasets /
+    eval_suites (FAR-1514, migration 0286).
     """
     async with db_engine.connect() as conn:
         tables_with_policy = {
@@ -358,7 +367,16 @@ async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None
             ).fetchall()
         }
 
-    expected = {"pipelines", "connector_instances", "model_backends", "library_primitives"}
+    expected = {
+        "pipelines",
+        "connector_instances",
+        "model_backends",
+        "library_primitives",
+        "environment_profiles",
+        "lifecycle_maps",
+        "eval_datasets",
+        "eval_suites",
+    }
     missing = expected - tables_with_policy
     assert not missing, f"Tables missing rls_team_isolation policy: {sorted(missing)}"
 
@@ -774,13 +792,22 @@ async def test_run_node_outputs_repo_module_org_gates(
 
 
 async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine) -> None:
-    """The OR'd org-only RLS policy was dropped on team-scoped tables (0124).
+    """The OR'd org-only RLS policy was dropped on team-scoped tables (0124, 0286).
 
     Regression guard for the cross-team leak: a team-scoped table must carry
     ONLY the team-visibility policy (which includes the org check), never the
     org-only policy that ORs in every org row. Conversely, the org-only tables
-    (``lifecycle_maps`` and its ``lifecycle_map_stages`` projection) must keep
+    (``lifecycle_map_stages`` and the other derived projections) must keep
     their org policy and must NOT gain a team/account policy.
+
+    Scope history: 0124 closed the original five tables; 0286 (FAR-1514)
+    closed the last three — ``lifecycle_maps``, ``eval_datasets`` and
+    ``eval_suites`` — which previously had NEITHER a team policy NOR, in
+    ``lifecycle_maps``' case, a request-time route gate. ``lifecycle_maps`` was
+    listed as org-only-by-design in an earlier version of this test (PR #2125);
+    that decision is superseded: the team policy keeps the ``visibility='org'``
+    arm, so org colleagues still see org-visible maps, and only team-private
+    rows become member-only.
 
     The ``rls_team_isolation`` policy body (``pg_policies.qual``) must ALSO
     contain the execution-context escape hatch (``app.execution_context``) so
@@ -799,18 +826,23 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         "model_backends",
         "environment_profiles",
         "library_primitives",
+        # FAR-1514 (0286):
+        "lifecycle_maps",
+        "eval_datasets",
+        "eval_suites",
     }
     # Org-only by design: these tables carry ONLY rls_org_isolation and must
-    # NOT gain a team/account policy. ``lifecycle_maps`` enforces its
-    # visibility/owner_team_id rules at the app layer, and
-    # ``lifecycle_map_stages`` is a derived read projection of
-    # ``lifecycle_maps.content_json`` whose ``account_id`` records which
-    # account last saved the map -- it is provenance, NOT an authorisation
-    # boundary. Gating reads on ``account_id`` would hide an org-visible map's
-    # stages from every other member of the organisation, and adding a policy
-    # that ORs with rls_org_isolation would be dead weight (Postgres ORs
-    # permissive policies). See the PR #2125 discussion.
-    org_only_tables = {"lifecycle_maps", "lifecycle_map_stages"}
+    # NOT gain a team/account policy. ``lifecycle_map_stages`` is a derived
+    # read projection of ``lifecycle_maps.content_json`` whose ``account_id``
+    # records which account last saved the map -- it is provenance, NOT an
+    # authorisation boundary, and it has no ``visibility`` column at all.
+    # Gating reads on ``account_id`` would hide an org-visible map's stages
+    # from every other member of the organisation, and adding a policy that
+    # ORs with rls_org_isolation would be dead weight (Postgres ORs
+    # permissive policies). See the PR #2125 discussion. The map itself is
+    # now team-gated by 0286, so a non-member's stages are unreachable anyway
+    # (the map read 404s first).
+    org_only_tables = {"lifecycle_map_stages"}
 
     async with db_engine.connect() as conn:
         rows = (await conn.execute(text("SELECT tablename, policyname, qual FROM pg_policies"))).fetchall()
@@ -840,6 +872,220 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
             "permissive policies, such a policy is either dead weight (if rls_org_isolation is kept) or "
             "a read regression (if it is dropped, since org colleagues would lose access)."
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1514 / migration 0286 — enforcement on the three neither-layer tables
+# ---------------------------------------------------------------------------
+
+_TEAM_RLS_TEST_TABLES: tuple[str, ...] = ("lifecycle_maps", "eval_datasets", "eval_suites")
+
+# Per-table INSERT: a team-private row and an org-visible row in one org.
+# Columns kept to the NOT NULL set plus the two team-visibility columns;
+# ``content_json`` is a bare '{}' literal so it coerces to whatever json/jsonb
+# type the migration chain left behind.
+_TEST_ROW_INSERTS: dict[str, str] = {
+    "lifecycle_maps": (
+        "INSERT INTO lifecycle_maps "
+        "(id, organisation_id, account_id, name, visibility, owner_team_id, version, content_json, "
+        "created_at, updated_at) "
+        "VALUES (:id, :oid, :aid, :name, :vis, :tid, 1, '{}', current_timestamp, current_timestamp)"
+    ),
+    "eval_datasets": (
+        "INSERT INTO eval_datasets "
+        "(id, organisation_id, name, visibility, owner_team_id, version, created_at, updated_at) "
+        "VALUES (:id, :oid, :name, :vis, :tid, 1, current_timestamp, current_timestamp)"
+    ),
+    "eval_suites": (
+        "INSERT INTO eval_suites "
+        "(id, organisation_id, name, visibility, owner_team_id, created_at, updated_at) "
+        "VALUES (:id, :oid, :name, :vis, :tid, current_timestamp, current_timestamp)"
+    ),
+}
+
+# Hardcoded SELECT/DELETE per table so the statement text stays a literal
+# (an f-string here would trip ruff S608) — same convention as the
+# ``count_queries`` dict in ``test_strict_rls_tables_fail_closed_with_empty_org_context``.
+_TEST_ROW_SELECTS: dict[str, str] = {
+    "lifecycle_maps": "SELECT id::text FROM lifecycle_maps WHERE id = ANY(:ids)",
+    "eval_datasets": "SELECT id::text FROM eval_datasets WHERE id = ANY(:ids)",
+    "eval_suites": "SELECT id::text FROM eval_suites WHERE id = ANY(:ids)",
+}
+
+_TEST_ROW_DELETES: dict[str, str] = {
+    "lifecycle_maps": "DELETE FROM lifecycle_maps WHERE organisation_id = :oid",
+    "eval_datasets": "DELETE FROM eval_datasets WHERE organisation_id = :oid",
+    "eval_suites": "DELETE FROM eval_suites WHERE organisation_id = :oid",
+}
+
+
+async def test_lifecycle_and_eval_tables_team_rls_enforcement(
+    db_engine: AsyncEngine,
+    non_superuser_role: str,
+) -> None:
+    """FAR-1514: ``lifecycle_maps`` / ``eval_datasets`` / ``eval_suites`` enforce team isolation.
+
+    Migration 0286 moved these three tables from org-only RLS to
+    ``rls_team_isolation`` (0124 pattern: org check AND the visibility matrix
+    AND the execution-context escape hatch). For each table this seeds a
+    team-private row (``visibility='team'``, ``owner_team_id`` = team A) and an
+    org-visible row, then reads as a NON-superuser (so RLS actually applies) in
+    three contexts:
+
+    1. **team-A member** (org + user context) — sees both rows;
+    2. **cross-team non-member** (team-B account, org + user context) — sees
+       ONLY the org row; the team-private read is denied;
+    3. **execution context** (org scope + ``app.execution_context='true'``,
+       no user context) — sees both rows, proving background machinery
+       (executor / cron / SAQ suite-run dispatch / housekeeping) still reads
+       team-private rows with org scope only.
+
+    The org-visible row is present in every context — the positive control
+    that the policy filters by visibility rather than denying access.
+    """
+    org_id = uuid.uuid4()
+    account_a = uuid.uuid4()  # team A member
+    account_b = uuid.uuid4()  # team B member (non-member of team A)
+    slug = f"team-rls-3tbl-{org_id.hex[:8]}"
+
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text(
+                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)",
+            ),
+            {"id": str(org_id), "name": "FAR-1514 Org", "slug": slug},
+        )
+        for idx, account_id in enumerate((account_a, account_b)):
+            await conn.execute(
+                text(
+                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
+                    "VALUES (:id, :email, :name, 'local', true, 'hash')"
+                ),
+                {
+                    "id": str(account_id),
+                    "email": f"{slug}-{idx}@example.com",
+                    "name": f"{slug}-{idx}",
+                },
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
+                    "VALUES (:mid, :aid, :oid, 'operator')"
+                ),
+                {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
+            )
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    from modulo.db.crud.team import create_team
+    from modulo.db.crud.team_membership import add_team_member
+
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        team_a = await create_team(session, org_id=org_id, name="Team A", account_id=account_a)
+        await add_team_member(session, org_id=org_id, team_id=team_a.id, account_id=account_a, role="operator")
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        team_b = await create_team(session, org_id=org_id, name="Team B", account_id=account_b)
+        await add_team_member(session, org_id=org_id, team_id=team_b.id, account_id=account_b, role="operator")
+
+    row_ids: dict[str, dict[str, uuid.UUID]] = {}
+    async with db_engine.connect() as conn, conn.begin():
+        for table in _TEAM_RLS_TEST_TABLES:
+            team_row = uuid.uuid4()
+            org_row = uuid.uuid4()
+            row_ids[table] = {"team": team_row, "org": org_row}
+            for kind, row_id, visibility, owner_team in (
+                ("team", team_row, "team", team_a.id),
+                ("org", org_row, "org", None),
+            ):
+                params: dict[str, object] = {
+                    "id": str(row_id),
+                    "oid": str(org_id),
+                    "name": f"{table}-{kind}-{row_id.hex[:8]}",
+                    "vis": visibility,
+                    "tid": str(owner_team) if owner_team is not None else None,
+                }
+                if table == "lifecycle_maps":
+                    # lifecycle_maps.account_id is NOT NULL and FK'd to accounts.
+                    params["aid"] = str(account_a)
+                await conn.execute(text(_TEST_ROW_INSERTS[table]), params)
+
+    async def _visible(row_ids_for_table: dict[str, uuid.UUID], **ctx: object) -> set[str]:
+        """Row ids visible to a non-superuser under the given RLS context."""
+        async with db_engine.connect() as conn, conn.begin():
+            await conn.execute(text(f'SET LOCAL ROLE "{non_superuser_role}"'))
+            await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
+            if ctx.get("user_id") is not None:
+                await conn.execute(text("SELECT set_config('app.user_id', :uid, true)"), {"uid": str(ctx["user_id"])})
+                await conn.execute(
+                    text("SELECT set_config('app.org_role', :role, true)"), {"role": str(ctx["org_role"])}
+                )
+            if ctx.get("execution_context"):
+                await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
+            table = str(ctx["table"])
+            ids = [str(v) for v in row_ids_for_table.values()]
+            rows = (
+                await conn.execute(
+                    text(_TEST_ROW_SELECTS[table]),
+                    {"ids": ids},
+                )
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    try:
+        for table in _TEAM_RLS_TEST_TABLES:
+            rows = row_ids[table]
+            team_id, org_row_id = str(rows["team"]), str(rows["org"])
+
+            # 1. Team member sees both rows.
+            member_visible = await _visible(
+                rows,
+                table=table,
+                user_id=account_a,
+                org_role="operator",
+            )
+            assert member_visible == {team_id, org_row_id}, (
+                f"{table}: team member should see both rows, got {sorted(member_visible)}"
+            )
+
+            # 2. Cross-team non-member: team-private denied, org-visible intact.
+            non_member_visible = await _visible(
+                rows,
+                table=table,
+                user_id=account_b,
+                org_role="operator",
+            )
+            assert team_id not in non_member_visible, (
+                f"{table}: cross-team read LEAKED a visibility='team' row to a non-member"
+            )
+            assert org_row_id in non_member_visible, (
+                f"{table}: org-visible row disappeared for a non-member — visibility='org' arm broken"
+            )
+
+            # 3. Background execution context (org scope only) reads everything.
+            exec_visible = await _visible(rows, table=table, execution_context=True)
+            assert exec_visible == {team_id, org_row_id}, (
+                f"{table}: execution-context read lost rows — background machinery would break"
+            )
+    finally:
+        # Cleanup as superuser (bypasses RLS), FK-dependency order.
+        async with db_engine.connect() as conn, conn.begin():
+            for table in _TEAM_RLS_TEST_TABLES:
+                await conn.execute(
+                    text(_TEST_ROW_DELETES[table]),
+                    {"oid": str(org_id)},
+                )
+            for stmt in (
+                "DELETE FROM team_memberships WHERE organisation_id = :oid",
+                "DELETE FROM teams WHERE organisation_id = :oid",
+                "DELETE FROM org_memberships WHERE organisation_id = :oid",
+                "DELETE FROM accounts WHERE email LIKE :email_prefix",
+                "DELETE FROM organisations WHERE id = :oid",
+            ):
+                await conn.execute(
+                    text(stmt),
+                    {"oid": str(org_id), "email_prefix": f"{slug}-%"},
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -47,3 +47,29 @@ Feature: Cross-Team Isolation
     And user "alice" is a member of team "design"
     When user "alice" requests the pipeline list
     Then the response total count does not include team-private pipelines
+
+  Scenario: Team A cannot see Team B's team-scoped lifecycle map
+    Given a team "engineering" exists
+    And a team "design" exists
+    And a lifecycle map "eng-map" is owned by team "engineering" with visibility "team"
+    And user "alice" is a member of team "design"
+    When user "alice" requests the lifecycle map list
+    Then the lifecycle map list does not contain "eng-map"
+
+  Scenario: A team member sees their own team's lifecycle map
+    Given a team "engineering" exists
+    And a lifecycle map "eng-map" is owned by team "engineering" with visibility "team"
+    And user "alice" is a member of team "engineering"
+    When user "alice" requests the lifecycle map list
+    Then the lifecycle map list contains "eng-map"
+
+  Scenario: Org-wide lifecycle maps are accessible across teams
+    Given a team "engineering" exists
+    And a team "design" exists
+    And a lifecycle map "shared-map" has visibility "org"
+    And user "alice" is a member of team "engineering"
+    And user "bob" is a member of team "design"
+    When user "alice" requests the lifecycle map list
+    Then the lifecycle map list contains "shared-map"
+    When user "bob" requests the lifecycle map list
+    Then the lifecycle map list contains "shared-map"
