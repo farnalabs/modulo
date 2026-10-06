@@ -24,6 +24,7 @@ pipeline is the state that actually exercises this gate end-to-end.
 """
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -370,13 +371,18 @@ class TestPipelineStateGateVisibility:
         org: uuid.UUID,
         non_member_user: uuid.UUID,
         archived_team_private_pipeline: uuid.UUID,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """RLS parity for the gate's own read: a user session that cannot see
-        the team-private row gets ROW ABSENT, so the gate does NOT refuse
-        (refusal would leak that the row exists)."""
+        the team-private row gets ROW ABSENT — the gate logs that (its
+        diagnosable signal) and does NOT refuse, because refusing would leak
+        that the row exists."""
         factory = async_sessionmaker(app_engine, expire_on_commit=False)
         async with factory() as session, session.begin():
             await set_rls_org(session, org)
             await set_rls_user_context(session, non_member_user, "runner")
 
-            await _enforce_pipeline_state_gate(session, archived_team_private_pipeline, org)
+            with caplog.at_level(logging.WARNING, logger="modulo.db.crud.run"):
+                await _enforce_pipeline_state_gate(session, archived_team_private_pipeline, org)
+
+        assert any("pipeline_row_absent" in message for message in caplog.messages)
