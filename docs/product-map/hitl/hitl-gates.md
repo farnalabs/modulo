@@ -18,6 +18,8 @@ code:
   - frontend/src/components/HitlBriefing.vue
 unit-tests:
   - backend/tests/unit/hitl_manager/test_hitl_manager.py
+  - backend/tests/unit/pipeline_engine/test_hitl_reject_terminate.py
+  - backend/tests/integration/test_hitl_resume_roundtrip.py
   - backend/tests/unit/hitl_manager/test_output_delivery_audit.py
   - backend/tests/unit/hitl_manager/test_overdue_warning.py
   - backend/tests/unit/hitl_manager/test_claim_expiry_job.py
@@ -106,12 +108,33 @@ may decide.
       data-rot guard (`test_hitl_manager` same-account re-claim cases)
 - [x] Approve resumes the run (`action: approved`, optional notes) – gated by
       `hitl.approve`; a claimed-by-other caller cannot approve
-- [x] Reject records the decision and resumes the graph: when a reject route
-      is wired (the gate's `reject_target` config or a reject-typed edge) the
-      gate's router routes the rejected path to that target, and with no
-      reject route wired there is no router — the run continues along the
-      normal edge (terminate-by-default is FAR-1487). Either way the run
-      resumes rather than being left in a non-terminal state
+- [x] Reject records the decision and resumes the graph with one of three
+      dispositions (FAR-1487, single resolver `resolve_reject_disposition`):
+      `route` when a reject route is wired (the gate's `reject_target` config
+      or a reject-typed edge; the gate's router sends the rejected path to that
+      target), `terminate` (the DEFAULT with no route) where a conditional edge
+      whose router returns LangGraph `END` on a stamped rejection (the FAR-541
+      gate-identity check) ends the run with the terminal `rejected` status and
+      `error_code=hitl.rejected` (not `failed`, not `cancelled`), and `proceed`
+      only when the gate explicitly sets `on_reject: proceed` (the pre-FAR-1487
+      continue-along-the-normal-edge behaviour). A reject route always wins; an
+      automated `correction_target` wins over terminate
+- [x] The executor finalize downgrades a would-be `complete` to `rejected` only
+      when BOTH the gate artifact (`result: rejected`, `reject_disposition:
+      terminate`, this review_id) AND the committed `hitl_claims.decision =
+      rejected` row agree - never on the agent's echo alone (END is a normal
+      stream exit)
+- [x] A coalesced-supersede system rejection (committed
+      `decision_payload.reason` = the supersede marker with no deciding
+      account) with no reject route and no `on_reject: proceed` ends `rejected`
+      with `error_code=hitl.superseded`: silent (no failure alert), excluded
+      from failure analytics, never advances a journey, and labelled
+      "Superseded by a newer version" on the run list and run detail - never
+      "Rejected by reviewer". A superseded run WITH a reject route still routes
+- [x] The reviewer briefing (`consequences.reject.disposition`) states the
+      reject consequence in all three states (routes to X / ends the run /
+      continues anyway); `on_reject` is validated at graph save (`terminate` |
+      `proceed`) for edge-level and node-level gate configs
 - [x] Modify-then-approve applies the reviewer's modified output into state
       before resuming; missing/expired claim_token → 403/410, already-decided
       → 409 (`test_hitl_manager` approve-with-modification cases,

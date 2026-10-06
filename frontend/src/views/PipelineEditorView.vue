@@ -532,7 +532,7 @@
           @pane-click="onPaneClick"
         >
           <Background :gap="20" :size="1" />
-          <Controls :showInteractive="false" />
+          <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
                     <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
@@ -1396,7 +1396,6 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -1404,6 +1403,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
+import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
@@ -2409,6 +2409,12 @@ function buildHitlReviewConfig(): any {
     human_only: edgeForm.human_only || false,
     required_team_id: selectedEdgeData.value?.hitl_review_config?.required_team_id || null,
   }
+  // FAR-1487: carry over the reject-disposition fields this form has no control
+  // for - dropping them on a save would silently flip an explicit
+  // `on_reject: proceed` (or a correction_target) back to the terminate default.
+  const existingGate = selectedEdgeData.value?.hitl_review_config
+  if (existingGate?.on_reject) config.on_reject = existingGate.on_reject
+  if (existingGate?.correction_target) config.correction_target = existingGate.correction_target
   if (edgeForm.condition_type === 'jmespath' && edgeForm.condition) {
     config.condition = edgeForm.condition
   }

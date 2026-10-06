@@ -867,6 +867,17 @@ class Settings(BaseSettings):
     # (whitespace-trimmed, empties dropped). None or empty = the email channel
     # is disabled — email also requires smtp_host to be set.
     alert_email_to: str | None = Field(default=None, alias="ALERT_EMAIL_TO", repr=False)
+    # Deployment environment name — carried on every operator alert email so a
+    # recipient can tell staging from production at a glance (FAR-1495).
+    # This field MIRRORS the pre-existing scattered ``os.environ.get("MODULO_ENV",
+    # "development")`` convention for the alert path; the pre-existing call
+    # sites are deliberately not migrated in this change.
+    environment: str = Field("development", alias="MODULO_ENV")
+    # Operator-supplied free text appended verbatim to every alert email body
+    # (FAR-1495) — runbook links, escalation notes, ticket pointers. One item
+    # per line; blank lines are dropped and the rendering is bounded by
+    # ``core.alert_context``. None (default) = the environment line only.
+    alert_context: str | None = Field(default=None, alias="ALERT_CONTEXT", repr=False)
 
     # Auth-specific rate limiting
     modulo_auth_rate_limit_enabled: bool = Field(True)
@@ -956,7 +967,23 @@ class Settings(BaseSettings):
     # settings can override this per-organisation via the admin email-settings API.
     smtp_timeout: int = Field(30, ge=1, le=120)
 
-    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
+    # populate_by_name (FAR-1500): constructor kwargs may use a field's NAME as
+    # well as its alias. Without it, a name-keyed kwarg for an aliased field is
+    # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``
+    # kept the default while ``Settings(MODULO_ENV="prod")`` worked, a silent
+    # footgun for every caller that constructs Settings in Python.
+    #
+    # What it actually changes: the alias wins when BOTH spellings are present
+    # (init kwargs and env vars alike); the field NAME is ALSO accepted as an
+    # init key AND as an env-var name, so when only the name is present the
+    # name supplies the value. For the 8 fields whose alias is not simply the
+    # upper-cased field name (``environment``, ``runner_machine_id``, the four
+    # ``max_*_usd`` cost knobs, ``product_analytics_endpoint_url``,
+    # ``product_analytics_instance_secret``) this is a real widening; the other
+    # aliased fields are unchanged because their alias already case-folds onto
+    # the name. Risk shape: an unprefixed ambient env var sharing one of those
+    # 8 names would now be read — the alias still wins if it is set too.
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore", "populate_by_name": True}
 
     @field_validator("secret_key")
     @classmethod

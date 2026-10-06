@@ -129,6 +129,11 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
         await _ingest_slack_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
+# is OPTIONAL - the event authenticates with Slack's X-Slack-Signature, not a
+# Modulo credential, so there is no guaranteed actor for
+# audited(principal_dep=...) to resolve. Actor-less core variant needed to
+# cover Slack event ingestion.
 @router.post(
     "/{trigger_id}/slack",
     status_code=status.HTTP_202_ACCEPTED,

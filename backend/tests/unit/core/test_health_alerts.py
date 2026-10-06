@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -391,6 +392,53 @@ async def test_observe_readiness_reuses_the_route_evaluation() -> None:
     assert observation.observed_state == "unhealthy"
 
 
+#: The detail the db_hygiene check reports when its probe did NOT complete
+#: (FAR-1510) — a stalled event loop, not a hygiene finding.
+_HYGIENE_NOT_MEASURED_DETAIL = (
+    "database-hygiene probe did not complete within 1s (likely an event-loop stall; "
+    "see event_loop_lag) — hygiene not measured"
+)
+
+
+async def test_non_ok_advisory_sub_check_with_ok_aggregate_never_emails() -> None:
+    """FAR-1510: a degraded ``db_hygiene`` sub-check whose probe timed out
+    leaves the aggregate at ``ok`` (the probe result is advisory, so
+    ``evaluate_readiness`` excludes it from the gate).
+
+    The alert keys on the AGGREGATE only, so this shape — visible in
+    ``conditions()``, never an unhealthy observation — must produce no email
+    across the hysteresis window. The production false "[Modulo] Readiness
+    degraded" emails were exactly this shape once the aggregate itself was
+    flipped to degraded by the timeout.
+    """
+    observer = _FakeObserver()
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="database reachable"),
+            "db_hygiene": ha.SubCheck(status="degraded", detail=_HYGIENE_NOT_MEASURED_DETAIL),
+        },
+    )
+    sender = _FakeSender()
+    settings = _make_settings()
+    redis = _FakeRedis()
+    clock = {"now": 1_000.0}
+
+    first = await _tick(observer, sender, redis, settings, clock)
+    clock["now"] += 300.0
+    second = await _tick(observer, sender, redis, settings, clock)
+
+    # Two confirmed ticks — enough for hysteresis to fire had the state been
+    # unhealthy — and still no send.
+    assert observer.calls == 2
+    assert first["action"] == "none"
+    assert second["action"] == "none"
+    assert second["notified"] == "none"
+    assert not sender.sent
+    # The finding is still NAMED (an operator reading the conditions sees it).
+    assert observer.observation.conditions() == [f"db_hygiene: degraded ({_HYGIENE_NOT_MEASURED_DETAIL})"]
+
+
 # ---------------------------------------------------------------------------
 # Default collaborators, malformed state, and failure edges.  The transition
 # tests above stub the observer/sender/redis and only drive the happy paths;
@@ -622,3 +670,150 @@ async def test_owned_redis_client_is_created_and_closed() -> None:
         )
     from_url.assert_called_once()
     assert result["notified"] == "none"
+
+
+async def test_alert_and_recovery_bodies_carry_environment_and_context() -> None:
+    """FAR-1495: BOTH the alert and the recovery email identify the deployment
+    environment and append the operator's ALERT_CONTEXT free text — in the
+    HTML part and the text part alike, with the context after the detection
+    stamp in the text part."""
+    settings = _make_settings(
+        # Settings keys match the field's env alias case-insensitively (see
+        # test_alert_context.py) — hence MODULO_ENV / ALERT_CONTEXT here.
+        MODULO_ENV="staging",
+        ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
+    )
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+    alert = sender.sent[0]
+    for part in (alert["html"], alert["text"]):
+        assert "Environment: staging" in part
+        assert "runbook: https://example.com/runbook" in part
+        assert "page the on-call" in part
+    # The context follows the detection stamp in the text part.
+    assert alert["text"].index("Detected at") < alert["text"].index("Environment: staging")
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+    recovery = sender.sent[1]
+    for part in (recovery["html"], recovery["text"]):
+        assert "Environment: staging" in part
+        assert "runbook: https://example.com/runbook" in part
+    assert recovery["text"].index("Resolved at") < recovery["text"].index("Environment: staging")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1495 follow-up: the stdout stamp is STRICTLY best-effort (a print failure
+# must never skip the send/state commit that surrounds it) and it carries the
+# conditions plus the environment line ONLY - never the operator's
+# ALERT_CONTEXT free text, which is repr=False precisely to keep it out of logs.
+# ---------------------------------------------------------------------------
+
+
+def _failing_stamp_print(prefix: str) -> Callable[..., None]:
+    """A ``print`` replacement that fails ONLY for the alert stamp.
+
+    A blanket ``patch("builtins.print", side_effect=...)`` would also break
+    pytest's logging formatter (it calls ``print`` while rendering an
+    ``exc_info`` traceback), which masks the behaviour under test - so only
+    the stamp's own message raises and everything else prints normally.
+    """
+    real_print = print
+
+    def _print(*args: Any, **kwargs: Any) -> None:
+        message = args[0] if args else ""
+        if isinstance(message, str) and message.startswith(prefix):
+            raise BrokenPipeError("stdout gone")
+        real_print(*args, **kwargs)
+
+    return _print
+
+
+async def test_stdout_stamp_names_environment_but_never_arbitrary_context(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both edges print the environment line and never the free text."""
+    settings = _make_settings(
+        MODULO_ENV="staging",
+        ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
+    )
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+    alert_stamp = capsys.readouterr().out
+    assert "[health-alert] ALERT" in alert_stamp
+    assert "Environment: staging" in alert_stamp
+    assert "runbook: https://example.com/runbook" not in alert_stamp
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+    recovery_stamp = capsys.readouterr().out
+    assert "[health-alert] RECOVERY" in recovery_stamp
+    assert "Environment: staging" in recovery_stamp
+    assert "runbook: https://example.com/runbook" not in recovery_stamp
+
+
+async def test_print_failure_never_skips_send_or_state_commit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The stamp prints AFTER the send but BEFORE the dedup state is
+    committed - a print failure must be swallowed (with a log) so neither the
+    send nor the commit is lost (a lost commit would re-send a DUPLICATE alert
+    on the next confirmed tick)."""
+    settings = _make_settings(MODULO_ENV="staging")
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, settings, clock)  # pending, no send yet
+
+    with (
+        patch("builtins.print", new=_failing_stamp_print("[health-alert]")),
+        caplog.at_level(logging.WARNING, logger="modulo.core.health_alerts"),
+    ):
+        result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    persisted = json.loads(store.data[ha.STATE_KEY])
+    assert persisted["notified"] == "unhealthy"
+    assert "health_alerts.stamp_print_failed" in caplog.text
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)  # pending, no send yet
+
+    caplog.clear()
+    with (
+        patch("builtins.print", new=_failing_stamp_print("[health-alert]")),
+        caplog.at_level(logging.WARNING, logger="modulo.core.health_alerts"),
+    ):
+        result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "recovery"
+    assert len(sender.sent) == 2
+    persisted = json.loads(store.data[ha.STATE_KEY])
+    assert persisted["notified"] == "healthy"
+    assert "health_alerts.stamp_print_failed" in caplog.text

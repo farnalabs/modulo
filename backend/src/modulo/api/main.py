@@ -330,6 +330,17 @@ async def _run_migrations(settings: Settings) -> None:
     Fast-path: when the DB is already at the head revision the migration run is
     skipped entirely (no advisory lock, no alembic run) so boot is instant and
     machines never contend for the lock.
+
+    The role bootstrap below runs on EVERY boot — warm boots included (it sits
+    BEFORE the fast-path return, FAR-1519): it is the reconcile point for role
+    credentials, so an upgrade-in-place that later adds
+    ``MODULO_SYSTEM_DATABASE_URL`` repairs the ``modulo_system`` password on
+    the next restart instead of leaving readiness red until an operator runs
+    ``python -m modulo.db.bootstrap_role`` by hand. The fast-path still skips
+    exactly what it exists to skip — the alembic run and the migration
+    advisory lock: the bootstrap is idempotent (create-or-update + re-grant +
+    re-assert), takes its OWN bounded, fail-open lock (FAR-1200), and does not
+    touch the migration lock the fast-path avoids.
     """
     from alembic import command
     from alembic.config import Config
@@ -339,12 +350,13 @@ async def _run_migrations(settings: Settings) -> None:
     alembic_ini = _resolve_alembic_ini()
     last_error: Exception | None = None
 
+    # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on
+    # exist — and before the head fast-path so warm boots reconcile too.
+    await _run_bootstrap(settings)
+
     if await _db_is_at_migration_head(settings):
         logger.info("startup.migrations_already_at_head -- skipping migration run")
         return
-
-    # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on exist.
-    await _run_bootstrap(settings)
 
     for attempt in range(1, _MIGRATION_MAX_ATTEMPTS + 1):
         try:

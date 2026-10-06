@@ -224,7 +224,7 @@ class TestLoginContext:
         assert data["org"] is None
 
     def test_sentinel_org_not_counted(self, client: tuple[TestClient, AsyncMock]) -> None:
-        """Sentinel orgs (ORPHAN_ORG_ID, MODULO_REGISTRY_ORG_ID) must not count."""
+        """Sentinel orgs (SYSTEM_ORG_ID, MODULO_REGISTRY_ORG_ID) must not count."""
         http, session = client
         # The DB returns only the sentinel — login-context sees zero.
 

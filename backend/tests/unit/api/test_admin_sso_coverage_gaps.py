@@ -25,12 +25,35 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.audit_coverage import audit_session
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _PROVIDER_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _NOW = datetime(2025, 6, 1, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — no database in the unit tier), so
+    stub that seam; the dependency itself still runs."""
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = AsyncMock()
+        configure_mock_session(session, allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
+
 
 _DB_ERROR_PARAMS = [
     pytest.param(ProgrammingError("stmt", {}, Exception("missing table")), 501, id="programming-501"),

@@ -165,9 +165,13 @@ the pinned image):
 - The config lives in [`deploy/watchdog/config.yaml`](../deploy/watchdog/config.yaml);
   edits apply on the next `docker compose up -d watchdog` (the file is mounted,
   so no rebuild is needed).
-- Scope: this ships in the root `docker-compose.yml` only. The production
-  override (`deploy/compose/docker-compose.prod.yml`) and any Helm chart do not
-  have it yet.
+- Scope: the root `docker-compose.yml` and the production compose
+  (`deploy/compose/docker-compose.prod.yml`). The two probe different targets:
+  the production compose runs the all-in-one image, so it probes
+  `GET http://modulo:80/healthz/ready` (service `modulo` behind nginx on port
+  80 — uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container),
+  and its dashboard is loopback-bound at `127.0.0.1:8083`. The Helm chart does
+  not have it.
 
 ---
 
@@ -439,8 +443,52 @@ Runs and triggers require Redis plus the SAQ workers – see [`docs/quickstart.m
 
 ### Docker Compose (single-server, multi-user)
 
+**1. Create the environment file.** The stack will not start without it: compose
+refuses to run (naming the variable) until `MODULO_DB_PASSWORD`, `SECRET_KEY`,
+`FERNET_KEY`, `SAQ_AUTH_USERNAME` and `SAQ_AUTH_PASSWORD` are set.
+
 ```bash
-docker compose -f deploy/compose/docker-compose.prod.yml up
+cp .env.prod.example deploy/compose/.env
+# then edit deploy/compose/.env and generate the REQUIRED values:
+#   MODULO_DB_PASSWORD=$(openssl rand -hex 24)
+#   SECRET_KEY=$(openssl rand -base64 48)
+#   FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+#   SAQ_AUTH_PASSWORD=$(openssl rand -hex 24)
+```
+
+**2. Start the stack.**
+
+```bash
+docker compose -f deploy/compose/docker-compose.prod.yml up -d
+```
+
+**3. Verify it can actually execute work.** The readiness probe reports one
+check per queue; both must be `ok`:
+
+```bash
+curl -s http://localhost/healthz/ready | python -m json.tool
+# look for "saq_workers": { "status": "ok", ... }
+```
+
+If `saq_workers` is not `ok`, no pipeline run, cron trigger or polling trigger
+will execute - see *What the single container runs* below.
+
+**What runs.** The `modulo` service runs the **all-in-one image**: one
+container whose `supervisord` starts the API (`uvicorn`), `nginx`, and **both
+SAQ queue workers** - `saq-runs` executes pipeline runs and `saq-system` owns
+the `system` queue (`fire_due_triggers`, i.e. every cron and polling trigger,
+plus the system crons). The workers run *inside* the application container
+deliberately: that is what guarantees they receive exactly the same environment
+the API receives (compose `environment:` + the project `.env`), with no second
+copy of `DATABASE_URL` / `SECRET_KEY` / `FERNET_KEY` to fall out of sync. It is
+also why the image is "all-in-one" rather than an API-only artifact.
+
+Worker output lands beside the API and nginx logs, under
+`/var/log/supervisor/` inside the container:
+
+```bash
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
+  tail -f /var/log/supervisor/saq-runs.out.log     # also: saq-system.*, backend.*, nginx.*
 ```
 
 The native single-install script is a *different* path - it installs a
@@ -458,12 +506,48 @@ bash modulo-install.sh
 | Component | How it runs |
 |---|---|
 | Database | PostgreSQL 16 (separate container) |
-| Task scheduling | SAQ system-worker cron (`fire_due_triggers`); cron & polling triggers fire via the Redis-backed SAQ workers |
-| Task queue | SAQ Redis queue (runs worker) |
+| Application + web tier | uvicorn + nginx inside the single `modulo` container, under supervisord |
+| Task scheduling | SAQ system-worker cron (`fire_due_triggers`) - the `saq-system` program in the **same** container's supervisord |
+| Task queue | SAQ Redis queue, consumed by the `saq-runs` program in the **same** container's supervisord |
 | Rate limiting | Redis sliding window |
 | Concurrency | Single backend replica, multiple simultaneous requests |
 
 Redis is required: the dispatcher enqueues every run to SAQ's Redis queue and cron/polling triggers run as Redis-backed SAQ system crons, and `api/main.py` refuses to boot if `REDIS_URL` is empty. `REDIS_URL` defaults to `redis://localhost:6379/0`; if it is explicitly set to an empty value, startup aborts with a `RuntimeError` (see `api/main.py`) instead of a silent fallback.
+
+The two queue workers are **not** separate compose services here - they are
+supervisord programs inside the `modulo` container
+(`deploy/supervisor/supervisord.conf`), which is what keeps the deployment
+"all-in-one": one artifact, one environment, no duplicated credentials block.
+They run the same commands the root `docker-compose.yml` uses for its
+separate `saq-runner` / `saq-system` services. On an existing deployment
+whose `.env` predates this, add the now-required variables before upgrading
+(`MODULO_DB_PASSWORD`, `SAQ_AUTH_USERNAME`, `SAQ_AUTH_PASSWORD`) - a database
+already initialised on the old `changeme` default keeps that value until you
+rotate it.
+
+The compose also constructs one URL the system worker needs:
+`MODULO_SYSTEM_DATABASE_URL` (`modulo_system` + `MODULO_DB_PASSWORD` @ the
+bundled Postgres). `dispatcher_reconcile` and the other cross-org system
+crons fail closed without it, and `dispatcher_reconcile` gates
+`/healthz/ready` - so leaving it out gives an API that answers while
+readiness never becomes ready.
+
+**Upgrading a database that already ran:** the `modulo_system` role is
+created on the *first* boot, when the URL above did not exist yet, so it
+carries a random password - and a warm boot (migrations already at head)
+does not re-run the role bootstrap to correct it. The symptom is
+`password authentication failed for user "modulo_system"` in the
+`saq-system` worker log and `dispatcher_reconcile` reporting `failed` in
+readiness. Reconcile the role once after upgrading:
+
+```bash
+docker compose -f deploy/compose/docker-compose.prod.yml exec modulo \
+  python -m modulo.db.bootstrap_role
+```
+
+It is idempotent (it re-applies the roles/grants from the URLs in the
+container's environment), after which the system crons pass and readiness
+reports `dispatcher_reconcile: ok`.
 
 ### Kubernetes (production, multi-replica)
 

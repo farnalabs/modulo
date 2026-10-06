@@ -23,8 +23,18 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIG_PATH = _REPO_ROOT / "deploy" / "watchdog" / "config.yaml"
-_COMPOSE_PATH = _REPO_ROOT / "docker-compose.yml"
 _DOCKERFILE_PATH = _REPO_ROOT / "deploy" / "watchdog" / "Dockerfile"
+_COMPOSE_PATH = _REPO_ROOT / "docker-compose.yml"
+_PROD_COMPOSE_PATH = _REPO_ROOT / "deploy" / "compose" / "docker-compose.prod.yml"
+
+# The probe target is parameterised in config.yaml (`url: ${WATCHDOG_PROBE_URL}`)
+# because the two compose deployments probe different services; the default is
+# baked as the image's ENV (Dockerfile) so a bare `docker run` and the root
+# compose need no extra configuration. Every real container therefore has this
+# variable set - `_render` supplies it for the same reason it supplies the SMTP
+# variables: to reproduce the YAML Gatus actually parses.
+_IMAGE_DEFAULT_PROBE_URL = "http://backend:8000/healthz/ready"
+_PROD_PROBE_URL = "http://modulo:80/healthz/ready"
 
 # The app's SMTP variables - reused verbatim, never renamed (one SMTP setup
 # serves HITL email alerts and health alerts).
@@ -61,6 +71,7 @@ def _render(env: dict[str, str]) -> Any:
     text = _CONFIG_PATH.read_text(encoding="utf-8")
     for name, value in env.items():
         text = text.replace(f"${{{name}}}", value)
+    text = text.replace("${WATCHDOG_PROBE_URL}", _IMAGE_DEFAULT_PROBE_URL)
     unresolved = [name for name in _SMTP_VARS if f"${{{name}}}" in text]
     assert not unresolved, f"config references variables the test did not supply: {unresolved}"
     return yaml.safe_load(text)
@@ -137,6 +148,69 @@ def test_watchdog_compose_port_is_loopback_only():
     ports = compose["services"]["watchdog"]["ports"]
 
     assert ports == ["127.0.0.1:8082:8080"]
+
+
+def test_watchdog_probe_url_is_parameterised_not_hardcoded():
+    """The shared config must not pin one deployment's service topology.
+
+    The root compose probes ``backend:8000`` and the production compose probes
+    ``modulo:80`` (the all-in-one image puts uvicorn behind nginx on port 80);
+    a hardcoded URL would leave exactly one of them probing nothing.
+    """
+    raw = _CONFIG_PATH.read_text(encoding="utf-8")
+    url_lines = [line.strip() for line in raw.splitlines() if line.strip().startswith("url:")]
+
+    assert url_lines == ["url: ${WATCHDOG_PROBE_URL}"]
+
+
+def test_watchdog_image_bakes_the_default_probe_url():
+    """An unset ``${WATCHDOG_PROBE_URL}`` panics the container (no default
+    syntax in Gatus), so the image ENV is what keeps a bare ``docker run`` and
+    the root compose working."""
+    dockerfile = _DOCKERFILE_PATH.read_text(encoding="utf-8")
+    assert f"WATCHDOG_PROBE_URL={_IMAGE_DEFAULT_PROBE_URL}" in dockerfile
+
+
+def test_watchdog_prod_compose_wiring_matches_the_root_service():
+    """The production compose carries the same watchdog, reusing deploy/watchdog/.
+
+    Same six SMTP variables, enabled by default (no profile), no ``depends_on``
+    (it reports the app being unhealthy), and the prod-specific probe target.
+    """
+    compose = yaml.safe_load(_PROD_COMPOSE_PATH.read_text(encoding="utf-8"))
+    service = compose["services"]["watchdog"]
+
+    assert "profiles" not in service, "watchdog must be enabled by default"
+    assert "depends_on" not in service
+    assert service["restart"] == "unless-stopped"
+    assert service["build"] == "../watchdog", "must build the shared context, not a copy"
+    assert set(service["environment"]) == set(_SMTP_VARS) | {"WATCHDOG_PROBE_URL"}
+    assert service["environment"]["WATCHDOG_PROBE_URL"] == _PROD_PROBE_URL
+    assert any("../watchdog/config.yaml" in volume for volume in service["volumes"])
+    assert service["healthcheck"]["test"][0] == "CMD"
+
+
+def test_watchdog_prod_compose_healthcheck_keeps_the_root_start_period():
+    """The prod healthcheck probes every 5s, so it needs a start_period.
+
+    Without one, the probes fired while the dashboard is still starting count
+    against ``retries`` and a slow start shows a transient ``unhealthy``. The
+    root compose already sets ``start_period: 10s``; the prod service must not
+    drop it.
+    """
+    prod = yaml.safe_load(_PROD_COMPOSE_PATH.read_text(encoding="utf-8"))
+    root = yaml.safe_load(_COMPOSE_PATH.read_text(encoding="utf-8"))
+
+    prod_healthcheck = prod["services"]["watchdog"]["healthcheck"]
+    root_healthcheck = root["services"]["watchdog"]["healthcheck"]
+    assert prod_healthcheck.get("start_period") == root_healthcheck["start_period"]
+
+
+def test_watchdog_prod_compose_port_is_loopback_only():
+    compose = yaml.safe_load(_PROD_COMPOSE_PATH.read_text(encoding="utf-8"))
+    ports = compose["services"]["watchdog"]["ports"]
+
+    assert ports == ["127.0.0.1:8083:8080"]
 
 
 def test_watchdog_image_drops_root_in_the_final_stage():

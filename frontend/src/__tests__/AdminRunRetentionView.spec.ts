@@ -98,6 +98,29 @@ describe('AdminRunRetentionView', () => {
     expect(wrapper.text()).toContain('Alpha Pipeline')
   })
 
+  it('styles a rejected candidate with the neutral badge', async () => {
+    const withRejected = {
+      runs: [
+        { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeffffffff', created_at: '2026-08-01T00:00:00Z', status: 'rejected', pipeline_id: 'pipeline-1', thread_id: 'thread-1', estimated_bytes: 26214400 },
+      ],
+      total_count: 1,
+      total_estimated_bytes: 26214400,
+      terminal_total: 1,
+      terminal_estimated_bytes: 26214400,
+    }
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/pipelines') return { data: mockPipelines, error: undefined }
+      if (url === '/api/v1/admin/run-retention/candidates') return { data: withRejected, error: undefined }
+      return { data: null, error: undefined }
+    })
+
+    const wrapper = await mountView()
+    const badge = wrapper.findAll('span').find(s => s.text() === 'rejected')
+    expect(badge).toBeTruthy()
+    expect(badge!.classes()).toContain('bg-muted')
+    expect(badge!.classes()).toContain('text-muted-foreground')
+  })
+
   it('shows a warning that in-flight runs are never purged', async () => {
     const wrapper = await mountView()
     const warning = wrapper.find('[data-testid="admin-run-retention-warning"]')

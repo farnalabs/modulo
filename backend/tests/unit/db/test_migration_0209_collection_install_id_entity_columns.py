@@ -143,9 +143,8 @@ class TestNoAddColumnRegression:
                 assert "add column" not in low or _COLUMN not in low or "if not exists" in low, (
                     f"0209 must not add column {_COLUMN}: {sql}"
                 )
-                assert not (f"add column {_COLUMN}" in low or f"add column if not exists {_COLUMN}" in low), (
-                    f"0209 must not add column {_COLUMN}: {sql}"
-                )
+                assert f"add column {_COLUMN}" not in low, f"0209 must not add column {_COLUMN}: {sql}"
+                assert f"add column if not exists {_COLUMN}" not in low, f"0209 must not add column {_COLUMN}: {sql}"
             # 0207 already owns the column, so 0209 must not request op.add_column
             # for it on any dialect (this is the DuplicateColumn regression).
             assert not rec.added_columns, f"0209 must not add column {_COLUMN}: {rec.added_columns}"

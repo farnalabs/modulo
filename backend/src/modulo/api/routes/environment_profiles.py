@@ -22,13 +22,16 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.runtime_provider import (
     ProviderNotConfiguredError,
     RuntimeProvider,
     build_hub,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.db.bundled_runner_template import TEMPLATE_CONFIG_JSON
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
     get_environment_profile,
@@ -215,7 +218,13 @@ async def list_profiles(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("environment_profile_created", "environment_profile", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE)
 async def create_profile(
     req: ProfileCreate,
@@ -316,7 +325,12 @@ async def get_profile(
     return _to_response(profile)
 
 
-@router.put("/{profile_id}")
+@router.put(
+    "/{profile_id}",
+    dependencies=[
+        Depends(audited("environment_profile_updated", "environment_profile", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
 async def update_profile(
     profile_id: uuid.UUID,
@@ -373,7 +387,20 @@ async def update_profile(
     return _to_response(profile)
 
 
-@router.delete("/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "environment_profile_deleted",
+                "environment_profile",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 @handle_db_errors("environment_profiles.delete_profile")
 async def delete_profile(
     profile_id: uuid.UUID,
@@ -408,7 +435,12 @@ async def delete_profile(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ENVIRONMENT_PROFILE_NOT_FOUND)
 
 
-@router.post("/{profile_id}/restore")
+@router.post(
+    "/{profile_id}/restore",
+    dependencies=[
+        Depends(audited("environment_profile_restored", "environment_profile", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("environment_profiles.restore_profile")
 async def restore_profile(
     profile_id: uuid.UUID,
@@ -475,37 +507,24 @@ def _sse_event(event: str, detail: str) -> str:
 # Provider registry -> canonical egress tier.  The tier vocabulary is owned
 # by ``modulo.core.pipeline_engine.egress`` (``_TIER_ENFORCEMENT``); the
 # provider identity (``provider_id`` + ``provider_aliases``) is owned by the
-# runtime-provider classes.  Sourcing both means a new provider alias cannot
-# drift from the egress tier it maps to (FAR-1065 lesson).
-_PROVIDER_TIER_SOURCES: tuple[tuple[str, str, str], ...] = (
-    ("modulo.core.runtime_provider.e2b", "E2BRuntimeProvider", "e2b"),
-    ("modulo.core.runtime_provider.docker", "DockerRuntimeProvider", "docker"),
-    ("modulo.core.runtime_provider.local", "LocalRuntimeProvider", "local"),
-)
-
-
+# runtime-provider classes.  The mapping itself now lives ONCE in
+# ``modulo.core.runtime_provider.egress_tier_for_provider_type`` (FAR-1051),
+# so this route, the dispatch-route workspace-spec mapper and the sandbox
+# capability certification all resolve the SAME tier for a provider_type —
+# this wrapper keeps the route's local name for its existing callers/tests.
 def _egress_tier_for_provider_type(provider_type: str) -> str | None:
     """Return the canonical egress tier for a profile ``provider_type``.
 
-    Provider aliases are read from the runtime-provider classes themselves
-    (the single source of truth) rather than duplicated here — ``local_docker``
-    is a Docker alias (``DockerRuntimeProvider.provider_aliases``), NOT the
-    host-process local tier.  Returns ``None`` for an unrecognised provider
-    type; the caller then fails closed.
+    Thin delegation to :func:`modulo.core.runtime_provider.egress_tier_for_provider_type`
+    (the single source of truth). Provider aliases are read from the
+    runtime-provider classes themselves — ``local_docker`` is a Docker alias
+    (``DockerRuntimeProvider.provider_aliases``), NOT the host-process local
+    tier.  Returns ``None`` for an unrecognised provider type; the caller then
+    fails closed.
     """
-    normalized = (provider_type or "").strip().lower()
-    from importlib import import_module
+    from modulo.core.runtime_provider import egress_tier_for_provider_type
 
-    for module_name, class_name, tier in _PROVIDER_TIER_SOURCES:
-        try:
-            provider_cls = getattr(import_module(module_name), class_name)
-        except ImportError:
-            # Optional provider dependency not installed — skip; the provider
-            # cannot have been resolved for this profile anyway.
-            continue
-        if normalized in {provider_cls.provider_id, *provider_cls.provider_aliases}:
-            return tier
-    return None
+    return egress_tier_for_provider_type(provider_type)
 
 
 def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
@@ -560,7 +579,7 @@ def _build_workspace_spec(profile: EnvironmentProfile) -> Any:
         run_id=None,
         image_ref=profile.image_ref or "",
         capabilities=profile.capabilities_json or [],
-        timeout_seconds=cfg.get("timeout_seconds", 3600),
+        timeout_seconds=cfg.get("timeout_seconds", TEMPLATE_CONFIG_JSON["timeout_seconds"]),
         resource_limits=cfg,
         egress_policy=_spec_egress,
         persistence_policy=profile.persistence_policy,

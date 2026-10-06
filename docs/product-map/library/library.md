@@ -12,6 +12,7 @@ code:
 unit-tests:
   - backend/tests/unit/library_service/test_library_service.py
   - backend/tests/unit/api/test_library_collection.py
+  - backend/tests/unit/api/test_library_primitive_masking.py
   - backend/tests/unit/library_service/test_contribution_flow.py
   - backend/tests/unit/library_service/test_ratings.py
   - backend/tests/unit/library_service/test_composite_library.py
@@ -86,6 +87,21 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
       (`composites/composite_library.feature`, `LibraryPrimitiveCreate` /
       `LibraryPrimitiveUpdate` handling in `api/routes/library.py`,
       `test_library_routes.py`)
+- [x] Composite library-primitive credential masking (FAR-1380): the shared
+      `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator masks
+      credential-bearing node fields inside a **composite** primitive's `content_json`
+      on every read surface — library list/get/create/patch/delete/restore/adapt,
+      community contribute + contributions list + admin publish, community install and
+      the fixture contributions list — and the MCP `modulo://library/{type}/{slug}`
+      resource masks composite nodes before rendering; non-composite primitives pass
+      through byte-identical. The FAR-1374 sentinel rule applies on write:
+      `POST /api/v1/libraries`, `PATCH /api/v1/libraries/{id}` and
+      `POST /api/v1/libraries/community/contribute` resolve a submitted mask echo
+      against the stored sub-graph (`resolve_and_reject_mask_sentinels`) and refuse an
+      unmappable sentinel with 422 `COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL`, and a
+      masked-read → patch round-trip preserves the stored secret
+      (`backend/tests/unit/api/test_library_primitive_masking.py`,
+      `api/routes/library.py`, `api/mcp_server.py`)
 - [x] Library collections (FAR-760): a `library_collection` primitive can be created as a
       draft (201), its manifest pins updated while draft, and published (200) – invalid
       pins, duplicate pins, an empty manifest and more than `MAX_COLLECTION_PINS` are
@@ -125,6 +141,20 @@ Library collections (FAR-760) are authored at `/library/collections/new` and vie
   matching only.
 
 ## QA History
+
+- 2026-10-05: **Improve Architecture product-map walk** – tracked the FAR-1380
+  composite library-primitive credential-masking surface, which shipped in
+  "fix(FAR-1380): mask composite library primitive content on every read
+  surface" (#1196) but had no product-map home: neither this tracker nor the
+  manifest `feat-library` registry described the shared
+  `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator that
+  masks composite `content_json` nodes on every read surface, the MCP
+  `modulo://library/{type}/{slug}` mask, or the FAR-1374 sentinel-refusal rule
+  on the library write surfaces. Added the checked behaviour and the
+  `test_library_primitive_masking.py` unit citation, and removed the now-stale
+  `feat-pipelines` deferral that still claimed the library-primitive surface was
+  "excluded ... pending FAR-1380" (the top-level `docs/deployment-security.md`
+  §2.6 control statement is corrected in the same walk).
 
 - 2026-09-26: **Improve Architecture product-map walk** – closed the
   `workflows/import.feature` `@awaiting-implementation` gap: the five pinned

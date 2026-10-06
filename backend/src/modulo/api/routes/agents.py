@@ -20,7 +20,9 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.prompt_optimizer import OptimizationFailedError, PromptOptimizer
@@ -409,7 +411,11 @@ async def list_agents_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("agent_created", "agent", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("agents.create_agent_endpoint")
 async def create_agent_endpoint(
     req: AgentCreate,
@@ -524,7 +530,9 @@ async def get_agent_endpoint(
     return AgentResponse.model_validate(agent)
 
 
-@router.patch("/{agent_id}")
+@router.patch(
+    "/{agent_id}", dependencies=[Depends(audited("agent_updated", "agent", principal_dep=get_current_tenant_user))]
+)
 @handle_db_errors(_CODE_AGENTS_UPDATE_AGENT_ENDPOINT)
 async def update_agent_endpoint(
     agent_id: uuid.UUID,
@@ -791,7 +799,10 @@ async def optimize_prompt(
     )
 
 
-@router.post("/{agent_id}/prompts/{version}/apply")
+@router.post(
+    "/{agent_id}/prompts/{version}/apply",
+    dependencies=[Depends(audited("agent_prompt_applied", "agent", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("agents.apply_optimized_prompt")
 async def apply_optimized_prompt(
     agent_id: uuid.UUID,
@@ -946,7 +957,10 @@ async def get_prompt_version_endpoint(
     )
 
 
-@router.put("/{agent_id}/prompts/rollback/{version}")
+@router.put(
+    "/{agent_id}/prompts/rollback/{version}",
+    dependencies=[Depends(audited("agent_prompt_rolled_back", "agent", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("agents.rollback_prompt")
 async def rollback_prompt(
     agent_id: uuid.UUID,
@@ -1072,7 +1086,11 @@ async def diff_prompt_versions(
     return PromptDiffResponse(version_a=req.version_a, version_b=req.version_b, lines=diff_lines)
 
 
-@router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{agent_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(audited("agent_deleted", "agent", principal_dep=get_current_tenant_user, fail_closed=True))],
+)
 @handle_db_errors("agents.delete_agent_endpoint")
 async def delete_agent_endpoint(
     agent_id: uuid.UUID,
@@ -1184,7 +1202,10 @@ async def list_bindings_endpoint(
     return AgentBindingListResponse(items=[AgentBindingResponse.model_validate(b) for b in bindings])
 
 
-@router.put("/{agent_id}/bindings")
+@router.put(
+    "/{agent_id}/bindings",
+    dependencies=[Depends(audited("agent_bindings_replaced", "agent", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("agents.replace_bindings_endpoint")
 async def replace_bindings_endpoint(
     agent_id: uuid.UUID,
@@ -1276,6 +1297,11 @@ async def replace_bindings_endpoint(
 @router.delete(
     "/{agent_id}/bindings/{binding_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("agent_binding_deleted", "agent_binding", principal_dep=get_current_tenant_user, fail_closed=True)
+        )
+    ],
 )
 @handle_db_errors("agents.delete_binding_endpoint")
 async def delete_binding_endpoint(

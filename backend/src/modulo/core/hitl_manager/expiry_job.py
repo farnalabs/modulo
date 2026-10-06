@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR, short_id
+from modulo.core.cron_helpers import _bound_org
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -67,131 +68,148 @@ async def expire_stale_claims(
 
     now = datetime.now(UTC)
     for org_id in org_ids:
-        async with factory() as session, session.begin():
-            await set_rls_org(session, org_id)
+        # FAR-1501: bind this org for the whole per-org tick so the failures
+        # logged below (audit-event write, notification dispatch) are
+        # attributed by ErrorTrackingLogHandler instead of dropped as
+        # no_org_context. ``_bound_org`` resets in finally, so the next
+        # org's tick never inherits the previous org's context.
+        async with _bound_org(org_id):
+            await _expire_org_claims(factory, org_id, notifier, now, all_expired)
 
-            # Advisory lock — only one expiry writer per org at a time.
+    return all_expired
+
+
+async def _expire_org_claims(
+    factory: async_sessionmaker[AsyncSession],
+    org_id: uuid.UUID,
+    notifier: Any | None,
+    now: datetime,
+    all_expired: list[dict[str, Any]],
+) -> None:
+    """One organisation's claim-expiry pass (runs with that org bound)."""
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+
+        # Advisory lock — only one expiry writer per org at a time.
+        try:
+            lock_result = await session.execute(
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
+                {"key": _EXPIRY_LOCK_KEY},
+            )
+            if not lock_result.scalar_one():
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning("hitl.expiry_job.lock_unavailable org=%s", org_id)
+
+        # 1. SELECT stale claims before resetting so we capture claimed_by
+        #    and claim id for audit events.
+        stale = await session.execute(
+            select(
+                HitlClaim.id,
+                HitlClaim.run_id,
+                HitlClaim.review_id,
+                HitlClaim.account_id,
+            ).where(
+                HitlClaim.organisation_id == org_id,
+                HitlClaim.expires_at < now,
+                HitlClaim.account_id.is_not(None),
+                HitlClaim.decision.is_(None),
+            )
+        )
+        stale_rows = stale.all()
+        if not stale_rows:
+            return
+
+        # 2. Build the list of claim IDs to reset
+        claim_ids = [r.id for r in stale_rows]
+        expired = [
+            {
+                "claim_id": r.id,
+                "run_id": r.run_id,
+                "review_id": r.review_id,
+                "claimed_by": r.account_id,
+                "organisation_id": org_id,
+            }
+            for r in stale_rows
+        ]
+        all_expired.extend(expired)
+
+        # 3. Reset the stale claims — re-validate conditions to prevent a
+        #    race with a concurrent claim (TOCTOU from the SELECT above).
+        await session.execute(
+            update(HitlClaim)
+            .where(
+                HitlClaim.id.in_(claim_ids),
+                HitlClaim.account_id.is_not(None),
+                HitlClaim.expires_at < now,
+                HitlClaim.decision.is_(None),
+            )
+            .values(
+                account_id=None,
+                claimed_at=None,
+                claim_token=None,
+                expires_at=now,
+            )
+        )
+
+        # 4. Batch-reset affected runs back to awaiting_human
+        run_ids = list({entry["run_id"] for entry in expired})
+        await session.execute(
+            update(Run).where(Run.id.in_(run_ids), Run.status == "claimed").values(status="awaiting_human")
+        )
+
+        # 5. Log audit events for each expired claim. Use savepoints so a
+        #    single failed audit log does not abort the org's transaction.
+        for entry in expired:
             try:
-                lock_result = await session.execute(
-                    text("SELECT pg_try_advisory_xact_lock(:key)"),
-                    {"key": _EXPIRY_LOCK_KEY},
-                )
-                if not lock_result.scalar_one():
-                    continue
+                async with session.begin_nested():
+                    await append_audit_event(
+                        session,
+                        org_id=org_id,
+                        event_type="hitl.claim_expired",
+                        resource_type="hitl_claim",
+                        resource_id=entry["claim_id"],
+                        payload_json={
+                            "actor": SYSTEM_ACTOR,
+                            "summary": (
+                                f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired "
+                                f"(run {short_id(entry['run_id']) or 'unknown'}, "
+                                f"gate {entry['review_id']})"
+                            ),
+                            "pipeline_run_id": str(entry["run_id"]),
+                            "node_id": entry["review_id"],
+                            "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
+                        },
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
-                _log.warning("hitl.expiry_job.lock_unavailable org=%s", org_id)
+                _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
 
-            # 1. SELECT stale claims before resetting so we capture claimed_by
-            #    and claim id for audit events.
-            stale = await session.execute(
-                select(
-                    HitlClaim.id,
-                    HitlClaim.run_id,
-                    HitlClaim.review_id,
-                    HitlClaim.account_id,
-                ).where(
-                    HitlClaim.organisation_id == org_id,
-                    HitlClaim.expires_at < now,
-                    HitlClaim.account_id.is_not(None),
-                    HitlClaim.decision.is_(None),
+    # 6. Dispatch notifications outside the transaction (SAQ cron only — the
+    #    in-process ClaimExpiryJob is constructed without a notifier).
+    if notifier is not None:
+        for entry in expired:
+            try:
+                await notifier.dispatch_event(
+                    org_id=org_id,
+                    event_type="claim_expired",
+                    payload={
+                        "run_id": str(entry["run_id"]),
+                        "review_id": entry["review_id"],
+                        "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
+                    },
+                    run_id=str(entry["run_id"]),
                 )
-            )
-            stale_rows = stale.all()
-            if not stale_rows:
-                continue
-
-            # 2. Build the list of claim IDs to reset
-            claim_ids = [r.id for r in stale_rows]
-            expired = [
-                {
-                    "claim_id": r.id,
-                    "run_id": r.run_id,
-                    "review_id": r.review_id,
-                    "claimed_by": r.account_id,
-                    "organisation_id": org_id,
-                }
-                for r in stale_rows
-            ]
-            all_expired.extend(expired)
-
-            # 3. Reset the stale claims — re-validate conditions to prevent a
-            #    race with a concurrent claim (TOCTOU from the SELECT above).
-            await session.execute(
-                update(HitlClaim)
-                .where(
-                    HitlClaim.id.in_(claim_ids),
-                    HitlClaim.account_id.is_not(None),
-                    HitlClaim.expires_at < now,
-                    HitlClaim.decision.is_(None),
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.exception(
+                    "hitl.expiry_job.notification_failed",
+                    extra={"review_id": entry["review_id"], "run_id": str(entry["run_id"])},
                 )
-                .values(
-                    account_id=None,
-                    claimed_at=None,
-                    claim_token=None,
-                    expires_at=now,
-                )
-            )
-
-            # 4. Batch-reset affected runs back to awaiting_human
-            run_ids = list({entry["run_id"] for entry in expired})
-            await session.execute(
-                update(Run).where(Run.id.in_(run_ids), Run.status == "claimed").values(status="awaiting_human")
-            )
-
-            # 5. Log audit events for each expired claim. Use savepoints so a
-            #    single failed audit log does not abort the org's transaction.
-            for entry in expired:
-                try:
-                    async with session.begin_nested():
-                        await append_audit_event(
-                            session,
-                            org_id=org_id,
-                            event_type="hitl.claim_expired",
-                            resource_type="hitl_claim",
-                            resource_id=entry["claim_id"],
-                            payload_json={
-                                "actor": SYSTEM_ACTOR,
-                                "summary": (
-                                    f"HITL claim {short_id(entry['claim_id']) or 'unknown'} expired "
-                                    f"(run {short_id(entry['run_id']) or 'unknown'}, "
-                                    f"gate {entry['review_id']})"
-                                ),
-                                "pipeline_run_id": str(entry["run_id"]),
-                                "node_id": entry["review_id"],
-                                "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
-                            },
-                        )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("Failed to record claim_expired audit event for claim %s", entry["claim_id"])
-
-        # 6. Dispatch notifications outside the transaction (SAQ cron only — the
-        #    in-process ClaimExpiryJob is constructed without a notifier).
-        if notifier is not None:
-            for entry in expired:
-                try:
-                    await notifier.dispatch_event(
-                        org_id=org_id,
-                        event_type="claim_expired",
-                        payload={
-                            "run_id": str(entry["run_id"]),
-                            "review_id": entry["review_id"],
-                            "claimed_by": str(entry["claimed_by"]) if entry["claimed_by"] else None,
-                        },
-                        run_id=str(entry["run_id"]),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception(
-                        "hitl.expiry_job.notification_failed",
-                        extra={"review_id": entry["review_id"], "run_id": str(entry["run_id"])},
-                    )
-
-    return all_expired
 
 
 class ClaimExpiryJob:

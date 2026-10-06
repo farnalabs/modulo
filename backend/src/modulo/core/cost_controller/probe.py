@@ -84,6 +84,7 @@ PROBE_TERMINAL_STATUSES = (
     "router_no_match",
     "cost_ceiling_exceeded",
     "compensation_failed",
+    "rejected",
 )
 
 # Per-org statement/query timeout (one stalled org cannot block the cadence).
@@ -97,7 +98,7 @@ _SAMPLE_QUERY_EXPLAIN_TEMPLATE = (
     "FROM runs "
     "WHERE organisation_id = :org_id "
     "AND status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'cost_ceiling_exceeded', 'router_no_match') "
+    "'budget_exceeded', 'cost_ceiling_exceeded', 'router_no_match', 'rejected') "
     "AND cost_breakdown IS NOT NULL "
     "ORDER BY started_at DESC "
     "LIMIT 50"
@@ -433,15 +434,26 @@ async def run_probe(session_factory: Callable[[], Any]) -> dict[str, Any]:
     if not org_ids:
         return summary
 
+    # FAR-1501: lazy import — cron_helpers is a heavyweight module and this
+    # file is reached from the SAQ ``cost_probe`` system cron (org-less at
+    # job level).
+    from modulo.core.cron_helpers import _bound_org
+
     for org_id in org_ids:
-        try:
-            await _probe_org(session_factory, org_id)
-            summary["orgs_succeeded"] += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            summary["orgs_failed"] += 1
-            _log.exception("cost_probe.org_failed", extra={"org_id": str(org_id)})
+        # FAR-1501: bind THIS org for the whole per-org tick so
+        # ``cost_probe.org_failed`` is attributed by ErrorTrackingLogHandler
+        # instead of dropped as no_org_context. ``_bound_org`` resets in
+        # finally, so the org enumeration (org-less) and the next org's tick
+        # never inherit the binding.
+        async with _bound_org(org_id):
+            try:
+                await _probe_org(session_factory, org_id)
+                summary["orgs_succeeded"] += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                summary["orgs_failed"] += 1
+                _log.exception("cost_probe.org_failed", extra={"org_id": str(org_id)})
 
     if summary["orgs_succeeded"] > 0:
         set_probe_last_success_ts(time.time())

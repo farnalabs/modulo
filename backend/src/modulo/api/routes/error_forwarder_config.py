@@ -38,6 +38,7 @@ from modulo.api.models.error_forwarder_config import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.error_tracking.forwarders import BaseForwarder, get_forwarder
 from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.error_event import ErrorEvent
@@ -354,7 +355,11 @@ async def list_forwarders(
 
 @router.put(
     "/{forwarder_type}",
-    dependencies=[require_feature("error_forwarders"), Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("error_forwarder_configured", "error_forwarder", principal_dep=get_current_tenant_user)),
+        require_feature("error_forwarders"),
+        Depends(deny_break_glass_mint),
+    ],
 )
 async def configure_forwarder(
     forwarder_type: str,
@@ -420,7 +425,10 @@ async def configure_forwarder(
 
 @router.post(
     "/{forwarder_type}/test",
-    dependencies=[require_feature("error_forwarders")],
+    dependencies=[
+        Depends(audited("error_forwarder_tested", "error_forwarder", principal_dep=get_current_tenant_user)),
+        require_feature("error_forwarders"),
+    ],
 )
 async def test_forwarder(
     forwarder_type: str,
@@ -484,7 +492,16 @@ async def test_forwarder(
 @router.delete(
     "/{forwarder_type}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[require_feature("error_forwarders"), Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(
+            audited(
+                "error_forwarder_deleted", "error_forwarder", principal_dep=get_current_tenant_user, fail_closed=True
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        require_feature("error_forwarders"),
+        Depends(deny_break_glass_mint),
+    ],
 )
 async def delete_forwarder(
     forwarder_type: str,
@@ -541,7 +558,11 @@ async def delete_forwarder(
 
 @router.post(
     "/{forwarder_type}/restore",
-    dependencies=[require_feature("error_forwarders"), Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("error_forwarder_restored", "error_forwarder", principal_dep=get_current_tenant_user)),
+        require_feature("error_forwarders"),
+        Depends(deny_break_glass_mint),
+    ],
 )
 async def restore_forwarder(
     forwarder_type: str,

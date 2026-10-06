@@ -25,7 +25,9 @@ export default {
       "rejecting": "Rejecting...",
       "approved_banner": "Gate was approved. The pipeline has resumed.",
       "rejected_banner": "Gate was rejected. The run was routed to {target}.",
-      "rejected_banner_no_route": "Gate was rejected. The run continues along the normal path.",
+      "rejected_banner_no_route": "Gate was rejected. The rejection was recorded.",
+      "rejected_banner_terminate": "Gate was rejected. The run ended with status Rejected.",
+      "rejected_banner_proceed": "Gate was rejected. The run continues along the normal path (this gate is set to proceed on reject).",
       "claim_token_label": "Claim Token",
       "claimed_by_you": "You",
       "claim_failed": "Claim failed:",
@@ -38,7 +40,9 @@ export default {
       "gate_claimed_you_can_now_approve_or_reject": "Gate claimed. You can now approve or reject.",
       "gate_approved_pipeline_resuming": "Gate approved. Pipeline resuming.",
       "gate_rejected_pipeline_routed_to_reject_target": "Gate rejected. Pipeline routed to {target}.",
-      "gate_rejected_no_reject_route": "Gate rejected. The run continues along the normal path.",
+      "gate_rejected_no_reject_route": "Gate rejected. The rejection was recorded.",
+      "gate_rejected_run_ended": "Gate rejected. The run has ended with status Rejected.",
+      "gate_rejected_proceeding": "Gate rejected. The run continues along the normal path (on_reject: proceed).",
       "rejected_by_reviewer": "Rejected by reviewer",
       "edit_subject": "Edit subject",
       "save_and_approve": "Save & approve",
@@ -1367,6 +1371,8 @@ export default {
       "status_cost_ceiling_exceeded": "Cost Ceiling Exceeded",
       "status_router_no_match": "Router No Match",
       "status_compensation_failed": "Compensation Failed",
+      "status_rejected": "Rejected",
+      "status_superseded": "Superseded by a newer version",
       "trigger_manual": "Manual",
       "trigger_webhook": "Webhook",
       "trigger_cron": "Cron",
@@ -1737,8 +1743,6 @@ export default {
       "cost_so_far": "Cost so far",
       "tokens": "tokens",
       "hitl_review": "HITL Gate",
-      "queued_waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
-      "queued_starting_soon": "Queued — starting soon",
       "work_items": "Work items",
       "work_item_kind_github": "GitHub",
       "work_item_kind_github_pr": "PR",
@@ -2266,6 +2270,18 @@ export default {
       "active": "Active",
       "local_only": "Local Only",
       "create_mcp_api_key": "Create MCP API Key",
+      "grants_title": "Permissions",
+      "grants_restrict_label": "Restrict this key to specific permissions",
+      "grants_role_bundle_hint": "Off: the key gets every permission of its role (default).",
+      "grants_loading": "Loading available permissions...",
+      "grants_load_failed": "Could not load the permission list, so the key cannot be created yet.",
+      "grants_retry": "Retry",
+      "grants_restricted_hint": "On: the key can only do the permissions you tick below. A permission above the key's own role has no effect (the key gets the overlap of the ticked permissions and its role). Note: over MCP, all read-only tools are controlled by the single resource.read_only permission, not by the finer read permissions (those apply to the REST API).",
+      "grants_select_at_least_one": "Select at least one permission, or turn restriction off.",
+      "grants_group_pipeline": "Pipelines",
+      "grants_group_run": "Runs",
+      "grants_group_hitl": "Human review",
+      "grants_group_org": "Organisation",
       "generate_new_api_key_description": "Generate a new API key for MCP client authentication",
       "no_api_keys_created_yet": "No API keys created yet.",
       "revoked": "Revoked",
@@ -3463,10 +3479,7 @@ export default {
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
       "name": "Name",
-      "description": "Description",
-      "zoom_in": "Zoom in",
-      "zoom_out": "Zoom out",
-      "fit_view": "Fit view"
+      "description": "Description"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
@@ -3549,9 +3562,15 @@ export default {
     }
   },
   "components": {
+    "FlowControls": {
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out",
+      "fit_view": "Fit view"
+    },
     "RunnerTier": {
       "bundled_docker": "Bundled Runner (Docker)",
       "external_e2b": "External Runner (E2B)",
+      "external_kubernetes": "External Runner (Kubernetes)",
       "local": "Local"
     },
     "HitlBriefing": {
@@ -3572,7 +3591,9 @@ export default {
       "hide_details": "Hide details",
       "subject": "What you are deciding",
       "consequence_approve": "Approve → continues to {target}",
-      "consequence_reject": "Reject → routes to {target}"
+      "consequence_reject": "Reject → routes to {target}",
+      "consequence_reject_terminate": "Reject → ends the run (status Rejected)",
+      "consequence_reject_proceed": "Reject → the run continues anyway (set to proceed on reject)"
     },
     "Sparkline": {
       "no_data": "No data",
@@ -4196,6 +4217,10 @@ export default {
       "minutes_seconds_ago": "{m}m {s}s ago",
       "hours_minutes_ago": "{h}h {m}m ago",
       "days_hours_ago": "{d}d {h}h ago"
+    },
+    "queue": {
+      "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
+      "starting_soon": "Queued — starting soon"
     }
   },
   "nav": {
@@ -4370,7 +4395,9 @@ export default {
     "config": { "error": "A configuration error prevented the run from starting.", "invalid": "The configuration is invalid and must be corrected." },
     "hitl": {
       "review_expired": "The run sat unanswered at a human review gate past the review window and was cancelled.",
-      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically."
+      "review_missing": "The run was waiting for a human review, but its review gate was never created, so the run was cancelled automatically.",
+      "rejected": "A reviewer rejected the run at a human review gate that has no reject route, so the run ended.",
+      "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it."
     }
   },
   "statusDescriptions": {
@@ -4383,6 +4410,8 @@ export default {
     "router_no_match": "A router node had no matching rule and no default.",
     "cost_ceiling_exceeded": "The organisation-wide spend ceiling was exceeded.",
     "compensation_failed": "A watched node and its compensation path both failed.",
+    "rejected": "A reviewer rejected the run at a human review gate with no reject route, so the run ended.",
+    "superseded": "A newer version of the work item replaced this run's waiting review, so the run ended. No reviewer rejected it.",
     "pending": "The run is queued and waiting to start.",
     "running": "The run is currently executing.",
     "awaiting_human": "The run is waiting for a human decision at a HITL gate.",

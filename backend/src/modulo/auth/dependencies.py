@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.auth.jwt import (
     CLIENT_KIND_PROGRAMMATIC,
     AuthenticatedPrincipal,
@@ -226,7 +227,9 @@ async def get_current_tenant_user_or_api_key(
         from modulo.auth.api_key import (
             _MK_PREFIX,
             _PREFIX_LEN,
+            ApiKeyGrantsUnavailableError,
             ApiKeyInvalidError,
+            resolve_key_grants,
             validate_api_key,
         )
         from modulo.db.models.api_key import OrgApiKey
@@ -282,9 +285,27 @@ async def get_current_tenant_user_or_api_key(
                     str(key.account_id),
                     str(key.organisation_id),
                 )
+            # FAR-1477: tri-state grant-set (None = legacy role bundle, no
+            # flag read). A grant-bearing key with the flag OFF is denied.
+            # Resolved AFTER the validation session closes: for grant-bearing
+            # keys the flag read opens its own pooled session, and holding two
+            # connections per request risks pool-exhaustion deadlock.
+            key_grants = await resolve_key_grants(key)
         except ApiKeyInvalidError:
             raise InvalidToken from None
-        except SQLAlchemyError:
+        except ApiKeyGrantsUnavailableError:
+            # Grant flag unreadable: fail closed with 503 (retryable), not 401.
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="API key grants temporarily unavailable.",
+            ) from None
+        except SQLAlchemyError as exc:
+            # FAR-1481: session-contract violations (InvalidRequestError and
+            # subclasses, incl. MissingGreenlet) are local programming bugs,
+            # not a DB outage — the shared classifier answers 500 for them and
+            # RETURNS for genuine transient errors so the 503 below is
+            # unchanged.
+            raise_session_contract_error(exc, "dependencies.get_current_tenant_user_or_api_key")
             _log.warning("auth.api_key_verify_failed", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -333,6 +354,7 @@ async def get_current_tenant_user_or_api_key(
                 # the human_only enforcement's ``client_kind != browser`` rule
                 # subsumes the via_api_key check through this stamp.
                 client_kind=CLIENT_KIND_PROGRAMMATIC,
+                key_grants=key_grants,
             ),
         )
 
@@ -376,6 +398,9 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
 
         Failure modes:
     - missing/deactivated membership -> raise 401 (removed users lose access immediately)
+    - session-contract violation (InvalidRequestError subclass) -> raise 500 via
+      the shared raise_session_contract_error guard (FAR-1481: a local
+      programming bug must not be reported as an outage)
     - SQLAlchemyError during the read -> raise 503 (fail-closed; a DB blip must
       not restore a removed user's stale role - ADR 047 review decision)
     - any other exception -> propagate (500)
@@ -428,7 +453,12 @@ async def _verify_identity(principal: AuthenticatedPrincipal) -> str | None:
             )
     except HTTPException:
         raise
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        # FAR-1481: session-contract violations (InvalidRequestError subclasses)
+        # are local programming bugs — the shared classifier answers 500 for
+        # them and RETURNS for genuine transient errors, so the fail-closed 503
+        # below keeps its exact behaviour for real DB faults.
+        raise_session_contract_error(exc, "dependencies._verify_identity")
         _log.warning("permission.live_role_read_failed", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

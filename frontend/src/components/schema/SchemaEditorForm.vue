@@ -44,9 +44,7 @@
         </Button>
       </div>
 
-      <div v-if="fields.length === 0" class="py-4 text-center text-sm text-muted-foreground">
-        {{ $t('views.SchemaEditorView.no_fields') }}
-      </div>
+      <EmptyState v-if="fields.length === 0" :title="$t('views.SchemaEditorView.no_fields')" />
 
       <div class="space-y-3">
         <SchemaFieldEditor
@@ -68,6 +66,7 @@
 
 <script setup lang="ts">
 import Button from 'primevue/button'
+import EmptyState from '../shared/EmptyState.vue'
 import { createField, type SchemaField } from '../../utils/schema-definition'
 import SchemaFieldEditor from './SchemaFieldEditor.vue'
 

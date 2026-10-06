@@ -8,6 +8,14 @@ filters.
 
 FAR-1201 follow-up: the engine-less skip — ``docker_endpoint_skip_reason``
 and the sweep's early return when NO Docker endpoint is resolvable.
+
+FAR-1051: the Kubernetes workspace source — the provider-neutral sweep
+drives a second source so ``modulo-ws-*`` pods are reclaimed too, each tier
+keeping its own applicability check (``kubernetes_endpoint_skip_reason``).
+
+FAR-1051 (qa-iterate): the dispatch-attribution test — the spec ``node_runner``
+actually builds carries ``modulo.run.id``, so the sweep's run-id filter can
+match a pod that outlives its dispatch.
 """
 
 import logging
@@ -27,6 +35,7 @@ from modulo.core.bundled_runner.runner_reconciler import (
     docker_endpoint_skip_reason,
     reconcile_runner_workspaces,
 )
+from modulo.core.runtime_provider.k8s import WorkspacePodRef
 
 
 @pytest.fixture(autouse=True)
@@ -223,7 +232,7 @@ async def test_container_list_failure_aborts_before_cross_reference(monkeypatch:
     monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
     monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
 
-    with pytest.raises(ReconcilerSweepError, match="listing containers"):
+    with pytest.raises(ReconcilerSweepError, match="listing docker workspaces"):
         await reconcile_runner_workspaces(_engine_with_active_runs([]))
 
     source.destroy_by_container_id.assert_not_awaited()
@@ -550,3 +559,383 @@ def test_default_socket_present_falls_back_to_windows_pipe(monkeypatch: pytest.M
     monkeypatch.setattr(runner_reconciler, "_windows_docker_engine_pipe_exists", lambda: False)
 
     assert runner_reconciler._default_docker_socket_present() is False
+
+
+# ---------------------------------------------------------------------------
+# FAR-1051: the Kubernetes workspace source (provider-neutral sweep)
+# ---------------------------------------------------------------------------
+
+
+def _pod_ref(ref: str, run_id: str | None, age_s: float) -> WorkspacePodRef:
+    labels = {} if run_id is None else {"modulo.run.id": run_id}
+    return WorkspacePodRef(ref=ref, labels=labels, created_age_s=age_s)
+
+
+async def test_kubernetes_source_maps_pods_and_skips_those_without_a_run_id() -> None:
+    """The pod listing is translated into the sweep's label vocabulary: a pod
+    carrying ``modulo.run.id`` becomes a reclaim candidate, one without it is
+    skipped (no cross-reference to fail-safe on), and the creation age is
+    passed through untouched so the grace/max-lifetime rules apply as on Docker."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.list_workspace_pods = AsyncMock(
+        return_value=[
+            _pod_ref("modulo-ws-aaa", "run-1", 42.0),
+            _pod_ref("modulo-ws-bbb", None, 7.0),
+        ]
+    )
+    source._provider = provider
+
+    listed = await source.list_labelled_workspaces()
+
+    assert [entry.id for entry in listed] == ["modulo-ws-aaa"]
+    assert listed[0].run_id == "run-1"
+    assert listed[0].created_age_s == 42.0
+
+
+async def test_kubernetes_source_destroys_by_pod_name_and_closes_the_provider() -> None:
+    """Reclamation goes through the provider's ref-only destroy primitive
+    (label-guarded, idempotent) and the source disposes the provider it built."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.destroy_workspace_by_ref = AsyncMock(return_value=True)
+    provider.close = AsyncMock()
+    source._provider = provider
+
+    await source.destroy_by_container_id("modulo-ws-aaa")
+    await source.close()
+
+    provider.destroy_workspace_by_ref.assert_awaited_once_with("modulo-ws-aaa")
+    provider.close.assert_awaited_once()
+    assert source._provider is None
+
+
+async def test_kubernetes_source_raises_when_the_destroy_is_unconfirmed() -> None:
+    """A pod delete the provider cannot confirm (``destroy_workspace_by_ref``
+    returns ``False``) is NOT swallowed: the source raises so the sweep aborts
+    with partial counts and SAQ retries — parity with the Docker source, whose
+    delete raises on failure."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.destroy_workspace_by_ref = AsyncMock(return_value=False)
+    source._provider = provider
+
+    with pytest.raises(RuntimeError, match="could not be confirmed destroyed"):
+        await source.destroy_by_container_id("modulo-ws-aaa")
+
+
+async def test_sweep_wraps_a_destroy_failure_with_partial_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A destroy failure aborts the sweep as ``ReconcilerSweepError`` carrying
+    the partial counts (so SAQ retries and /healthz sees it) and the failed
+    workspace is NEVER counted as destroyed — on every tier, Docker included.
+    The orphan after the failure is left for the next sweep."""
+    source = _fake_source(
+        [
+            _container("gone-1", 9999.0, "c-1"),
+            _container("gone-2", 9999.0, "c-2"),
+            _container("gone-3", 9999.0, "c-3"),
+        ]
+    )
+
+    async def _destroy(cid: str) -> None:
+        if cid == "c-2":
+            raise RuntimeError("docker rm failed")
+
+    source.destroy_by_container_id = AsyncMock(side_effect=_destroy)
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    with pytest.raises(ReconcilerSweepError) as exc_info:
+        await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert exc_info.value.scanned == 2
+    assert exc_info.value.destroyed == 1
+    assert "destroying docker workspace c-2" in str(exc_info.value)
+
+
+async def test_kubernetes_skip_reason_names_the_registration_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unregistered provider is an EXPLICIT skip, never a silent one: the
+    reason names the env var that would register it."""
+    monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
+
+    reason = await runner_reconciler.kubernetes_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "MODULO_KUBERNETES_ENABLED" in reason
+
+
+async def test_kubernetes_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The applicability check delegates to the registration matrix: with the
+    opt-in flag set (and the SDK installed) the sweep's Kubernetes half runs."""
+    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+
+    assert await runner_reconciler.kubernetes_endpoint_skip_reason() is None
+
+
+async def test_sweep_reclaims_orphans_through_the_kubernetes_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both tiers contribute to ONE sweep: the Kubernetes source's orphan is
+    destroyed under the same grace/active-run rules as a Docker container."""
+    k8s_source = _fake_source([_container("gone-run", 9999.0, "pod-1")])
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: _fake_source([]))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 1, "orphans_destroyed": 1}
+    k8s_source.destroy_by_container_id.assert_has_awaits([(("pod-1",), {})])
+    k8s_source.close.assert_awaited_once()
+
+
+async def test_source_close_failure_does_not_skip_the_other_tier(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FAR-1051 review: a close() failure on the FIRST tier must not skip the
+    second tier's close — teardown is per-tier best-effort, logged not silent."""
+    docker_source = _fake_source([])
+    docker_source.close = AsyncMock(side_effect=RuntimeError("docker close boom"))
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    with caplog.at_level(logging.ERROR):
+        result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0}
+    k8s_source.close.assert_awaited_once()
+    assert "source_close_failed" in caplog.text
+
+
+async def test_source_close_failure_does_not_mask_the_in_flight_sweep_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close() failure during teardown must not replace the sweep's own
+    exception — the real abort is what surfaces."""
+    docker_source = _fake_source([])
+    docker_source.close = AsyncMock(side_effect=RuntimeError("docker close boom"))
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    with pytest.raises(ReconcilerSweepError, match="cross-reference"):
+        await reconcile_runner_workspaces(_engine_with_active_runs([], fail=True))
+
+    k8s_source.close.assert_awaited_once()
+
+
+async def test_sweep_skips_the_kubernetes_source_when_the_provider_is_unregistered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unregistered tier is skipped WITH a logged reason while the
+    applicable tier keeps sweeping — the skip is per-tier, never all-or-nothing."""
+    k8s_factory = MagicMock(
+        side_effect=AssertionError("_KubernetesWorkspaceSource must not be built when the provider is unregistered")
+    )
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", k8s_factory)
+    monkeypatch.setattr(
+        runner_reconciler,
+        "kubernetes_endpoint_skip_reason",
+        AsyncMock(return_value="the Kubernetes runtime provider is not registered"),
+    )
+    docker_source = _fake_source([_container("gone-run", 9999.0, "c-9")])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 1, "orphans_destroyed": 0}
+    k8s_factory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1051 (qa-iterate F3): the dispatch stamps the run id the sweep keys on
+# ---------------------------------------------------------------------------
+
+
+async def test_node_runner_dispatch_spec_carries_the_run_id_the_reconciler_keys_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dispatched workspace must be reclaimable: the spec the REAL
+    ``node_runner`` dispatch builds carries ``modulo.run.id`` (plus org/node)
+    in ``workspace_metadata``, and the pod labels derived from it satisfy the
+    reconciler's own run-id filter.
+
+    Without the stamp the Kubernetes pod carries no ``modulo.run.id`` label,
+    the source skips it (no run to cross-reference) and a pod outliving its
+    dispatch can never be reclaimed — driving the dispatch here rather than
+    hand-building a spec is what proves the CALL SITE stamps it.
+    """
+    from modulo.core.pipeline_engine.node_runner import make_sandbox_agent_fn
+    from tests.unit.pipeline_engine.conftest import FakeFileIOProvider, install_fake_dispatch
+
+    run_id = str(uuid.uuid4())
+    org_id = str(uuid.uuid4())
+    node_id = "n1"
+
+    # Route the dispatch's provider / file-IO / log-tail seams to fakes so the
+    # real spec build runs with no live sandbox, cluster or network.
+    file_io = FakeFileIOProvider(files={"/home/user/output.json": b'{"status": "completed", "summary": "done"}'})
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_file_io_provider",
+        AsyncMock(return_value=file_io),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner._build_log_tail_provider",
+        AsyncMock(return_value=MagicMock(read_log_tail=AsyncMock(return_value=b"f3-tail"))),
+    )
+    dispatch = install_fake_dispatch(monkeypatch, ref="sbx-f3", exit_code=0)
+
+    fn = make_sandbox_agent_fn(
+        {
+            "id": node_id,
+            "agent_prompt": "Do the thing",
+            "agent_commands": ["echo hi"],
+            "timeout_seconds": 30,
+        }
+    )
+    await fn(
+        {
+            "run_context": {"input": {}},
+            "_run_id": run_id,
+            "_pipeline_id": "pipe-f3",
+            "_org_id": org_id,
+        }
+    )
+
+    spec = dispatch.created_spec
+    assert spec is not None
+    assert spec.workspace_metadata[runner_reconciler._RUN_ID_LABEL] == run_id
+    assert spec.workspace_metadata["modulo.org.id"] == org_id
+    assert spec.workspace_metadata["modulo.node.id"] == node_id
+
+    # ...and a pod labelled from that spec passes the reconciler's OWN filter:
+    # map the metadata through the real Kubernetes provider, then run the
+    # source's listing over it.
+    from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+
+    labels, _annotations = KubernetesRuntimeProvider()._build_metadata(spec)
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    k8s_provider = MagicMock()
+    k8s_provider.list_workspace_pods = AsyncMock(
+        return_value=[WorkspacePodRef(ref="modulo-ws-f3", labels=labels, created_age_s=42.0)]
+    )
+    source._provider = k8s_provider
+
+    listed = await source.list_labelled_workspaces()
+
+    assert [entry.run_id for entry in listed] == [run_id]
+    assert listed[0].created_age_s == 42.0
+
+
+# ---------------------------------------------------------------------------
+# Branch Fixer coverage: lazy Kubernetes source build + per-tier skip logging
+# ---------------------------------------------------------------------------
+
+
+async def test_kubernetes_source_builds_its_provider_lazily_via_importlib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_get_provider`` imports the concrete provider module on first use and
+    caches the instance (the concrete import stays inside the provider package
+    boundary — it is never imported at this module's scope)."""
+    source = runner_reconciler._KubernetesWorkspaceSource()
+    provider = MagicMock()
+    provider.list_workspace_pods = AsyncMock(return_value=[])
+    fake_module = SimpleNamespace(KubernetesRuntimeProvider=MagicMock(return_value=provider))
+    monkeypatch.setattr("importlib.import_module", lambda name: fake_module)
+
+    listed = await source.list_labelled_workspaces()
+    await source.list_labelled_workspaces()  # cached — no second build
+
+    assert listed == []
+    assert source._provider is provider
+    fake_module.KubernetesRuntimeProvider.assert_called_once()
+
+
+async def test_kubernetes_source_close_without_a_provider_is_a_noop() -> None:
+    source = runner_reconciler._KubernetesWorkspaceSource()
+
+    await source.close()
+
+    assert source._provider is None
+
+
+async def test_workspace_source_protocol_stub_bodies_are_executable() -> None:
+    """The structural boundary the sweep drives is implementable without a
+    shared base class; its declared method bodies are callable no-ops."""
+
+    class _MinimalSource(runner_reconciler._WorkspaceSource):
+        pass
+
+    source = _MinimalSource()
+
+    assert await source.list_labelled_workspaces() is None
+    assert await source.destroy_by_container_id("ref") is None
+    assert await source.close() is None
+
+
+async def test_kubernetes_skip_reason_reports_a_hub_build_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hub-build failure is an explicit, named skip reason — never a crash."""
+    monkeypatch.setattr(
+        "modulo.core.runtime_provider.build_hub",
+        MagicMock(side_effect=RuntimeError("hub down")),
+    )
+
+    reason = await runner_reconciler.kubernetes_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "hub could not be built" in reason
+
+
+async def test_sweep_logs_distinct_kubernetes_skip_when_docker_also_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When BOTH tiers are inapplicable, the historical Docker skip envelope is
+    returned and the distinct Kubernetes reason is logged alongside it."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "docker-reason"}
+
+
+async def test_sweep_with_identical_skip_reasons_does_not_log_the_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both tiers report the SAME reason, the Kubernetes reason is not
+    logged a second time (the Docker envelope already carries it)."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "same-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="same-reason"))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "same-reason"}
+
+
+async def test_sweep_runs_kubernetes_tier_while_logging_the_docker_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Docker-inapplicable / Kubernetes-applicable deployment sweeps ONLY the
+    Kubernetes source — the Docker skip is logged, the tier is not built."""
+    docker_factory = MagicMock(side_effect=AssertionError("docker source must not be built"))
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", docker_factory)
+    k8s_source = _fake_source([])
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "no docker endpoint")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0}
+    docker_factory.assert_not_called()
+    k8s_source.close.assert_awaited_once()

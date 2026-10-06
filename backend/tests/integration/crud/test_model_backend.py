@@ -6,11 +6,13 @@ RLS is set to test_org; all ORM changes are rolled back after each test.
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.auth.jwt import create_access_token
@@ -481,6 +483,35 @@ async def test_delete_model_backend_allowed_when_snapshot_runs_terminal_real_end
     headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
     resp = await model_backend_client.delete(f"/api/v1/model-backends/{backend_id}", headers=headers)
     assert resp.status_code == 204, resp.text
+
+
+async def test_delete_model_backend_fails_closed_when_audit_append_fails(
+    db_engine: AsyncEngine,
+    model_backend_client: AsyncClient,
+) -> None:
+    """``fail_closed=True``: an audit-append failure fails the destroy end-to-end.
+
+    The model-backend DELETE route annotates ``audited(..., fail_closed=True)``,
+    so a failed append must NOT be swallowed (unlike the route's own
+    ``append_audit_event_isolated`` PRD event, which is deliberately fail-open).
+    This is the environmental counterpart to the unit-suite ``audited`` doubles:
+    the real route, the real Postgres engine and the real ``audit_session`` are
+    exercised; only the chained append itself is made to fail — the same seam
+    the shared-helper unit test patches. A regression that swallowed the
+    fail-closed raise would let this test pass silently.
+    """
+    org_id, user_id = await _seed_org_and_admin(db_engine)
+    _, backend_id = await _seed_backends(db_engine, org_id, user_id)
+
+    headers = {"Authorization": f"Bearer {_token(org_id, user_id)}"}
+    with (
+        patch(
+            "modulo.core.audit_coverage.append_audit_event",
+            new=AsyncMock(side_effect=SQLAlchemyError("audit store unavailable")),
+        ),
+        pytest.raises(SQLAlchemyError, match="audit store unavailable"),
+    ):
+        await model_backend_client.delete(f"/api/v1/model-backends/{backend_id}", headers=headers)
 
 
 async def test_update_model_backend_self_reference_rejected_real_endpoint(

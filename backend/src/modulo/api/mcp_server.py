@@ -68,10 +68,14 @@ from modulo.api.middleware.sensitive_mask import (
     merge_masked_config,
     merge_masked_graph_nodes,
 )
+from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
+    ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
+    api_key_grants_enabled,
+    resolve_key_grants,
     validate_api_key,
 )
 from modulo.auth.api_key import (
@@ -90,7 +94,7 @@ from modulo.auth.oauth import (
     decode_oauth_access_token,
     scopes_required_role,
 )
-from modulo.auth.permissions import _clamp_role, set_authz_enforce
+from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY, org_role_level
 from modulo.core.analytics.builder import (
     AnalyticsDimension,
@@ -383,6 +387,9 @@ _ctx_team_id: contextvars.ContextVar[uuid.UUID | None] = contextvars.ContextVar(
 # 'user' (a user-scoped API key, a regular JWT session, or an OAuth token),
 # None (unset — the caller-scope leg of the tool-scope check fails closed).
 _ctx_key_scope: contextvars.ContextVar[str | None] = contextvars.ContextVar("mcp_key_scope", default=None)
+# FAR-1477: the request's API-key grant-set. ``None`` = no grant-set (JWT/OAuth
+# sessions and legacy role-bundle keys); an empty frozenset is explicit deny-all.
+_ctx_key_grants: contextvars.ContextVar[frozenset[str] | None] = contextvars.ContextVar("mcp_key_grants", default=None)
 # FAR-620: per-request resolution of the ``user_scoped_mcp_keys`` org flag.
 # Read once per request by the auth middleware (no caching across requests);
 # fail-closed default False so a read failure never broadens access.
@@ -507,6 +514,7 @@ def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
         allowed_tools=_ctx_node_allowed_tools_val(),
         key_scope=_ctx_key_scope.get(None),
         auth_type=_ctx_auth_type.get(None),
+        grants=_ctx_key_grants.get(None),
     )
 
 
@@ -523,13 +531,16 @@ def _ctx_may_manage_cost() -> bool:
     (``assert_org_role``). A missing/unknown role raises ``PermissionDenied``
     and resolves to False, never True.
     """
-    from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+    from modulo.auth.permissions import PermissionDenied, assert_org_role, grants_and_role, resolve_required
 
-    try:
-        assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
-    except PermissionDenied:
-        return False
-    return True
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(_ctx_role_val(), resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(_ctx_key_grants.get(None), _CODE_COST_MANAGE, _role_ok)
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
@@ -993,6 +1004,12 @@ async def _validate_api_key_live(token: str, org_id: uuid.UUID) -> bool:
             degraded=True,
             key_id=key.id,
         )
+    # FAR-1477: re-run the grant resolver on every re-validation so flag-OFF
+    # (or a malformed value) kills a grant-bearing key on a long-lived
+    # connection, and the cached grant-set is refreshed. ApiKeyInvalidError /
+    # ApiKeyGrantsUnavailableError propagate -> validate_current_auth denies.
+    key_grants = await resolve_key_grants(key)
+    _ctx_key_grants.set(key_grants)
     _ctx_role.set(clamped)
     _ctx_team_id.set(key.team_id)
     return True
@@ -1097,6 +1114,11 @@ async def validate_current_auth() -> bool:
             return await _validate_principal_live(token, principal)
         return False
     except (ApiKeyInvalidError, JWTError):
+        return False
+    except ApiKeyGrantsUnavailableError:
+        # FAR-1477: grant flag unreadable -> retryable fail-closed denial; a
+        # transient read failure is expected noise, not a traceback.
+        _log.warning("mcp.validate_current_auth_grants_unavailable")
         return False
     except Exception:
         _log.exception("validate_current_auth failed")
@@ -1286,6 +1308,12 @@ async def _authenticate_api_key(
                     degraded=True,
                     key_id=key.id,
                 )
+        # FAR-1477: grant-set (None = legacy, no flag read; flag OFF on a
+        # grant-bearing key raises ApiKeyInvalidError -> 401). Resolved AFTER
+        # the validation session closes: the flag read opens its own pooled
+        # session for grant-bearing keys, and nesting two sessions per request
+        # risks pool-exhaustion deadlock.
+        key_grants = await resolve_key_grants(key)
         org_id = key.organisation_id
         # FAR-620: the ``user_scoped_mcp_keys`` flag is the kill switch for
         # user-scoped keys — disabling it DENIES the key at auth (401),
@@ -1315,6 +1343,7 @@ async def _authenticate_api_key(
         # caller-scope leg. The isinstance guard keeps test doubles (MagicMock
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
+        _ctx_key_grants.set(key_grants)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1335,6 +1364,14 @@ async def _authenticate_api_key(
         return False, Response(
             '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
             status_code=401,
+            media_type=_CT_APPLICATION_JSON,
+        )
+    except ApiKeyGrantsUnavailableError:
+        # FAR-1477: grant flag unreadable -> fail closed as 503 (retryable), not 401.
+        _log.warning("mcp.api_key_grants_unavailable")
+        return False, Response(
+            '{"error":"service_unavailable","detail":"API key grants temporarily unavailable"}',
+            status_code=503,
             media_type=_CT_APPLICATION_JSON,
         )
     except (SQLAlchemyError, TimeoutError) as exc:
@@ -1453,6 +1490,7 @@ async def _authenticate_oauth_jwt(
         # 'user' (identity-bound, eligible for caller-scoped tools).
         _ctx_auth_type.set("jwt")
         _ctx_key_scope.set("user")
+        _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
         request.scope["auth_principal"] = {
             "type": "user",
@@ -1584,6 +1622,7 @@ async def _finalize_oauth_principal(
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
+    _ctx_key_grants.set(None)
     _ctx_team_id.set(None)  # user tokens carry no team boundary
     request.scope["auth_principal"] = {
         "type": "user",
@@ -1702,6 +1741,37 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
     return {"error": "auth_expired", "detail": msg}
 
 
+def _tool_session_contract_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any] | None:
+    """MCP payload form of the shared session-contract classifier (FAR-1482).
+
+    ``raise_session_contract_error`` is the ONE classifier for "is this a
+    client-side session-contract violation?"; its documented contract is to
+    RAISE ``HTTPException(500, MSG_SESSION_CONTRACT)`` for one and to RETURN
+    for every other exception. MCP tool results carry no status code — the
+    payload IS the response — so this adapter reads that verdict off the raise
+    and re-emits the classifier's own message as this surface's internal-error
+    payload::
+
+        {"error": "internal_error", "detail": MSG_SESSION_CONTRACT}
+
+    One classifier, two renderings: REST answers 500, MCP answers an
+    ``internal_error`` payload carrying the same ``MSG_SESSION_CONTRACT`` text,
+    so a caller reading either surface gets the same verdict. The detail is
+    taken from the exception the classifier raised rather than restated here,
+    so the two surfaces cannot drift apart.
+
+    Returns ``None`` for any exception the classifier does not flag, so the
+    caller's own database-unavailable handling runs unchanged — a genuine
+    transient ``OperationalError`` / ``PendingRollbackError`` still reports
+    ``database_unavailable``.
+    """
+    try:
+        raise_session_contract_error(exc, log_key)
+    except FastAPIHTTPException as http_exc:
+        return _tool_error(str(http_exc.detail))
+    return None
+
+
 def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
     """Parse a UUID tool param, returning ``(value, None)`` or ``(None, error_dict)``."""
     try:
@@ -1763,6 +1833,11 @@ def _tool_db_shell(
     def decorator(
         fn: Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]],
     ) -> Callable[_TOOL_SHELL_P, Awaitable[dict[str, Any]]]:
+        # `fn.__name__` is the only per-tool identity available here —
+        # ``log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
+        # classifier appends ``.session_contract_error`` itself (FAR-1482).
+        log_key = f"mcp.{fn.__name__}"
+
         @functools.wraps(fn)
         async def wrapper(*args: _TOOL_SHELL_P.args, **kwargs: _TOOL_SHELL_P.kwargs) -> dict[str, Any]:
             try:
@@ -1786,7 +1861,12 @@ def _tool_db_shell(
             except ProgrammingError:
                 _log.exception(log_constant)
                 return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-            except SQLAlchemyError:
+            except SQLAlchemyError as exc:
+                # FAR-1482: the session-contract guard must run BEFORE the
+                # db_errors_to_fallback split — a programming bug is not the
+                # generic "failed to <tool>" fallback either.
+                if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+                    return contract_error
                 if db_errors_to_fallback:
                     _log.exception(log_constant)
                     return _tool_error(fallback)
@@ -2971,14 +3051,16 @@ async def _update_pipeline_graph_impl(
         _set_mutation_row_lock_timeout,
     )
 
-    is_privileged = _is_privileged(_ctx_role_val())
+    is_privileged = _is_privileged(_ctx_role_val(), _ctx_key_grants.get(None))
 
     # FAR-309 PR A review: the guardrail-binding strip guard lives in the
     # SERVICE LAYER (replace_pipeline_graph, under the row lock) so the MCP
     # surface inherits it — no separate call-site check. The admin flag is
     # resolved from the caller's org role; for MCP the service layer uses it
     # as-is (the MCP role is resolved at the tool boundary).
-    _mcp_is_guardrail_admin = _ctx_role_val() == "admin"
+    _mcp_is_guardrail_admin = _ctx_role_val() == "admin" and grants_permit(
+        _ctx_key_grants.get(None), "guardrail.manage"
+    )
 
     # FAR-1471: attribute the MCP graph write to the caller's ACCOUNT id, so
     # ``pipeline.graph_updated`` records a real ``changed_by`` instead of
@@ -4589,7 +4671,7 @@ async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
     description=(
         "Get read-only detail for one HITL review: run status, the review config AS "
         "CAPTURED IN THAT RUN'S SNAPSHOT (label, condition, human_only, "
-        "claim_expiry_minutes, reject_target, required_team_id), and the review's "
+        "claim_expiry_minutes, reject_target, on_reject, required_team_id), and the review's "
         "claim/decision state. Decide via review_hitl or the browser UI."
     ),
 )
@@ -4651,6 +4733,7 @@ async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
             "human_only": human_only_effective(config),
             "claim_expiry_minutes": config.get("claim_expiry_minutes"),
             "reject_target": config.get("reject_target"),
+            "on_reject": config.get("on_reject"),
             "required_team_id": str(required_team) if required_team else None,
         }
     return result
@@ -7240,7 +7323,15 @@ async def set_hitl_email_alerts(
         "Create a new organisation API key. Returns the full mk_... key value "
         "ONLY at creation — store it immediately, it is never returned again. "
         "Mirrors POST /api/v1/api-keys. Roles: 'operator' or 'runner'. A key "
-        "cannot be minted above the caller's live org role."
+        "cannot be minted above the caller's live org role. Optional 'grants' "
+        "(list of permission names, e.g. ['pipeline.list', 'pipeline.graph.read']) "
+        "restricts the key to exactly those permissions instead of its full role "
+        "bundle; omit it for the legacy role bundle, pass [] to deny everything. "
+        "Requires the org's api_key_grants flag; grants must be delegable and "
+        "within your own live capability. NOTE: over MCP, every read-only tool is "
+        "gated by the single coarse key 'resource.read_only' (include it to allow "
+        "MCP reads; fine-grained read keys like 'pipeline.list' do NOT apply to "
+        "MCP read tools), whereas REST enforces the fine-grained keys exactly."
     ),
 )
 @_RETRY_DB
@@ -7249,6 +7340,7 @@ async def create_api_key(
     role: str = "operator",
     expires_at: str | None = None,
     team_id: str | None = None,
+    grants: list[str] | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -7272,9 +7364,38 @@ async def create_api_key(
         if team_error is not None:
             return team_error
 
+        # FAR-1477: grants are accepted ONLY with the org flag ON (OFF => 422,
+        # never a silent downgrade to a legacy full-role key). Read STRICT so a
+        # transient flag-read failure is not mistaken for "flag OFF" — it must
+        # surface as a retryable 503, matching the REST mint path (and this
+        # server's own grant-enforcement auth path).
+        if grants is not None:
+            try:
+                grants_on = await api_key_grants_enabled(org_id, strict=True)
+            except ApiKeyGrantsUnavailableError:
+                _log.warning("mcp.create_api_key_grants_unavailable")
+                return {
+                    "error": "service_unavailable",
+                    "status": 503,
+                    "detail": "API key grant settings are temporarily unavailable; retry shortly",
+                }
+            if not grants_on:
+                return {
+                    "error": "validation_error",
+                    "status": 422,
+                    "detail": "API key grant-sets are not enabled for this organisation",
+                }
+
         async with _session(org_id) as s:
             await _deny_break_glass_mint(s, account_id)
             await _enforce_api_key_mint_cap(s, account_id, org_id, role)
+            if grants is not None:
+                try:
+                    await enforce_grants_mint_cap_for(s, account_id, org_id, grants)
+                except FastAPIHTTPException as exc:
+                    if exc.status_code == 422:
+                        return {"error": "validation_error", "status": 422, "detail": str(exc.detail)}
+                    raise MCPAuthorizationError(str(exc.detail)) from None
             key, full_key = await auth_create_api_key(
                 s,
                 org_id=org_id,
@@ -7283,6 +7404,7 @@ async def create_api_key(
                 account_id=account_id,
                 team_id=team_uuid,
                 expires_at=parsed_expires_at,
+                grants=grants,
             )
 
         # FAR-620: parity with the REST mint audit (PRD §8.12) + payload stamps.
@@ -7299,6 +7421,7 @@ async def create_api_key(
                 # tool can never produce a user-scoped key.
                 "key_scope": "org",
                 "lookup_prefix": f"mk_{key.lookup_prefix}****",
+                **({"grants": sorted(grants)} if grants is not None else {}),
             },
             log_context="mcp.create_api_key_audit_failed",
         )
@@ -7311,6 +7434,7 @@ async def create_api_key(
             "lookup_prefix": f"mk_{key.lookup_prefix}****",
             "created_at": key.created_at.isoformat() if key.created_at else None,
             "team_id": str(key.team_id) if key.team_id else None,
+            "grants": sorted(grants) if grants is not None else None,
         }
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
@@ -7320,7 +7444,9 @@ async def create_api_key(
     except ProgrammingError:
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_api_key")) is not None:
+            return contract_error
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -7350,7 +7476,9 @@ async def list_api_keys() -> dict[str, Any]:
     except ProgrammingError:
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.list_api_keys")) is not None:
+            return contract_error
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -7412,7 +7540,9 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.revoke_api_key")) is not None:
+            return contract_error
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
         return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
     except Exception:
@@ -7960,7 +8090,9 @@ async def create_schema(
     except ProgrammingError:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_schema")) is not None:
+            return contract_error
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8200,7 +8332,9 @@ async def create_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("create_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("create_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8298,7 +8432,9 @@ async def update_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("update_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("update_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8350,7 +8486,9 @@ async def delete_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("delete_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("delete_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8405,7 +8543,9 @@ async def restore_parameter_schema(
     except ProgrammingError:
         _log_tool_failure("restore_parameter_schema")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_schema")) is not None:
+            return contract_error
         _log_tool_failure("restore_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8596,7 +8736,9 @@ async def create_parameter_set(
     except ProgrammingError:
         _log_tool_failure("create_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.create_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("create_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8703,7 +8845,9 @@ async def update_parameter_set(
     except ProgrammingError:
         _log_tool_failure("update_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.update_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("update_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8762,7 +8906,9 @@ async def delete_parameter_set(
     except ProgrammingError:
         _log_tool_failure("delete_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.delete_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("delete_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:
@@ -8815,7 +8961,9 @@ async def restore_parameter_set(
     except ProgrammingError:
         _log_tool_failure("restore_parameter_set")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.restore_parameter_set")) is not None:
+            return contract_error
         _log_tool_failure("restore_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
     except Exception:

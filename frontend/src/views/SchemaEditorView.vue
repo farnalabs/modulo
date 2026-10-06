@@ -16,8 +16,8 @@
     />
 
     <main class="flex-1 overflow-y-auto">
-      <div v-if="!editingSchema" class="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {{ $t('views.SchemaEditorView.select_or_create') }}
+      <div v-if="!editingSchema" class="p-6">
+        <EmptyState :title="$t('views.SchemaEditorView.select_or_create')" />
       </div>
 
       <template v-else>
@@ -87,6 +87,7 @@ import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import { buildJsonSchema, parseDefinitionToFields, type SchemaField } from '../utils/schema-definition'
 import FeatureGate from '../components/FeatureGate.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import Button from 'primevue/button'

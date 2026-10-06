@@ -19,7 +19,9 @@ from modulo.api.dependencies import (
     get_db_session,
     require_system_permission,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.fernet_rotation import rotate_all_encrypted_data
 from modulo.core.saq_worker import _make_system_session_factory
@@ -98,7 +100,10 @@ def _validate_fernet_key(key: str, label: str) -> None:
 @router.post(
     "/rotate-key",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("fernet_key_rotation_started", "encryption", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
     responses={
         409: {"description": "Conflict"},
         500: {"description": "Internal Server Error"},

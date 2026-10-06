@@ -25,13 +25,49 @@ WORKDIR /app
 COPY backend/pyproject.toml backend/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --only-binary :all: uv==0.11.13
+# `--extra docker` (FAR-1509): this image is an SAQ system-worker image now -
+# supervisord runs `python -m modulo.core.saq_worker`, whose always-registered
+# crons import `aiodocker` (the `docker` extra, FAR-1201). Without the extra
+# every runner_workspace_reconcile / runner_health_probe tick dies with
+# ModuleNotFoundError and the advisory /healthz/ready checks degrade forever.
+#
+# --no-build (docker:S8541): never execute sdist setup scripts during
+# installation. ibm-cos-sdk (a langchain-ibm dependency) publishes sdist-only,
+# so `--no-build` alone hard-fails; the three hash-pinned ibm-cos-sdk
+# distributions are re-allowed individually with --no-binary-package. Every
+# other dependency must install from a pre-built wheel; the local project is
+# re-allowed for the project-installing sync. NOSONAR comments are not
+# supported in Dockerfiles, hence the explicit flags. Mirrors backend/Dockerfile.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev --frozen --no-install-project
+    uv sync --frozen --no-dev --extra docker --no-install-project --no-build \
+    --no-binary-package ibm-cos-sdk \
+    --no-binary-package ibm-cos-sdk-core \
+    --no-binary-package ibm-cos-sdk-s3transfer
 COPY backend/src ./src
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --no-dev --frozen
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra docker --no-build \
+    --no-binary-package ibm-cos-sdk \
+    --no-binary-package ibm-cos-sdk-core \
+    --no-binary-package ibm-cos-sdk-s3transfer \
+    --no-binary-package farnalabs-modulo
 COPY backend/alembic.ini ./alembic.ini
 COPY --from=frontend-builder /app/dist /usr/share/nginx/html
 COPY deploy/nginx/all-in-one.conf /etc/nginx/conf.d/default.conf
+# FAR-1507: the Debian nginx package also ships
+# /etc/nginx/sites-enabled/default -> ../sites-available/default, which declares
+# `listen 80 default_server`. nginx.conf includes BOTH sites-enabled/* and
+# conf.d/*.conf, and default_server wins server selection, so the stock site
+# answered every request: "/" returned the distribution's welcome page and the
+# proxied paths 404'd - the config copied above was never reached. Drop the
+# stock site (the symlink; sites-available is inert once unlinked), then FAIL
+# THE BUILD if anything is still wired into sites-enabled, so a package change
+# can never silently reintroduce a shadowing server block.
+RUN rm -f /etc/nginx/sites-enabled/default \
+    && if [ -n "$(ls -A /etc/nginx/sites-enabled 2>/dev/null)" ]; then \
+         echo "ERROR: stock nginx site(s) still enabled - they would shadow /etc/nginx/conf.d/default.conf:" >&2; \
+         ls -A /etc/nginx/sites-enabled >&2; \
+         exit 1; \
+       fi
 COPY deploy/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY deploy/supervisor/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
