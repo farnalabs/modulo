@@ -312,7 +312,7 @@ class TestMcpAuthSurface:
         from modulo.core.logging_config import org_id_var
 
         # --- seams for the real _authenticate_api_key (API-key flavour) ---
-        key = MagicMock(role="operator", id=_USER_MCP)
+        key = MagicMock(role="operator", id=_USER_MCP, grants=None)
         key.organisation_id = _ORG_MCP
         key.account_id = _USER_MCP
         key.team_id = None

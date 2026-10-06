@@ -15,6 +15,7 @@ from modulo.api.main import app
 from modulo.auth.api_key import _UNSET
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audit_session
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -24,6 +25,25 @@ _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _KEY_ID = uuid.uuid4()
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session() -> Generator[None, None, None]:
+    """FAR-1472: the fail-closed ``audited(...)`` dependency writes its event on a
+    fresh ``audit_session`` (a real engine — no database in the unit tier), so
+    stub that seam; the dependency itself still runs."""
+
+    async def _override() -> AsyncGenerator[AsyncMock, None]:
+        session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        yield session
+
+    app.dependency_overrides[audit_session] = _override
+    yield
+    app.dependency_overrides.pop(audit_session, None)
 
 
 def _make_settings() -> Settings:
@@ -708,6 +728,10 @@ def test_create_user_scoped_key_flag_on(client: TestClient) -> None:
     key.scope = "user"
     with (
         patch("modulo.api.routes.api_keys.get_registry", return_value=_flag_registry(True)),
+        # FAR-1477: the mint path reads the ``api_key_grants`` flag STRICT for
+        # user-scoped keys (to apply the 90-day cap); stub it ON so the test
+        # exercises the happy path rather than the 503 flag-unavailable branch.
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
         patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_user_key")) as mint,
         patch("modulo.api.routes.api_keys.set_rls_org"),
         patch("modulo.api.routes.api_keys.set_rls_user_context"),
@@ -753,6 +777,42 @@ def test_create_user_scoped_key_flag_read_failure_fails_closed(client: TestClien
             json={"name": "user:duncan", "role": "operator", "scope": "user"},
         )
     assert resp.status_code == 422
+    mint.assert_not_called()
+
+
+def test_create_grant_bearing_key_flag_on_mints_with_grants(client: TestClient) -> None:
+    """A grant-bearing create with the flag ON runs the grants mint cap and
+    passes the grants through to the create call."""
+    key = _make_key()
+    with (
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=True)),
+        patch("modulo.api.routes.api_keys._enforce_grants_mint_cap", new=AsyncMock()) as cap,
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(key, "mk_grant_key")) as mint,
+        patch("modulo.api.routes.api_keys.set_rls_org"),
+        patch("modulo.api.routes.api_keys.set_rls_user_context"),
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Restricted", "role": "operator", "grants": ["run.trigger"]},
+        )
+    assert resp.status_code == 201
+    cap.assert_awaited_once()
+    assert mint.await_args.kwargs["grants"] == ["run.trigger"]
+
+
+def test_create_grant_bearing_key_flag_off_rejected_422(client: TestClient) -> None:
+    """A grant-bearing create with the flag OFF is rejected 422 — never a silent
+    downgrade to a legacy full-role key (which would WIDEN access)."""
+    with (
+        patch("modulo.api.routes.api_keys.api_key_grants_enabled", new=AsyncMock(return_value=False)),
+        patch("modulo.api.routes.api_keys.create_api_key", return_value=(_make_key(), "mk_x")) as mint,
+    ):
+        resp = client.post(
+            "/api/v1/api-keys",
+            json={"name": "Restricted", "role": "operator", "grants": ["run.trigger"]},
+        )
+    assert resp.status_code == 422
+    assert "not enabled" in resp.json()["detail"]
     mint.assert_not_called()
 
 

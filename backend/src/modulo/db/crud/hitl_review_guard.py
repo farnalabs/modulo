@@ -454,6 +454,7 @@ async def resolve_effective_privilege(
     account_id: uuid.UUID | None,
     is_privileged: bool,
     caller_type: CallerType,
+    grants_deny_privilege: bool = False,
 ) -> bool:
     """Resolve the effective privilege flag under the row lock (plan §3 item 5).
 
@@ -467,8 +468,16 @@ async def resolve_effective_privilege(
       denies with ``role-changed-reauth-required``.
     - otherwise: the caller-supplied ``is_privileged`` is used as-is (tests,
       creation-only paths).
+
+    FAR-1477: ``grants_deny_privilege`` carries an API-key grant-set denial
+    (the key lacks the permission). It can only NARROW the result: when True
+    the effective privilege is False regardless of the live role. The live-role
+    semantics above are otherwise unchanged (the live role stays authoritative
+    for ``rest`` + ``account_id``, including upgrading a stale-low flag).
     """
     if caller_type == "mcp":
+        return False
+    if grants_deny_privilege:
         return False
     if account_id is None:
         return is_privileged
@@ -562,6 +571,7 @@ async def enforce_guardrail_binding_strip(
     is_guardrail_admin: bool,
     caller_type: CallerType,
     account_id: uuid.UUID | None = None,
+    grants_deny_guardrail_admin: bool = False,
 ) -> None:
     """Service-layer guardrail-binding strip guard (FAR-309 PR A review).
 
@@ -588,6 +598,9 @@ async def enforce_guardrail_binding_strip(
             account_id=account_id,
             caller_type=caller_type,
         )
+    # FAR-1477: an API-key grant-set denial can only NARROW the result.
+    if grants_deny_guardrail_admin:
+        effective_admin = False
     if effective_admin:
         return
     from modulo.db.crud.guardrail_config import load_pipeline_guardrail_rows

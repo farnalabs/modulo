@@ -74,6 +74,15 @@ def _make_trigger_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1287: create_snapshot_from_live_graph allocates the snapshot version
+    # inside a ``session.begin_nested()`` SAVEPOINT. A bare AsyncMock's
+    # begin_nested() returns a plain coroutine, which is not an async context
+    # manager, so the route would 500 with TypeError. Stub it the same way
+    # ``begin`` is stubbed above.
+    nested_cm = AsyncMock()
+    nested_cm.__aenter__ = AsyncMock(return_value=None)
+    nested_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested_cm)
 
     trigger_mock = MagicMock()
     trigger_mock.pipeline_id = uuid.uuid4()

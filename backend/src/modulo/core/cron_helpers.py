@@ -3240,7 +3240,7 @@ async def fire_due_triggers() -> dict[str, Any]:
             # per-row atomic advance below still moves next_fire_at forward so
             # unpausing never causes a catch-up storm.
             org_paused = pause_by_org.get(org_id, False)
-            async with factory() as session, session.begin():
+            async with _bound_org(org_id), factory() as session, session.begin():
                 await _set_rls_org(session, org_id)
                 now = datetime.now(UTC)
                 advanced_this_tick = await _process_due_cron_scan(
