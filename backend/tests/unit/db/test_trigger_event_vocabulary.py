@@ -147,10 +147,11 @@ _MIGRATION_PATH = (
 # 0280_runs_node_deadline_watchdog_fired_count chained onto 0279_table_autovacuum_tuning, and
 # 0281_org_api_keys_grants chained onto 0280_runs_node_deadline_watchdog_fired_count, and
 # 0282_env_profiles_kubernetes chained onto 0281_org_api_keys_grants, and
-# 0283_add_rejected_run_status chained onto 0282_env_profiles_kubernetes as the chain head.
+# 0283_runs_drop_unused_indexes chained onto 0282_env_profiles_kubernetes, and
+# 0284_add_rejected_run_status chained onto 0283_runs_drop_unused_indexes as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0283_add_rejected_run_status"
+_CHAIN_HEAD_MIGRATION_NAME = "0284_add_rejected_run_status"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

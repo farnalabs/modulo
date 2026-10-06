@@ -21,7 +21,8 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0280_runs_node_deadline_watchdog_fired_count`` ->
 ``0281_org_api_keys_grants`` ->
 ``0282_env_profiles_kubernetes`` ->
-``0283_add_rejected_run_status`` as the single linear head) and the
+``0283_runs_drop_unused_indexes`` ->
+``0284_add_rejected_run_status`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -48,19 +49,19 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0283_add_rejected_run_status"
+_CHAIN_HEAD_MIGRATION = "0284_add_rejected_run_status"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
 #: The predicate AS 0278 CREATED THE INDEX (historical; FAR-1487's migration
-#: 0283 re-created the index with ``'rejected'`` added to the IN list).
+#: 0284 re-created the index with ``'rejected'`` added to the IN list).
 _PREDICATE_0278 = (
     "status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
     "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') "
     "AND workspace_inputs_drift_detected IS NULL"
 )
 
-#: The sweep's WHERE clause as it must read in the index TODAY (after 0283).
+#: The sweep's WHERE clause as it must read in the index TODAY (after 0284).
 #: The IN list is the ``TERMINAL_STATUSES`` vocabulary (asserted below);
 #: parity comparisons canonicalise order so frozenset iteration can never
 #: flake them.
@@ -69,7 +70,7 @@ _PREDICATE = (
     "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
     "AND workspace_inputs_drift_detected IS NULL"
 )
-_REJECTED_MIGRATION_PATH = _VERSIONS / "0283_add_rejected_run_status.py"
+_REJECTED_MIGRATION_PATH = _VERSIONS / "0284_add_rejected_run_status.py"
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +186,7 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0283_add_rejected_run_status(self) -> None:
+    def test_single_head_is_0284_add_rejected_run_status(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
@@ -241,7 +242,7 @@ class TestUpgrade:
         predicate in the same change — otherwise that status falls outside
         the partial index and the sweep seq-scans for it. 0278 created the
         index for the vocabulary of its day; ``rejected`` (FAR-1487) was added
-        by the 0283 re-creation, so 0278's list + ``rejected`` == today's."""
+        by the 0284 re-creation, so 0278's list + ``rejected`` == today's."""
         assert _statuses(_PREDICATE_0278) | {"rejected"} == frozenset(TERMINAL_STATUSES)
         assert _statuses(_PREDICATE) == frozenset(TERMINAL_STATUSES)
 
@@ -302,8 +303,8 @@ class TestSweepPredicateParity:
         sweep's WHERE without widening the index (or vice versa) fails here."""
         sweep_where = _extract_where(_compile(await _sweep_select()))
 
-        # The index as it stands TODAY is the one migration 0283 (re)created.
-        spec = importlib.util.spec_from_file_location("migration_0283_rejected", _REJECTED_MIGRATION_PATH)
+        # The index as it stands TODAY is the one migration 0284 (re)created.
+        spec = importlib.util.spec_from_file_location("migration_0284_rejected", _REJECTED_MIGRATION_PATH)
         assert spec is not None
         assert spec.loader is not None
         rejected_migration = importlib.util.module_from_spec(spec)

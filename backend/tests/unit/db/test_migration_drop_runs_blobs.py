@@ -74,7 +74,7 @@ class TestStructure:
         assert literal is not None
         statuses = re.findall(r'"([a-z_]+)"', literal.group(1))
         # The 0215 backfill literal is HISTORICAL: ``rejected`` (FAR-1487) joined
-        # TERMINAL_STATUSES after it shipped and no pre-0283 row can carry it.
+        # TERMINAL_STATUSES after it shipped and no pre-0284 row can carry it.
         assert statuses == sorted(TERMINAL_STATUSES - {"rejected"})
 
     def test_drain_covers_inflight_statuses(self) -> None:

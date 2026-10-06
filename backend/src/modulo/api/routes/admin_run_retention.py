@@ -35,7 +35,9 @@ from modulo.api.dependencies import (
     require_feature,
     require_system_or_org_admin,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.run_retention import (
     ESTIMATE_DEADLINE_SECONDS,
     iter_run_export,
@@ -268,7 +270,20 @@ async def export(
     )
 
 
-@router.post("/purge", dependencies=[require_feature("admin_run_retention")])
+@router.post(
+    "/purge",
+    dependencies=[
+        Depends(
+            audited(
+                "run_retention_purge",
+                "run",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        ),
+        require_feature("admin_run_retention"),
+    ],
+)
 async def purge(
     req: PurgeRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],

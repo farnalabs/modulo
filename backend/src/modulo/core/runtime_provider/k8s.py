@@ -143,7 +143,12 @@ _SERVICE_ACCOUNT_ENV = "MODULO_KUBERNETES_SERVICE_ACCOUNT"
 _DEPLOYMENT_IDENTITY_ENV = "MODULO_RUNNER_MACHINE_ID"
 _DEFAULT_PROVISION_TIMEOUT_S = 120
 _PROVISION_POLL_INTERVAL = 1.0
-_LOG_TAIL_LINES = 5000
+# Workspace agent log file: the dispatcher redirects the agent command's
+# stdout/stderr here (``node_runner._SANDBOX_LOG_PATH``), so this FILE — not
+# the pod's container log, whose PID 1 is the keep-alive wait loop — is the
+# real workspace log surface (see ``read_log_tail``).
+_SANDBOX_LOG_PATH = "/home/user/agent.log"
+_LOG_TAIL_READ_TIMEOUT_S = 10
 _CLOSE_DESTROY_TIMEOUT_S = 30
 _STREAM_ERROR_TRUNC = 200
 
@@ -454,6 +459,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         pod_spec = V1PodSpec(
             restart_policy="Never",
             containers=[container],
+            # Workspace and /tmp are Memory-backed (tmpfs) emptyDirs so a
+            # read-only rootfs still has writable scratch space. Note the
+            # interaction with ``resource_limits.memory_mb``: tmpfs pages are
+            # charged to the container's memory cgroup, so a workspace that
+            # fills the 512Mi volume counts against the same limit as the
+            # agent's own RSS and the pod OOMKills before the emptyDir ever
+            # reports ENOSPC. Raising a profile's memory_mb therefore buys
+            # agent headroom only if it also leaves room for the workspace.
             volumes=[
                 V1Volume(
                     name="workspace",
@@ -520,8 +533,9 @@ class KubernetesRuntimeProvider(RuntimeProvider):
             await self._wait_until_running(pod_name, wait_bound_s)
         except BaseException:
             # Provision failed or was cancelled — reclaim the pod so a failed
-            # create never leaks it (the shipped reconciler sweep is
-            # Docker-only; this is the only cleanup on this path).
+            # create never leaks it. The provider-neutral reconciler sweep now
+            # reclaims Kubernetes pods too (FAR-1051), but deleting here keeps a
+            # failed create from lingering until the next sweep.
             await self._delete_pod_best_effort(pod_name)
             raise
 
@@ -554,7 +568,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
 
     @staticmethod
     def _pod_phase_and_note(pod: Any) -> tuple[str, str]:
-        """Return ``(lowercase phase, diagnostic note)`` from a V1Pod status."""
+        """Return ``(lowercase phase, diagnostic note)`` from a V1Pod status.
+
+        Container waiting/terminated states are the most specific signal and
+        win when present. When neither is, the first pod condition that is not
+        ``True`` supplies the note, so pod-level stalls that never surface a
+        container status (e.g. ``PodScheduled=False`` during a long admission
+        delay) still reach the provision-timeout message.
+        """
         status = getattr(pod, "status", None)
         phase = str(getattr(status, "phase", "") or "").strip().lower()
         waiting_note = ""
@@ -573,7 +594,22 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 exit_code = getattr(terminated, "exit_code", None)
                 if reason or exit_code is not None:
                     terminated_note = f"{reason} (exit {exit_code})" if reason else f"exit {exit_code}"
-        return phase, waiting_note or terminated_note
+        condition_note = KubernetesRuntimeProvider._pod_condition_note(status)
+        return phase, waiting_note or terminated_note or condition_note
+
+    @staticmethod
+    def _pod_condition_note(status: Any) -> str:
+        """Return the first pod condition that is not ``True`` as a note."""
+        for condition in getattr(status, "conditions", None) or []:
+            if str(getattr(condition, "status", "") or "").strip().lower() == "true":
+                continue
+            parts = (
+                str(getattr(condition, "type", "") or ""),
+                str(getattr(condition, "reason", "") or ""),
+                str(getattr(condition, "message", "") or ""),
+            )
+            return " ".join(part for part in parts if part)
+        return ""
 
     async def _read_pod(self, pod_name: str) -> Any | None:
         """Read the workspace pod; ``None`` when it is gone (404)."""
@@ -679,7 +715,25 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         *,
         environment: dict[str, str] | None = None,
     ) -> Any:
-        """Open the pods/exec WebSocket for *provider_ref* (unawaited-ready)."""
+        """Open the pods/exec WebSocket for *provider_ref* and return it ready.
+
+        kubernetes-asyncio's exec call resolves in TWO awaits against a real
+        cluster (aiohttp 3.14, kubernetes-asyncio 36.1.0):
+
+        1. ``connect_get_namespaced_pod_exec(...)`` returns a coroutine that
+           runs the request; awaiting it yields ``WsApiClient.request``'s
+           return value — aiohttp's ``_WSRequestContextManager`` from
+           ``ClientSession.ws_connect()``.
+        2. Awaiting *that* context manager enters it and yields the actual
+           ``ClientWebSocketResponse``.
+
+        Returning after one await handed the caller the context manager, so
+        every exec died with ``AttributeError: '_BaseRequestContextManager'
+        object has no attribute 'recv'`` (FAR-1504). The websocket is
+        returned bare (not via ``async with``): leaving that block would
+        close the socket on return, and the callers close it explicitly
+        through :meth:`_close_ws`.
+        """
         ws_core = await self._get_ws_core()
         exec_command = self._command_with_environment(command, environment)
         try:
@@ -694,7 +748,7 @@ class KubernetesRuntimeProvider(RuntimeProvider):
                 tty=False,
                 _preload_content=False,
             )
-            return await context_manager
+            return await (await context_manager)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -737,10 +791,14 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         ERROR, never a silent end with a fabricated success code) and ends
         the stream. Unknown channels with payload are routed to stderr so
         diagnostic output is never silently dropped.
+
+        Reads go through ``receive()`` — aiohttp 3.14 removed
+        ``ClientWebSocketResponse.recv()`` (FAR-1504), and a missing method
+        would surface as a stream error rather than output.
         """
         while True:
             try:
-                message = await ws.recv()
+                message = await ws.receive()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -842,6 +900,11 @@ class KubernetesRuntimeProvider(RuntimeProvider):
 
         Already-gone pods (404) are a logged no-op; every other failure is
         logged and swallowed (Docker parity).
+
+        Only refs this instance created (tracked in ``self._workspaces``) are
+        destroyed; a ref created before a provider restart is not in that set,
+        so this is a no-op for it. Reclaim such pods via
+        :meth:`destroy_workspace_by_ref` (the ADR 040 reconciler path).
         """
         if provider_ref not in self._workspaces:
             return
@@ -957,32 +1020,41 @@ class KubernetesRuntimeProvider(RuntimeProvider):
         return phase or "unknown"
 
     async def read_log_tail(self, provider_ref: str, *, max_bytes: int) -> bytes:
-        """Read the workspace container's log tail (ADR 040 primitive).
+        """Read the workspace agent-log tail (ADR 040 primitive).
 
-        K8s retains pod logs only while the pod exists (no post-destroy
-        retention window on this tier), so a read after delete returns
-        ``b""``. Best-effort probe contract: never raises — invalid ref,
-        missing pod, RBAC and network failures all yield ``b""``. The
-        ``max_bytes`` bound is a character slice on the decoded tail text
-        before re-encoding (ABC contract).
+        The dispatcher redirects the agent command's stdout/stderr to
+        ``/home/user/agent.log`` (``node_runner._SANDBOX_LOG_PATH``), so the
+        real workspace log lives in that FILE. The pod's container log is the
+        wrong surface on this tier: its PID 1 is the keep-alive wait loop, so
+        ``read_namespaced_pod_log`` is empty for the whole lifetime while the
+        agent output accumulates in the file. Reading the file through the
+        exec subresource keeps the dispatch stall/timeout diagnostics
+        (``_read_log_tail_via_provider``) as useful here as the E2B logs
+        endpoint is on that tier.
+
+        Best-effort probe contract: never raises — invalid ref, missing pod
+        (exec 404), RBAC/network failures and a missing/empty log file all
+        yield ``b""``. ``tail -c`` bounds the transfer; the ``max_bytes``
+        bound itself is a character slice on the decoded tail text before
+        re-encoding (ABC contract).
         """
         if not isinstance(provider_ref, str) or not provider_ref or max_bytes <= 0:
             return b""
+        # Fetch up to 4 bytes/char so the character slice below can still
+        # return ``max_bytes`` chars for a multi-byte tail.
+        byte_bound = max_bytes * 4
         try:
-            core = await self._get_core()
-            text = await core.read_namespaced_pod_log(
-                name=provider_ref,
-                namespace=self._namespace,
-                container=_CONTAINER_NAME,
-                tail_lines=_LOG_TAIL_LINES,
-                timestamps=False,
+            result = await self.exec_command(
+                provider_ref,
+                ["sh", "-c", f"tail -c {byte_bound} {_SANDBOX_LOG_PATH} 2>/dev/null || true"],
+                cmd_timeout=_LOG_TAIL_READ_TIMEOUT_S,
             )
         except asyncio.CancelledError:
             raise
         except Exception:
             _log.info("read_log_tail failed for pod %s (best-effort)", provider_ref, exc_info=True)
             return b""
-        decoded = text if isinstance(text, str) else str(text or "")
+        decoded = result.stdout if isinstance(result.stdout, str) else ""
         return decoded[-max_bytes:].encode("utf-8", errors="replace")
 
     async def apply_isolation(

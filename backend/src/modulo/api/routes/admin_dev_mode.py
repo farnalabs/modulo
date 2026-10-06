@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.dependencies import get_db_session, require_system_permission
-from modulo.auth.dependencies import get_current_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.system_config import get_config, update_config
 from modulo.settings import Settings, get_settings
 
@@ -55,7 +56,12 @@ async def get_dev_mode(
     return {"enabled": False, "source": "default"}
 
 
-@router.put("", response_model=DevModeResponse, responses={500: {"description": "Internal Server Error"}})
+@router.put(
+    "",
+    dependencies=[Depends(audited("dev_mode_updated", "organisation", principal_dep=get_current_tenant_user))],
+    response_model=DevModeResponse,
+    responses={500: {"description": "Internal Server Error"}},
+)
 async def set_dev_mode(
     req: SetDevModeRequest,
     _settings: Settings = Depends(get_settings),

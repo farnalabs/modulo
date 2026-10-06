@@ -13,7 +13,9 @@ from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.system_config import delete_config, list_config, update_config
 
 _CODE_SYSTEM_CONFIG_MANAGE = "system.config.manage"
@@ -85,6 +87,7 @@ class SetConfigRequest(BaseModel):
 
 @router.put(
     "/{key}",
+    dependencies=[Depends(audited("system_config_updated", "system_config", principal_dep=get_current_tenant_user))],
     responses={
         409: {"description": "Conflict"},
         500: {"description": "Internal Server Error"},
@@ -136,6 +139,16 @@ async def admin_set_config(
 @router.delete(
     "/{key}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "system_config_deleted",
+                "system_config",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
     responses={
         404: {"description": "Not Found"},
         500: {"description": "Internal Server Error"},
