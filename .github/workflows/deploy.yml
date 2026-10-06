@@ -41,6 +41,13 @@ jobs:
       actions: read
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
+      # Legibility outputs (no job gates on these): WHY the throttle skipped
+      # (in_progress | interval_throttled; empty when deploying) and WHEN the
+      # next deploy is expected. A throttled run still concludes SUCCESS —
+      # these exist so the run says so in plain words instead of reading as a
+      # deploy that happened. Consumed by deploy-throttle-status.
+      skip_reason: ${{ steps.check.outputs.skip_reason }}
+      next_deploy: ${{ steps.check.outputs.next_deploy }}
       # Run identity, resolved ONCE below and consumed by every downstream
       # job via needs.deploy-throttle.outputs.* — so all jobs in one run
       # report the same RUN_SHA instead of each re-deriving it.
@@ -96,9 +103,34 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          # Legibility only - the throttle POLICY (interval batching, the
+          # in-progress check, force_deploy / deploy-fix bypasses) is untouched
+          # below. A throttled run still exits 0 with every downstream job
+          # skipped, so this verdict summary is where a reader learns "this run
+          # deployed nothing, why, and when the next deploy is expected"
+          # without digging through the log.
+          write_verdict() {
+            # $1 = will this run deploy (YES.../NO...), $2 = reason,
+            # $3 = next deploy expected ('' when this run is deploying)
+            {
+              echo "## Deploy verdict: $1"
+              echo ""
+              echo "**Will this run deploy?** $1"
+              echo "**Reason:** $2"
+              if [ -n "$3" ]; then
+                echo "**Next deploy expected:** $3"
+              fi
+              echo ""
+              echo "_Throttle policy unchanged: ${INTERVAL_HOURS}h interval, in-progress batching, force_deploy and deploy/CI-fix bypasses._"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
           if [ "$FORCE_DEPLOY" = "true" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=" >> "$GITHUB_OUTPUT"
+            echo "next_deploy=" >> "$GITHUB_OUTPUT"
             echo "Force deploy requested — bypassing throttle."
+            write_verdict "YES (forced - throttle bypassed)" "workflow_dispatch force_deploy=true" ""
             exit 0
           fi
           # If a deploy run is already in progress, batch this one - do not cancel/compete.
@@ -122,7 +154,13 @@ jobs:
           fi
           if [ -n "$IN_PROGRESS" ]; then
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy."
+            echo "skip_reason=in_progress" >> "$GITHUB_OUTPUT"
+            # Next deploy: as soon as the in-progress run concludes - an exact
+            # time is unknowable from here, so say what it is instead of a
+            # fabricated timestamp.
+            echo "next_deploy=after run ${IN_PROGRESS} finishes (it is deploying now)" >> "$GITHUB_OUTPUT"
+            echo "::notice::A deploy run is already in progress (run $IN_PROGRESS) - batching; skipping this run so it does not cancel the in-progress deploy. This run will NOT deploy; expected next deploy: after run $IN_PROGRESS finishes."
+            write_verdict "NO - this run deploys nothing (batched)" "another deploy run is already in progress (run ${IN_PROGRESS}); batching instead of competing with it" "after run ${IN_PROGRESS} finishes (it is deploying now)"
             exit 0
           fi
 
@@ -130,7 +168,10 @@ jobs:
           COMMIT_MSG="$(gh api repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.commit.message' 2>/dev/null || echo '')"
           if [[ "$COMMIT_MSG" =~ ^(fix\(deploy(ment)?\)|fix\(ci\)|infra\(deploy\)|ci:) ]]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=" >> "$GITHUB_OUTPUT"
+            echo "next_deploy=" >> "$GITHUB_OUTPUT"
             echo "Deploy/CI-fix commit — bypassing throttle."
+            write_verdict "YES (deploy/CI-fix commit - throttle bypassed)" "commit message matches the fix(deploy)/fix(ci)/ci: bypass pattern" ""
             exit 0
           fi
           # Anchor the throttle on the most recent run that ACTUALLY deployed to
@@ -158,7 +199,10 @@ jobs:
           echo "last_deploy_attempt=${LAST:-none}"
           if [ -z "$LAST" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=" >> "$GITHUB_OUTPUT"
+            echo "next_deploy=" >> "$GITHUB_OUTPUT"
             echo "No previous deploy attempt - deploying."
+            write_verdict "YES" "no previous deploy attempt found to anchor the throttle on" ""
           else
             LAST_TS=$(date -u -d "$LAST" +%s)
             NOW_TS=$(date -u +%s)
@@ -166,10 +210,21 @@ jobs:
             echo "hours_since_deploy=${DIFF_H}"
             if [ "$DIFF_H" -lt "$INTERVAL_HOURS" ]; then
               echo "should_deploy=false" >> "$GITHUB_OUTPUT"
-              echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. Use workflow_dispatch to force."
+              echo "skip_reason=interval_throttled" >> "$GITHUB_OUTPUT"
+              # Next eligible deploy = anchor + interval, computed from the
+              # SAME anchor the skip just used (never re-derived - see the
+              # stale-anchor bug in the comment above the loop).
+              NEXT_TS=$((LAST_TS + INTERVAL_HOURS * 3600))
+              NEXT_AT="$(date -u -d "@$NEXT_TS" +%Y-%m-%dT%H:%MZ)"
+              echo "next_deploy=${NEXT_AT} (last deploy + ${INTERVAL_HOURS}h interval)" >> "$GITHUB_OUTPUT"
+              echo "::notice::Last deploy attempt ${DIFF_H}h ago (< ${INTERVAL_HOURS}h) - skipping deploy. This run will NOT deploy; next deploy eligible at ${NEXT_AT} (UTC). Use workflow_dispatch force_deploy=true to bypass now."
+              write_verdict "NO - this run deploys nothing (throttled)" "last production deploy was ${DIFF_H}h ago, under the ${INTERVAL_HOURS}h throttle interval" "${NEXT_AT} UTC (last deploy + ${INTERVAL_HOURS}h); sooner only via workflow_dispatch force_deploy=true"
             else
               echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=" >> "$GITHUB_OUTPUT"
+              echo "next_deploy=" >> "$GITHUB_OUTPUT"
               echo "Deploying (${DIFF_H}h since last deploy attempt)."
+              write_verdict "YES" "${DIFF_H}h since last deploy attempt (>= ${INTERVAL_HOURS}h interval)" ""
             fi
           fi
 
@@ -3297,7 +3352,16 @@ jobs:
         # failures hard-fail the run.
 
   deploy-throttle-status:
-    name: "Deploy throttle status (FAR-954: distinguish throttled from deployed)"
+    # FAR-954: distinguish throttled from deployed. The display NAME is
+    # dynamic (job `name` accepts the `needs` context) so the skip is visible
+    # in the run's job list at a glance - a reader sees
+    # "THROTTLED - NO DEPLOY" next to a green run without opening any log.
+    # The run's own name (run-name) cannot do this: it is evaluated at run
+    # creation, before the throttle has decided, and only with github/inputs
+    # contexts. A distinct run CONCLUSION is not available either - GitHub
+    # offers no "neutral" run state we could set without failing the run,
+    # and a throttled run must stay green (throttling is intentional).
+    name: "${{ needs.deploy-throttle.outputs.should_deploy == 'true' && 'Deploy throttle status: DEPLOYING (FAR-954)' || needs.deploy-throttle.outputs.should_deploy == 'false' && 'Deploy throttle status: THROTTLED - NO DEPLOY (FAR-954)' || 'Deploy throttle status: THROTTLE CHECK FAILED (FAR-954)' }}"
     needs: [deploy-throttle]
     if: always()
     runs-on: ubicloud-standard-2
@@ -3306,28 +3370,74 @@ jobs:
         shell: bash
         env:
           SHOULD_DEPLOY: ${{ needs.deploy-throttle.outputs.should_deploy }}
+          SKIP_REASON: ${{ needs.deploy-throttle.outputs.skip_reason }}
+          NEXT_DEPLOY: ${{ needs.deploy-throttle.outputs.next_deploy }}
+          FORCE_DEPLOY: ${{ github.event.inputs.force_deploy }}
           DEPLOY_SHA: ${{ github.sha }}
         run: |
           SHORT_SHA="${DEPLOY_SHA:0:7}"
           if [ "$SHOULD_DEPLOY" = "true" ]; then
+            if [ "$FORCE_DEPLOY" = "true" ]; then
+              THROTTLE_LINE="**Throttle:** bypassed - force_deploy=true"
+            else
+              THROTTLE_LINE="**Throttle:** passed - this run is deploying"
+            fi
             echo "::notice::THIS RUN IS DEPLOYING: deploy pipeline will run pre-deploy tests, staging deploy, staging E2E, production deploy, and prod smoke tests. Deployed SHA will be ${SHORT_SHA}."
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Deploy Pipeline: ACTIVELY DEPLOYING
 
           **Status:** The deploy throttle passed — this run is executing the full deploy pipeline.
+          ${THROTTLE_LINE}
           **Deploying SHA:** ${SHORT_SHA}
           **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
 
           All pre-deploy gates, staging E2E, production deploy, and prod smoke tests will run.
           EOF
+          elif [ -z "$SHOULD_DEPLOY" ]; then
+            # should_deploy is empty: the deploy-throttle job itself failed
+            # before deciding (it fails LOUD on an unknown throttle state -
+            # see its FAR-528 comment), so the run is already red. Say what
+            # happened rather than mislabeling it as a deliberate throttle.
+            echo "::warning::THROTTLE CHECK FAILED — no deploy verdict was produced; see the Deploy throttle job log. This run did NOT deploy."
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Deploy Pipeline: THROTTLE CHECK FAILED — NO DEPLOY
+
+          **Status:** The \`deploy-throttle\` job did not produce a verdict (it failed - see its log). **No deployment happened.**
+          **Next step:** fix the Deploy throttle job, or dispatch with \`force_deploy=true\` to bypass it.
+
+          **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
+          EOF
           else
-            echo "::notice::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged. Production is currently running $(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown'). This run will conclude SUCCESS but NO deployment happened."
+            # Not deploying: say WHY (batched behind an in-progress run vs
+            # throttle interval) and WHEN the next deploy is expected. Both
+            # values are computed by the throttle job from the same anchor it
+            # skipped on - never re-derived here, so they cannot disagree.
+            case "$SKIP_REASON" in
+              in_progress)
+                REASON="Another deploy run is already in progress; this run was batched behind it instead of competing."
+                ;;
+              interval_throttled)
+                REASON="Last production deploy was under the throttle interval; this run is batching."
+                ;;
+              *)
+                REASON="The deploy throttle skipped this run (reason not recorded - see the Deploy throttle job log)."
+                ;;
+            esac
+            NEXT_LINE="${NEXT_DEPLOY:-unknown - see the Deploy throttle job log}"
+            PROD_SHA="$(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown')"
+            # ::warning:: not ::notice:: - the run is green but deployed
+            # nothing, which is exactly the state that reads as success at a
+            # glance. A warning-level annotation carries a yellow marker in
+            # the run's annotation list; it does NOT change the run's
+            # conclusion (annotations never do).
+            echo "::warning::THROTTLED — NO DEPLOYMENT PERFORMED. Production is unchanged (running ${PROD_SHA}). Reason: ${REASON} Next deploy expected: ${NEXT_LINE}. This run will conclude SUCCESS but NO deployment happened. Use workflow_dispatch force_deploy=true to deploy now."
             cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Deploy Pipeline: THROTTLED — NO DEPLOYMENT
 
           **Status:** This run was **THROTTLED** and **NO DEPLOYMENT was performed**.
-          **Production build:** $(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown') (unchanged)
-          **Reason:** ${{ github.event.inputs.force_deploy == 'true' && 'Force deploy' || 'Throttle interval not reached' }}
+          **Reason:** ${REASON}
+          **Next deploy expected:** ${NEXT_LINE}
+          **Production build:** ${PROD_SHA} (unchanged)
           **Triggered by:** ${{ github.event_name == 'push' && 'push to main' || 'manual dispatch' }}
 
           > **This run succeeded WITHOUT deploying.** Production is serving the previous build.
