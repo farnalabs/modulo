@@ -17,41 +17,174 @@
 # started at 07:58:10, still saw only `agent-generated` and failed). Reading
 # the live labels removes that race. The payload is only a fallback for when
 # the labels API call fails.
+#
+# FAR-1527: this workflow now ALSO hosts the fast-lane classifier, merged in
+# from the former fast-lane-classify.yml (identical pull_request triggers, so
+# one runner per event instead of two), plus a path-derived label sync. The
+# fast-lane conclusion contract is preserved EXACTLY — same synthetic
+# check-run name ("fast-lane-eligible"), same three-way conclusion
+# (success = eligible, neutral = ineligible, failure = classifier error
+# rc=2), same `checks: write` permission, same classifier invocation — and
+# the merge queue keeps reading that check run BY NAME.
+#
+# STEP ORDER IS LOAD-BEARING: the classifier and its check-run step run
+# FIRST (after checkout + uv setup). Everything after them (the changelog
+# gate, the label sync) can fail without ever suppressing or superseding the
+# fast-lane check run; the check-run step keeps its original
+# `if: always()` (a failed checkout/setup leaves rc empty → `*` → failure,
+# exactly the standalone workflow's behaviour).
 
 name: "Check: Changelog classification"
 
 on:
   pull_request:
+    # Superset of both former workflows' triggers: changelog-classify.yml had
+    # no `branches:` filter, fast-lane-classify.yml had `branches: [main]`.
+    # Every PR targets main, so the union changes nothing observable and the
+    # changelog gate keeps covering every base branch.
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
-  # The live-label read hits GET /repos/{repo}/issues/{n}/labels, so the
-  # precise scope is `issues: read` (a PR is an issue for this endpoint).
-  issues: read
+  # The live-label read hits GET /repos/{repo}/issues/{n}/labels, and the
+  # path-derived label sync creates repo labels and adds/removes labels on
+  # this PR through the same issue-labels endpoints (a pull request is an
+  # issue for them), so `issues` must be writable; `pull-requests` covers the
+  # PR changed-file list read (GET /repos/{repo}/pulls/{n}/files) and any
+  # pull-request-scoped label write GitHub resolves through that scope.
+  issues: write
+  pull-requests: write
+  # The fast-lane classifier publishes its result as a SYNTHETIC check run
+  # ("fast-lane-eligible") via POST /repos/{repo}/check-runs; the merge queue
+  # reads it by name. This permission is load-bearing (FAR-1099).
+  checks: write
 
-# NO workflow-level concurrency (deliberate; mirrors fast-lane-classify.yml).
-# Opening a PR fires `opened`, and the auto-applied `agent-generated` label
-# fires a near-simultaneous `labeled`, so two runs enter this workflow at once.
-# With `cancel-in-progress: true` the newer run cancelled the earlier one,
-# leaving a CANCELLED check-run on the head SHA. That superseded duplicate is
-# counted as a failure by both the PR Reviewer (pr-reviewer-agent-prompt.md:
-# every non-success/non-skip/non-neutral conclusion is FAILED) and the merge
-# queue (`checks_pass`: every check-run must be `success`), so a fully green
-# PR was blocked and a Branch Fixer run was dispatched for a non-failure
-# (observed 2026-10-04 on PR #1253). Letting every run complete keeps each
-# check-run `success`; this classifier takes seconds, so the extra run is cheap.
+# NO workflow-level concurrency (deliberate; carried over from BOTH former
+# workflows). Opening a PR fires `opened`, and the auto-applied
+# `agent-generated` label fires a near-simultaneous `labeled`, so two runs
+# enter this workflow at once. With `cancel-in-progress: true` the newer run
+# cancelled the earlier one, leaving a CANCELLED check-run on the head SHA.
+# That superseded duplicate is counted as a failure by both the PR Reviewer
+# (pr-reviewer-agent-prompt.md: every non-success/non-skip/non-neutral
+# conclusion is FAILED) and the merge queue (`checks_pass`: every check-run
+# must be `success`), so a fully green PR was blocked and a Branch Fixer run
+# was dispatched for a non-failure (observed 2026-10-04 on PR #1253). Letting
+# every run complete keeps each check-run `success`; this classifier takes
+# seconds, so the extra run is cheap.
 
 jobs:
   changelog-classify:
     name: Changelog classification
+    if: github.event_name == 'pull_request'
     runs-on: ubicloud-standard-2
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # No persisted credentials: everything below talks to GitHub through
+          # an explicit GH_TOKEN env (the repo is public, so the label-sync's
+          # `git fetch origin main` works anonymously too).
           persist-credentials: false
 
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # --- fast-lane classifier (merged from fast-lane-classify.yml, FAR-1099) ---
+      # FAR-1099: classify PRs for fast-lane eligibility. Runs the classifier
+      # script that checks (1) all changed paths are class-A (test-infra only),
+      # (2) guardrails pass (cap, no test-weakening, SHA-pinned check). The
+      # result is a named check run ("fast-lane-eligible") on the PR's head SHA
+      # that the merge-queue reads when evaluating fast-lane eligibility.
+      #
+      # The classifier step captures its exit code into a step output and
+      # ALWAYS exits 0, so the job stays green for every PR (class-B included)
+      # and the merge-queue collect step / notify-pr-failure are not broken. A
+      # separate step publishes the eligibility signal as the named check run.
+      #
+      # `continue-on-error` is not used anywhere here (forbidden by
+      # .semgrep/continue-on-error-in-ci.yaml): where a non-fatal outcome is
+      # genuinely needed it is reported explicitly rather than suppressed. The
+      # check-run approach satisfies both constraints: the job stays green (no
+      # continue-on-error), and ineligibility is published as a `neutral`
+      # (non-failing) check run — never a red one — so the feature stays inert
+      # for every non-fast-lane PR. The merge-queue grants the fast lane only
+      # on a `success` conclusion, so `neutral` is a correct, non-blocking
+      # denial. A red check here would trigger the Branch Fixer on every
+      # class-B PR.
+      - name: Run fast-lane classifier
+        id: classify
+        env:
+          # The suspension guardrail reads the FAST_LANE_SUSPENDED_UNTIL
+          # repository variable, which the Actions integration token
+          # (github.token) cannot read — it returns HTTP 403 "Resource not
+          # accessible by integration", fail-closing the guardrail and pinning
+          # every fast-lane PR to `neutral` (observed on PR #907/#904, blocking
+          # the fix for broken main).  The reviewer PAT can read variables
+          # (fast-lane-suspension.yml uses it to write them), so prefer it and
+          # fall back to github.token only when the secret is unavailable.
+          GH_TOKEN: ${{ secrets.MODULO_REVIEWBOT_TOKEN || github.token }}
+        run: |
+          set +e
+          uv run --no-build --project backend --no-sync python scripts/fast_lane_classify.py \
+            --pr-number ${{ github.event.pull_request.number }} \
+            --head-sha ${{ github.event.pull_request.head.sha }} \
+            --repo ${{ github.repository }} \
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
+          rc=$?
+          echo "classify_rc=$rc" >> "$GITHUB_OUTPUT"
+          # Always exit 0: the job stays green (workflow run = success) for
+          # every PR. The eligibility signal is the named check run created
+          # below, not the job conclusion.
+          exit 0
+      - name: Create fast-lane-eligible check run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RC="${{ steps.classify.outputs.classify_rc }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          # Conclusion contract (FAR-1099):
+          #   0 -> success  : class-A and (if labelled) guardrails pass
+          #   1 -> neutral  : class-B / unlabelled — NOT a failure. The PR takes
+          #                   the normal reviewed lane. A `failure` here would
+          #                   put a red check on every non-fast-lane PR, re-
+          #                   dispatching the Branch Fixer and breaking the
+          #                   feature's "side-effect-free for existing PRs"
+          #                   guarantee.
+          #   * -> failure  : rc=2 is a genuine classifier/usage error.
+          case "$RC" in
+            0)
+              CONCLUSION="success"
+              TITLE="Fast-lane eligible"
+              SUMMARY="PR is fast-lane eligible (class-A, guardrails pass). Merge-queue may skip review for this PR." ;;
+            1)
+              CONCLUSION="neutral"
+              TITLE="Fast-lane ineligible"
+              SUMMARY="PR is NOT fast-lane eligible (class-B or guardrail violation). Standard review lane applies." ;;
+            *)
+              CONCLUSION="failure"
+              TITLE="Fast-lane classifier error"
+              SUMMARY="The fast-lane classifier exited with code ${RC} (usage/infra error). Eligibility could not be determined; standard review lane applies." ;;
+          esac
+          # Build the body with jq so the nested `output` object is sent
+          # correctly (a dotted `-f output.title=` sends a literal key and
+          # GitHub drops it, leaving the check run with no title/summary).
+          BODY=$(jq -n \
+            --arg name "fast-lane-eligible" \
+            --arg sha "$HEAD_SHA" \
+            --arg conclusion "$CONCLUSION" \
+            --arg title "$TITLE" \
+            --arg summary "$SUMMARY" \
+            '{name: $name, head_sha: $sha, status: "completed", conclusion: $conclusion, output: {title: $title, summary: $summary}}')
+          gh api "repos/${{ github.repository }}/check-runs" \
+            --method POST \
+            --input - <<< "$BODY" \
+            --jq '.id'
+          echo "fast-lane check run created: conclusion=$CONCLUSION on $HEAD_SHA"
+
+      # --- changelog gate (FAR-1155, logic unchanged) ---
       - name: Require a changelog:* label on user-facing changes
         shell: bash
         env:
@@ -122,3 +255,228 @@ jobs:
           printf '%s\n' "$CHANGED"
           echo "::error::PR #${PR_NUMBER} changes user-facing paths (backend/src/**, frontend/src/**) but has no changelog classification label. Apply exactly one of: 'changelog: breaking' (Breaking Changes), 'changelog: feature' (Features), 'changelog: fix' (Fixes), 'changelog: none' (no entry — the correct, honest label for internal/refactor/test/docs/infra work)."
           exit 1
+
+      # --- path-derived label sync (FAR-1527) ---
+      #
+      # Reconciles a small MANAGED label set derived from the changed paths:
+      #   db: migrations               <- backend/src/modulo/db/migrations/**
+      #   risk: high                   <- globs in .github/high-risk-paths.yaml
+      #   area: backend                <- backend/**
+      #   area: frontend               <- frontend/**
+      #   area: ci                     <- .github/** + deploy/**
+      #   area: docs                   <- docs/** + *.md
+      #
+      # The high-risk globs are read from origin/main ONLY (`git fetch origin
+      # main` + `git show origin/main:.github/high-risk-paths.yaml`) — never
+      # from the PR head — so a PR cannot weaken the registry and de-label
+      # itself. That file stays the single source of truth: no glob list is
+      # duplicated in this workflow (only its `registry_file` self-reference
+      # is appended, which the registry itself declares always-high-risk).
+      #
+      # Labels are HUMAN-FACING ONLY. No downstream automation may read them:
+      # no gate, router, merge-queue rule or pipeline consumes `db: migrations`,
+      # `risk: high` or `area: *` — automation reads check runs, code paths and
+      # the changelog:* labels directly. These labels exist purely for people
+      # scanning PR lists.
+      #
+      # Reconciliation touches ONLY the managed names: compute the desired set,
+      # read the PR's current labels, then ADD missing and REMOVE stale
+      # managed names only. It uses POST (add) + DELETE (remove) per label and
+      # NEVER PUT /issues/{n}/labels — a PUT replaces the entire label set and
+      # would wipe changelog:*, agent-generated, manual-delivery, etc.
+      #
+      # Failure posture: prerequisite READS (PR file list, origin/main
+      # registry, repo label list, PR label list) fail LOUD but NON-FATAL —
+      # a ::warning:: and the sync is skipped for this run. Genuine
+      # logic/write failures below fail the step; nothing is masked with
+      # `|| true`.
+      - name: Sync path-derived labels
+        id: label-sync
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          MANAGED=("db: migrations" "risk: high" "area: backend" "area: frontend" "area: ci" "area: docs")
+
+          # --- prerequisite 1: changed files from the GitHub API ---------------
+          # `rc=0; out=$(...) || rc=$?` survives Actions' `bash -e -o pipefail`
+          # so a failed API call reaches the skip branch instead of aborting the
+          # step. previous_filename is included so a rename out of (or into) a
+          # managed path still counts. count >= 3000 is GitHub's file-list cap:
+          # a truncated list would produce an incomplete desired set and wrongly
+          # REMOVE valid labels, so it skips instead of reconciling.
+          rc=0
+          FILES="$(gh api --paginate "/repos/${REPO}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty)')" || rc=$?
+          COUNT="$(printf '%s\n' "$FILES" | grep -c . || true)"
+          if [ "$rc" -ne 0 ] || [ "$COUNT" -eq 0 ] || [ "$COUNT" -ge 3000 ]; then
+            echo "::warning::label-sync skipped: unreliable changed-file list (rc=${rc}, count=${COUNT})"
+            exit 0
+          fi
+
+          # --- prerequisite 2: high-risk globs from origin/main ONLY -----------
+          if ! git fetch origin main --quiet; then
+            echo "::warning::label-sync skipped: could not fetch origin/main to read .github/high-risk-paths.yaml"
+            exit 0
+          fi
+          if ! REGISTRY="$(git show origin/main:.github/high-risk-paths.yaml)"; then
+            echo "::warning::label-sync skipped: .github/high-risk-paths.yaml is unreadable on origin/main"
+            exit 0
+          fi
+          # Parse the `high_risk_paths` list (quoted `- "glob"` entries only) —
+          # comments and blank lines inside the block are ignored, and the list
+          # ends at the first non-list line.
+          RISK_GLOBS="$(printf '%s\n' "$REGISTRY" | awk '
+            /^high_risk_paths:/ { inlist = 1; next }
+            inlist && /^[ \t]*-[ \t]*"/ {
+              line = $0
+              sub(/^[ \t]*-[ \t]*/, "", line)
+              gsub(/"/, "", line)
+              print line
+              next
+            }
+            inlist && (/^[ \t]*#/ || /^[ \t]*$/) { next }
+            inlist { inlist = 0 }
+          ')"
+          # The registry also names itself as always-high-risk (registry_file);
+          # reading that key keeps the mirror faithful without duplicating any
+          # glob in this workflow.
+          REG_FILE="$(printf '%s\n' "$REGISTRY" | awk -F'"' '/^registry_file:/ { print $2; exit }')"
+          if [ -n "$REG_FILE" ]; then
+            RISK_GLOBS="${RISK_GLOBS}"$'\n'"${REG_FILE}"
+          fi
+          if [ -z "$RISK_GLOBS" ]; then
+            echo "::warning::label-sync skipped: no high-risk globs parsed from origin/main's .github/high-risk-paths.yaml"
+            exit 0
+          fi
+
+          # A registry glob used as a shell pattern: bash `case` performs glob
+          # matching without FNM_PATHNAME, so `dir/**` matches across slashes
+          # exactly like the PR Reviewer's router treats it.
+          is_high_risk() {
+            local file="$1" glob
+            while IFS= read -r glob; do
+              [ -z "$glob" ] && continue
+              case "$file" in
+                $glob) return 0 ;;
+              esac
+            done <<< "$RISK_GLOBS"
+            return 1
+          }
+
+          # --- compute the desired managed set from the changed paths ----------
+          HAS_MIGRATIONS=false
+          HAS_BACKEND=false
+          HAS_FRONTEND=false
+          HAS_CI=false
+          HAS_DOCS=false
+          HAS_RISK=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              backend/src/modulo/db/migrations/*) HAS_MIGRATIONS=true ;;
+            esac
+            case "$file" in
+              backend/*) HAS_BACKEND=true ;;
+            esac
+            case "$file" in
+              frontend/*) HAS_FRONTEND=true ;;
+            esac
+            case "$file" in
+              .github/*|deploy/*) HAS_CI=true ;;
+            esac
+            case "$file" in
+              docs/*|*.md) HAS_DOCS=true ;;
+            esac
+            if is_high_risk "$file"; then
+              HAS_RISK=true
+            fi
+          done <<< "$FILES"
+
+          DESIRED=()
+          if [ "$HAS_MIGRATIONS" = true ]; then DESIRED+=("db: migrations"); fi
+          if [ "$HAS_RISK" = true ]; then DESIRED+=("risk: high"); fi
+          if [ "$HAS_BACKEND" = true ]; then DESIRED+=("area: backend"); fi
+          if [ "$HAS_FRONTEND" = true ]; then DESIRED+=("area: frontend"); fi
+          if [ "$HAS_CI" = true ]; then DESIRED+=("area: ci"); fi
+          if [ "$HAS_DOCS" = true ]; then DESIRED+=("area: docs"); fi
+
+          # --- read current labels (repository + PR) ---------------------------
+          if ! REPO_LABELS="$(gh api --paginate "repos/${REPO}/labels" --jq '.[].name')"; then
+            echo "::warning::label-sync skipped: could not read the repository's label list"
+            exit 0
+          fi
+          if ! CURRENT="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name')"; then
+            echo "::warning::label-sync skipped: could not read PR #${PR_NUMBER}'s current labels"
+            exit 0
+          fi
+          # Split the newline list into a real array: comparing a needle
+          # against the whole multi-line blob (a scalar) would never match,
+          # so stale managed labels would never be removed.
+          CURRENT_LIST=()
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              CURRENT_LIST+=("$line")
+            fi
+          done <<< "$CURRENT"
+
+          # Every managed label must exist on the repo before it can be
+          # attached; create-if-absent (idempotent via --force) so a deleted
+          # managed label cannot make every PR's sync fail.
+          for name in "${MANAGED[@]}"; do
+            if ! printf '%s\n' "$REPO_LABELS" | grep -Fxq "$name"; then
+              gh label create "$name" --force -R "$REPO"
+            fi
+          done
+
+          in_list() {
+            local needle="$1" item
+            shift
+            for item in "$@"; do
+              if [ "$item" = "$needle" ]; then
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          # --- reconcile: ONLY managed names — add missing, remove stale --------
+          for name in "${MANAGED[@]}"; do
+            want=false
+            if in_list "$name" "${DESIRED[@]}"; then want=true; fi
+            attached=false
+            if in_list "$name" "${CURRENT_LIST[@]}"; then attached=true; fi
+
+            if [ "$want" = true ] && [ "$attached" = false ]; then
+              BODY="$(jq -n --arg l "$name" '{labels: [$l]}')"
+              gh api --method POST "repos/${REPO}/issues/${PR_NUMBER}/labels" \
+                --input - <<< "$BODY" --jq '.[].name' >/dev/null
+              echo "label added: ${name}"
+            elif [ "$want" = false ] && [ "$attached" = true ]; then
+              ENCODED="$(jq -rn --arg v "$name" '$v | @uri')"
+              if ! gh api --method DELETE \
+                  "repos/${REPO}/issues/${PR_NUMBER}/labels/${ENCODED}" >/dev/null; then
+                # 404 here means a concurrent run removed it first (both
+                # `opened` and `labeled` runs reconcile). Only a label that is
+                # provably STILL attached after a failed DELETE is a failure.
+                drc=0
+                AGAIN="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name')" || drc=$?
+                if [ "$drc" -ne 0 ]; then
+                  echo "::error::label-sync: failed to remove '${name}' from PR #${PR_NUMBER}, and the label list could not be re-read (rc=${drc})"
+                  exit 1
+                fi
+                if printf '%s\n' "$AGAIN" | grep -Fxq "$name"; then
+                  echo "::error::label-sync: could not remove '${name}' from PR #${PR_NUMBER} — still attached"
+                  exit 1
+                fi
+                echo "label '${name}' was already removed by a concurrent run"
+              else
+                echo "label removed: ${name}"
+              fi
+            fi
+          done
+          echo "label-sync complete: desired=${#DESIRED[@]} of ${#MANAGED[@]} managed labels on PR #${PR_NUMBER}"
