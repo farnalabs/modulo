@@ -24,6 +24,10 @@ Contract:
 * FAR-442 rate budget — the hub is built with the instance's ``org_id`` so
   rate-limited connectors (REST) draw from the org's SHARED Redis budget, not
   an untenant'd per-process bucket.
+* FAR-1526 per-org secret read — the instance's org context is bound on the
+  session for the check's transaction, so the Fernet secrets backend can
+  resolve the ``secrets`` row (it refuses to read without an org context) and
+  every secret read stays scoped to that instance's organisation.
 * FAR-935 validation level — the sweep computes and writes the current
   validation level for each instance, mirroring the ``last_health_check_at``
   pattern: a failed canary degrades the level automatically.
@@ -41,6 +45,7 @@ from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.validation_level import connector_baseline_level, resolve_validation_level
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.rls import set_rls_org
 
 _ERR_DETAIL_LIMIT = 2000
 
@@ -58,10 +63,33 @@ async def _check_instance(
     session: AsyncSession,
     fernet_key: str | None,
 ) -> str:
-    """Health-check one instance. Returns "" for ok, else the failure detail."""
+    """Health-check one instance. Returns "" for ok, else the failure detail.
+
+    FAR-1526: the sweep runs on the cross-org ``modulo_system`` session factory,
+    which deliberately carries NO ``app.organisation_id`` (system crons are
+    BYPASSRLS and never call ``set_rls_org``). ``FernetSecretsBackend.get_secret``
+    requires an org context before it will read the ``secrets`` table — without
+    one it raises ``RuntimeError: FernetSecretsBackend: RLS organisation context
+    not set``, the hub skips every instance, and the sweep records
+    ``ConnectorNotFoundError`` for all of them (observed in prod: all five
+    active connectors failed their 2026-10-06 16:00 tick). Binding the
+    INSTANCE's org for this transaction scopes the secret read per-org — on
+    Postgres via ``set_config(..., is_local=true)`` (cleared at commit, and
+    irrelevant to the BYPASSRLS role's own row visibility), on generic
+    backends via ``session.info`` — so tenancy is tightened, never weakened.
+
+    When the hub skips an instance (bad credentials, unknown type, exploding
+    connector) the recorded detail is the hub's own skip reason rather than the
+    bare ``ConnectorNotFoundError`` from the subsequent ``get()``, so the
+    health column stays actionable.
+    """
+    await set_rls_org(session, ci.organisation_id)
     secrets_backend = create_secrets_backend(fernet_key=fernet_key, session=session)
     async with ConnectorHub(secrets_backend=secrets_backend, org_id=str(ci.organisation_id)) as hub:
         await hub.initialise([ci])
+        skip_reason = hub.skipped.get(ci.id)
+        if skip_reason is not None:
+            return _bound_detail(skip_reason)
         connector = hub.get(ci.id)
         result = await connector.health_check()
     return "" if result.ok else _bound_detail(result.detail or _FALLBACK_DETAIL)
