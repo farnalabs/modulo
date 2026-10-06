@@ -302,7 +302,7 @@ class Run(OrgScoped):
     )
     # account_id (FAR-1443): deliberately NOT indexed — no query filters this
     # column (it is written at create and read for display only; the sole
-    # WHERE against it is by primary key), so migration 0281 drops
+    # WHERE against it is by primary key), so migration 0283 drops
     # ix_runs_account_id. Re-add index=True only together with a query that
     # actually predicates on it.
     account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL))
@@ -386,7 +386,7 @@ class Run(OrgScoped):
     # NOT indexed (FAR-1443): no query leads with dispatcher — it only ever
     # appears bundled with selective status/heartbeat predicates — and the
     # near-binary column distribution makes it a planner-unfriendly key, so
-    # migration 0281 drops ix_runs_dispatcher.
+    # migration 0283 drops ix_runs_dispatcher.
     dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # SAQ job id — deterministic saq:job:{queue}:run:{id}. SAQ retries reuse it.
     saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
