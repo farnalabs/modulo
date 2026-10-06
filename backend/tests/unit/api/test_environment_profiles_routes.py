@@ -720,6 +720,26 @@ def test_build_workspace_spec_profile_outbound_allows_internet() -> None:
     assert _egress_allows_internet(spec.egress_policy) is True
 
 
+def test_build_workspace_spec_timeout_default_matches_template_constant() -> None:
+    """FAR-1494: the sandbox-test route's workspace-spec timeout DEFAULT is
+    sourced from the shared template constant. This is the coupling guard for
+    the site this PR changed (``_build_workspace_spec``, used by the
+    ``/environment-profiles/{id}/test`` path): a profile whose ``config_json``
+    omits ``timeout_seconds`` must fall back to
+    ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``. This catches divergence
+    between this site and the constant; a pure constant-value drift is not
+    detected here (the site and the assertion move together) and is covered by
+    the constant-pinning tests in
+    ``tests/unit/core/bundled_runner/test_profile.py``.
+    """
+    from modulo.api.routes.environment_profiles import _build_workspace_spec
+    from modulo.core.bundled_runner.profile import TEMPLATE_CONFIG_JSON
+
+    spec = _build_workspace_spec(_fake_profile(provider_type="e2b", config_json={"memory_mb": 1024}))
+
+    assert spec.timeout_seconds == TEMPLATE_CONFIG_JSON["timeout_seconds"]
+
+
 def test_build_workspace_spec_selected_produces_deny_internet_spec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
