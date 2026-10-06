@@ -228,26 +228,22 @@ describe('SchemaJsonPreview', () => {
 })
 
 describe('SchemaVersionHistory', () => {
-  it('shows loading spinner while loading', () => {
+  it('shows skeleton placeholders while loading', () => {
     const wrapper = mount(SchemaVersionHistory, {
       props: { versions: [], loading: true },
       global: {
         stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
+          SkeletonBlock: { template: '<div data-testid="skeleton-block" />' },
         },
       },
     })
-    expect(wrapper.find('[data-testid="loading-spinner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="schema-editor-versions-loading"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="skeleton-block"]').length).toBeGreaterThan(0)
   })
 
   it('shows empty state when no versions', () => {
     const wrapper = mount(SchemaVersionHistory, {
       props: { versions: [], loading: false },
-      global: {
-        stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
-        },
-      },
     })
     expect(wrapper.text()).toContain('No version history')
   })
@@ -255,11 +251,6 @@ describe('SchemaVersionHistory', () => {
   it('emits restore with the version', async () => {
     const wrapper = mount(SchemaVersionHistory, {
       props: { versions: [version], loading: false },
-      global: {
-        stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
-        },
-      },
     })
     expect(wrapper.text()).toContain('v1.0.0')
     expect(wrapper.text()).toContain('Published')
@@ -287,7 +278,6 @@ describe('SchemaEditorSidebar', () => {
       props: { schemas: [schema], loading: false, selectedId: null, searchQuery: '' },
       global: {
         stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
           FilterBar: { template: '<div data-testid="filter-bar" />' },
           Button: { template: '<button type="button"><slot /></button>' },
         },
@@ -301,12 +291,44 @@ describe('SchemaEditorSidebar', () => {
     expect(wrapper.emitted('create')).toBeTruthy()
   })
 
+  it('marks only the selected schema with aria-current', () => {
+    const other = { ...schema, id: 'schema-2', name: 'Other Schema' }
+    const wrapper = mount(SchemaEditorSidebar, {
+      props: { schemas: [schema, other], loading: false, selectedId: 'schema-1', searchQuery: '' },
+      global: {
+        stubs: {
+          FilterBar: { template: '<div data-testid="filter-bar" />' },
+          Button: { template: '<button type="button"><slot /></button>' },
+        },
+      },
+    })
+
+    const items = wrapper.findAll('[data-testid="schema-editor-list-item"]')
+    expect(items[0].attributes('aria-current')).toBe('true')
+    expect(items[1].attributes('aria-current')).toBeUndefined()
+  })
+
+  it('shows skeleton placeholders while loading', () => {
+    const wrapper = mount(SchemaEditorSidebar, {
+      props: { schemas: [], loading: true, selectedId: null, searchQuery: '' },
+      global: {
+        stubs: {
+          SkeletonBlock: { template: '<div data-testid="skeleton-block" />' },
+          FilterBar: { template: '<div data-testid="filter-bar" />' },
+          Button: { template: '<button type="button"><slot /></button>' },
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="schema-editor-list-loading"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="skeleton-block"]').length).toBeGreaterThan(0)
+  })
+
   it('emits update:searchQuery from the filter bar', async () => {
     const wrapper = mount(SchemaEditorSidebar, {
       props: { schemas: [schema], loading: false, selectedId: null, searchQuery: '' },
       global: {
         stubs: {
-          LoadingSpinner: { template: '<div data-testid="loading-spinner" />' },
           FilterBar: { template: '<input data-testid="filter-bar" :value="searchValue" @input="$emit(\'update:search\', $event.target.value)" />' },
           Button: { template: '<button type="button"><slot /></button>' },
         },

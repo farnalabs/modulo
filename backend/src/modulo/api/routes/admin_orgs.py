@@ -485,20 +485,44 @@ async def admin_create_org_user(
 
 @router.delete(
     "/{org_id}",
-    dependencies=[Depends(audited("organisation_deleted", "organisation", principal_dep=resolve_audit_principal))],
+    # FAR-1517: NO audited() dependency — this handler hard-deletes the org, so
+    # a post-commit org-scoped append can never satisfy the audit_events FK
+    # (fail-open, recording nothing). The durable org-independent record is
+    # written IN-transaction before the delete instead.
     status_code=status.HTTP_204_NO_CONTENT,
 )
 @handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
-    _: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
+    principal: Annotated[AuthenticatedPrincipal, require_system_permission(_CODE_SYSTEM_ORG_MANAGE)],
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
+    from modulo.core.system_audit_logger import append_system_audit_event
+
     try:
         async with session.begin():
             org = await get_organisation(session, org_id)
             if org is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_ORGANISATION_NOT_FOUND)
+
+            # FAR-1517: hard-deleting an org cascades away its entire audit
+            # trail, so the record of WHO deleted it goes to the org-independent
+            # ledger BEFORE the org row is removed — same transaction, so it
+            # commits only with the delete (a failed append aborts the delete).
+            await append_system_audit_event(
+                session,
+                event_type="org_deletion_completed",
+                org_id=org_id,
+                actor_user_id=principal.account_id,
+                resource_type="organisation",
+                resource_id=org_id,
+                payload_json={
+                    "flow": "admin_delete_org",
+                    "immediate": True,
+                    "organisation_name": org.name,
+                    "organisation_slug": org.slug,
+                },
+            )
 
             deleted = await delete_organisation(session, org_id)
             if not deleted:
