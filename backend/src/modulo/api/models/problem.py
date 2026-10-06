@@ -70,6 +70,10 @@ class ProblemDetail(BaseModel):
     detail: str
     instance: str | None = None
     request_id: str | None = None
+    # RFC 9457 extension member: the route's machine-readable error code (from
+    # ``HTTPException(detail={"error": ...})``). Clients discriminate on this
+    # rather than substring-matching the human ``detail`` prose.
+    code: str | None = None
 
     @classmethod
     def from_type(
@@ -78,6 +82,7 @@ class ProblemDetail(BaseModel):
         detail: str,
         instance: str | None = None,
         request_id: str | None = None,
+        code: str | None = None,
     ) -> ProblemDetail:
         meta = _PROBLEM_METADATA[problem_type]
         return cls(
@@ -87,6 +92,7 @@ class ProblemDetail(BaseModel):
             detail=detail,
             instance=instance,
             request_id=request_id,
+            code=code,
         )
 
     def to_response(self, headers: dict[str, str] | None = None) -> JSONResponse:
@@ -154,9 +160,19 @@ def problem_from_http_exception(
 ) -> ProblemDetail:
     """Map a plain HTTPException to a ProblemDetail (no ProblemException)."""
     status = exc.status_code
-    # Handle dict detail (from FastAPI's raise HTTPException(detail={...}))
+    # Handle dict detail (from FastAPI's raise HTTPException(detail={...})).
+    # The route's machine-readable ``error`` code is preserved as an RFC 9457
+    # extension member so the frontend can branch on it; the human ``detail``
+    # string (or, absent one, the code itself) becomes the problem detail.
     raw = exc.detail
-    detail = raw.get("detail", str(raw)) if isinstance(raw, dict) else str(raw)
+    code: str | None = None
+    if isinstance(raw, dict):
+        raw_error = raw.get("error")
+        code = raw_error if isinstance(raw_error, str) else None
+        raw_detail = raw.get("detail")
+        detail = raw_detail if isinstance(raw_detail, str) else (code or str(raw))
+    else:
+        detail = str(raw)
 
     lookup = {
         400: ProblemType.BAD_REQUEST,
@@ -178,6 +194,7 @@ def problem_from_http_exception(
     return ProblemDetail.from_type(
         problem_type=problem_type,
         detail=detail,
+        code=code,
         request_id=getattr(request.state, "request_id", None),
     )
 

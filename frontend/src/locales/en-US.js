@@ -2639,6 +2639,20 @@ export default {
       "delete_referenced_error": "Cannot delete: schema is referenced by agents or parameter sets.",
       "cloned_set_name": "{name} (clone)"
     },
+    "ModelBackendSetupView": {
+      "complete_model_backend_setup": "Complete Model Backend Setup",
+      "page_subtitle": "A model backend was created via MCP. Paste the API key below to complete setup.",
+      "backend_now_active": "Backend \"{name}\" is now active.",
+      "view_model_backends": "View Model Backends",
+      "missing_token_hint": "This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.",
+      "api_key": "API Key",
+      "api_key_placeholder": "sk-...",
+      "saving": "Saving...",
+      "complete_setup": "Complete Setup",
+      "error_link_expired": "Setup link expired or already used. Re-run the MCP command to generate a new setup URL.",
+      "error_backend_not_found": "Model backend not found. It may have been deleted.",
+      "error_setup_failed": "Setup failed. Please try again."
+    },
   "pipeline": {
     "hide_ports": "Hide Ports"
   },

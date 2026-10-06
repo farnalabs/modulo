@@ -5114,6 +5114,19 @@ elements:
       - testid: settings-triggers-outcomes-toggle
         type: element
         dynamic_testid: false
+    /setup/model-backend/:id:
+      - testid: model-backend-setup-form
+        type: element
+        dynamic_testid: false
+      - testid: model-backend-setup-api-key
+        type: input
+        dynamic_testid: false
+      - testid: model-backend-setup-submit
+        type: button
+        dynamic_testid: false
+      - testid: model-backend-setup-view-backends
+        type: button
+        dynamic_testid: false
     /variants/compare:
       - testid: variant-compare-group-select
         type: select

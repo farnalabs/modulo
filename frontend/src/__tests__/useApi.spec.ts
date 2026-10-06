@@ -17,6 +17,7 @@ import {
   exitToLogin,
 } from '../lib/api/auth'
 import { useApi } from '../composables/useApi'
+import { ApiError } from '../lib/api/apiError'
 
 const mockedGetAuthHeaders = getAuthHeaders as Mock
 const mockedAttemptTokenRefresh = attemptTokenRefresh as Mock
@@ -308,6 +309,63 @@ describe('useApi error mapping', () => {
 
     const api = useApi()
     await expect(api.get('/api/v1/widgets')).rejects.toThrow('Failed to fetch')
+  })
+
+  it('attaches the RFC 9457 code extension member to the thrown ApiError', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(404, {
+        type: 'urn:problem:modulo:not_found',
+        title: 'Not Found',
+        status: 404,
+        detail: 'Token not found, expired, or already used',
+        code: 'invalid_token',
+      }),
+    )
+
+    const api = useApi()
+    const error = await api.get('/api/v1/widgets').catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(404)
+    expect((error as ApiError).code).toBe('invalid_token')
+    expect((error as ApiError).message).toBe('Token not found, expired, or already used')
+  })
+
+  it('leaves code undefined for a problem body without a code', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(403, {
+        type: 'urn:problem:modulo:forbidden',
+        title: 'Forbidden',
+        status: 403,
+        detail: 'nope',
+      }),
+    )
+
+    const api = useApi()
+    const error = await api.get('/api/v1/widgets').catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).code).toBeUndefined()
+  })
+
+  it('falls back to the HTTP status when the formatted error body is empty', async () => {
+    // A JSON body of "" formats to "" — the message must fall back to the
+    // status text rather than throwing an empty Error.
+    fetchMock.mockResolvedValue(jsonResponse(500, ''))
+
+    const api = useApi()
+    await expect(api.get('/api/v1/widgets')).rejects.toThrow('Request failed: 500')
+  })
+
+  it('handles a null error body without a code', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(500, null))
+
+    const api = useApi()
+    const error = await api.get('/api/v1/widgets').catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).code).toBeUndefined()
+    expect((error as ApiError).message).toBe('Unknown error')
   })
 })
 
