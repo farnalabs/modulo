@@ -40,12 +40,15 @@ from modulo.api.dependencies import (
     system_engine_is_fallback,
 )
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_backpressure_delivery, record_busy_delivery
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import PermissionDenied, assert_org_role
 from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.core.audit_coverage import audited
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import SnapshotLockNotAvailableError, TriggersPausedError
+from modulo.core.logging_config import org_id_var
 
 # Deprecated private aliases — kept importable so legacy patch targets and
 # callers referencing the underscore names keep working (M5 public-API fix).
@@ -112,6 +115,34 @@ async def _org_row_exists(session: AsyncSession, org_id: uuid.UUID) -> bool:
     return org_exists.scalar_one_or_none() is not None
 
 
+def _bind_webhook_org_context(request: Request, org_id: uuid.UUID) -> None:
+    """Publish the trigger's organisation where ERROR capture can see it (FAR-1484).
+
+    Webhook ingress resolves its organisation ONLY at the trigger bootstrap
+    (``load_trigger_and_org_global``) — the unauthenticated HMAC path has no
+    principal at all — so without this bind every ERROR logged from that point
+    on (the HMAC-secret decrypt failure, snapshot/DB errors, the
+    ``db_transient`` 503s of the 2026-09-04 incident) was dropped by
+    ``ErrorTrackingLogHandler`` for want of an org.
+
+    Both carriers, same contract as ``bind_principal_context`` (FAR-1417):
+
+    * ``org_id_var`` — read synchronously by the handler inside this request's
+      task context, covering the route body AND the ``handle_db_errors``
+      wrapper that logs escaping errors.
+    * ``request.state.organisation_id`` — the ASGI scope is shared with every
+      middleware layer, so an OUTER ``CatchAllMiddleware`` can re-bind from it
+      after an unhandled failure.
+
+    Failures BEFORE the bootstrap (bad JSON, system-role fallback, trigger
+    not found) have no organisation to resolve and keep the announced
+    ``no_org_context`` drop — never fabricate one here.
+    """
+    org = str(org_id)
+    org_id_var.set(org)
+    request.state.organisation_id = org
+
+
 async def _ingest_webhook_dispatch_error(run_id: str, org_id: str, detail: str) -> None:
     """Ingest an error_event (source='saq', function='webhook_dispatch').
 
@@ -165,6 +196,13 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
         await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
+# is OPTIONAL - HMAC-less triggers accept unauthenticated calls by design, and
+# an HMAC-verified caller carries no Modulo credential. audited() takes a
+# required principal resolver (it needs an account_id for
+# audit_events.actor_user_id) and get_current_tenant_user_optional can return
+# None, so there is nothing to attribute the event to. Actor-less variant
+# needed to cover webhook ingestion.
 @router.post(
     "/{trigger_id}/webhook",
     status_code=status.HTTP_202_ACCEPTED,
@@ -251,6 +289,11 @@ async def receive_webhook(
                 system_session, trigger_id, principal.organisation_id if principal else None
             )
 
+            # FAR-1484: the org is resolved HERE (derived from the trigger row,
+            # so it always exists once the bootstrap returned). Bind before any
+            # further work so every ERROR from this point on — HMAC decrypt,
+            # snapshot, DB — is attributed instead of dropped.
+            _bind_webhook_org_context(request, org_id)
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
@@ -565,6 +608,10 @@ async def receive_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): same gap as
+# receive_webhook - the replay's principal is optional (an HMAC-only caller
+# carries no Modulo credential), so audited(principal_dep=...) has no
+# guaranteed actor. Actor-less core variant needed to cover replay.
 @router.post(
     "/{trigger_id}/webhook/replay/{event_id}",
     status_code=status.HTTP_202_ACCEPTED,
@@ -649,6 +696,11 @@ async def replay_webhook(
                 system_session, trigger_id, principal.organisation_id if principal else None
             )
 
+            # FAR-1484: the org is resolved HERE (derived from the trigger row,
+            # so it always exists once the bootstrap returned). Bind before any
+            # further work so every ERROR from this point on — HMAC decrypt,
+            # snapshot, DB — is attributed instead of dropped.
+            _bind_webhook_org_context(request, org_id)
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
@@ -887,7 +939,13 @@ async def replay_webhook(
     return {"run_id": str(run_id), "status": "accepted"}
 
 
-@router.post("/cleanup-expired", status_code=status.HTTP_200_OK)
+@router.post(
+    "/cleanup-expired",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("webhook_events_cleaned_up", "webhook_event", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("webhooks.cleanup_expired")
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),

@@ -54,9 +54,17 @@ from modulo.api.team_scope import (
     team_membership_exists,
     validate_owner_team_for_create,
 )
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.permissions import PermissionDenied, assert_org_role, resolve_required
+from modulo.auth.permissions import (
+    PermissionDenied,
+    assert_org_role,
+    grants_and_role,
+    grants_permit,
+    resolve_required,
+)
 from modulo.auth.team_rbac import org_role_level
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
     ScopeViolationError,
@@ -168,20 +176,27 @@ _MAX_GRAPH_EDGES = 1000
 
 # ADR 047 service-layer backstop: operator+ is "privileged" (privilege is
 # required to weaken/remove an existing HITL gate via a graph write).
+_CODE_GUARDRAIL_MANAGE = "guardrail.manage"  # nosec B105 — permission key, not a credential
 _OPERATOR_LEVEL = org_role_level("operator")
 _ADMIN_LEVEL = org_role_level("admin")
 
 
-def _is_privileged(role: str | None) -> bool:
+def _is_privileged(role: str | None, key_grants: frozenset[str] | None = None) -> bool:
     """Resolve the is_privileged flag from an org role (operator+ -> True).
+
+    FAR-1477: an API key carrying a grant-set (``key_grants is not None``) is
+    privileged only if it ALSO holds ``pipeline.graph.update`` (effective =
+    grants INTERSECT live-role bundle). ``None`` = no grant-set, unchanged.
 
     Uses the flag-independent numeric hierarchy (team_rbac), NOT the
     kill-switched assert_org_role path, so the HITL guard stays live even
     when authz.enforce is disabled.
     """
-    if role is None:
-        return False
-    return org_role_level(role) >= _OPERATOR_LEVEL
+    return grants_and_role(
+        key_grants,
+        _CODE_PIPELINE_GRAPH_UPDATE,
+        lambda: role is not None and org_role_level(role) >= _OPERATOR_LEVEL,
+    )
 
 
 def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
@@ -198,9 +213,25 @@ def _is_guardrail_admin(principal: TenantPrincipal) -> bool:
     ``rollback_to_snapshot``) re-reads the live role under the row lock for
     REST callers, so a stale role claim cannot slip a strip past the guard.
     """
-    if principal.org_role is None:
-        return False
-    return org_role_level(principal.org_role) >= _ADMIN_LEVEL
+    role = principal.org_role
+    return grants_and_role(
+        principal.key_grants,
+        _CODE_GUARDRAIL_MANAGE,
+        lambda: role is not None and org_role_level(role) >= _ADMIN_LEVEL,
+    )
+
+
+def _grants_deny_privilege(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``pipeline.graph.update``.
+
+    Passed to the service layer where it can only NARROW the live-role result.
+    """
+    return not grants_permit(principal.key_grants, _CODE_PIPELINE_GRAPH_UPDATE)
+
+
+def _grants_deny_guardrail_admin(principal: TenantPrincipal) -> bool:
+    """FAR-1477: True when the key's grant-set lacks ``guardrail.manage``."""
+    return not grants_permit(principal.key_grants, _CODE_GUARDRAIL_MANAGE)
 
 
 def _may_manage_cost(principal: TenantPrincipal) -> bool:
@@ -211,11 +242,15 @@ def _may_manage_cost(principal: TenantPrincipal) -> bool:
     (``assert_org_role``) — never an ad-hoc role comparison. Fail-closed: a
     missing/unknown role raises ``PermissionDenied`` and resolves to False.
     """
-    try:
-        assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
-    except PermissionDenied:
-        return False
-    return True
+
+    def _role_ok() -> bool:
+        try:
+            assert_org_role(principal.org_role, resolve_required(_CODE_COST_MANAGE), _CODE_COST_MANAGE)
+        except PermissionDenied:
+            return False
+        return True
+
+    return grants_and_role(principal.key_grants, _CODE_COST_MANAGE, _role_ok)
 
 
 async def _set_rls_context(session: AsyncSession, principal: TenantPrincipal) -> None:
@@ -1210,7 +1245,8 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     )
     hitl_config: dict[str, Any] | None = Field(
         default=None,
-        description="HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, "
+        description="HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, "
+        "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
     )
@@ -1576,7 +1612,18 @@ class HitlReviewConfig(BaseModel):
         description="Node ID routed to on HITL rejection for the FAR-210 single-node "
         "correction path. Accepted and persisted through the graph contract; the "
         "reject→correction dispatch seam is tracked as a follow-up (the graph "
-        "compiler currently kicks a rejection back to reject_target).",
+        "compiler currently kicks a rejection back to reject_target). FAR-1487: a "
+        "correction_target WINS over terminating - a gate with one never ends the run "
+        "on reject.",
+    )
+    on_reject: Literal["terminate", "proceed"] | None = Field(
+        default=None,
+        description="FAR-1487: what a rejection does when the gate has NO reject "
+        "destination (no reject_target / reject edge). Absent or 'terminate' (the "
+        "DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' "
+        "explicitly continues down the approve path (the pre-FAR-1487 behaviour) - "
+        "continuing is never the silent fallback. A reject destination always wins "
+        "('route'), as does a correction_target.",
     )
     claim_expiry_minutes: int = Field(gt=0, le=1440)
     # FAR-609: every HITL gate defaults to human_only — a graph save that
@@ -2328,7 +2375,11 @@ async def list_pipelines_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_created", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("pipelines.create")
 async def create_pipeline_endpoint(
     req: PipelineCreate,
@@ -2613,7 +2664,10 @@ async def _sync_agent_row_commands(
     return changed
 
 
-@router.patch("/{pipeline_id}/graph")
+@router.patch(
+    "/{pipeline_id}/graph",
+    dependencies=[Depends(audited("pipeline_graph_replaced", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.replace_graph")
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
@@ -2672,10 +2726,12 @@ async def replace_pipeline_graph_endpoint(
                 org_id=principal.organisation_id,
                 nodes=node_data,
                 edges=[_edge_data_to_dict(edge) for edge in edge_data],
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 account_id=principal.account_id,
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
             if graph is not None:
                 # FAR-488a: keep the bound Agent rows in step with node-level
@@ -3021,10 +3077,12 @@ async def _apply_graph_update(
         org_id=org_id,
         nodes=node_data,
         edges=[_edge_data_to_dict(edge) for edge in edge_data],
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
@@ -3056,7 +3114,10 @@ def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
     ) from None
 
 
-@router.patch("/{pipeline_id}")
+@router.patch(
+    "/{pipeline_id}",
+    dependencies=[Depends(audited("pipeline_updated", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("pipelines.update")
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3192,7 +3253,13 @@ async def update_pipeline_endpoint(
     return response
 
 
-@router.delete("/{pipeline_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{pipeline_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(audited("pipeline_deleted", "pipeline", principal_dep=get_current_tenant_user, fail_closed=True))
+    ],
+)
 @handle_db_errors("pipelines.delete")
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3261,7 +3328,10 @@ async def _resolve_pipeline_team_scope_including_deleted(
     return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
 
 
-@router.post("/{pipeline_id}/restore")
+@router.post(
+    "/{pipeline_id}/restore",
+    dependencies=[Depends(audited("pipeline_restored", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.restore")
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3331,7 +3401,10 @@ async def _toggle_pipeline_archive_state(
     return _pipeline_response(pipeline)
 
 
-@router.post("/{pipeline_id}/archive")
+@router.post(
+    "/{pipeline_id}/archive",
+    dependencies=[Depends(audited("pipeline_archived", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.archive")
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3344,7 +3417,10 @@ async def archive_pipeline_endpoint(
     return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=archive_pipeline)
 
 
-@router.post("/{pipeline_id}/unarchive")
+@router.post(
+    "/{pipeline_id}/unarchive",
+    dependencies=[Depends(audited("pipeline_unarchived", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.unarchive")
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3475,7 +3551,11 @@ async def _clone_pipeline_into_org(
     return cloned, target_name
 
 
-@router.post("/{pipeline_id}/clone", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{pipeline_id}/clone",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_cloned", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.clone")
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3597,7 +3677,13 @@ async def _detect_parameter_ports(
     return detected_ports
 
 
-@router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{pipeline_id}/save-as-composite",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipelines.save_as_composite")
 async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
@@ -3735,6 +3821,9 @@ async def _quality_report_recipient_urls(
 
 @router.post(
     "/{pipeline_id}/quality-report",
+    dependencies=[
+        Depends(audited("pipeline_quality_report_triggered", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.trigger_quality_report")
 async def trigger_quality_report(
@@ -3937,7 +4026,10 @@ async def list_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots",
-    dependencies=[require_feature("pipeline_diff_rollback")],
+    dependencies=[
+        require_feature("pipeline_diff_rollback"),
+        Depends(audited("pipeline_snapshot_saved", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("pipelines.save_edit_snapshot")
 async def save_edit_snapshot_endpoint(
@@ -4017,7 +4109,12 @@ async def get_snapshot_detail_endpoint(
     return _snapshot_to_detail_response(snapshot)
 
 
-@router.patch("/{pipeline_id}/snapshots/{snapshot_id}")
+@router.patch(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    dependencies=[
+        Depends(audited("pipeline_snapshot_tagged", "pipeline_snapshot", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipelines.tag_snapshot")
 async def tag_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -4063,7 +4160,10 @@ async def tag_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
-    dependencies=[require_feature("pipeline_diff_rollback")],
+    dependencies=[
+        require_feature("pipeline_diff_rollback"),
+        Depends(audited("pipeline_snapshot_rolled_back", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("pipelines.rollback_snapshot")
 async def rollback_snapshot_endpoint(
@@ -4089,9 +4189,11 @@ async def rollback_snapshot_endpoint(
                 pipeline_id,
                 snapshot_id,
                 account_id=principal.account_id,
-                is_privileged=_is_privileged(principal.org_role),
+                is_privileged=_is_privileged(principal.org_role, principal.key_grants),
                 caller_type="rest",
                 is_guardrail_admin=_is_guardrail_admin(principal),
+                grants_deny_privilege=_grants_deny_privilege(principal),
+                grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4111,7 +4213,20 @@ async def rollback_snapshot_endpoint(
     return _snapshot_to_response(new_snapshot)
 
 
-@router.delete("/{pipeline_id}/snapshots/{snapshot_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "pipeline_snapshot_deleted",
+                "pipeline_snapshot",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 @handle_db_errors("pipelines.delete_snapshot")
 async def delete_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -4210,7 +4325,10 @@ class PipelineFolderMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = None
 
 
-@router.patch("/{pipeline_id}/folder")
+@router.patch(
+    "/{pipeline_id}/folder",
+    dependencies=[Depends(audited("pipeline_moved_to_folder", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.move_to_folder")
 async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
@@ -4396,10 +4514,12 @@ async def _save_locked_graph(
         org_id,
         nodes,
         edges,
-        is_privileged=_is_privileged(principal.org_role),
+        is_privileged=_is_privileged(principal.org_role, principal.key_grants),
         caller_type="rest",
         account_id=principal.account_id,
         is_guardrail_admin=_is_guardrail_admin(principal),
+        grants_deny_privilege=_grants_deny_privilege(principal),
+        grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
     )
     if graph is None:
         return None
@@ -4501,6 +4621,9 @@ async def _finalize_locked_graph_save(
 # the gate body itself is single-sourced).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
+    dependencies=[
+        Depends(audited("pipeline_node_converted_to_agent", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.convert_node_to_agent")
 async def convert_node_to_agent_endpoint(
@@ -4608,6 +4731,9 @@ async def convert_node_to_agent_endpoint(
 # above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
+    dependencies=[
+        Depends(audited("pipeline_node_reverted_to_manual", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.revert_node_to_manual")
 async def revert_node_to_manual_endpoint(
@@ -4740,6 +4866,8 @@ async def _save_graph(
     caller_type: Literal["rest", "mcp"],
     account_id: uuid.UUID | None = None,
     is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
 ) -> tuple[list[dict[str, Any]], list[Any]] | None:
     """Persist updated nodes + edges via replace_pipeline_graph.
 
@@ -4759,6 +4887,8 @@ async def _save_graph(
         caller_type=caller_type,
         account_id=account_id,
         is_guardrail_admin=is_guardrail_admin,
+        grants_deny_privilege=grants_deny_privilege,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
     )
     if graph is not None:
         # FAR-488a: node-conversion saves go through here too — keep the same

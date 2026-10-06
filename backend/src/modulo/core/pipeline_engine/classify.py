@@ -37,6 +37,8 @@ Decision table (spec, keyed on status — never prose):
 |                 | reason); reason ``hitl_timeout`` when collected by the FAR-1257 review-window sweep |
 | budget_exceeded | ``excluded`` (and breaks the FAR-190 walk)      |
 | router_no_match | ``excluded`` (FAR-415 — its own reason, never budget_exceeded) |
+| rejected        | ``excluded`` (FAR-1487 — a HITL reject ended the run; reason ``hitl_rejected``, or |
+|                 | ``hitl_superseded`` for a coalesced supersede — never a human "no") |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
 | complete        | ``delivered`` iff >= 1 valid ``pr_url`` OR any marker carries ``delivery_done`` (FAR-228 |
 |                 | email sentinel); else COUNTABLE ``no_delivery`` (empty-backlog, PO) |
@@ -128,6 +130,14 @@ REASON_HITL_TIMEOUT = "hitl_timeout"
 REASON_BUDGET_EXCEEDED = "budget_exceeded"
 REASON_COMPENSATION_FAILED = "compensation_failed"
 REASON_ROUTER_NO_MATCH = "router_no_match"
+# FAR-1487: a HITL rejection ended the run (status ``rejected``). A human said
+# "no"; nothing broke and nothing was delivered, so it is excluded (never
+# countable). ``REASON_HITL_SUPERSEDED`` is the bookkeeping variant (a newer
+# version of the work item replaced the review) - it must NOT read as a human
+# decision.
+REASON_HITL_REJECTED = "hitl_rejected"
+_HITL_SUPERSEDED_ERROR_CODE = "hitl.superseded"
+REASON_HITL_SUPERSEDED = "hitl_superseded"
 REASON_DELIVERED = "pr_delivered"
 REASON_DELIVERED_EMAIL = "email_delivered"
 REASON_UNCLASSIFIED = "classifier_error"
@@ -228,7 +238,7 @@ _SOURCE_ERROR_CLASSES: frozenset[str] = frozenset(
 #: the classifier never compares against raw status literals (the
 #: ``raw-status-complete`` semgrep rule routes status checks through the shared
 #: status sets until the FAR-146 success-predicate lands).
-_EXCLUDED_STATUSES: frozenset[str] = frozenset({"cancelled", "budget_exceeded", "router_no_match"})
+_EXCLUDED_STATUSES: frozenset[str] = frozenset({"cancelled", "budget_exceeded", "router_no_match", "rejected"})
 _COUNTABLE_NO_DELIVERY_STATUSES: frozenset[str] = frozenset({"failed", "eval_failed", "stalled", "compensation_failed"})
 #: The deliverable verdict bucket — the ONLY status that may produce
 #: ``delivered``. Named (not a raw ``status == "complete"`` literal) so the
@@ -660,7 +670,7 @@ def classify_run(
     computed_at = datetime.now(UTC)
     declared_success_nodes = len(_declared_success_nodes(outputs_json, telemetry_json))
 
-    # operator/HITL-cancelled + budget_exceeded + router_no_match -> EXCLUDED. A
+    # operator/HITL-cancelled + budget_exceeded + router_no_match + rejected -> EXCLUDED. A
     # cancelled run is never countable, even with an unparseable reason;
     # budget_exceeded is excluded and breaks the FAR-190 walk. Each excluded
     # status keeps its own reason so analytics/reporting never mislabels a
@@ -674,6 +684,8 @@ def classify_run(
             reason = REASON_HITL_TIMEOUT if _is_hitl_timeout(error_code, cancel_reason) else REASON_CANCELLED
         elif status == "router_no_match":
             reason = REASON_ROUTER_NO_MATCH
+        elif status == "rejected":
+            reason = REASON_HITL_SUPERSEDED if error_code == _HITL_SUPERSEDED_ERROR_CODE else REASON_HITL_REJECTED
         else:
             reason = REASON_BUDGET_EXCEEDED
         return ClassificationResult(

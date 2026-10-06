@@ -35,7 +35,9 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.bundled_runner import template_drift_status
 from modulo.core.bundled_runner.health_probe import (
     PER_CONTAINER_CPU,
@@ -364,7 +366,16 @@ def _apply_response(p: EnvironmentProfile) -> ApplyTemplateResponse:
     )
 
 
-@router.post("/profiles/{profile_id}/apply-template")
+@router.post(
+    "/profiles/{profile_id}/apply-template",
+    dependencies=[
+        Depends(
+            audited(
+                "environment_profile_template_applied", "environment_profile", principal_dep=get_current_tenant_user
+            )
+        )
+    ],
+)
 @handle_db_errors(_CODE_RUNNERS_APPLY_TEMPLATE)
 async def apply_template(
     profile_id: uuid.UUID,

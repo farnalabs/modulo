@@ -791,6 +791,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Pipeline Snapshot Lock
+         * @description Report whether this pipeline's snapshot advisory lock is held, and by whom.
+         *
+         *     Read-only — it neither acquires nor releases anything. Run it before the
+         *     release endpoint to see WHICH backend is wedged (pid, application, state,
+         *     how long it has been there) instead of terminating blind.
+         */
+        get: operations["get_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/pipelines/{pipeline_id}/snapshot-lock/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Pipeline Snapshot Lock
+         * @description Terminate the backend(s) holding this pipeline's snapshot advisory lock.
+         *
+         *     Idempotent: no holder means ``{"released": 0, "pids": []}`` and HTTP 200, so
+         *     an operator can re-issue it after a crash without checking first. Only
+         *     backends holding THIS pipeline's derived keys are terminated, never this
+         *     session and never an unrelated backend.
+         *
+         *     Two deliberate refusal arms, both fail-closed:
+         *
+         *     * no organisation context on the principal → 403. Terminating a backend is a
+         *       destructive operator action and must land on an audit chain; one that
+         *       cannot be recorded is not performed.
+         *     * the database role lacks the signal right (SQLSTATE 42501) → 403 problem
+         *       detail naming the grant (``GRANT pg_signal_backend TO "<app role>";``).
+         *       ``pg_terminate_backend`` requires superuser or ``pg_signal_backend``, and
+         *       a self-hosted deployment's runtime role normally has neither.
+         *
+         *     The audit event is written AFTER the termination through
+         *     ``append_audit_event_isolated`` (fail-open with a loud log): the backends are
+         *     already gone and a failed audit write must never resurrect them.
+         */
+        post: operations["release_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/dev-mode": {
         parameters: {
             query?: never;
@@ -3169,7 +3232,9 @@ export interface paths {
          *
          *     The reject route is the gate's reject_target config or a reject-typed
          *     edge, when one exists. With no reject route configured on the gate, the
-         *     run continues along the normal path.
+         *     run ENDS with the terminal ``rejected`` status (FAR-1487) - unless the
+         *     gate sets ``on_reject: proceed`` (or declares a ``correction_target``),
+         *     which continues the run along the normal path.
          */
         post: operations["reject_review_api_v1_runs__run_id__hitl__review_id__reject_post"];
         delete?: never;
@@ -5256,6 +5321,32 @@ export interface paths {
         post?: never;
         /** Revoke Api Key Endpoint */
         delete: operations["revoke_api_key_endpoint_api_v1_api_keys__key_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/api-keys/grantable-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Grantable Permissions Endpoint
+         * @description List permissions a new key's grant-set may contain.
+         *
+         *     Sourced from the registry through ``is_delegable`` (the same predicate the
+         *     mint cap and the enforcement resolvers use), so non-delegable permissions
+         *     are never offered. Filtered to the caller's own role level for the UI; the
+         *     mint cap remains the authority. ``enabled`` mirrors the ``api_key_grants``
+         *     flag -- when OFF the list is empty.
+         */
+        get: operations["grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -9234,7 +9325,7 @@ export interface paths {
          *     * Max request body size 10,000 bytes.
          *     * Events are stored in a dedicated orphan-org partition: the ingest
          *       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
-         *       migration 0171) that tenant sessions can never see (org-only RLS
+         *       migration 0172) that tenant sessions can never see (org-only RLS
          *       policies), so unattributed frontend errors never leak across tenancy.
          *     * A future cleanup job will prune events older than 48 hours (TTL).
          */
@@ -10314,7 +10405,7 @@ export interface components {
          * AnalyticsStatus
          * @enum {string}
          */
-        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "hitl_parked" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match";
+        AnalyticsStatus: "pending" | "running" | "awaiting_human" | "claimed" | "hitl_parked" | "complete" | "failed" | "cancelled" | "eval_failed" | "stalled" | "budget_exceeded" | "router_no_match" | "rejected";
         /**
          * AnalyticsTriggerType
          * @enum {string}
@@ -10352,6 +10443,8 @@ export interface components {
             team_id?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyCreatedResponse */
         ApiKeyCreatedResponse: {
@@ -10380,6 +10473,8 @@ export interface components {
              * @default org
              */
             scope: string;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** ApiKeyRevokeResponse */
         ApiKeyRevokeResponse: {
@@ -10403,6 +10498,8 @@ export interface components {
             expires_at?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Grants */
+            grants?: string[] | null;
         };
         /** AppendMessageRequest */
         AppendMessageRequest: {
@@ -12995,6 +13092,23 @@ export interface components {
             /** Pipeline Id */
             pipeline_id?: string | null;
         };
+        /** GrantablePermission */
+        GrantablePermission: {
+            /** Name */
+            name: string;
+            /** Min Role */
+            min_role: string;
+        };
+        /**
+         * GrantablePermissionsResponse
+         * @description Delegable permissions the caller may put in an API key grant-set (FAR-1477).
+         */
+        GrantablePermissionsResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Permissions */
+            permissions: components["schemas"]["GrantablePermission"][];
+        };
         /** GraphPosition */
         GraphPosition: {
             /** X */
@@ -13389,9 +13503,14 @@ export interface components {
             reject_target?: string | null;
             /**
              * Correction Target
-             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target).
+             * @description Node ID routed to on HITL rejection for the FAR-210 single-node correction path. Accepted and persisted through the graph contract; the reject→correction dispatch seam is tracked as a follow-up (the graph compiler currently kicks a rejection back to reject_target). FAR-1487: a correction_target WINS over terminating - a gate with one never ends the run on reject.
              */
             correction_target?: string | null;
+            /**
+             * On Reject
+             * @description FAR-1487: what a rejection does when the gate has NO reject destination (no reject_target / reject edge). Absent or 'terminate' (the DEFAULT) ENDS the run with the terminal 'rejected' status. 'proceed' explicitly continues down the approve path (the pre-FAR-1487 behaviour) - continuing is never the silent fallback. A reject destination always wins ('route'), as does a correction_target.
+             */
+            on_reject?: ("terminate" | "proceed") | null;
             /** Claim Expiry Minutes */
             claim_expiry_minutes: number;
             /**
@@ -15725,7 +15844,7 @@ export interface components {
             } | null;
             /**
              * Hitl Config
-             * @description HITL node config (mode, form_schema_ref, reject_target, claim_team_id, claim_expiry_min, human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.
+             * @description HITL node config (mode, form_schema_ref, reject_target, on_reject, claim_team_id, claim_expiry_min, human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.
              */
             hitl_config?: {
                 [key: string]: unknown;
@@ -16204,7 +16323,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, kubernetes, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type: string;
             /** Image Ref */
@@ -16366,7 +16485,7 @@ export interface components {
             description?: string | null;
             /**
              * Provider Type
-             * @description One of: e2b, local, local_docker, runner_docker (the provider_type vocabulary).
+             * @description One of: e2b, kubernetes, local, local_docker, runner_docker (the provider_type vocabulary).
              */
             provider_type?: string | null;
             /** Image Ref */
@@ -18263,6 +18382,46 @@ export interface components {
             items: components["schemas"]["SnapshotResponse"][];
             /** Total */
             total: number;
+        };
+        /**
+         * SnapshotLockHolder
+         * @description One backend holding the pipeline's snapshot advisory lock.
+         *
+         *     Every field except ``pid`` may be NULL: ``pg_locks`` is readable by any
+         *     role, but ``pg_stat_activity`` redacts the detail columns of backends the
+         *     viewer does not own unless it holds ``pg_read_all_stats``. ``pid`` and
+         *     ``granted`` are always present, which is what the diagnostic is for.
+         */
+        SnapshotLockHolder: {
+            /** Pid */
+            pid: number;
+            /** Application Name */
+            application_name?: string | null;
+            /** State */
+            state?: string | null;
+            /** Backend Start */
+            backend_start?: string | null;
+            /** Query Start */
+            query_start?: string | null;
+            /**
+             * Granted
+             * @default false
+             */
+            granted: boolean;
+        };
+        /** SnapshotLockReleaseResponse */
+        SnapshotLockReleaseResponse: {
+            /** Released */
+            released: number;
+            /** Pids */
+            pids: number[];
+        };
+        /** SnapshotLockStatusResponse */
+        SnapshotLockStatusResponse: {
+            /** Held */
+            held: boolean;
+            /** Holders */
+            holders: components["schemas"]["SnapshotLockHolder"][];
         };
         /** SnapshotResponse */
         SnapshotResponse: {
@@ -21703,6 +21862,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelemetryStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotLockStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_pipeline_snapshot_lock_api_v1_admin_pipelines__pipeline_id__snapshot_lock_release_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnapshotLockReleaseResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31710,6 +31935,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiKeyRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grantable_permissions_endpoint_api_v1_api_keys_grantable_permissions_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantablePermissionsResponse"];
                 };
             };
             /** @description Validation Error */

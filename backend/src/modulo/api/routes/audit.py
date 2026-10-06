@@ -122,6 +122,9 @@ async def list_audit_events_endpoint(
     return result
 
 
+# FAR-1472 exemption (read-only POST): reads a batch of audit events by id and
+# writes nothing, so chaining an audit event per lookup would only add noise to
+# the append-only chain. Deliberately left in audit_coverage_baseline.txt.
 @router.post("/batch-detail", dependencies=[require_feature("audit_viewer")])
 async def batch_detail_endpoint(
     req: BatchDetailRequest,

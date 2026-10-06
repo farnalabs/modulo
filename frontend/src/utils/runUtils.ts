@@ -1,6 +1,14 @@
 import { toDate } from '../lib/formatDate'
 import { isTerminalStatus } from '../constants/runStatuses'
 
+/** FAR-1487: the bookkeeping `rejected` variant - a newer version replaced the waiting review. */
+export const SUPERSEDED_ERROR_CODE = 'hitl.superseded'
+
+/** True for a `rejected` run that ended because a newer version superseded its review (never a human "no"). */
+export function isSupersededRun(status: string | null | undefined, errorCode: string | null | undefined): boolean {
+  return status === 'rejected' && errorCode === SUPERSEDED_ERROR_CODE
+}
+
 export function runStatusBadgeClass(status: string): string {
   const map: Record<string, string> = {
     complete: 'bg-success/10 text-success',
@@ -14,6 +22,7 @@ export function runStatusBadgeClass(status: string): string {
     awaiting_human: 'bg-warning/10 text-warning',
     hitl_parked: 'bg-warning/10 text-warning',
     cancelled: 'bg-muted text-muted-foreground',
+    rejected: 'bg-muted text-muted-foreground',
     eval_failed: 'bg-destructive/10 text-destructive',
     claimed: 'bg-warning/10 text-warning',
     unknown: 'bg-muted text-muted-foreground',
@@ -38,8 +47,9 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   eval_failed: 'eval failed',
 }
 
-export function runStatusLabel(status: string | null | undefined): string {
+export function runStatusLabel(status: string | null | undefined, errorCode?: string | null): string {
   if (status == null) return ''
+  if (isSupersededRun(status, errorCode)) return 'superseded by a newer version'
   if (RUN_STATUS_LABELS[status]) return RUN_STATUS_LABELS[status]
   return status.replaceAll('_', ' ')
 }
@@ -52,11 +62,18 @@ export function runStatusLabel(status: string | null | undefined): string {
  * description for the status, so the accessible name is never erased for
  * statuses the locale doesn't yet describe.
  */
-export function runStatusDescription(status: string | null | undefined, t: (key: string) => string): string {
+export function runStatusDescription(
+  status: string | null | undefined,
+  t: (key: string) => string,
+  errorCode?: string | null,
+): string {
   if (status == null) return ''
-  const key = `statusDescriptions.${status}`
+  // FAR-1487: a superseded run is bookkeeping, not a reviewer decision.
+  const key = isSupersededRun(status, errorCode) ? 'statusDescriptions.superseded' : `statusDescriptions.${status}`
   const translated = t(key)
-  return translated === key ? runStatusLabel(status) : translated
+  // Pass errorCode through: the fallback must preserve the superseded phrasing
+  // for a `rejected` run whose locale lacks the `statusDescriptions.superseded` key.
+  return translated === key ? runStatusLabel(status, errorCode) : translated
 }
 
 const CANCEL_REASON_MESSAGE_KEYS: Record<string, string> = {
@@ -176,4 +193,29 @@ export function errorCodeDescription(code: string | null | undefined, t: (key: s
   const key = `errorCodeDescriptions.${code}`
   const translated = t(key)
   return translated === key ? errorCodeLabel(code, t) : translated
+}
+
+export interface RunCapacity {
+  active_runs: number
+  concurrency_limit: number | null
+  waiting: boolean
+}
+
+/**
+ * Why a queued run is waiting, shared by the runs list badge and the run
+ * detail queue banner so the wording and the capacity branch logic cannot
+ * drift between the two surfaces. A waiting run below a known concurrency
+ * limit reports its slot usage; otherwise it reports "starting soon".
+ */
+export function queuedCapacityReason(
+  capacity: RunCapacity | null | undefined,
+  t: (key: string, named?: Record<string, unknown>) => string,
+): string {
+  if (capacity?.waiting && capacity.concurrency_limit != null) {
+    return t('common.queue.waiting_slot', {
+      active: capacity.active_runs,
+      limit: capacity.concurrency_limit,
+    })
+  }
+  return t('common.queue.starting_soon')
 }

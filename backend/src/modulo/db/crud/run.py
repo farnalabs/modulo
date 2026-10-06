@@ -173,6 +173,7 @@ RUN_STATUS_WHITELIST: frozenset[str] = frozenset(
         "router_no_match",
         "cost_ceiling_exceeded",
         "compensation_failed",
+        "rejected",
     }
 )
 
@@ -3210,7 +3211,7 @@ _UPDATE_STATUS_FENCED_SQL = text(
     "completed_at = CASE "
     "  WHEN cancellation_requested AND :status IN ('awaiting_human', 'complete') THEN now() "
     "  WHEN :status IN ('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', "
-    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed') THEN now() "
+    "'budget_exceeded', 'router_no_match', 'cost_ceiling_exceeded', 'compensation_failed', 'rejected') THEN now() "
     "  ELSE completed_at END, "
     "claimed_by = CASE WHEN CAST(:claimed_by AS text) IS NOT NULL THEN CAST(:claimed_by AS text) ELSE claimed_by END, "
     "error_code = CASE WHEN :clear_error_code THEN NULL "
@@ -3355,7 +3356,7 @@ _TRANSITION_SQL = text(
     "UPDATE runs SET status=CAST(:target AS text), "
     "completed_at = CASE WHEN CAST(:target AS text) IN "
     "('complete', 'failed', 'cancelled', 'eval_failed', 'stalled', 'budget_exceeded', 'router_no_match', "
-    "'cost_ceiling_exceeded', 'compensation_failed') "
+    "'cost_ceiling_exceeded', 'compensation_failed', 'rejected') "
     "THEN now() ELSE completed_at END, "
     "error_code = COALESCE(CAST(:error_code AS text), error_code), "
     "error_detail = CASE WHEN CAST(:error_code AS text) IS NOT NULL "
@@ -3678,12 +3679,17 @@ async def count_active_sandbox_runs_for_org(
 # default-cap bucket must not undercount).
 # ---------------------------------------------------------------------------
 RUNNER_TOMBSTONE_EXCLUSION_SQL = 'runs.sandbox_dispatch_state NOT LIKE \'%"state": "cleared_at_hitl"%\''
+# The IN-list is the SQL face of ``core.runner_capacity.HOST_RESOURCE_PROVIDERS``
+# (FAR-1051 added 'kubernetes' there so a Kubernetes dispatch counts toward the
+# absent-key default cap instead of being silently uncounted); the two must be
+# changed together — the Python set is the gate's membership test, this filter
+# is the count's scope.
 RUNNER_HOST_RESOURCE_FILTER_SQL = (
     "COALESCE("
     "CASE WHEN runs.sandbox_dispatch_state LIKE '%\"provider\"%' "
     "THEN substring(runs.sandbox_dispatch_state from "
     '\'"provider"[[:space:]]*:[[:space:]]*"([a-z_]+)"\') END, '
-    "'runner_docker') IN ('runner_docker', 'local')"
+    "'runner_docker') IN ('runner_docker', 'local', 'kubernetes')"
 )
 
 
@@ -3719,7 +3725,8 @@ async def count_active_runner_dispatches_for_org(
     self-block.
 
     ``host_resource_only=True`` scopes the count to the host-resource
-    providers (Docker + Local) for the absent-key Docker-tier default; the
+    providers (Docker + Local + Kubernetes — FAR-1051) for the absent-key
+    Docker-tier default; the
     provider is attributed from the marker's JSON ``"provider"`` key, with
     legacy tier-less markers attributed to ``runner_docker`` (fail-safe — see
     ``modulo.core.runner_capacity``).

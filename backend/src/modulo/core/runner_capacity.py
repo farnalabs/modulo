@@ -137,16 +137,27 @@ def runner_marker_sweep_lock_keys() -> tuple[int, int]:
 RUNNER_PROVIDER_DOCKER = "runner_docker"
 RUNNER_PROVIDER_E2B = "e2b"
 RUNNER_PROVIDER_LOCAL = "local"
+RUNNER_PROVIDER_KUBERNETES = "kubernetes"
 
 MARKER_STATE_DISPATCHING = "dispatching"
 MARKER_STATE_SCRIPT_EXECUTING = "script_executing"
 MARKER_STATE_CLEARED_AT_HITL = "cleared_at_hitl"
 
-# Providers billed against the HOST (Docker containers / local subprocesses).
-# The absent-key Docker-tier default counts ONLY these (+ legacy tier-less
-# markers, which are Docker-tier by fail-safe); e2b has its own platform-side
-# concurrency quota and is excluded from that default bucket.
-HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset({RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL})
+# Providers counted against the DEPLOYMENT's own capacity (Docker containers
+# and local subprocesses on this host, and self-hosted Kubernetes workspace
+# pods on this cluster — FAR-1051). The absent-key Docker-tier default counts
+# ONLY these (+ legacy tier-less markers, which are Docker-tier by
+# fail-safe); e2b is excluded because it has its own platform-side
+# concurrency quota, while a Kubernetes tier has no Modulo-readable per-org
+# quota (the Helm namespace ResourceQuota is a cluster ceiling shared by
+# every org, not a dispatch gate) — leaving it out would give a
+# Kubernetes-bound org NO cap at all, i.e. a silently uncounted tier.
+# The SQL filter that applies this set is
+# ``modulo.db.crud.run.RUNNER_HOST_RESOURCE_FILTER_SQL`` (the DB layer owns
+# the count body); the two MUST stay in step.
+HOST_RESOURCE_PROVIDERS: frozenset[str] = frozenset(
+    {RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_LOCAL, RUNNER_PROVIDER_KUBERNETES}
+)
 
 # SQL provider attribution: markers carrying a JSON "provider" key are
 # attributed from it; legacy tier-less markers (pre-D8 JSON without the key,
@@ -167,8 +178,10 @@ def build_dispatch_marker(attempt_key: str, provider: str, *, via_provider: bool
     Base shape (unchanged, fence-compatible — ``_script_lease_probe_ok`` /
     ``rollback_thresholds`` / ``dispatcher_reconcile`` read only
     ``state``/``attempt_key``): ``{"state": "dispatching", "attempt_key": …}``.
-    The D8 gate adds ``"provider"`` (``runner_docker`` | ``e2b`` | ``local``)
-    and ``"written_at"`` for every tier.  ``provider`` is REQUIRED — every
+    The D8 gate adds ``"provider"`` (``runner_docker`` | ``e2b`` | ``local`` |
+    ``kubernetes`` — FAR-1051 added the Kubernetes tier so a pod dispatch is
+    attributed instead of silently uncounted) and ``"written_at"`` for every
+    tier.  ``provider`` is REQUIRED — every
     call site must pass its value explicitly so the type-checker enforces
     correct attribution (FAR-995).
 
@@ -1203,7 +1216,7 @@ async def reconcile_runner_dispatch_markers(
     # was written more recently than the reconciler's stale-heartbeat window
     # is alive (heartbeat writes refresh updated_at) — the sweep clears its
     # stale marker but never terminalises over it.
-    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR
+    from modulo.core.cron_helpers import RECONCILE_STALE_HEARTBEAT_FACTOR, _bound_org
 
     fresh_window = RECONCILE_STALE_HEARTBEAT_FACTOR * int(settings.saq_job_heartbeat)
     now = datetime.now(UTC)
@@ -1258,49 +1271,53 @@ async def reconcile_runner_dispatch_markers(
 
         for org_id in org_ids:
             org_scanned_slot: list[int] = [0]
-            try:
-                org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
-                    factory,
-                    org_id,
-                    settings=settings,
-                    recovery_or=recovery_or,
-                    exclusion=exclusion,
-                    now=now,
-                    fresh_window=fresh_window,
-                    stale_window=stale_window,
-                    scanned_slot=org_scanned_slot,
-                )
-                scanned += org_scanned
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                orgs_failed += 1
-                # qa F5: a failed org pass still reports the PARTIAL scan count —
-                # the rows it had already classified before the failure must not
-                # be silently dropped to zero on the raised RunnerMarkerSweepError.
-                scanned += org_scanned_slot[0]
-                # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
-                # transaction holds a conflicting row lock.  Log at warning level
-                # with a distinctive event name so the sweep is visible in prod
-                # logs without the noisy traceback of a genuine org failure; the
-                # 60s cadence retries the org next tick (fail-open, self-healing).
-                sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
-                org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
-                if sqlstate == "55P03":
-                    _log.warning(
-                        "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+            # FAR-1501: bind this org so per-org failures logged below
+            # (marker_sweep_org_failed, capacity violations) are attributed
+            # by ErrorTrackingLogHandler instead of dropped as no_org_context.
+            async with _bound_org(org_id):
+                try:
+                    org_scanned, org_breach, committed_outcomes = await _scan_org_markers(
+                        factory,
                         org_id,
+                        settings=settings,
+                        recovery_or=recovery_or,
+                        exclusion=exclusion,
+                        now=now,
+                        fresh_window=fresh_window,
+                        stale_window=stale_window,
+                        scanned_slot=org_scanned_slot,
                     )
-                else:
-                    _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
-                continue
-            # The org transaction COMMITTED — emit the outcomes + the breach
-            # verdict now (post-commit, never phantom).
-            org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
-            cleared += org_cleared
-            transitioned += org_transitioned
-            if org_breach:
-                violations += 1
+                    scanned += org_scanned
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    orgs_failed += 1
+                    # qa F5: a failed org pass still reports the PARTIAL scan count —
+                    # the rows it had already classified before the failure must not
+                    # be silently dropped to zero on the raised RunnerMarkerSweepError.
+                    scanned += org_scanned_slot[0]
+                    # FAR-767: a lock_timeout (SQLSTATE 55P03) means a sandbox-run
+                    # transaction holds a conflicting row lock.  Log at warning level
+                    # with a distinctive event name so the sweep is visible in prod
+                    # logs without the noisy traceback of a genuine org failure; the
+                    # 60s cadence retries the org next tick (fail-open, self-healing).
+                    sqlstate = sqlstate_of(exc) if isinstance(exc, SQLAlchemyError) else None
+                    org_failure_details.append(f"org={org_id}: {type(exc).__name__}: {exc}"[:200])
+                    if sqlstate == "55P03":
+                        _log.warning(
+                            "runner.capacity.marker_sweep_org_lock_timeout org=%s",
+                            org_id,
+                        )
+                    else:
+                        _log.exception("runner.capacity.marker_sweep_org_failed org=%s", org_id)
+                    continue
+                # The org transaction COMMITTED — emit the outcomes + the breach
+                # verdict now (post-commit, never phantom).
+                org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
+                cleared += org_cleared
+                transitioned += org_transitioned
+                if org_breach:
+                    violations += 1
         _log.info(
             "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
             scanned,
@@ -1341,6 +1358,7 @@ __all__ = [
     "MARKER_STATE_SCRIPT_EXECUTING",
     "RUNNER_PROVIDER_DOCKER",
     "RUNNER_PROVIDER_E2B",
+    "RUNNER_PROVIDER_KUBERNETES",
     "RUNNER_PROVIDER_LOCAL",
     "RunnerCapacityDecision",
     "RunnerCapacityDeniedError",

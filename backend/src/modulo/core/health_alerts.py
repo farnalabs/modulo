@@ -66,7 +66,12 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
-from modulo.core.alert_context import alert_context_html, alert_context_text, alert_environment_line
+from modulo.core.alert_context import (
+    alert_context_html,
+    alert_context_text,
+    alert_environment_line,
+    stamp_stdout,
+)
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.settings import Settings, get_settings, resolve_instance_identity
 
@@ -337,23 +342,6 @@ def _recovery_text(
     )
 
 
-def _stamp(message: str) -> None:
-    """Best-effort stdout stamp for an alert event (``fly logs`` renders JSON
-    logs unreliably — same lesson as the watchdog).
-
-    STRICTLY best-effort: this runs after the alert email was delivered but
-    before the dedup state is committed, so a ``print`` failure
-    (``UnicodeEncodeError`` on a non-UTF-8 stdout, ``BrokenPipeError``, ...)
-    must never propagate — a raise here would skip ``redis.set`` and the next
-    confirmed tick would re-send a DUPLICATE alert. Best-effort fails open,
-    with a log.
-    """
-    try:
-        print(message, flush=True)  # noqa: T201
-    except Exception:
-        _log.warning("health_alerts.stamp_print_failed", exc_info=True)
-
-
 async def _notify_alert(
     settings: Settings,
     sender: EmailSender,
@@ -386,9 +374,13 @@ async def _notify_alert(
     state.since = now
     # Stamp carries only the conditions + the environment line: ALERT_CONTEXT
     # is repr=False precisely to keep it out of logs, so it never goes to
-    # stdout. The stamp is best-effort (see _stamp) — it cannot skip the
-    # state commit below.
-    _stamp(f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)} | {alert_environment_line(settings)}")
+    # stdout. The stamp is best-effort (see alert_context.stamp_stdout) — it
+    # cannot skip the state commit below.
+    stamp_stdout(
+        f"[health-alert] ALERT readiness={status}: {'; '.join(conditions)} | {alert_environment_line(settings)}",
+        logger=_log,
+        log_event="health_alerts.stamp_print_failed",
+    )
     return "alert"
 
 
@@ -419,12 +411,14 @@ async def _notify_recovery(
     state.notified = "healthy"
     state.conditions = []
     state.since = None
-    # Best-effort stamp (see _stamp): the state above is already mutated in
-    # memory and committed by the caller after this returns — a print failure
-    # must not abort the commit.
-    _stamp(
+    # Best-effort stamp (see alert_context.stamp_stdout): the state above is
+    # already mutated in memory and committed by the caller after this returns
+    # — a print failure must not abort the commit.
+    stamp_stdout(
         f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions) or 'conditions cleared'}"
-        f" | {alert_environment_line(settings)}"
+        f" | {alert_environment_line(settings)}",
+        logger=_log,
+        log_event="health_alerts.stamp_print_failed",
     )
     return "recovery"
 

@@ -16,7 +16,9 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_permission
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.observability import get_otel_config, update_otel_config
 from modulo.db.rls import set_rls_org
@@ -173,7 +175,12 @@ async def get_observability_settings(
 
 @router.put(
     "",
-    dependencies=[require_feature("observability")],
+    dependencies=[
+        Depends(
+            audited("observability_settings_updated", "observability_settings", principal_dep=get_current_tenant_user)
+        ),
+        require_feature("observability"),
+    ],
     responses={
         500: {"description": "Internal Server Error"},
         501: {"description": "Not Implemented"},
@@ -241,6 +248,9 @@ async def update_observability_settings(
         raise HTTPException(status_code=500, detail="Internal server error.") from None
 
 
+# FAR-1472 exemption (read-only POST): probes an OTLP endpoint with a test span
+# and persists nothing, so chaining an audit event per probe would only add
+# noise. Deliberately left in audit_coverage_baseline.txt.
 @router.post("/test", dependencies=[require_feature("observability")])
 async def test_otel_connection(
     req: TestOtelConfig,

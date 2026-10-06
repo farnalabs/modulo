@@ -10,6 +10,9 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from sqlalchemy.exc import InvalidRequestError, SQLAlchemyError
+
+from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
 from tests.unit.mcp.helpers import ORG_ID, AuthContext, make_session_context
 
 _NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -296,6 +299,111 @@ class TestCreateApiKeySuccess(AuthContext):
         assert result["team_id"] is None
 
 
+class TestCreateApiKeyGrants(AuthContext):
+    """FAR-1477: MCP create_api_key accepts ``grants`` through the REST mint-cap."""
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("admin")
+
+    @contextlib.contextmanager
+    def _env(self, *, flag: bool = True, role: str | None = "admin"):
+        with (
+            _patch_create_env(role=role) as mock_session,
+            patch("modulo.api.mcp_server.api_key_grants_enabled", new=AsyncMock(return_value=flag)),
+            patch(
+                "modulo.api.routes.api_keys.resolve_role_from_membership",
+                new=AsyncMock(return_value=role),
+            ),
+        ):
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            yield
+
+    async def test_grants_passed_to_crud_and_echoed(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI", grants=["run.list", "run.cancel"])
+        assert mock_crud.await_args.kwargs["grants"] == ["run.list", "run.cancel"]
+        assert result["grants"] == ["run.cancel", "run.list"]
+
+    async def test_omitted_grants_stay_null(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI")
+        assert mock_crud.await_args.kwargs["grants"] is None
+        assert result["grants"] is None
+
+    async def test_empty_grants_is_explicit_deny_all(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(return_value=(_make_key(), "mk_fullkeyvalue12345678901234567890"))
+        with self._env(), patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+            result = await create_api_key(name="CI", grants=[])
+        sent = mock_crud.await_args.kwargs["grants"]
+        assert sent is not None
+        assert not sent
+        assert result["grants"] is not None
+        assert not result["grants"]
+
+    async def test_flag_off_rejected_422(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env(flag=False):
+            result = await create_api_key(name="CI", grants=["run.list"])
+        assert result["error"] == "validation_error"
+        assert result["status"] == 422
+
+    async def test_flag_read_failure_returns_503(self) -> None:
+        """FAR-1477: a transient grants-flag read failure fails closed as a
+        retryable 503, matching the REST mint path — never misreported as the
+        permanent-looking 422 "not enabled"."""
+        from modulo.api.mcp_server import create_api_key
+        from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+
+        with (
+            _patch_create_env(role="admin") as mock_session,
+            patch(
+                "modulo.api.mcp_server.api_key_grants_enabled",
+                new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
+            ),
+        ):
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            result = await create_api_key(name="CI", grants=["run.list"])
+        assert result["error"] == "service_unavailable"
+        assert result["status"] == 503
+
+    async def test_unknown_grant_rejected_422(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env():
+            result = await create_api_key(name="CI", grants=["no.such.permission"])
+        assert result["error"] == "validation_error"
+        assert result["status"] == 422
+
+    async def test_non_delegable_grant_denied(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        with self._env():
+            result = await create_api_key(name="CI", grants=["api_key.create"])
+        assert result["error"] == "insufficient_scope"
+        assert "cannot be delegated" in result["detail"]
+
+    async def test_grant_above_caller_capability_denied(self) -> None:
+        from modulo.api.mcp_server import _ctx_role, create_api_key
+
+        _ctx_role.set("runner")
+        with self._env(role="runner"):
+            result = await create_api_key(name="CI", role="runner", grants=["org.email.manage"])
+        assert result["error"] == "insufficient_scope"
+        assert "live role" in result["detail"]
+
+
 class TestListApiKeys(AuthContext):
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=False)
     async def test_returns_auth_error_on_revoked_token(self, mock_validate_auth: AsyncMock) -> None:
@@ -452,3 +560,70 @@ class TestRoundTrip(AuthContext):
             revoked = await revoke_api_key(key_id)
 
         assert revoked == {"id": key_id, "revoked": True}
+
+
+class TestApiKeySessionContract(AuthContext):
+    """FAR-1482: the session-contract guard on the hand-rolled API-key arms.
+
+    Both branches of each guard's ``if`` are pinned: an ``InvalidRequestError``
+    is a programming error (``internal_error`` + the shared ``MSG_SESSION_CONTRACT``
+    text), while a generic ``SQLAlchemyError`` keeps the old transient reply. A
+    test that only pins one branch would leave the other — and the ``if`` line
+    itself — uncovered.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("admin")
+
+    async def test_create_api_key_session_contract_error_is_internal(self) -> None:
+        from modulo.api.mcp_server import create_api_key
+
+        mock_crud = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
+        with _patch_create_env() as mock_session:
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+                result = await create_api_key(name="CI")
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == MSG_SESSION_CONTRACT, result
+
+    async def test_create_api_key_transient_stays_database_unavailable(self) -> None:
+        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, create_api_key
+
+        mock_crud = AsyncMock(side_effect=SQLAlchemyError("down"))
+        with _patch_create_env() as mock_session:
+            mock_session.return_value = make_session_context(_make_create_session(_make_key()))
+            with patch("modulo.api.mcp_server.auth_create_api_key", new=mock_crud):
+                result = await create_api_key(name="CI")
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result
+
+    async def test_revoke_api_key_session_contract_error_is_internal(self) -> None:
+        from modulo.api.mcp_server import revoke_api_key
+
+        mock_revoke = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session"))
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+        ):
+            mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
+            result = await revoke_api_key(str(_KEY_ID))
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == MSG_SESSION_CONTRACT, result
+
+    async def test_revoke_api_key_transient_stays_database_unavailable(self) -> None:
+        from modulo.api.mcp_server import _MSG_DB_TEMPORARILY_UNAVAILABLE, revoke_api_key
+
+        mock_revoke = AsyncMock(side_effect=SQLAlchemyError("down"))
+        with (
+            patch("modulo.api.mcp_server.validate_current_auth", return_value=True),
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.api.mcp_server.auth_revoke_api_key", new=mock_revoke),
+        ):
+            mock_session.return_value = make_session_context(_make_revoke_session(_make_key()))
+            result = await revoke_api_key(str(_KEY_ID))
+        assert result["error"] == "internal_error", result
+        assert result["detail"] == _MSG_DB_TEMPORARILY_UNAVAILABLE, result

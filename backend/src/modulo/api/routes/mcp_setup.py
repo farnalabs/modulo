@@ -14,6 +14,7 @@ from modulo.api.db_error_handling import handle_db_errors, raise_session_contrac
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.mcp_setup_handoff import consume_handoff
 from modulo.db.crud.model_backend import get_model_backend, update_model_backend
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -29,7 +30,13 @@ class CompleteSetupRequest(BaseModel):
     api_key: str = Field(..., min_length=1, description="The API key to configure")
 
 
-@router.post("/model-backends/{backend_id}/complete-setup", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/model-backends/{backend_id}/complete-setup",
+    dependencies=[
+        Depends(audited("model_backend_setup_completed", "model_backend", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("mcp_setup.complete_model_backend_setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,

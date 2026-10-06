@@ -392,6 +392,53 @@ async def test_observe_readiness_reuses_the_route_evaluation() -> None:
     assert observation.observed_state == "unhealthy"
 
 
+#: The detail the db_hygiene check reports when its probe did NOT complete
+#: (FAR-1510) — a stalled event loop, not a hygiene finding.
+_HYGIENE_NOT_MEASURED_DETAIL = (
+    "database-hygiene probe did not complete within 1s (likely an event-loop stall; "
+    "see event_loop_lag) — hygiene not measured"
+)
+
+
+async def test_non_ok_advisory_sub_check_with_ok_aggregate_never_emails() -> None:
+    """FAR-1510: a degraded ``db_hygiene`` sub-check whose probe timed out
+    leaves the aggregate at ``ok`` (the probe result is advisory, so
+    ``evaluate_readiness`` excludes it from the gate).
+
+    The alert keys on the AGGREGATE only, so this shape — visible in
+    ``conditions()``, never an unhealthy observation — must produce no email
+    across the hysteresis window. The production false "[Modulo] Readiness
+    degraded" emails were exactly this shape once the aggregate itself was
+    flipped to degraded by the timeout.
+    """
+    observer = _FakeObserver()
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="database reachable"),
+            "db_hygiene": ha.SubCheck(status="degraded", detail=_HYGIENE_NOT_MEASURED_DETAIL),
+        },
+    )
+    sender = _FakeSender()
+    settings = _make_settings()
+    redis = _FakeRedis()
+    clock = {"now": 1_000.0}
+
+    first = await _tick(observer, sender, redis, settings, clock)
+    clock["now"] += 300.0
+    second = await _tick(observer, sender, redis, settings, clock)
+
+    # Two confirmed ticks — enough for hysteresis to fire had the state been
+    # unhealthy — and still no send.
+    assert observer.calls == 2
+    assert first["action"] == "none"
+    assert second["action"] == "none"
+    assert second["notified"] == "none"
+    assert not sender.sent
+    # The finding is still NAMED (an operator reading the conditions sees it).
+    assert observer.observation.conditions() == [f"db_hygiene: degraded ({_HYGIENE_NOT_MEASURED_DETAIL})"]
+
+
 # ---------------------------------------------------------------------------
 # Default collaborators, malformed state, and failure edges.  The transition
 # tests above stub the observer/sender/redis and only drive the happy paths;

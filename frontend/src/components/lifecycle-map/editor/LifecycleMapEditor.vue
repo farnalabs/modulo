@@ -60,7 +60,7 @@
           @connect="onConnect"
         >
           <Background :gap="20" :size="1" />
-          <Controls :showInteractive="false" />
+          <FlowControls :show-interactive="false" />
           <template #node-lifecycle-stage="nodeProps">
             <StageNode
               v-bind="nodeProps"
@@ -142,7 +142,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { VueFlow, useVueFlow, type EdgeMouseEvent, type NodeMouseEvent } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -153,6 +152,7 @@ import EdgeConfigPanel from './EdgeConfigPanel.vue'
 import StagePalette from './StagePalette.vue'
 import GraduationDialog from './GraduationDialog.vue'
 import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
+import FlowControls from '../../shared/FlowControls.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'

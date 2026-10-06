@@ -4,7 +4,14 @@ services:
     environment:
       POSTGRES_DB: modulo
       POSTGRES_USER: modulo
-      POSTGRES_PASSWORD: ${MODULO_DB_PASSWORD:-changeme}
+      # REQUIRED - no default. `changeme` used to be interpolated here, so a
+      # production stack whose operator never set the variable silently got a
+      # publicly-known database password AND the same string embedded in the
+      # app's DATABASE_URL below. Compose now refuses to start, naming the
+      # variable, exactly like SECRET_KEY / FERNET_KEY. Set it in
+      # deploy/compose/.env (copy .env.prod.example) - see that file for a
+      # generation command.
+      POSTGRES_PASSWORD: ${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -26,24 +33,168 @@ services:
     restart: unless-stopped
 
   modulo:
+    # The all-in-one image: ONE container running supervisord with the API
+    # (uvicorn), nginx, and BOTH SAQ queue workers - the `runs` worker and the
+    # `system` worker that fires cron/polling triggers (FAR-1509; see
+    # deploy/supervisor/supervisord.conf). That is why there are no separate
+    # worker services here: keeping the workers inside this container is what
+    # guarantees they receive exactly the environment below, and it is what
+    # makes this artifact "all-in-one" rather than an API-only image.
     image: ghcr.io/farnalabs/modulo:${TAG:-latest}
     ports:
       - "${PORT:-80}:80"
+    # The project-directory .env is BOTH compose's interpolation source (for
+    # the ${...} references below) AND, via env_file, the application's config
+    # file: every entry in it reaches the container - and, because supervisord
+    # inherits the container env, reaches the SAQ workers too. Without this
+    # line only the variables the block below happens to reference would reach
+    # the app, and every optional setting documented in .env.prod.example
+    # (MODULO_USERS, STRIPE_*, MODULO_LICENSE_*, MODULO_HEALTH_*) would be
+    # silently inert. `required: false` keeps the absence of the file itself
+    # from being an error; the ${VAR:?...} references below
+    # (SECRET_KEY, FERNET_KEY, MODULO_DB_PASSWORD, SAQ_AUTH_USERNAME,
+    # SAQ_AUTH_PASSWORD) are what actually refuse to run without one.
+    # `environment:` still wins over env_file for the names declared there.
+    env_file:
+      - path: .env
+        required: false
+    # Every name below is one the application actually reads: a Settings field
+    # (backend/src/modulo/settings.py - pydantic-settings derives the env name
+    # from the field name, `secret_key` -> `SECRET_KEY`, or from the field's
+    # alias) or a name read straight from os.environ. A name Settings does not
+    # read is silently ignored; a REQUIRED Settings field left unsatisfied is a
+    # ValidationError at boot and the backend crash-loops (FAR-1506). The
+    # contract is enforced by
+    # backend/tests/architecture/test_prod_compose_env_contract.py - do not
+    # rename anything here without that test agreeing.
     environment:
-      DATABASE_URL: postgresql+asyncpg://modulo_app:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
-      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:-changeme}@postgres:5432/modulo
-      MODULO_REDIS_URL: redis://redis:6379/0
+      # Settings.database_url.
+      DATABASE_URL: postgresql+asyncpg://modulo_app:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      # Not a Settings field, but read directly from os.environ by
+      # db/bootstrap.py, db/migrations/env.py and api/main.py (the
+      # superuser/migration URL) - alembic runs under it at container start.
+      DATABASE_ADMIN_URL: postgresql+asyncpg://modulo:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      # Settings.redis_url - REQUIRED at runtime (the API refuses to boot when
+      # it resolves empty) and previously never reached the container, because
+      # the compose passed MODULO_REDIS_URL, which nothing reads: the backend
+      # silently fell back to redis://localhost:6379/0, which is wrong inside a
+      # container. Default = this file's own `redis` service; set REDIS_URL in
+      # .env to use an external/managed Redis instead.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Settings.modulo_public_url (SSO redirects, absolute links).
       MODULO_PUBLIC_URL: ${MODULO_PUBLIC_URL:-http://localhost:80}
+      # Not a Settings field - read from os.environ by the logging and
+      # error-tracking setup to label the environment of every event.
       MODULO_ENV: production
+      # Settings.modulo_log_level.
       MODULO_LOG_LEVEL: ${MODULO_LOG_LEVEL:-info}
+      # Settings.modulo_license_key.
       MODULO_LICENSE_KEY: ${MODULO_LICENSE_KEY:-}
-      MODULO_SECRET_KEY: ${MODULO_SECRET_KEY:-change-me-in-production}
+      # Settings.secret_key - REQUIRED, no default, at least 32 random bytes
+      # (the validator also rejects placeholder values). There is no safe
+      # default for a JWT-signing secret, so compose fails fast here with the
+      # generation command rather than handing the backend a placeholder it
+      # will reject at boot.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required - generate one with openssl rand -base64 48}
+      # Settings.fernet_key - REQUIRED, no default, at least 32 bytes and it
+      # must be a REAL Fernet key (urlsafe base64 of 32 bytes), or credential
+      # encryption fails on first use. Generation: see .env.prod.example.
+      FERNET_KEY: ${FERNET_KEY:?FERNET_KEY is required - see .env.prod.example for how to generate a valid Fernet key}
+      # Settings.saq_auth_username / Settings.saq_auth_password - REQUIRED now
+      # that the all-in-one image runs the SAQ workers (FAR-1509). The system
+      # worker owns the `system` queue - fire_due_triggers, i.e. every cron and
+      # polling trigger - and it FAILS CLOSED without both values: without them
+      # the compose would start an API that reports healthy while its scheduler
+      # crash-loops, which is the same silent half-broken deployment class as
+      # FAR-1506. Fail fast here instead, naming the variable.
+      SAQ_AUTH_USERNAME: ${SAQ_AUTH_USERNAME:?SAQ_AUTH_USERNAME is required - the SAQ system worker refuses to boot without it, see .env.prod.example}
+      SAQ_AUTH_PASSWORD: ${SAQ_AUTH_PASSWORD:?SAQ_AUTH_PASSWORD is required - the SAQ system worker refuses to boot without it, see .env.prod.example}
+      # Settings.modulo_system_database_url - the modulo_system (LOGIN,
+      # BYPASSRLS) role URL. REQUIRED now that this container runs the SAQ
+      # system worker (FAR-1509): `dispatcher_reconcile` builds its session
+      # factory from this URL and FAILS CLOSED without it
+      # (core/cron_helpers.py `_get_system_engine`), so the cron never runs and
+      # /healthz/ready reports it `unavailable` - which GATES readiness, i.e.
+      # the backend NEVER becomes ready (the same reason the Helm chart wires
+      # it, see deploy/helm/.../_helpers.tpl). Without it the deploy looks
+      # half-healthy: API up, workers up, readiness permanently 503.
+      # The password is MODULO_DB_PASSWORD on purpose: bootstrap_role parses
+      # the password out of THIS url when it creates/alters the role, so the
+      # role and the URL can never disagree (this is exactly what
+      # db/bootstrap.py's derive_system_database_url computes from
+      # DATABASE_URL; here it is wired explicitly because supervisord's
+      # children inherit the container env as-is).
+      MODULO_SYSTEM_DATABASE_URL: postgresql+asyncpg://modulo_system:${MODULO_DB_PASSWORD:?MODULO_DB_PASSWORD is required - set it in deploy/compose/.env, see .env.prod.example}@postgres:5432/modulo
+      # Settings.saq_worker_db_pool_size - the bundled postgres:16-alpine
+      # defaults to max_connections=100, while Settings' own default (65, sized
+      # for Fly's 300-connection Postgres) would let the runs worker and the
+      # system worker alone permit 130. 20 is exactly the worker floor at the
+      # default SAQ_WORKER_CONCURRENCY=5 (concurrency*3+5), so nothing is
+      # starved; the floor still raises it automatically if concurrency is
+      # raised. On a tier with a larger max_connections, override it here.
+      SAQ_WORKER_DB_POOL_SIZE: ${SAQ_WORKER_DB_POOL_SIZE:-20}
+      # SMTP for the app's own HITL alert email - Settings.smtp_host /
+      # smtp_port / smtp_username / smtp_password / email_from /
+      # alert_email_to. The same names are consumed by the watchdog service
+      # below, so ONE SMTP block in .env configures both (the claim the
+      # watchdog comment already made, which was only true for the watchdog
+      # until these were passed through here). Email stays disabled while
+      # SMTP_HOST is empty, exactly as before.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  # Health watchdog (Gatus) - same image and config as the root
+  # docker-compose.yml's watchdog: built from ../watchdog and mounted from
+  # there, so nothing is duplicated in this directory. Enabled by default.
+  #
+  # Probes THIS deployment over the compose network: the all-in-one image
+  # serves the app behind nginx on port 80, whose `location /health` prefix
+  # proxies /healthz/ready through to uvicorn - uvicorn's own 127.0.0.1:8000
+  # is loopback-bound inside the container, so backend:8000 (the root compose's
+  # target) does not exist here.
+  #
+  # No `depends_on` on `modulo`, deliberately: this service reports the app
+  # being unhealthy, so it must start regardless. Monitoring is on from the
+  # first `up`; email alerting stays off until SMTP_HOST / SMTP_PORT /
+  # EMAIL_FROM / ALERT_EMAIL_TO are set (the same variables the app uses for
+  # HITL email - one SMTP setup serves both). See deploy/watchdog/README.md.
+  watchdog:
+    build: ../watchdog
+    restart: unless-stopped
+    environment:
+      WATCHDOG_PROBE_URL: http://modulo:80/healthz/ready
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+    volumes:
+      - ../watchdog/config.yaml:/config/config.yaml:ro
+    ports:
+      # Loopback-only dashboard. 8083 rather than the root compose's 8082 so
+      # a root-compose stack and this one can share a host; it collides with
+      # nothing in this file (the modulo app publishes ${PORT:-80}:80).
+      - "127.0.0.1:8083:8080"
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      # Match the root compose's grace window: the 5s interval makes the
+      # probes during container start count against `retries`, so a slow
+      # dashboard start would otherwise flap `unhealthy`.
+      start_period: 10s
 
 volumes:
   postgres_data:

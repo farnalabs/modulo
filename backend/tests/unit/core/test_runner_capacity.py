@@ -20,6 +20,7 @@ from modulo.core.runner_capacity import (
     MARKER_STATE_SCRIPT_EXECUTING,
     RUNNER_PROVIDER_DOCKER,
     RUNNER_PROVIDER_E2B,
+    RUNNER_PROVIDER_KUBERNETES,
     RUNNER_PROVIDER_LOCAL,
     RunnerCapacityDecision,
     RunnerCapacityDeniedError,
@@ -190,9 +191,47 @@ def test_build_dispatch_marker_local_provider() -> None:
     assert parsed["state"] == "dispatching"
 
 
+def test_build_dispatch_marker_kubernetes_provider() -> None:
+    """FAR-1051: a pod dispatch is attributed to its own tier.
+
+    Before this, the only provider values in the marker vocabulary were
+    runner_docker/e2b/local, so a Kubernetes dispatch had nowhere to record
+    which tier ran it and the capacity count could not see it at all.
+    """
+    marker = build_dispatch_marker("k", RUNNER_PROVIDER_KUBERNETES)
+    parsed = json.loads(marker)
+    assert parsed["provider"] == "kubernetes"
+    assert parsed["state"] == "dispatching"
+    assert parse_marker_provider(marker) == RUNNER_PROVIDER_KUBERNETES
+
+
+def test_host_resource_bucket_includes_kubernetes() -> None:
+    """FAR-1051: a Kubernetes dispatch counts toward the deployment's own
+    capacity bucket (the absent-key default cap), instead of being silently
+    uncounted alongside a tier that has no Modulo-readable per-org quota."""
+    assert RUNNER_PROVIDER_KUBERNETES in HOST_RESOURCE_PROVIDERS
+    # e2b keeps its platform-side concurrency quota and stays excluded.
+    assert RUNNER_PROVIDER_E2B not in HOST_RESOURCE_PROVIDERS
+
+
+def test_host_resource_filter_sql_matches_the_python_bucket() -> None:
+    """The DB count scope and the gate's membership test must stay in step.
+
+    The two live in different layers (core owns the gate's membership set,
+    db owns the count body); a provider added to one and not the other makes
+    the gate deny on a count that never included the tier being admitted.
+    """
+    from modulo.db.crud.run import RUNNER_HOST_RESOURCE_FILTER_SQL
+
+    missing = [p for p in sorted(HOST_RESOURCE_PROVIDERS) if f"'{p}'" not in RUNNER_HOST_RESOURCE_FILTER_SQL]
+    assert not missing, f"RUNNER_HOST_RESOURCE_FILTER_SQL does not count {missing}"
+    # Legacy tier-less markers still attribute to Docker (fail-safe).
+    assert "'runner_docker')" in RUNNER_HOST_RESOURCE_FILTER_SQL
+
+
 def test_build_dispatch_marker_always_includes_provider_and_written_at() -> None:
     """FAR-995: every marker carries provider + written_at — no tier-less shape."""
-    for provider in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL):
+    for provider in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL, RUNNER_PROVIDER_KUBERNETES):
         marker = build_dispatch_marker("k", provider)
         parsed = json.loads(marker)
         assert "provider" in parsed, f"provider missing for {provider}"
@@ -289,7 +328,7 @@ async def test_contract_flag_on_absent_key_activates_docker_tier_default(monkeyp
     cap, host_only = await read_runner_cap_contract(MagicMock(), _ORG)
     assert cap == 4
     assert host_only is True
-    assert {RUNNER_PROVIDER_DOCKER, "local"} == HOST_RESOURCE_PROVIDERS
+    assert {RUNNER_PROVIDER_DOCKER, "local", RUNNER_PROVIDER_KUBERNETES} == HOST_RESOURCE_PROVIDERS
 
 
 async def test_contract_flag_on_explicit_value_gates_all_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -735,7 +774,12 @@ async def test_acquire_slot_marker_carrying_provider(monkeypatch: pytest.MonkeyP
     captured_markers: list[str] = []
     factory = _marker_capturing_factory(captured_markers)
 
-    for provider_val in (RUNNER_PROVIDER_DOCKER, RUNNER_PROVIDER_E2B, RUNNER_PROVIDER_LOCAL):
+    for provider_val in (
+        RUNNER_PROVIDER_DOCKER,
+        RUNNER_PROVIDER_E2B,
+        RUNNER_PROVIDER_LOCAL,
+        RUNNER_PROVIDER_KUBERNETES,
+    ):
         slot = await acquire_runner_dispatch_slot(
             factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=provider_val
         )
@@ -1433,7 +1477,8 @@ async def test_sweep_acquires_marker_lock_on_dedicated_connection(
     # that SAME handle (the unlock ran and the connection closed).
     assert lock_engine.connect_calls == 1, "the dedup lock must use exactly one dedicated connection"
     assert lock_engine.unlock_calls == 1, "the lock must be released on the acquiring connection"
-    assert lock_engine.last_conn is not None and lock_engine.last_conn.unlocked
+    assert lock_engine.last_conn is not None
+    assert lock_engine.last_conn.unlocked
     assert lock_engine.close_calls == 1, "the dedicated connection must be closed after the sweep"
     assert not any("runner.capacity.marker_sweep_lock_failed" in r.message for r in caplog.records), (
         "the advisory lock must be acquired — the lock_failed fail-open path must not fire"
