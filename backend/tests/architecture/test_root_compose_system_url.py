@@ -9,11 +9,13 @@ tier GATES readiness with HTTP 503 (FAR-199): the API answers while the
 deployment never becomes ready.
 
 * ``saq-system`` runs the cron and needs the URL to authenticate.
-* ``backend`` needs it too: the entrypoint's ``bootstrap_role`` parses the
-  role password out of this URL when it creates/alters ``modulo_system``, so
-  a backend without it would re-randomise the password the worker's URL
-  depends on; the backend's own cross-org reads (pre-auth SSO provider
-  lookup, Fernet key rotation) use the same URL.
+* ``backend`` needs it too: the entrypoint's ``bootstrap_role`` reconciles
+  the ``modulo_system`` password from this URL when it creates/alters the
+  role, so a backend that creates the role without it would leave a random
+  placeholder the worker's URL could never authenticate against (FAR-1519: an
+  unconfigured URL no longer re-randomises an existing credential - it only
+  creates a *missing* role with a placeholder); the backend's own cross-org
+  reads (pre-auth SSO provider lookup, Fernet key rotation) use the same URL.
 
 Structural guard: deleting the variable from either service fails here,
 instead of surfacing as a permanently-red readiness endpoint on the next
