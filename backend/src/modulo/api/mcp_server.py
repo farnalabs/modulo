@@ -3059,6 +3059,155 @@ async def _append_mcp_hitl_denial_audit(
         _log.exception("mcp.hitl_denial_audit_failed", extra={"org_id": str(org_id)})
 
 
+def _validate_graph_update(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Validate an MCP graph-update payload before it touches the database.
+
+    Covers, in order: the REST-parity Pydantic structural contract, the
+    FAR-296 mode-aware ``sandbox_agent`` gate, and the FAR-613 HITL
+    gate-description requirement. Returns the standard ``validation_failed``
+    envelope on the first failure, else None.
+
+    FAR-613: the MCP path never runs the full graph validator, and a node's
+    ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
+    edge-level ``HitlReviewConfig`` Pydantic contract entirely — so the HITL
+    gate-description requirement is enforced here explicitly. An
+    agent-authored gate is exactly where an unexplained gate most needs its
+    decision briefing: a node-level or edge-level gate without a
+    human-provided description is rejected with the same
+    ``validation_failed`` shape as structural validation failures.
+    The check is single-sourced with the save-time validator via the public
+    helper (deliberately NOT the full ``validate_definition`` — that would
+    surface every pre-existing issue and break MCP flows).
+
+    DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
+    description check; do NOT wire the full ``validate_definition`` here.
+    Rationale for keeping the narrow check: it enforces the one rule an
+    agent-authored graph would most plausibly violate (an unexplained
+    gate) at the only surface that bypasses the Pydantic contract, with
+    zero false positives. Rationale for deferring full validation: the
+    MCP tool writes onto pipelines that may predate any validator rule —
+    running the full validator would reject a write because of PRE-EXISTING
+    unrelated issues (legacy topology, schema drift), blocking legitimate
+    MCP flows for defects this call did not introduce; save-time
+    enforcement for REST writes stays the forcing function, and the
+    editor surfaces legacy violations to the user (PipelineEditorView
+    banner, FAR-688) instead of blocking the read.
+    """
+    # Validate graph structure using Pydantic models (same as REST endpoint)
+    from pydantic import ValidationError as _PydanticValidationError
+
+    from modulo.api.routes.pipelines import PipelineGraphUpdate
+
+    try:
+        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
+    # Pydantic model, node runner, and GraphValidator use, applied to the
+    # raw node dicts so this gate agrees with save-time and run-time
+    # validation even if the Pydantic surface is bypassed.
+    sandbox_err = _validate_sandbox_nodes(nodes)
+    if sandbox_err:
+        return sandbox_err
+
+    from modulo.core.graph_validator import check_hitl_review_descriptions as _check_hitl_descriptions
+
+    hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
+    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
+    if hitl_description_errors:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {'; '.join(hitl_description_errors)}",
+        }
+    return None
+
+
+async def _replace_pipeline_graph_txn(
+    org_id: uuid.UUID,
+    pid: uuid.UUID,
+    pipeline_id: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    *,
+    is_privileged: bool,
+    graph_account_id: uuid.UUID | None,
+    is_guardrail_admin: bool,
+) -> tuple[list[Any], list[Any]] | dict[str, Any]:
+    """Run the MCP graph replacement inside its own bounded-lock session.
+
+    Returns ``(updated_nodes, updated_edges)`` on success or a standard error
+    envelope (``pipeline_not_found`` / team-scope / connector-team-mismatch)
+    when the write must not proceed.
+    """
+    from modulo.api.routes.pipelines import _set_mutation_row_lock_timeout
+    from modulo.core.team_visibility import (
+        CONNECTOR_TEAM_MISMATCH,
+        connector_team_mismatch_detail,
+        extract_connector_bindings,
+        find_connector_team_mismatches,
+    )
+    from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+
+    async with _session(org_id) as s:
+        # FAR-1361: bound every row-lock wait in this transaction BEFORE its
+        # first lock. The MCP graph-update transaction opens its own
+        # ``_session`` and never runs the REST layer's in-txn team gate, so
+        # without this the graph write's ``SELECT ... FOR UPDATE``
+        # (``replace_pipeline_graph``) is an UNBOUNDED wait on a contended
+        # pipeline row - a held lock parks a pooled connection indefinitely.
+        # The helper is transaction-scoped (``set_config(..., is_local =>
+        # true)`` == ``SET LOCAL``) and dialect-gated, so it reverts on
+        # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
+        # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
+        # mutation endpoints use).
+        await _set_mutation_row_lock_timeout(s)
+
+        pipeline = await get_pipeline(s, pid)
+        if pipeline is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        if _team_scoped_key_mismatch(pipeline.owner_team_id):
+            return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1181: the graph READ masks env_vars/context_files/parameter
+        # values; a full-replace write round-tripping that masked read must
+        # not persist the mask literals over the stored secrets. Echoes are
+        # resolved against the stored graph before the write commits — the
+        # same parity routes/pipelines.py applies on REST graph writes.
+        nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
+        mismatches = await find_connector_team_mismatches(
+            s,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline.owner_team_id,
+            connector_bindings=extract_connector_bindings(nodes),
+        )
+        if mismatches:
+            return {
+                "error": CONNECTOR_TEAM_MISMATCH,
+                "detail": connector_team_mismatch_detail(mismatches),
+            }
+        # FAR-309 PR A review: the guardrail-binding strip guard runs in the
+        # service layer (replace_pipeline_graph, under the row lock) — the
+        # MCP surface inherits it via caller_type="mcp".
+        result = await replace_pipeline_graph(
+            s,
+            pipeline_id=pid,
+            org_id=org_id,
+            nodes=nodes,
+            edges=edges,
+            is_privileged=is_privileged,
+            caller_type="mcp",
+            account_id=graph_account_id,
+            is_guardrail_admin=is_guardrail_admin,
+        )
+        if result is None:
+            return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+        updated_nodes, updated_edges = result
+    return updated_nodes, updated_edges
+
+
 async def _update_pipeline_graph_impl(
     pipeline_id: str,
     nodes: list[dict[str, Any]],
@@ -3067,13 +3216,6 @@ async def _update_pipeline_graph_impl(
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("update_pipeline_graph")
-    from modulo.core.team_visibility import (
-        CONNECTOR_TEAM_MISMATCH,
-        connector_team_mismatch_detail,
-        extract_connector_bindings,
-        find_connector_team_mismatches,
-    )
-    from modulo.db.crud.pipeline import replace_pipeline_graph
 
     org_id = _ctx_org_id_val()
     pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
@@ -3086,11 +3228,7 @@ async def _update_pipeline_graph_impl(
     # guarded function hardcodes is_privileged=False when
     # caller_type=="mcp" (no DB query); the literal below is enforced by a
     # .semgrep/ rule (mcp call site must pass the literal, not a variable).
-    from modulo.api.routes.pipelines import (
-        PipelineGraphUpdate,
-        _is_privileged,
-        _set_mutation_row_lock_timeout,
-    )
+    from modulo.api.routes.pipelines import _is_privileged
 
     is_privileged = _is_privileged(_ctx_role_val(), _ctx_key_grants.get(None))
 
@@ -3118,116 +3256,21 @@ async def _update_pipeline_graph_impl(
     except McpAuthContextError:
         graph_account_id = None
 
-    # Validate graph structure using Pydantic models (same as REST endpoint)
-    from pydantic import ValidationError as _PydanticValidationError
+    validation_err = _validate_graph_update(nodes, edges)
+    if validation_err is not None:
+        return validation_err
 
     try:
-        PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
-    except _PydanticValidationError as exc:
-        return {
-            "error": "validation_failed",
-            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
-        }
-
-    # FAR-296 mode-aware sandbox_agent gate — the SAME shared helper the
-    # Pydantic model, node runner, and GraphValidator use, applied to the
-    # raw node dicts so this gate agrees with save-time and run-time
-    # validation even if the Pydantic surface is bypassed.
-    sandbox_err = _validate_sandbox_nodes(nodes)
-    if sandbox_err:
-        return sandbox_err
-
-    # FAR-613: the MCP path never runs the full graph validator, and a node's
-    # ``hitl_config`` is an unvalidated ``dict[str, Any]`` that bypasses the
-    # edge-level ``HitlReviewConfig`` Pydantic contract entirely — so the HITL
-    # gate-description requirement is enforced HERE explicitly. An
-    # agent-authored gate is exactly where an unexplained gate most needs its
-    # decision briefing: a node-level or edge-level gate without a
-    # human-provided description is rejected with the same
-    # ``validation_failed`` shape as structural validation failures.
-    # The check is single-sourced with the save-time validator via the public
-    # helper (deliberately NOT the full ``validate_definition`` — that would
-    # surface every pre-existing issue and break MCP flows).
-    #
-    # DECIDED (FAR-688, Conductor decision): KEEP this narrow node-level
-    # description check; do NOT wire the full ``validate_definition`` here.
-    # Rationale for keeping the narrow check: it enforces the one rule an
-    # agent-authored graph would most plausibly violate (an unexplained
-    # gate) at the only surface that bypasses the Pydantic contract, with
-    # zero false positives. Rationale for deferring full validation: the
-    # MCP tool writes onto pipelines that may predate any validator rule —
-    # running the full validator would reject a write because of PRE-EXISTING
-    # unrelated issues (legacy topology, schema drift), blocking legitimate
-    # MCP flows for defects this call did not introduce; save-time
-    # enforcement for REST writes stays the forcing function, and the
-    # editor surfaces legacy violations to the user (PipelineEditorView
-    # banner, FAR-688) instead of blocking the read.
-    from modulo.core.graph_validator import check_hitl_review_descriptions as _check_hitl_descriptions
-
-    hitl_issues = _check_hitl_descriptions({"nodes": nodes, "edges": edges})
-    hitl_description_errors = [i.message for i in hitl_issues if i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED"]
-    if hitl_description_errors:
-        return {
-            "error": "validation_failed",
-            "detail": f"Graph validation failed: {'; '.join(hitl_description_errors)}",
-        }
-
-    try:
-        async with _session(org_id) as s:
-            from modulo.db.crud.pipeline import get_pipeline
-
-            # FAR-1361: bound every row-lock wait in this transaction BEFORE its
-            # first lock. The MCP graph-update transaction opens its own
-            # ``_session`` and never runs the REST layer's in-txn team gate, so
-            # without this the graph write's ``SELECT ... FOR UPDATE``
-            # (``replace_pipeline_graph``) is an UNBOUNDED wait on a contended
-            # pipeline row - a held lock parks a pooled connection indefinitely.
-            # The helper is transaction-scoped (``set_config(..., is_local =>
-            # true)`` == ``SET LOCAL``) and dialect-gated, so it reverts on
-            # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
-            # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
-            # mutation endpoints use).
-            await _set_mutation_row_lock_timeout(s)
-
-            pipeline = await get_pipeline(s, pid)
-            if pipeline is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            if _team_scoped_key_mismatch(pipeline.owner_team_id):
-                return _team_scope_error("pipeline", pipeline_id)
-            # FAR-1181: the graph READ masks env_vars/context_files/parameter
-            # values; a full-replace write round-tripping that masked read must
-            # not persist the mask literals over the stored secrets. Echoes are
-            # resolved against the stored graph before the write commits — the
-            # same parity routes/pipelines.py applies on REST graph writes.
-            nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
-            mismatches = await find_connector_team_mismatches(
-                s,
-                org_id=org_id,
-                pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_bindings=extract_connector_bindings(nodes),
-            )
-            if mismatches:
-                return {
-                    "error": CONNECTOR_TEAM_MISMATCH,
-                    "detail": connector_team_mismatch_detail(mismatches),
-                }
-            # FAR-309 PR A review: the guardrail-binding strip guard runs in the
-            # service layer (replace_pipeline_graph, under the row lock) — the
-            # MCP surface inherits it via caller_type="mcp".
-            result = await replace_pipeline_graph(
-                s,
-                pipeline_id=pid,
-                org_id=org_id,
-                nodes=nodes,
-                edges=edges,
-                is_privileged=is_privileged,
-                caller_type="mcp",
-                account_id=graph_account_id,
-                is_guardrail_admin=_mcp_is_guardrail_admin,
-            )
-            if result is None:
-                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            updated_nodes, updated_edges = result
+        outcome = await _replace_pipeline_graph_txn(
+            org_id,
+            pid,
+            pipeline_id,
+            nodes,
+            edges,
+            is_privileged=is_privileged,
+            graph_account_id=graph_account_id,
+            is_guardrail_admin=_mcp_is_guardrail_admin,
+        )
     except HitlReviewWeakeningDenied as exc:
         await _append_mcp_hitl_denial_audit(org_id, pid, exc)
         return {
@@ -3270,6 +3313,9 @@ async def _update_pipeline_graph_impl(
             }
         raise
 
+    if isinstance(outcome, dict):
+        return outcome
+    updated_nodes, updated_edges = outcome
     return {
         "pipeline_id": pipeline_id,
         # FAR-1181: mask the response so the MCP write surface cannot echo the
