@@ -2260,19 +2260,31 @@ async def _run_sweep_orgs(
     isolated via :func:`_enforce_org_streak`.
     """
     notify_budget = _STREAK_NOTIFY_MAX_PER_TICK
+    # FAR-1501: lazy import — cron_helpers imports THIS module at module
+    # level (the cycle documented at its import block), so the helper must be
+    # fetched at call time.
+    from modulo.core.cron_helpers import _bound_org
+
     for org_id in org_ids:
         if time.monotonic() > deadline:
             summary["budget_exceeded"] = True
             break
-        notify_budget = await _enforce_org_streak(
-            factory,
-            org_id,
-            redis_client=redis_client,
-            max_triggers_per_tick=max_triggers_per_tick,
-            deadline=deadline,
-            notify_budget=notify_budget,
-            summary=summary,
-        )
+        # FAR-1501: bind THIS org for the whole per-org tick so every
+        # ERROR/CRITICAL emitted inside it (streak-deactivation notify
+        # timeouts, mass-cascade alert failures) is attributed by
+        # ErrorTrackingLogHandler instead of dropped as no_org_context.
+        # ``_bound_org`` resets in finally, so the budget ``break`` and the
+        # next org's tick never inherit the binding.
+        async with _bound_org(org_id):
+            notify_budget = await _enforce_org_streak(
+                factory,
+                org_id,
+                redis_client=redis_client,
+                max_triggers_per_tick=max_triggers_per_tick,
+                deadline=deadline,
+                notify_budget=notify_budget,
+                summary=summary,
+            )
     return summary
 
 
