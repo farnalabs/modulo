@@ -2183,6 +2183,52 @@ class TestFireCronTrigger:
         assert log_event.await_args.kwargs["result"] == "no_pipeline"
 
     @pytest.mark.asyncio
+    async def test_unpinned_fire_runs_the_snapshot_frozen_at_fire_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1519 item 3: an UNPINNED fire auto-creates the snapshot from the
+        live graph and runs that fresh snapshot.
+
+        This is the inner ``snapshot_id is None`` success arm — distinct from the
+        pinned case (no auto-create) and the pipeline-missing case (auto-create
+        returns None). It is the behaviour the stale-snapshot defect violated:
+        the run must be pinned to the snapshot minted at fire time, not to a
+        pre-resolved "latest existing" snapshot.
+        """
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+        auto_snapshot = SimpleNamespace(id=uuid.uuid4())
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock, return_value=event),
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=auto_snapshot,
+            ) as make_snapshot,
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=None,
+            )
+
+        assert result["status"] == "fired"
+        assert result["run_id"] == str(run.id)
+        make_snapshot.assert_awaited_once()
+        # The run is pinned to the snapshot frozen at fire time, not a reused one.
+        assert create_run.await_args.kwargs["snapshot_id"] == auto_snapshot.id
+
+    @pytest.mark.asyncio
     async def test_advance_next_fire_at_writes_next_fire_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Legacy Celery path: advance_next_fire_at=True recomputes next_fire_at."""
         _patch_env(monkeypatch)
