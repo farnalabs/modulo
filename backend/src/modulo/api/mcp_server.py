@@ -198,8 +198,14 @@ _log = logging.getLogger(__name__)
 
 # S1192: hoisted duplicated literals (rate-limit bucket fallback + tool error
 # detail shared by the parameter-schema restore/restore-set paths).
+# NOTE: the OR_DELETED suffix is REQUIRED — this module already defines a
+# pre-existing ``_MSG_PARAM_SCHEMA_NOT_FOUND`` ("Parameter schema not found",
+# the lookup/list tools' message) further down, and a same-named second
+# definition would bind LAST, silently shadowing one of the two values at
+# every call site (FAR-1522 regression: the restore payloads briefly emitted
+# the short string).
 _CLIENT_USER_UNKNOWN = "user:unknown"
-_MSG_PARAM_SCHEMA_NOT_FOUND = "Parameter schema not found or not deleted"
+_MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED = "Parameter schema not found or not deleted"
 
 _CT_APPLICATION_JSON = "application/json"
 _MSG_TOKEN_REVOKED = "Token revoked or expired - re-authenticate"  # nosec B105 -- user-facing error message string, NOT a secret credential
@@ -8897,12 +8903,12 @@ async def restore_parameter_schema(
         async with _session(org_id) as s:
             existing = await db_get_ps(s, sid)
             if existing is None or existing.organisation_id != org_id:
-                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
             schema = await db_restore_ps(s, sid)
 
         if schema is None:
-            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
+            return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
         return {
             "data": {
@@ -9320,7 +9326,7 @@ async def restore_parameter_set(
         async with _session(org_id) as s:
             schema = await db_get_ps(s, sid)
             if schema is None or schema.organisation_id != org_id:
-                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND}
+                return {"error": "not_found", "detail": _MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED}
 
             existing = await db_get_set(s, setid)
             if existing is None or existing.parameter_schema_id != sid or existing.organisation_id != org_id:
