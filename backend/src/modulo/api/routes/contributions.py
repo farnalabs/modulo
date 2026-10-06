@@ -12,7 +12,9 @@ from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.api.routes.library import LibraryPrimitiveResponse
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.library_service import (
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
@@ -62,7 +64,11 @@ class ContributionStatusResponse(BaseModel):
     slug: str
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("contribution_created", "contribution", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("contributions.create_contribution")
 async def create_contribution(
     req: ContributeFixtureRequest,
@@ -121,7 +127,10 @@ async def create_contribution(
     )
 
 
-@router.post("/{primitive_id}/submit")
+@router.post(
+    "/{primitive_id}/submit",
+    dependencies=[Depends(audited("contribution_submitted", "contribution", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("contributions.submit_for_review")
 async def submit_for_review(
     primitive_id: uuid.UUID,
@@ -173,7 +182,10 @@ async def submit_for_review(
     )
 
 
-@router.post("/{primitive_id}/publish")
+@router.post(
+    "/{primitive_id}/publish",
+    dependencies=[Depends(audited("contribution_published", "contribution", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("contributions.publish_contribution_endpoint")
 async def publish_contribution_endpoint(
     primitive_id: uuid.UUID,
@@ -241,7 +253,13 @@ class VersionListResponse(BaseModel):
     total: int
 
 
-@router.post("/{primitive_id}/versions", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{primitive_id}/versions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("contribution_version_created", "contribution", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("contributions.submit_contribution_version_endpoint")
 async def submit_contribution_version_endpoint(
     primitive_id: uuid.UUID,
