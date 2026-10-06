@@ -1960,7 +1960,8 @@ async def test_watchdog_drain_probe_failure_keeps_offset_and_preserves_exc(caplo
     assert not wd._drained_chunks
     assert any("log_drain_probe_failed" in m for m in caplog.messages)
     records = [r for r in caplog.records if "log_drain_probe_failed" in r.getMessage()]
-    assert records and records[0].exc_info is not None
+    assert records
+    assert records[0].exc_info is not None
     assert isinstance(records[0].exc_info[1], OSError)
 
 
@@ -1983,7 +1984,8 @@ async def test_watchdog_probe_log_growth_failure_is_quiet(caplog):
     assert any("watch_log_probe_failed" in m for m in caplog.messages)
     # FAR-909: the static token must not discard the underlying exception.
     records = [r for r in caplog.records if "watch_log_probe_failed" in r.getMessage()]
-    assert records and records[0].exc_info is not None
+    assert records
+    assert records[0].exc_info is not None
     assert isinstance(records[0].exc_info[1], OSError)
 
 
@@ -2041,7 +2043,8 @@ async def test_watchdog_probe_filesystem_list_failure_is_quiet(caplog):
     assert any("watch_fs_probe_failed" in m for m in caplog.messages)
     # FAR-909: the static token must not discard the underlying exception.
     records = [r for r in caplog.records if "watch_fs_probe_failed" in r.getMessage()]
-    assert records and records[0].exc_info is not None
+    assert records
+    assert records[0].exc_info is not None
     assert isinstance(records[0].exc_info[1], OSError)
 
 
@@ -2103,7 +2106,8 @@ async def test_watchdog_probe_filesystem_invalid_listing_is_quiet(caplog):
     # static token keeps the exception.
     assert any("watch_fs_probe_failed" in m for m in caplog.messages)
     records = [r for r in caplog.records if "watch_fs_probe_failed" in r.getMessage()]
-    assert records and records[0].exc_info is not None
+    assert records
+    assert records[0].exc_info is not None
     assert isinstance(records[0].exc_info[1], RuntimeError)
 
 

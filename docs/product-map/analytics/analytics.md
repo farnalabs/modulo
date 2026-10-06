@@ -75,6 +75,15 @@ reports resolve against a consistent fact model.
       and the metric survives the run purge; NULL when the bucket has no
       sample, never 0 (`core/analytics/builder.py`,
       `backend/tests/unit/api/test_analytics_export_contract.py`)
+- [x] Node-deadline watchdog firings (FAR-1463): every query bucket carries
+      `node_deadline_watchdog_fired_count`, the `SUM` of the per-run
+      `RunDailyFact` column (COALESCEd to 0 — count semantics, never NULL for
+      an empty bucket), and the per-run export item carries the raw
+      `node_deadline_watchdog_fired_count`. This is the observability signal
+      the `error_code` dimension can never show: the FAR-1463 firing record is
+      written whether the kill re-dispatched (which nulls `error_code`) or
+      terminal-failed (`core/analytics/builder.py`,
+      `api/routes/analytics.py`, `backend/tests/unit/test_analytics_facts.py`)
 - [x] Concurrency (`/concurrency`) reports the pooled slot-utilisation series
       (`pool_reference` + per-bucket `max_active`/`avg_active`/`max_queued`/
       `avg_queued`), and the guardrail scorecard (`/guardrails`) is labelled
@@ -87,6 +96,15 @@ reports resolve against a consistent fact model.
 
 ## QA History
 
+- 2026-10-05: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1463 analytics surface: the query bucket now carries
+  `node_deadline_watchdog_fired_count` (SUM over the bucket's runs, COALESCEd
+  to 0) and the export item the raw per-run count, so a node-deadline watchdog
+  firing is visible without log access even when the kill re-dispatched and
+  nulled `error_code`. Added the checked behaviour line plus the
+  `core/analytics/builder.py` / `api/routes/analytics.py` and
+  `test_analytics_facts.py` citations. The run-side recording is cited under
+  `feat-runs`.
 - 2026-10-03: **Improve Architecture product-map walk** – closed the
   `feat-analytics` tracker lag left by FAR-1421 (merged 2026-09-25): the
   manifest `feat-analytics` registry carried the claim→dispatch latency

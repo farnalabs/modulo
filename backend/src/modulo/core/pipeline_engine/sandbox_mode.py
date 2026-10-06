@@ -99,6 +99,7 @@ def derive_sandbox_capabilities(
     node_def: dict[str, Any],
     *,
     profile_network_policy: str | None = None,
+    provider_type: str | None = None,
 ) -> dict[str, bool | None]:
     """Mechanically derive a sandbox_agent node's capability profile.
 
@@ -141,6 +142,20 @@ def derive_sandbox_capabilities(
     from the canonical resolution of BOTH node and profile values — so the
     certified capability matches what the runtime actually enforces.
 
+    ``provider_type`` (FAR-1051): the bound environment profile's declared
+    runtime-provider type.  When provided, the egress resolution runs under
+    THAT provider's tier instead of the historical reference ``e2b`` tier, so
+    the certificate matches what dispatch actually enforces for the profile
+    the node is bound to.  A tier that cannot enforce the resolved policy
+    (e.g. ``deny_all`` on ``kubernetes``, where bounded egress is the
+    customer's NetworkPolicy) resolves the capability to ``None`` — fail-closed
+    unknown — instead of certifying an enforcement the provider never
+    performs while dispatch refuses the run.  An unrecognised provider type
+    resolves to the raw value as the tier, which the resolver refuses as an
+    unknown tier (also fail-closed).  When absent (no bound profile, or a
+    direct caller) the reference tier stays ``e2b`` — unchanged legacy
+    behaviour for every existing caller.
+
     The derivation is MECHANICAL — it reads the node's actual validated
     configuration, never a declared claim — so a conformance hard-block can
     CERTIFY what is genuinely enforced (egress, read-only workspace, scoped git
@@ -161,10 +176,18 @@ def derive_sandbox_capabilities(
 
     # FAR-1085: derive egress capability from the canonical resolution
     # (node + profile -> effective policy) instead of reading the node
-    # config in isolation.  The "e2b" tier is used as the reference tier
-    # because it can enforce all three policies (default, deny_all, selected).
-    # When profile_network_policy is None (not plumbed), this falls back to
-    # the node-only derivation -- backward-compatible with existing callers.
+    # config in isolation.  When profile_network_policy is None (not
+    # plumbed), this falls back to the node-only derivation --
+    # backward-compatible with existing callers.
+    #
+    # FAR-1051: the reference tier follows the profile's RESOLVED provider
+    # (previously hardcoded to "e2b", which could certify an enforcement the
+    # bound provider never performs — e.g. a kubernetes profile with
+    # network_policy=none certified sandbox.egress=False while dispatch
+    # refused the same combination).  Absent provider_type keeps the legacy
+    # "e2b" reference tier; an unrecognised provider type passes through RAW
+    # so resolve_egress refuses it as an unknown tier (fail-closed) instead
+    # of defaulting to an enforceable one.
     #
     # Fail-closed guard: an unrecognised egress_policy string (not in the
     # valid vocabulary) returns None (unknown) regardless of what resolve_egress
@@ -176,11 +199,17 @@ def derive_sandbox_capabilities(
     else:
         from modulo.core.pipeline_engine.egress import resolve_egress
 
+        _tier = "e2b"
+        if isinstance(provider_type, str) and provider_type.strip():
+            from modulo.core.runtime_provider import egress_tier_for_provider_type
+
+            _normalized_provider = provider_type.strip().lower()
+            _tier = egress_tier_for_provider_type(_normalized_provider) or _normalized_provider
         _egress_res = resolve_egress(
             node_egress_policy=raw_egress,
             node_egress_allowlist=node_def.get("egress_allowlist"),
             profile_network_policy=profile_network_policy,
-            tier="e2b",
+            tier=_tier,
         )
         if _egress_res.refusal is not None:
             # Tier cannot enforce -- capability is unknown (fail-closed).

@@ -42,6 +42,7 @@ from modulo.core.pipeline_engine.runtime_retry import (
 )
 from modulo.db.crud.run import SandboxConcurrencyLimit
 from modulo.otel_bridge import trace_id_for_thread
+from tests.unit.api.mock_session import make_empty_execute_result
 
 
 class _InterruptState(TypedDict, total=False):
@@ -2749,6 +2750,12 @@ def _make_capacity_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # Every admissible-claim test exercises the real fail-safe DB reads
+    # (org run-cap settings, pipeline-name audit lookup, audit chain head)
+    # against this shared session; an unconfigured AsyncMock execute leaks a
+    # never-awaited coroutine the moment its result's scalar readers are
+    # called (FAR-739). Give it the shared plain-MagicMock empty result instead.
+    session.execute = AsyncMock(return_value=make_empty_execute_result())
     return session
 
 

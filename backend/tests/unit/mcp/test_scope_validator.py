@@ -20,6 +20,7 @@ from modulo.core.mcp.scope_validator import (
     VALID_CALLER_SCOPE_CLASSIFICATIONS,
     MCPAuthorizationError,
     MCPConfigurationError,
+    _denial_message,
     check_tool_scope,
     classify_caller_scope,
     resolve_tool_access,
@@ -218,6 +219,31 @@ class TestCheckToolScope:
         with pytest.raises(MCPAuthorizationError) as excinfo:
             check_tool_scope("admin", None)  # type: ignore[arg-type]
         assert "must be a string" in str(excinfo.value)
+
+    def test_grant_denied_reports_grant_message(self) -> None:
+        """FAR-1477 leg 5: a role-sufficient caller whose grant-set omits the
+        permission is denied with the grant-specific message."""
+        with pytest.raises(MCPAuthorizationError) as excinfo:
+            check_tool_scope("operator", "create_pipeline", grants=frozenset({"run.trigger"}))
+        assert "which is not granted to this API key" in str(excinfo.value)
+        assert "pipeline.create" in str(excinfo.value)
+
+    def test_grant_permitted_leaves_default_denial_message(self) -> None:
+        """The re-derived denial falls through to the default when every leg
+        (including leg 5) passes — the single-fault fallback branch."""
+        message = _denial_message(
+            tool_name="create_pipeline",
+            normalized="create_pipeline",
+            action=None,
+            act=None,
+            current_role="operator",
+            key_scope=None,
+            auth_type="api_key",
+            allowed_set=None,
+            kill_switch=True,
+            grants=None,
+        )
+        assert message == "Tool 'create_pipeline' access denied"
 
 
 class TestReviewHitlActionScopes:

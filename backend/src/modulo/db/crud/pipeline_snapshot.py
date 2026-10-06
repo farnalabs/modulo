@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -26,6 +26,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
+from modulo.db.sqlstates import sqlstate_of
 from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import get_settings
 
@@ -64,6 +65,70 @@ _SNAPSHOT_LOCK_ACQUIRE_TIMEOUT_SECONDS = 5.0
 _SNAPSHOT_LOCK_ENGINES: dict[str, AsyncEngine] = {}
 
 _log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2: bounded OPTIMISTIC retry of the snapshot_version allocation
+# ---------------------------------------------------------------------------
+# The advisory lock is released in ``create_snapshot_from_live_graph``'s
+# ``finally`` — BEFORE the caller's transaction commits — so a second creator can
+# grab the lock inside that window, read the same ``max(snapshot_version)+1`` and
+# collide on ``uq_pipeline_snapshot_version`` at insert time. The lock cannot be
+# held across the caller's commit (it lives on its own connection and the caller
+# owns the transaction), so the collision is resolved the optimistic way: a
+# SAVEPOINT contains the read+insert, and an ``IntegrityError`` on that unique
+# constraint is rolled back to the savepoint and retried with a freshly read
+# version. Module-level so tests can patch the bound.
+SNAPSHOT_VERSION_ATTEMPTS = 3
+
+# The unique constraint whose violation identifies an allocation collision.
+_SNAPSHOT_VERSION_CONSTRAINT = "uq_pipeline_snapshot_version"
+
+# SQLSTATE ``insufficient_privilege`` — what Postgres raises when
+# ``pg_terminate_backend`` is called by a role that is neither superuser nor a
+# member of ``pg_signal_backend``.
+_INSUFFICIENT_PRIVILEGE_SQLSTATE = "42501"
+
+
+class SnapshotVersionAllocationError(IntegrityError):
+    """Raised when the bounded snapshot_version allocation retry is exhausted.
+
+    Subclasses ``IntegrityError`` on purpose: the collision it reports is
+    exactly the unique-constraint failure callers already handle, so every
+    existing ``except IntegrityError`` arm (route → 409 via ``handle_db_errors``,
+    trigger engine, MCP) keeps its current mapping while this subclass carries a
+    specific, actionable message. It is raised — never a silent ``None`` — after
+    ``SNAPSHOT_VERSION_ATTEMPTS`` attempts, with the original driver error
+    chained as ``__cause__``.
+    """
+
+    def __init__(self, pipeline_id: uuid.UUID, attempts: int) -> None:
+        self.pipeline_id = pipeline_id
+        self.attempts = attempts
+        message = (
+            f"could not allocate snapshot_version for pipeline {pipeline_id} after {attempts} attempts: "
+            f"concurrent creators kept colliding on {_SNAPSHOT_VERSION_CONSTRAINT}"
+        )
+        super().__init__(message, {}, RuntimeError(message))
+
+
+class SnapshotLockTerminateDeniedError(RuntimeError):
+    """``pg_terminate_backend`` refused: the database role lacks the signal right.
+
+    ``pg_terminate_backend`` requires superuser or membership in the
+    ``pg_signal_backend`` predefined role. The endpoint that raises this stays
+    live and answers with a typed 403 so an operator sees the exact grant to
+    apply (``GRANT pg_signal_backend TO "<app role>";``) instead of a generic
+    500. Raised by :func:`terminate_snapshot_lock_holders`.
+    """
+
+    def __init__(self, sqlstate: str | None) -> None:
+        self.sqlstate = sqlstate
+        super().__init__(
+            "the database role is not permitted to terminate other backends: "
+            "pg_terminate_backend requires superuser or "
+            'membership in pg_signal_backend (GRANT pg_signal_backend TO "<app role>";)'
+        )
 
 
 def _snapshot_lock_engine(session: AsyncSession) -> AsyncEngine:
@@ -323,6 +388,104 @@ async def _release_snapshot_lock(lock_conn: AsyncConnection, *, key1: int, key2:
         _log.warning("snapshot_lock_unlock_failed", exc_info=True)
     finally:
         await _dispose_snapshot_lock_connection(lock_conn, can_pool=unlocked)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1287 Part 2 (Workstream A): operator inspection / clear path for a
+# wedged snapshot advisory lock.
+# ---------------------------------------------------------------------------
+# ``pg_advisory_unlock`` only works on the connection that holds the lock, so a
+# lock stranded by a dead or wedged backend CANNOT be unlocked from another
+# session — the only primitive that clears it is terminating the holding
+# backend. These two helpers derive the SAME keys :func:`_pipeline_lock_keys`
+# derives for acquisition and read/act on ``pg_locks`` with those keys only.
+
+# ``pg_locks.classid``/``objid`` are uint32: the signed int4 keys are recorded
+# as a uint32 BIT-CAST (verified in Part 1 — ``pg_try_advisory_lock(-123456789)``
+# lands at ``classid = 4171510507`` = ``-123456789 & 0xFFFFFFFF``, and binding
+# the signed value fails with "value out of uint32 range"), so every predicate
+# below binds the MASKED keys.
+_SNAPSHOT_LOCK_HOLDER_SQL = text(
+    "SELECT l.pid AS pid, a.application_name AS application_name, a.state AS state, "
+    "a.backend_start AS backend_start, a.query_start AS query_start, l.granted AS granted "
+    "FROM pg_locks AS l LEFT JOIN pg_stat_activity AS a ON a.pid = l.pid "
+    "WHERE l.locktype = 'advisory' AND l.classid = :key1 AND l.objid = :key2 "
+    "ORDER BY l.pid"
+)
+
+# Only GRANTED rows hold the lock — a waiter does not — and a backend is never
+# asked to terminate itself (belt-and-braces: this session never acquires the
+# snapshot lock, but a self-kill would take the request down mid-response).
+_SNAPSHOT_LOCK_HOLDER_PIDS_SQL = text(
+    "SELECT DISTINCT l.pid AS pid FROM pg_locks AS l "
+    "WHERE l.locktype = 'advisory' AND l.classid = :key1 AND l.objid = :key2 "
+    "AND l.granted AND l.pid <> pg_backend_pid() "
+    "ORDER BY l.pid"
+)
+
+_TERMINATE_BACKEND_SQL = text("SELECT pg_terminate_backend(:pid) AS terminated")
+
+
+def _masked_snapshot_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
+    """The pipeline's advisory keys, masked to the uint32 ``pg_locks`` domain."""
+    key1, key2 = _pipeline_lock_keys(pipeline_id)
+    return (key1 & 0xFFFFFFFF, key2 & 0xFFFFFFFF)
+
+
+async def inspect_snapshot_lock(session: AsyncSession, pipeline_id: uuid.UUID) -> dict[str, Any]:
+    """Report whether *pipeline_id*'s snapshot advisory lock is held, and by whom.
+
+    Reads ``pg_locks`` (restricted to this pipeline's derived keys) joined to
+    ``pg_stat_activity`` for the operator-facing detail. ``pg_locks`` is visible
+    to every role; the ``pg_stat_activity`` detail columns may come back NULL for
+    a viewer without ``pg_read_all_stats`` — every holder field is therefore
+    optional and the diagnostic still answers the load-bearing question
+    (``held``).
+
+    Read-only: it neither acquires nor releases anything, so it is safe to call
+    on a healthy pipeline.
+    """
+    key1, key2 = _masked_snapshot_lock_keys(pipeline_id)
+    result = await session.execute(_SNAPSHOT_LOCK_HOLDER_SQL, {"key1": key1, "key2": key2})
+    holders: list[dict[str, Any]] = [dict(row) for row in result.mappings().all()]
+    return {"held": bool(holders), "holders": holders}
+
+
+async def terminate_snapshot_lock_holders(session: AsyncSession, pipeline_id: uuid.UUID) -> dict[str, Any]:
+    """Terminate ONLY the backend(s) currently holding this pipeline's lock.
+
+    ``{"released": N, "pids": [...]}``; idempotent — no holder means
+    ``released: 0`` and success. The pids come from a ``pg_locks`` read of the
+    SAME derived keys (granted rows only, never this session), so a backend that
+    does not hold exactly those keys can never be touched.
+
+    A role without the signal right is reported as
+    :class:`SnapshotLockTerminateDeniedError` (SQLSTATE 42501) rather than a raw
+    driver error, so the route can answer with the grant it needs. Callers must
+    hold a write transaction — an aborted transaction is not recoverable here.
+    """
+    key1, key2 = _masked_snapshot_lock_keys(pipeline_id)
+    pid_result = await session.execute(_SNAPSHOT_LOCK_HOLDER_PIDS_SQL, {"key1": key1, "key2": key2})
+    pids = [int(pid) for pid in pid_result.scalars().all()]
+
+    terminated: list[int] = []
+    for pid in pids:
+        try:
+            result = await session.execute(_TERMINATE_BACKEND_SQL, {"pid": pid})
+        except SQLAlchemyError as exc:
+            # Specific before base: only the privilege refusal becomes the typed
+            # error; every other failure (transport, aborted txn) re-raises
+            # untouched for the route's normal error mapping.
+            if sqlstate_of(exc) == _INSUFFICIENT_PRIVILEGE_SQLSTATE:
+                raise SnapshotLockTerminateDeniedError(_INSUFFICIENT_PRIVILEGE_SQLSTATE) from exc
+            raise
+        if bool(result.scalar_one()):
+            terminated.append(pid)
+        else:
+            # Lost the race: the holder released/died between the read and the
+            # terminate. Not a failure — the lock is gone either way.
+            _log.info("snapshot_lock_terminate_race pid=%s pipeline_id=%s", pid, pipeline_id)
+    return {"released": len(terminated), "pids": terminated}
 
 
 async def _load_pipeline_and_edges(
@@ -707,6 +870,22 @@ def _add_snapshot_schema_pins(
             )
 
 
+def _is_snapshot_version_conflict(exc: IntegrityError) -> bool:
+    """True when *exc* is the ``uq_pipeline_snapshot_version`` unique violation.
+
+    The retry must only ever retry the allocation collision it exists for: an
+    unrelated integrity failure (FK, CHECK) would fail identically on every
+    attempt and must propagate unchanged. Identified from the driver message
+    (both asyncpg and psycopg name the violated constraint), with SQLSTATE
+    ``23505`` + the column name as a dialect-tolerant fallback.
+    """
+    message = str(exc)
+    if _SNAPSHOT_VERSION_CONSTRAINT in message:
+        return True
+    sqlstate = sqlstate_of(exc)
+    return sqlstate == "23505" and "snapshot_version" in message
+
+
 async def create_snapshot_from_live_graph(
     session: AsyncSession,
     *,
@@ -747,14 +926,32 @@ async def create_snapshot_from_live_graph(
     lock source fails fast instead of stalling. Raises
     SnapshotLockNotAvailableError only after a bound is exhausted.
 
-    KNOWN RESIDUAL — pre-existing, recorded for FAR-1287 Part 2 (do NOT fix
-    here): the lock is released in this function's ``finally``, i.e. BEFORE the
-    caller's transaction commits, so ``max(snapshot_version)+1`` is read and the
-    row written inside a window where a second creator — holding the lock right
-    after the release — can read the same max and collide on the unique
-    ``(pipeline_id, snapshot_version)`` at commit time. Part 1 only guarantees
-    the lock is always released; narrowing that window (or making the version
-    allocation itself atomic) is Part 2 work.
+    FAR-1287 Part 2 (version-allocation race): the lock is still released in
+    this function's ``finally``, i.e. BEFORE the caller's transaction commits —
+    that ordering is unchanged and unavoidable (the lock lives on its own
+    connection and the caller owns the commit). What Part 2 changed is the
+    consequence: ``max(snapshot_version)+1`` and the insert now run inside a
+    ``session.begin_nested()`` SAVEPOINT, and a collision on
+    ``uq_pipeline_snapshot_version`` is rolled back to that savepoint and
+    retried up to ``SNAPSHOT_VERSION_ATTEMPTS`` times with a freshly read max,
+    so a concurrent same-pipeline creator can no longer surface
+    ``IntegrityError`` at a caller. The window is still there; it is now
+    benign. Exhausting the bound raises
+    :class:`SnapshotVersionAllocationError` (an ``IntegrityError`` subclass, so
+    every existing route/trigger handler keeps its 409 mapping) — never a
+    silent ``None``.
+
+    Retry scope (the documented choice): the GRAPH COPY — pipeline + edges,
+    composite expansion, agent materialisation, parameter bindings, reference
+    models — runs exactly once, outside the savepoint. Inside it, the version
+    read, the guardrail/policy-gate pin loads and the insert are re-run on a
+    retry. Those pin loads are two cheap SELECTs that already sit between the
+    version read and the insert, so keeping them inside the savepoint means a
+    retry can never assemble a row from a read set that straddles a rollback —
+    and the first attempt issues statements in exactly the order it did before
+    the retry existed. ``_add_snapshot_schema_pins`` runs inside the same
+    savepoint, so a rolled-back attempt expunges its pin rows with the snapshot
+    row: a retry can never duplicate them.
     """
     key1, key2 = _pipeline_lock_keys(pipeline_id)
     lock_conn = await _acquire_snapshot_lock(session, pipeline_id=pipeline_id, key1=key1, key2=key2)
@@ -779,77 +976,129 @@ async def create_snapshot_from_live_graph(
         parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
         connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
 
-        try:
-            version_result = await session.execute(
-                select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
-                    PipelineSnapshot.pipeline_id == pipeline_id
+        # FAR-1287 Part 2: bounded OPTIMISTIC retry of the version allocation.
+        # The graph copy above ran once; each attempt below re-reads
+        # ``max(snapshot_version)``, re-loads the two pin sets and inserts,
+        # ALL inside a SAVEPOINT so a collision on
+        # ``uq_pipeline_snapshot_version`` rolls back to the savepoint — the
+        # caller's outer transaction stays usable and the attempt re-runs with a
+        # freshly read version instead of surfacing IntegrityError at a caller.
+        for attempt in range(1, SNAPSHOT_VERSION_ATTEMPTS + 1):
+            version_read_completed = False
+            try:
+                async with session.begin_nested():
+                    try:
+                        version_result = await session.execute(
+                            select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
+                                PipelineSnapshot.pipeline_id == pipeline_id
+                            )
+                        )
+                        snapshot_version = int(version_result.scalar_one()) + 1
+                    except ProgrammingError:
+                        # Re-raised so the SAVEPOINT ROLLS BACK — catching it
+                        # here would make the block exit cleanly and RELEASE the
+                        # savepoint on an aborted transaction (25P02), masking
+                        # the original error. Mapped to the historical ``None``
+                        # outside the block.
+                        raise
+                    version_read_completed = True
+
+                    connector_bindings = _build_connector_bindings(nodes, connectors_by_id)
+                    schema_pins = _build_schema_pins(agents, schema_models_by_id)
+                    prompt_pins, model_backend_pins = _build_prompt_and_backend_pins(agents, backends_by_id)
+
+                    graph_json = {
+                        "nodes": nodes,
+                        "edges": edge_dicts,
+                    }
+
+                    # Guardrail snapshot pin (FAR-223 item 10): serialize the
+                    # pipeline's bound guardrail rows so a replay evaluates the
+                    # ORIGINAL conditions (the pinned set), never the live rows.
+                    # Loaded here — not inside create_run — so the pin is
+                    # immutable like the graph itself.
+                    guardrail_pins = await _load_guardrail_pins(session, pipeline)
+                    # Run-start snapshot-integrity fingerprint (FAR-309 PR B):
+                    # the digest of the serialized pin set is saved alongside it
+                    # so the replay seam can detect a tampered/drifted pin set
+                    # and fail closed.
+                    guardrail_pins_fingerprint = _fingerprint_guardrail_pins(guardrail_pins)
+
+                    # FAR-967 chunk 10 (s3.1 - s3.3): policy-gate snapshot pins.
+                    # Only live, enabled gates are pinned (criterion 14);
+                    # disabled gates are excluded from the pin set at creation.
+                    policy_gate_rows = await _load_policy_gate_rows_for_pipeline(
+                        session,
+                        pipeline_id=pipeline.id,
+                        organisation_id=pipeline.organisation_id,
+                    )
+                    policy_gate_pins = _build_policy_gate_pins(policy_gate_rows)
+                    policy_gate_pins_fingerprint = _fingerprint_policy_gate_pins(policy_gate_pins)
+
+                    snapshot = PipelineSnapshot(
+                        organisation_id=pipeline.organisation_id,
+                        pipeline_id=pipeline.id,
+                        snapshot_version=snapshot_version,
+                        account_id=account_id,
+                        graph_json=graph_json,
+                        connector_bindings_json=connector_bindings,
+                        schema_pins_json=schema_pins,
+                        prompt_pins_json=prompt_pins,
+                        model_backend_pins_json=model_backend_pins,
+                        composite_bindings_json=composite_bindings or None,
+                        parameter_bindings_json=parameter_bindings or None,
+                        guardrail_pins_json=guardrail_pins,
+                        guardrail_pins_fingerprint=guardrail_pins_fingerprint,
+                        policy_gate_pins_json=policy_gate_pins,
+                        policy_gate_pins_fingerprint=policy_gate_pins_fingerprint,
+                        run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
+                        default_autonomy_level=pipeline.default_autonomy_level,
+                        max_autonomy_level=pipeline.max_autonomy_level,
+                        stdout_retention_config=copy.deepcopy(pipeline.stdout_retention_config),
+                        version_kind=version_kind,
+                        created_kind=created_kind,
+                        draft=draft,
+                        channel=channel,
+                    )
+                    session.add(snapshot)
+                    await session.flush()
+
+                    # Inside the savepoint: a rolled-back attempt expunges these
+                    # rows together with the snapshot row, so a retry can never
+                    # duplicate them.
+                    _add_snapshot_schema_pins(session, pipeline.organisation_id, snapshot.id, nodes)
+                return snapshot
+            except ProgrammingError:
+                if version_read_completed:
+                    raise
+                # Pre-existing contract: a missing/unreadable snapshot_version
+                # column (migration not applied yet) reports "no snapshot".
+                return None
+            except IntegrityError as exc:
+                if not _is_snapshot_version_conflict(exc):
+                    # Any other integrity failure (FK, RLS, pin constraints) is
+                    # not an allocation collision — never swallowed, never
+                    # retried: it would fail identically on every attempt.
+                    raise
+                if attempt == SNAPSHOT_VERSION_ATTEMPTS:
+                    # Exhaustion is the terminal outcome of the retry cycle: log
+                    # it explicitly so a fully wedged allocation is visible by
+                    # the failure line alone, without relying on the propagated
+                    # exception surviving log filtering.
+                    _log.warning(
+                        "snapshot_version_allocation_exhausted pipeline_id=%s attempts=%s",
+                        pipeline_id,
+                        SNAPSHOT_VERSION_ATTEMPTS,
+                    )
+                    raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS) from exc
+                _log.warning(
+                    "snapshot_version_conflict_retry pipeline_id=%s attempt=%s/%s",
+                    pipeline_id,
+                    attempt,
+                    SNAPSHOT_VERSION_ATTEMPTS,
                 )
-            )
-            snapshot_version = int(version_result.scalar_one()) + 1
-        except ProgrammingError:
-            return None
-
-        connector_bindings = _build_connector_bindings(nodes, connectors_by_id)
-        schema_pins = _build_schema_pins(agents, schema_models_by_id)
-        prompt_pins, model_backend_pins = _build_prompt_and_backend_pins(agents, backends_by_id)
-
-        graph_json = {
-            "nodes": nodes,
-            "edges": edge_dicts,
-        }
-
-        # Guardrail snapshot pin (FAR-223 item 10): serialize the pipeline's
-        # bound guardrail rows so a replay evaluates the ORIGINAL conditions
-        # (the pinned set), never the live rows. Loaded here — not inside
-        # create_run — so the pin is immutable like the graph itself.
-        guardrail_pins = await _load_guardrail_pins(session, pipeline)
-        # Run-start snapshot-integrity fingerprint (FAR-309 PR B): the digest
-        # of the serialized pin set is saved alongside it so the replay seam
-        # can detect a tampered/drifted pin set and fail closed.
-        guardrail_pins_fingerprint = _fingerprint_guardrail_pins(guardrail_pins)
-
-        # FAR-967 chunk 10 (s3.1 - s3.3): policy-gate snapshot pins.  Only
-        # live, enabled gates are pinned (criterion 14); disabled gates are
-        # excluded from the pin set at creation time.
-        policy_gate_rows = await _load_policy_gate_rows_for_pipeline(
-            session,
-            pipeline_id=pipeline.id,
-            organisation_id=pipeline.organisation_id,
-        )
-        policy_gate_pins = _build_policy_gate_pins(policy_gate_rows)
-        policy_gate_pins_fingerprint = _fingerprint_policy_gate_pins(policy_gate_pins)
-
-        snapshot = PipelineSnapshot(
-            organisation_id=pipeline.organisation_id,
-            pipeline_id=pipeline.id,
-            snapshot_version=snapshot_version,
-            account_id=account_id,
-            graph_json=graph_json,
-            connector_bindings_json=connector_bindings,
-            schema_pins_json=schema_pins,
-            prompt_pins_json=prompt_pins,
-            model_backend_pins_json=model_backend_pins,
-            composite_bindings_json=composite_bindings or None,
-            parameter_bindings_json=parameter_bindings or None,
-            guardrail_pins_json=guardrail_pins,
-            guardrail_pins_fingerprint=guardrail_pins_fingerprint,
-            policy_gate_pins_json=policy_gate_pins,
-            policy_gate_pins_fingerprint=policy_gate_pins_fingerprint,
-            run_context_defaults=copy.deepcopy(pipeline.run_context_defaults),
-            default_autonomy_level=pipeline.default_autonomy_level,
-            max_autonomy_level=pipeline.max_autonomy_level,
-            stdout_retention_config=copy.deepcopy(pipeline.stdout_retention_config),
-            version_kind=version_kind,
-            created_kind=created_kind,
-            draft=draft,
-            channel=channel,
-        )
-        session.add(snapshot)
-        await session.flush()
-
-        _add_snapshot_schema_pins(session, pipeline.organisation_id, snapshot.id, nodes)
-
-        return snapshot
+        # Unreachable by construction: the final attempt always returns or raises.
+        raise SnapshotVersionAllocationError(pipeline_id, SNAPSHOT_VERSION_ATTEMPTS)
     finally:
         # Runs on every exit — success, `return None`, a ProgrammingError at the
         # version read, an IntegrityError at flush, or a cancellation — and the
