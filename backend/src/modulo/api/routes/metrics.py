@@ -58,6 +58,12 @@ class WebVitalTimeSeriesPoint(BaseModel):
     count: int
 
 
+# FAR-1538 ingest-volume decision: ACCEPT the audit event, do not baseline-exempt.
+# The event is one per REQUEST, not one per vital, and the client only posts when
+# it has buffered vitals (5s flush timer / 10-event flush), so volume tracks page
+# loads rather than metric samples. Exempting would mean dropping the annotation
+# plus a baseline edit, and would set a "too busy to audit" precedent any endpoint
+# could claim.
 @router.post(
     "/web-vitals",
     status_code=status.HTTP_204_NO_CONTENT,

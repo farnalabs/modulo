@@ -228,7 +228,7 @@ async def update_hitl_email_preferences(
     status_code=status.HTTP_200_OK,
     dependencies=[
         Depends(
-            audited("password_changed", "user_credential", principal_dep=get_current_tenant_user, fail_closed=True),
+            audited("api_access_put", "user_credential", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],
