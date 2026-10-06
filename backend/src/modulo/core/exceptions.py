@@ -73,6 +73,18 @@ class RateLimitConflictError(RuntimeError):
         super().__init__(f"rate limit conflict for pipeline {pipeline_id}, key {rate_limit_key!r}")
 
 
+# Skip ``reason`` every BACKGROUND fire origin returns when the pipeline-state
+# gate refuses a run (FAR-1528 follow-up): the SAQ cron/polling/ongoing fire
+# jobs and the agent_signal child-run path translate the refusal into a quiet
+# typed skip instead of letting it escape as a job error. Deliberately a
+# DIFFERENT value from ``PAUSE_SKIP_REASON`` (``"triggers_paused"``, in
+# ``modulo.db.settings_resolver``) so a per-pipeline lifecycle refusal can
+# never be read as the org-wide pause kill-switch. This is an outcome-envelope
+# reason, NOT a ``TriggerEvent.validation_result`` value — no trigger-event
+# vocabulary change is implied by it.
+PIPELINE_NOT_RUNNABLE_SKIP_REASON = "pipeline_not_runnable"
+
+
 class PipelineNotRunnableError(RuntimeError):
     """Raised by ``create_run`` when the pipeline's lifecycle state refuses a run (FAR-1528).
 
@@ -87,9 +99,15 @@ class PipelineNotRunnableError(RuntimeError):
 
     Sibling of ``TriggersPausedError`` (the org-wide pause kill-switch) and
     ``OrgDeletedError`` (the org-level guard), but distinct from both: this is
-    a PER-PIPELINE refusal and is never mapped to the trigger ``skipped`` /
-    ``PAUSE_SKIP_REASON`` envelope. Read failures are NEVER converted into
-    this error — a ``SQLAlchemyError`` read failure in the gate propagates
+    a PER-PIPELINE refusal. It is never mapped to the pause envelope —
+    ``PAUSE_SKIP_REASON`` stays reserved for the org-wide kill-switch — but
+    every origin DOES map it explicitly: REST/MCP origins answer 409 Conflict
+    (``pipeline_not_runnable_http``), and the background fire origins (SAQ
+    cron, polling, ongoing; the agent_signal child-run path) translate it into
+    a quiet typed skip carrying ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` so an
+    archived pipeline's active trigger is a per-tick skip rather than a
+    repeating job failure. Read failures are NEVER converted into this
+    error — a ``SQLAlchemyError`` read failure in the gate propagates
     untouched (fail closed by raising the read error itself, never fabricate
     a state and never treat an unreadable row as runnable).
 

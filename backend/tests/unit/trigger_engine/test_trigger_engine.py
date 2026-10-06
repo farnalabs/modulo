@@ -180,7 +180,7 @@ def _make_session(
 
     async def _execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal call_count
-        # RLS set_config (org / execution context) is plumbing ? do not consume
+        # RLS set_config (org / execution context) is plumbing — do not consume
         # a result slot or shift the call-count routing below.
         if "set_config" in str(stmt):
             return MagicMock()

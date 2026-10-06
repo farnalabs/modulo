@@ -16,9 +16,13 @@ These tests drive the REAL ``create_run`` against an in-memory SQLite database
     FK upstream/downstream — pinned so the scope does not drift),
   * the gate's read failure PROPAGATES (fail closed: a DB error is never
     converted into a refusal state and never into "runnable"),
+  * the gate's read is ORG-SCOPED (RLS equivalence: the raw ``text()`` select
+    carries ``organisation_id = :org`` so SQLite/MariaDB see what Postgres'
+    ``rls_org_isolation`` policy would show them),
   * the state-priority helper that FAR-1530 (per-pipeline Paused) extends.
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -189,7 +193,43 @@ class TestPipelineStateGateReadFailure:
         "runnable" (``pytest.raises(OperationalError)`` fails if either
         happened)."""
         with pytest.raises(OperationalError):
-            await _enforce_pipeline_state_gate(cast(AsyncSession, _ReadFailingSession()), uuid.uuid4())
+            await _enforce_pipeline_state_gate(cast(AsyncSession, _ReadFailingSession()), uuid.uuid4(), uuid.uuid4())
+
+
+class TestPipelineStateGateOrgScope:
+    """RLS equivalence for the gate's raw ``text()`` read (FAR-1528).
+
+    On Postgres the ``rls_org_isolation`` policy scopes this SELECT; on
+    SQLite/MariaDB the ORM tenant filter does not reach ``text()`` statements,
+    so the gate carries its own ``organisation_id = :org`` predicate. A row the
+    session's org cannot see must be ROW ABSENT (not a refusal), exactly like
+    the team-visibility case pinned above.
+    """
+
+    async def test_archived_pipeline_of_another_org_is_row_absent(
+        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The archived row belongs to ``_ORG``; asking with a different org id
+        sees nothing to refuse on. The gate's own row-absent log is the
+        observable proof that the read (not the refusal) was org-scoped."""
+        await _seed_org(session)
+        await _seed_pipeline(session, archived_at=datetime.now(UTC))
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.run"):
+            await _enforce_pipeline_state_gate(session, _PIPELINE, uuid.uuid4())
+
+        assert any("pipeline_row_absent" in record.getMessage() for record in caplog.records)
+
+    async def test_archived_pipeline_of_the_owning_org_is_refused(self, session: AsyncSession) -> None:
+        """Control: the org predicate does not soften the refusal for the
+        row's own org."""
+        await _seed_org(session)
+        await _seed_pipeline(session, archived_at=datetime.now(UTC))
+
+        with pytest.raises(PipelineNotRunnableError) as excinfo:
+            await _enforce_pipeline_state_gate(session, _PIPELINE, _ORG)
+
+        assert excinfo.value.state == "archived"
 
 
 class TestPipelineNotRunnableStateHelper:

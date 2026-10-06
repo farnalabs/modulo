@@ -459,6 +459,48 @@ class TestOngoingTopup:
         assert outcome["status"] == "skipped"
         assert outcome["reason"] == "triggers_paused"
 
+    @pytest.mark.asyncio
+    async def test_pipeline_not_runnable_mid_loop_stops_creating(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1528: an archived/soft-deleted pipeline refuses the top-up the
+        SAME way the pause backstop does — the loop stops, runs already created
+        stay, and the refusal lands in the outcome as a typed skip instead of
+        escaping as an SAQ job failure on every tick."""
+        _patch_env(monkeypatch)
+        from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
+
+        now = datetime.now(UTC)
+        session = _RoutedSession(trigger=_make_trigger(max_concurrent_runs=5))
+        refusal = PipelineNotRunnableError(state="archived", pipeline_id=uuid.uuid4())
+        create_run = AsyncMock(side_effect=[_make_run(), refusal])
+        outcome: dict[str, Any] = {}
+        created, mock_cr, _ = await _run_topup(session, now=now, in_flight=0, outcome=outcome, create_run=create_run)
+        assert len(created) == 1
+        assert mock_cr.await_count == 2  # second call raised
+        assert outcome["status"] == "skipped"
+        assert outcome["reason"] == PIPELINE_NOT_RUNNABLE_SKIP_REASON
+
+    @pytest.mark.asyncio
+    async def test_pipeline_not_runnable_on_first_create_skips_without_events(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """First refusal (nothing created yet) -> empty result + typed skip and
+        NO accepted/on-going TriggerEvent."""
+        _patch_env(monkeypatch)
+        from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError
+
+        now = datetime.now(UTC)
+        session = _RoutedSession(trigger=_make_trigger())
+        create_run = AsyncMock(side_effect=PipelineNotRunnableError(state="deleted", pipeline_id=uuid.uuid4()))
+        outcome: dict[str, Any] = {}
+        created, mock_cr, log_event = await _run_topup(
+            session, now=now, in_flight=0, outcome=outcome, create_run=create_run
+        )
+        assert created == []
+        assert mock_cr.await_count == 1
+        assert log_event.await_count == 0
+        assert outcome["status"] == "skipped"
+        assert outcome["reason"] == PIPELINE_NOT_RUNNABLE_SKIP_REASON
+
 
 # ---------------------------------------------------------------------------
 # _ongoing_topup — snapshot resolution

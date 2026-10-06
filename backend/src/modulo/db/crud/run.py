@@ -798,10 +798,22 @@ def _pipeline_not_runnable_state(
 
     The ONE place the set of not-runnable pipeline states is defined (FAR-1528).
     Extending it is a two-line change: add the condition here, add its column to
-    the gate's SELECT below, and every run origin picks the new state up at once
-    — FAR-1530's per-pipeline Paused state lands exactly here. ``deleted``
-    outranks ``archived``: a soft-deleted pipeline that was also archived
-    reports the final state.
+    the gate's SELECT below, and every run origin's ENFORCEMENT picks the new
+    state up at once — FAR-1530's per-pipeline Paused state lands exactly here.
+    ``deleted`` outranks ``archived``: a soft-deleted pipeline that was also
+    archived reports the final state.
+
+    "Every origin picks it up" describes enforcement, not the response shape.
+    Each origin maps the refusal itself: REST/MCP answer 409 Conflict
+    (``pipeline_not_runnable_http``), and the background fire origins (SAQ
+    cron, polling, ongoing) plus the agent_signal child-run path turn it into a
+    quiet typed skip (``PIPELINE_NOT_RUNNABLE_SKIP_REASON``) instead of a
+    repeating job failure. Reachability also differs by state: a SOFT-DELETED
+    pipeline is filtered out by ``SoftDeleteMixin`` before most callers get
+    here, so REST/rerun typically 404 upstream and a webhook/replay can still
+    500 on its own missing-row path — the gate is what refuses every origin
+    that can still SEE the row (notably archived pipelines, which stay
+    visible), not a guarantee that no origin fails before it.
     """
     if deleted_at is not None:
         return "deleted"
@@ -810,7 +822,7 @@ def _pipeline_not_runnable_state(
     return None
 
 
-async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.UUID) -> None:
+async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.UUID, org_id: uuid.UUID) -> None:
     """Pipeline lifecycle state — the SINGLE authority gate (FAR-1528).
 
     Refuses a run whose pipeline is archived (``archived_at IS NOT NULL``) or
@@ -819,11 +831,27 @@ async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.
     correction runs all converge on ``create_run``, so the check lives HERE and
     only here — never add a per-path pipeline-state check upstream.
 
+    Enforcement is uniform; the RESPONSE to the refusal is per-origin: REST /
+    MCP map it to 409 Conflict, while the three SAQ fire-job origins (cron,
+    polling, ongoing) and the agent_signal child-run path catch it and return a
+    quiet typed skip (``PIPELINE_NOT_RUNNABLE_SKIP_REASON``) — an archived
+    pipeline with a still-active trigger is a per-tick skip, never a job that
+    fails forever. See ``modulo.core.cron_helpers`` / ``trigger_engine.
+    agent_signal`` for those handlers.
+
     Reads the two columns directly (never the ORM identity map) so a freshly
     toggled row is observed, mirroring ``_ensure_org_not_deleted``; the raw
     ``text()`` binding uses ``pipeline_id.hex`` for the same cross-backend
     reason (SQLite's ``Uuid`` stores 32-char hex and never matches a dashed
     ``str(uuid)``; Postgres accepts the bare 32-hex form as uuid input).
+
+    The explicit ``organisation_id = :org`` predicate restores RLS equivalence
+    on backends where the raw ``text()`` read bypasses the ORM tenant filter:
+    Postgres scopes this read through the ``rls_org_isolation`` policy, while
+    SQLite/MariaDB only inject that filter into ORM statements. ``org_id`` is
+    already a ``create_run`` parameter, so the bound value costs nothing and
+    the ROW-ABSENT semantics below are unchanged (a row the session cannot see
+    is absent, never a refusal).
 
     * Read failures PROPAGATE — a ``SQLAlchemyError`` here is never converted
       to ``PipelineNotRunnableError`` and never swallowed into "runnable"
@@ -843,8 +871,8 @@ async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.
     locks.
     """
     pipeline_state_result = await session.execute(
-        text("SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid"),
-        {"pid": pipeline_id.hex},
+        text("SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid AND organisation_id = :org"),
+        {"pid": pipeline_id.hex, "org": org_id.hex},
     )
     row = pipeline_state_result.first()
     if row is None:
@@ -1873,8 +1901,13 @@ async def create_run(
     # them; never add a per-path pipeline-state check upstream. Read failures
     # propagate (fail closed), same discipline as the pause gate below.
     # Raises PipelineNotRunnableError (modulo.core.exceptions); the db->core
-    # edge is exempted under the db-does-not-import-core contract.
-    await _enforce_pipeline_state_gate(session, pipeline_id)
+    # edge is exempted under the db-does-not-import-core contract. Callers map
+    # it themselves: REST/MCP answer 409, the SAQ fire jobs (cron/polling/
+    # ongoing) and agent_signal return a typed skip. Note that most origins
+    # only REACH this gate for rows they can still see — SoftDeleteMixin
+    # already filters soft-deleted pipelines from REST/rerun entry reads (404
+    # upstream), so this gate's reliable subject is an ARCHIVED pipeline.
+    await _enforce_pipeline_state_gate(session, pipeline_id, org_id)
 
     # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside
     # the guardrail rows, never re-read mid-run. Defaults to OFF on read
