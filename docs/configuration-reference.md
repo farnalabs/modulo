@@ -375,13 +375,14 @@ serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 supported state where monitoring still runs and only the emails are skipped.
 See [`deployment.md` §Health watchdog](./deployment.md#health-watchdog-docker-compose).
 
-The same SMTP setup also sends the **error-tracking** alert emails, which identify the deployment environment:
+The same SMTP setup also sends the **error-tracking**, **readiness** and **worker-liveness watchdog** alert emails, which identify the deployment environment and may carry operator-supplied context:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown on error-tracking alert emails as `Environment: <value>`; an empty value renders as `N/A`. The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+| `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown as `Environment: <value>` on error-tracking alert emails (an empty value renders as `N/A`) and on [readiness health](#readiness-health-alerts) / [worker-liveness watchdog](#worker-liveness-watchdog) alerts (an empty value renders as `unknown`). The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
+| `ALERT_CONTEXT` | No | – | Operator-supplied free text appended verbatim to every readiness and [worker-liveness watchdog](#worker-liveness-watchdog) alert — runbook links, escalation notes, ticket pointers. One item per line; blank lines are dropped and the rendering is bounded (at most 20 lines, 300 chars each, the environment line always first). Carried on email, generic webhook and Teams channels alike. Never written to logs (the setting is `repr=False`). |
 
-The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails below do not carry an environment line.
+The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails, webhooks and Teams messages carry the environment line and `ALERT_CONTEXT`; the out-of-process Gatus sentinel and the error-tracking pipeline do not use `ALERT_CONTEXT`.
 
 ### Readiness health alerts
 
