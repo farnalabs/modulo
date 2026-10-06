@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from modulo.core.bundled_runner.profile import (
+    TEMPLATE_CONFIG_JSON,
     is_placeholder_bundled_runner_image_ref,
 )
 from modulo.core.bundled_runner.runner_dispatch import (
@@ -315,6 +316,32 @@ def test_workspace_spec_carries_structured_labels_and_network() -> None:
     assert spec.image_ref.startswith("modulo-runner:opencode@sha256:")
     assert spec.resource_limits == {"memory_mb": 1024}
     assert spec.timeout_seconds == 1800
+
+
+def test_workspace_spec_timeout_default_matches_template_constant() -> None:
+    """FAR-1494: the dispatch workspace-spec timeout DEFAULT is sourced from
+    the shared template constant. This is the coupling guard for the dispatch
+    site (``_workspace_spec_for_dispatch``): a profile whose ``config_json``
+    omits ``timeout_seconds`` must fall back to
+    ``TEMPLATE_CONFIG_JSON["timeout_seconds"]``. This catches divergence
+    between this site and the constant (e.g. a re-hardcoded literal); a pure
+    constant-value drift is not detected here (the site and the assertion move
+    together) and is covered by the constant-pinning tests in
+    ``tests/unit/core/bundled_runner/test_profile.py``. (The sandbox-test route
+    default is guarded separately by
+    test_build_workspace_spec_timeout_default_matches_template_constant.)"""
+    profile = _profile(
+        "runner_docker",
+        config_json={"memory_mb": 1024, "workspace_network": "modulo-runner-workspace"},
+    )
+    spec = _workspace_spec_for_dispatch(
+        profile,
+        org_id=_ORG,
+        run_id="run-123",
+        node_id="node-9",
+        run_uuid=uuid.uuid4(),
+    )
+    assert spec.timeout_seconds == TEMPLATE_CONFIG_JSON["timeout_seconds"]
 
 
 def test_workspace_spec_none_egress_opt_in_maps_to_none_policy() -> None:

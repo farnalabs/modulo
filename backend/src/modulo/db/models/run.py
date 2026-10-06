@@ -335,9 +335,12 @@ class Run(OrgScoped):
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
     )
-    account_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL), index=True
-    )
+    # account_id (FAR-1443): deliberately NOT indexed — no query filters this
+    # column (it is written at create and read for display only; the sole
+    # WHERE against it is by primary key), so migration 0283 drops
+    # ix_runs_account_id. Re-add index=True only together with a query that
+    # actually predicates on it.
+    account_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), ForeignKey("accounts.id", ondelete=ONDELETE_SET_NULL))
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # FAR-410 / FAR-402 P5: the logical idempotency identity of the operator
     # re-run, derived deterministically (``<pipeline_id>:<run_number>`` +
@@ -415,7 +418,11 @@ class Run(OrgScoped):
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     # SAQ dispatch tracking (PR B, migration 0031) — dispatcher reflects where
     # the job actually went: 'saq' iff enqueued to SAQ; NULL iff legacy (pre-PR C).
-    dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    # NOT indexed (FAR-1443): no query leads with dispatcher — it only ever
+    # appears bundled with selective status/heartbeat predicates — and the
+    # near-binary column distribution makes it a planner-unfriendly key, so
+    # migration 0283 drops ix_runs_dispatcher.
+    dispatcher: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # SAQ job id — deterministic saq:job:{queue}:run:{id}. SAQ retries reuse it.
     saq_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # DISTINCT per-claim value (NOT saq_job_id — SAQ retries reuse saq_job_id so a

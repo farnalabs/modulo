@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_system_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.license import (
     LicenseData,
     LicenseError,
@@ -193,7 +195,11 @@ async def get_license_status(
         ) from None
 
 
-@router.post("", status_code=status.HTTP_200_OK)
+@router.post(
+    "",
+    dependencies=[Depends(audited("license_uploaded", "license", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_200_OK,
+)
 @handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
@@ -226,7 +232,11 @@ async def upload_license(
     )
 
 
-@router.post("/issue", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/issue",
+    dependencies=[Depends(audited("license_issued", "license", principal_dep=get_current_tenant_user))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.license.issue_license")
 async def issue_license(
     req: LicenseIssueRequest,

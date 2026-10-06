@@ -15,6 +15,7 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.pipeline import ManualNodeOutputSchemaError, create_pipeline, enforce_manual_node_output_schemas
 from modulo.db.crud.template import (
     _agent_count_from_content,
@@ -228,6 +229,9 @@ _TEMPLATE_CREATE_PERMISSION = require_permission("pipeline.create")
 @router.post(
     "/pipelines/from-template/{template_id}",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("pipeline_created_from_template", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors(_CODE_TEMPLATES_CREATE_PIPELINE_TEMPLATE)
 async def create_pipeline_from_template_endpoint(

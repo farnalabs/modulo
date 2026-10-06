@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_feature, require_system_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.db.crud.system_config import get_config, update_config
 
 # WARNING: system.config.manage is currently ONLY assignable to is_system_admin
@@ -118,7 +120,14 @@ async def get_monitor_config(
     return _merge(entry)
 
 
-@router.put("", response_model=MonitorConfigResponse, dependencies=[require_feature("error_tracking")])
+@router.put(
+    "",
+    response_model=MonitorConfigResponse,
+    dependencies=[
+        Depends(audited("monitor_config_updated", "monitor_config", principal_dep=get_current_tenant_user)),
+        require_feature("error_tracking"),
+    ],
+)
 @handle_db_errors("admin.monitor_config.set_monitor_config")
 async def set_monitor_config(
     req: MonitorConfigUpdate,

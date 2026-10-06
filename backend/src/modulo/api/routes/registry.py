@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_UNEXPECTED_ERROR_NO_PERIOD
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.registry import (
     get_publisher_status,
     get_registry_primitive,
@@ -216,6 +218,9 @@ async def get_registry_primitive_endpoint(
 @router.post(
     "/primitives",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("registry.publish_primitive_endpoint")
 async def publish_primitive_endpoint(
@@ -251,6 +256,9 @@ async def publish_primitive_endpoint(
 
 @router.post(
     "/primitives/{slug:path}/download",
+    dependencies=[
+        Depends(audited("registry_primitive_downloaded", "registry_primitive", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("registry.download_registry_primitive_endpoint")
 async def download_registry_primitive_endpoint(
@@ -398,7 +406,13 @@ class VerifyResponseV2(BaseModel):
     trust_anchor_verified: bool = False
 
 
-@router.post("/publish", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/publish",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("registry_primitive_published", "registry_primitive", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("registry.publish_primitive_v2")
 async def publish_primitive_v2(
     req: PublishRequestV2,
@@ -643,7 +657,13 @@ async def verify_registry_primitive_v2(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/publishers", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/publishers",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("registry_publisher_registered", "registry_publisher", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("registry.register_publisher_endpoint")
 async def register_publisher_endpoint(
     req: RegisterPublisherRequest,
@@ -659,7 +679,12 @@ async def register_publisher_endpoint(
     return {"status": "registered", "fingerprint": pub.fingerprint, "author": pub.author}
 
 
-@router.post("/publishers/{fingerprint_hex}/revoke")
+@router.post(
+    "/publishers/{fingerprint_hex}/revoke",
+    dependencies=[
+        Depends(audited("registry_publisher_revoked", "registry_publisher", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("registry.revoke_publisher_endpoint")
 async def revoke_publisher_endpoint(
     fingerprint_hex: str,

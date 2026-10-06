@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -22,8 +22,10 @@ from modulo.api.dependencies import (
     require_system_permission,
     require_target_org_role,
 )
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.dependencies import get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.seed_data.cost_components import seed_cost_components_for_org
 from modulo.db.crud.account import create_account, get_account_by_email
@@ -61,6 +63,56 @@ _MSG_EMAIL_ACCOUNT_EXISTS = (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/orgs", tags=["admin"])
+
+
+async def resolve_audit_principal(
+    request: Request,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Audit-event principal for cross-org admin routes.
+
+    ``audited()`` records an ORG-scoped event, so it needs a ``TenantPrincipal``.
+    These routes deliberately authenticate through ``get_current_user``
+    (``require_system_permission`` / ``require_target_org_role``) so a system
+    admin whose JWT carries NO organisation claim can still act on the org in
+    the path - the contract ``TestSystemAdminExplicitOrgParam`` pins as "the
+    JWT org_id is ignored; the path org_id is used". Resolving the audit
+    principal with ``get_current_tenant_user`` instead would 403 that
+    capability, so this derives the acting organisation from the ``{org_id}``
+    path parameter first and falls back to the JWT claim, and skips the identity
+    re-read that neither of those gates performs.
+
+    Access control is unchanged: the route's own ``require_*`` dependency still
+    decides who may act. This only names the organisation the audit event is
+    written against.
+
+    Raises 403 ``Organisation ID required`` - the same refusal the org-scoped
+    handlers raise - when neither the path nor the claim yields an organisation.
+
+    Shared with ``admin_email`` (the same path-org system-admin pattern).
+    Promoting it to ``api.dependencies`` is a follow-up: that file is outside
+    this sweep's file allowlist.
+    """
+    org_id: uuid.UUID | None = None
+    raw_org = request.path_params.get("org_id")
+    if raw_org is not None:
+        try:
+            org_id = uuid.UUID(str(raw_org))
+        except ValueError:
+            org_id = None
+    if org_id is None:
+        org_id = current_user.organisation_id
+    if org_id is None or current_user.org_role is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Organisation ID required")
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=org_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role,
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
+    )
 
 
 # --- Error helpers ---
@@ -186,7 +238,11 @@ class CreateOrgResponse(BaseModel):
     created_at: str
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    dependencies=[Depends(audited("organisation_created", "organisation", principal_dep=resolve_audit_principal))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.orgs.admin_create_org")
 async def admin_create_org(
     req: CreateOrgRequest,
@@ -375,7 +431,11 @@ def _create_org_user_response(account: Any, membership: Any) -> "CreateOrgUserRe
     )
 
 
-@router.post("/{org_id}/users", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{org_id}/users",
+    dependencies=[Depends(audited("organisation_user_created", "user", principal_dep=resolve_audit_principal))],
+    status_code=status.HTTP_201_CREATED,
+)
 @handle_db_errors("admin.orgs.admin_create_org_user")
 async def admin_create_org_user(
     org_id: uuid.UUID,
@@ -423,7 +483,11 @@ async def admin_create_org_user(
 # --- Delete Org ---
 
 
-@router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{org_id}",
+    dependencies=[Depends(audited("organisation_deleted", "organisation", principal_dep=resolve_audit_principal))],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 @handle_db_errors("admin.orgs.admin_delete_org")
 async def admin_delete_org(
     org_id: uuid.UUID,
@@ -548,7 +612,12 @@ def _clear_org_license_key(settings_json: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-@router.put("/{org_id}/license")
+@router.put(
+    "/{org_id}/license",
+    dependencies=[
+        Depends(audited("organisation_license_updated", "organisation", principal_dep=resolve_audit_principal))
+    ],
+)
 @handle_db_errors("admin.orgs.admin_set_org_license")
 async def admin_set_org_license(
     org_id: uuid.UUID,
@@ -600,7 +669,19 @@ async def admin_set_org_license(
     return _license_response_from_data(d)
 
 
-@router.delete("/{org_id}/license")
+@router.delete(
+    "/{org_id}/license",
+    dependencies=[
+        Depends(
+            audited(
+                "organisation_license_removed",
+                "organisation",
+                principal_dep=resolve_audit_principal,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 @handle_db_errors("admin.orgs.admin_remove_org_license")
 async def admin_remove_org_license(
     org_id: uuid.UUID,
@@ -656,7 +737,12 @@ class SetOrgAuthzEnforceResponse(BaseModel):
     enforce: bool
 
 
-@router.patch("/{org_id}/authz-enforce")
+@router.patch(
+    "/{org_id}/authz-enforce",
+    dependencies=[
+        Depends(audited("organisation_authz_enforce_updated", "organisation", principal_dep=resolve_audit_principal))
+    ],
+)
 @handle_db_errors("admin.orgs.admin_set_org_authz_enforce")
 async def admin_set_org_authz_enforce(
     org_id: uuid.UUID,
@@ -707,7 +793,10 @@ class SetOrgTriggersPausedResponse(BaseModel):
     paused_at: str | None
 
 
-@router.put("/{org_id}/triggers/pause")
+@router.put(
+    "/{org_id}/triggers/pause",
+    dependencies=[Depends(audited("triggers_paused", "organisation", principal_dep=resolve_audit_principal))],
+)
 @handle_db_errors("admin.orgs.admin_set_org_triggers_paused")
 async def admin_set_org_triggers_paused(
     org_id: uuid.UUID,
@@ -825,7 +914,10 @@ async def admin_get_org_guardrails_kill_switch(
     # FAR-309 PR B org-global invariant: the kill-switch is the org-global
     # guardrail safety control -- a break-glass account must NEVER be able to
     # disable it (or read it) even though it is an admin-scoped endpoint.
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("guardrails_kill_switch", "organisation", principal_dep=resolve_audit_principal)),
+        Depends(deny_break_glass_mint),
+    ],
 )
 @handle_db_errors("admin.orgs.admin_set_org_guardrails_kill_switch")
 async def admin_set_org_guardrails_kill_switch(
