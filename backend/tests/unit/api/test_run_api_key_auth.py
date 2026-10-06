@@ -109,6 +109,38 @@ async def test_api_key_invalid_raises_401() -> None:
 
 
 @pytest.mark.asyncio
+async def test_api_key_grants_unavailable_raises_503() -> None:
+    """FAR-1477: a grant-flag read failure on the REST auth path fails CLOSED
+    with a retryable 503, not a 401 that looks like a bad key."""
+    from modulo.auth.api_key import ApiKeyGrantsUnavailableError
+
+    settings = get_settings()
+    with (
+        patch("modulo.api.dependencies.get_or_create_engine", return_value=MagicMock()),
+        patch(
+            "modulo.api.dependencies.get_or_create_session_factory",
+            return_value=_FakeFactory(_make_session()),
+        ),
+        patch("modulo.auth.api_key.validate_api_key", return_value=_fake_key("runner")),
+        patch(
+            "modulo.auth.dependencies.resolve_role_from_membership",
+            new=AsyncMock(return_value="runner"),
+        ),
+        patch(
+            "modulo.auth.api_key.resolve_key_grants",
+            new=AsyncMock(side_effect=ApiKeyGrantsUnavailableError),
+        ),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await get_current_tenant_user_or_api_key(
+            credentials=_credentials(_KEY),
+            settings=settings,
+        )
+
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_api_key_unknown_prefix_raises_401() -> None:
     """An org lookup that returns no organisation must reject the key with 401,
     never fall through to validate_api_key."""

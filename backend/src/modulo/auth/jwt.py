@@ -83,6 +83,11 @@ class AuthenticatedPrincipal:
     #: marks the credential TYPE for its consumers; ``client_kind`` is the
     #: JWT-level class the human_only gate reads).
     client_kind: str = _DEFAULT_CLIENT_KIND
+    #: FAR-1477: the API key's explicit grant-set (ADR 058). None = no grant-set
+    #: (browser JWTs and legacy role-bundle keys); an empty frozenset is an
+    #: explicit deny-all; otherwise the exact permission keys. Enforced as
+    #: ``grant_set INTERSECT bundle(live_role)`` by ``_assert_tenant_permission``.
+    key_grants: frozenset[str] | None = None
 
     @property
     def user_id(self) -> uuid.UUID:

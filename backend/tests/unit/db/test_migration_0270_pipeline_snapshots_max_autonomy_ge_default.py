@@ -19,7 +19,10 @@ Lenses:
   0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
    0279_table_autovacuum_tuning chains onto 0278, and
-   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning as the single
+   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
+   0281_org_api_keys_grants chains onto 0280_runs_node_deadline_watchdog_fired_count, and
+   0282_env_profiles_kubernetes chains onto 0281_org_api_keys_grants, and
+   0283_add_rejected_run_status chains onto 0282_env_profiles_kubernetes as the single
    linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -62,7 +65,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0281_add_rejected_run_status"
+_HEAD_MIGRATION = "0283_add_rejected_run_status"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

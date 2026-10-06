@@ -892,6 +892,33 @@ async def test_build_live_manifest_sandbox_plumbs_profile_network_policy(monkeyp
     assert registered.get("sandbox.egress") is True
 
 
+async def test_build_live_manifest_sandbox_plumbs_profile_provider_tier(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1051: the bound profile's provider_type decides the tier the egress
+    capability is certified under.
+
+    A kubernetes profile with network_policy='none' certifies UNKNOWN (the
+    Kubernetes tier cannot enforce deny_all — dispatch refuses the same
+    combination), not the enforced-False the e2b reference tier would claim.
+    """
+    pid = uuid.uuid4()
+    row = _row_profile(pid, ["sandbox.e2b"])
+    row.network_policy = "none"
+    row.provider_type = "kubernetes"
+    session = _manifest_session(profile=row)
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=pid,
+        agent_id=None,
+        node_def=_sandbox_node(),  # egress_policy unset -> the profile fills it
+    )
+    assert registered.get("sandbox.egress") is None
+    derivation = decide_conformance(["sandbox.egress"], registered)
+    assert derivation.state == "unknown"
+
+
 async def test_build_live_manifest_sandbox_profile_missing_uses_node_only(monkeypatch: pytest.MonkeyPatch):
     """A missing profile row leaves profile_network_policy None, so the sandbox
     capability falls back to the node-only derivation (never a crash)."""

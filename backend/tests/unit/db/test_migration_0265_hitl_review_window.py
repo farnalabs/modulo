@@ -20,7 +20,10 @@ Lenses:
   0277_run_daily_facts_trigger_dispatch_phase chains onto 0276, and
   0278_runs_workspace_drift_sweep_index chains onto 0277, and
    0279_table_autovacuum_tuning chains onto 0278, and
-   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning as the
+   0280_runs_node_deadline_watchdog_fired_count chains onto 0279_table_autovacuum_tuning, and
+   0281_org_api_keys_grants chains onto 0280_runs_node_deadline_watchdog_fired_count, and
+   0282_env_profiles_kubernetes chains onto 0281_org_api_keys_grants, and
+   0283_add_rejected_run_status chains onto 0282_env_profiles_kubernetes as the
    current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
@@ -47,7 +50,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0281_add_rejected_run_status"
+_HEAD_MIGRATION = "0283_add_rejected_run_status"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)
