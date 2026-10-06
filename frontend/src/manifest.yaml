@@ -5114,6 +5114,19 @@ elements:
       - testid: settings-triggers-outcomes-toggle
         type: element
         dynamic_testid: false
+    /setup/model-backend/:id:
+      - testid: model-backend-setup-form
+        type: element
+        dynamic_testid: false
+      - testid: model-backend-setup-api-key
+        type: input
+        dynamic_testid: false
+      - testid: model-backend-setup-submit
+        type: button
+        dynamic_testid: false
+      - testid: model-backend-setup-view-backends
+        type: button
+        dynamic_testid: false
     /variants/compare:
       - testid: variant-compare-group-select
         type: select
@@ -5341,6 +5354,9 @@ features:
 
             # Pipeline graph mutation audit (FAR-1471)
             - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
+
+            # Org-independent durable ledger for org-lifecycle events (FAR-1517)
+            - "[x] Org-lifecycle audit records survive a hard delete (FAR-1517): `audit_events.organisation_id` FKs `organisations.id` with ON DELETE CASCADE, so the org-scoped chain - including the `org_deletion_requested` row written moments earlier - dies with the org, and a post-commit append can never satisfy the FK afterwards. The org-lifecycle writers (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`, `POST /api/v1/admin/org/deletion-confirm`, `PATCH /api/v1/admin/org/deletion-cancel`, and system-admin `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence into the org-independent `system_audit_events` ledger IN the deleting transaction BEFORE the org row is removed: the table carries `org_id`/`actor_user_id` as PLAIN values with NO FK and no `organisation_id` tenant column, so nothing cascades into it and no RLS scope excludes it; the record commits only with the delete and a failed append aborts the delete (fail-closed, deliberately no try/except), while UPDATE/DELETE are rejected by database append-only triggers (migration 0285). The ledger is deliberately NOT hash-chained - the tamper-evident chain is per-org and its head cascades away - so immutability here comes from the triggers. Those routes sit in the audit-coverage baseline because `audited()`'s post-commit org-scoped append can never satisfy the audit_events FK after the delete (core/system_audit_logger.py, db/models/system_audit_event.py, db/migrations/versions/0285_system_audit_events.py, tests/integration/test_system_audit_org_deletion.py, tests/unit/core/test_system_audit_logger.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"

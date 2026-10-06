@@ -1152,6 +1152,16 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with patch.object(ms, "_list_runs_impl", side_effect=RuntimeError("boom")):
             assert (await list_runs())["error"] == "server_error"
 
+    async def test_list_runs_malformed_pipeline_filter_returns_invalid_id(self) -> None:
+        """FAR-1540: a malformed ``pipeline_id`` filter is a client error the
+        caller can branch on — pre-fix it raised ``ValueError`` out of
+        ``uuid.UUID(...)``, reached the wrapper's generic ``except Exception``
+        arm and came back as ``internal_error``."""
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await list_runs(pipeline_id="not-a-uuid")
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "pipeline_id"
+
     async def test_get_pipeline_graph_defensive_invalid_id(self) -> None:
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),

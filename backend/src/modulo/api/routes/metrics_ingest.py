@@ -196,6 +196,11 @@ async def _stage_single_event(
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 
+# FAR-1538 ingest-volume decision: ACCEPT the audit event, do not baseline-exempt.
+# One event per REQUEST: the client buffers curated events and flushes on a 30s
+# interval or at 50 events (and only then - an empty buffer posts nothing), and
+# the endpoint is consent-gated. Exempting would drop coverage and need a baseline
+# edit; a "too busy to audit" exemption is a precedent any endpoint could claim.
 @router.post(
     "/events",
     status_code=status.HTTP_204_NO_CONTENT,

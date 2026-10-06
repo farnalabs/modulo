@@ -4,6 +4,7 @@ import {
   clearAccessToken,
   exitToLogin,
 } from '../lib/api/auth'
+import { ApiError, getProblemCode } from '../lib/api/apiError'
 import { formatApiError } from '../lib/api/formatError'
 
 const BASE = ''
@@ -74,8 +75,12 @@ async function request<T>(method: string, path: string, body?: unknown, options?
   }
 
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(formatApiError(detail) || `Request failed: ${res.status}`)
+    const body = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new ApiError(
+      formatApiError(body) || `Request failed: ${res.status}`,
+      res.status,
+      getProblemCode(body),
+    )
   }
   if (res.status === 204) return undefined as T
   try {
