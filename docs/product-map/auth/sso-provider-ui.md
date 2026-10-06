@@ -50,7 +50,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 - [x] Common fields per provider: name, auto-provision toggle, default role
       (operator/runner), group-to-team mappings
 - [x] Admin can edit, enable/disable, and delete an SSO provider (confirmation dialog)
-- [x] Admin can test an SSO provider connection — OIDC resolves the discovery URL,
+- [x] Admin can test an SSO provider connection – OIDC resolves the discovery URL,
       SAML parses the metadata XML
 - [x] Adds/edits/deletes/toggles raise audit events
 - [x] SSO provider management is admin-only (403 for non-admin)
@@ -61,23 +61,23 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
       JWT pair; SAML ACS parses `SAMLResponse`, validates the assertion, and issues JWTs
 - [x] JIT provisioning creates the user with the provider's default role; group
       mappings apply at provisioning time
-- [x] Configured SSO providers surface on the login page as buttons — `LoginView.vue`
+- [x] Configured SSO providers surface on the login page as buttons – `LoginView.vue`
       calls `GET /api/v1/auth/sso/providers` on mount and renders an OIDC button per
       advertised provider (linking to `/api/v1/auth/oidc/{provider}/login`) plus a SAML
       button when SAML is enabled; when the feature is unavailable (402) or no provider
       is advertised, the page stays on password login (fails closed)
-- [x] Deleting a provider warns that already-signed-in users are NOT signed out — their
+- [x] Deleting a provider warns that already-signed-in users are NOT signed out – their
       sessions remain valid until they expire and only new sign-ins through the provider
       are blocked (`settings-sso-delete-session-warning` in the delete-confirmation dialog)
 
 ## Known Gaps
 
-- **Sidebar entry tier-gated but not SSO-skill-gated** — the nav entry hides for
+- **Sidebar entry tier-gated but not SSO-skill-gated**: the nav entry hides for
   community (team tier required) but does not re-check the `sso` license key; the page
   renders a locked prompt via `FeatureGate show-disabled`.
 
 ## QA History
-- 2026-09-28: **Improve Architecture product-map walk** — closed the
+- 2026-09-28: **Improve Architecture product-map walk**: closed the
   "Delete-provider confirmation does not warn about active SSO sessions" gap:
   the delete-confirmation dialog now explains that deleting a provider does not
   revoke the sessions of already-signed-in users (they remain valid until they
@@ -85,23 +85,23 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   static `settings-sso-delete-session-warning` testid, registered in the
   `/settings/sso` manifest `elements:` inventory (reverse testid-coverage guard),
   and is asserted by the delete-confirmation vitest cases.
-- 2026-09-21: **product-map review pass** — closed the OIDC
+- 2026-09-21: **product-map review pass**: closed the OIDC
   multi-org real-DB (RLS) integration gap (manifest `feat-sso` deferral). New
   `backend/tests/integration/auth/test_oidc_rls_resolution.py` mirrors the SAML
   RLS regression for the per-provider OIDC surface: the system role resolves an
   OIDC provider owned by a NON-first org, unknown slugs fail closed all-None
   (never RuntimeError→500), the app fallback resolves first-org-only inside a
-  scoped transaction (FAR-1058 parity — `_resolve_oidc_provider` now opens its
+  scoped transaction (FAR-1058 parity – `_resolve_oidc_provider` now opens its
   own `session.begin()` when the caller has none, matching
   `_resolve_saml_for_route`), an unbound app session sees zero OIDC providers,
   and `GET /oidc/{provider}/login` 307s cross-org with the resolved provider's
   client_id while an unknown slug is a 400 not a 500. Demoted the OIDC deferral
   and added the behaviour lines to `frontend/src/manifest.yaml`.
-- 2026-09-21: **product-map review pass** — closed the
+- 2026-09-21: **product-map review pass**: closed the
   "No BDD scenarios for admin provider CRUD" gap. Registered
   `auth/sso_admin_crud.feature` into the executing BDD suite from the new
   `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso` routes
-  with only the DB CRUD, RLS and outbound-network seams patched — 16 scenarios:
+  with only the DB CRUD, RLS and outbound-network seams patched – 16 scenarios:
   200 provider list with type badges (O/S), 201 OIDC create (client secret never
   echoed in the clear, computed callback URL) and SAML 2.0 create, the FAR-855
   unrestricted-provisioning 422 while the flag is off and duplicate-name 409,
@@ -111,7 +111,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   (`_test_oidc_connection` / `_test_saml_connection` parse for real, only the
   pinned HTTP client patched), group-to-team mapping set/get, and the non-admin
   403. `_ORPHANED_BDD_FEATURES` stays empty.
-- 2026-09-17: **product-map review pass** — registered the
+- 2026-09-17: **product-map review pass**: registered the
   `SsoProviderForm.vue` provider-form surface in the manifest `elements:`
   inventory for `/settings/sso`: the form ships the tenant-domain input
   (`sso-tenant-domain`) and the callback-URL copy control
@@ -123,7 +123,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   (`test_mapped_route_elements_cover_owning_view_testids`), so a newly shipped
   provider-form control can no longer silently drift out of the product map.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/settings/sso`: a successful connection
@@ -133,7 +133,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   route's reverse testid-coverage guard
   (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/settings/sso`
   and wired the two components into the reverse testid-coverage guard
@@ -141,7 +141,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/settings/sso`: the whole-page view(s) `SettingsSsoView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -149,7 +149,7 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-08-25: **product-map review pass** — shipped the login-page SSO
+- 2026-08-25: **product-map review pass**: shipped the login-page SSO
   provider buttons (``LoginView.vue`` consumes ``GET /api/v1/auth/sso/providers`` and
   renders OIDC/SAML buttons that link to the existing login endpoints). Coverage added in
   ``frontend/src/__tests__/LoginView.spec.ts`` (5 cases, incl. fails-closed on 402 / empty

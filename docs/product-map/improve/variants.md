@@ -16,7 +16,7 @@ status: covered
 
 # Variants
 
-Variant groups — batch comparison on `/variants/compare`. A variant group bundles
+Variant groups – batch comparison on `/variants/compare`. A variant group bundles
 weighted variants (optional `run_context_overrides`) and fires one run per
 variant; the page hosts an inline variant-group builder (create + batch-fire),
 and comparison surfaces eval scores per node, prompt diffs and eval
@@ -49,7 +49,7 @@ by the `variant_batch_compare` feature flag.
       `api/routes/variant_batches.py`) and the `get_batch_compare` surface
       (`BatchRunCompare` / `batch_compare` in `api/routes/variants.py`) via the
       persisted `node_token_usage` union, serialized through the RunResponse
-      bounds (`_serialize_node_token_usage` — `model_cost_raw_usd` display
+      bounds (`_serialize_node_token_usage` – `model_cost_raw_usd` display
       clamp + newest-N node truncation), and the `/variants/compare/:batchId`
       page renders a per-node token table per expanded variant run
       (`VariantBatchCompareView.vue`, `VariantBatchCompareView.spec.ts`,
@@ -63,7 +63,7 @@ by the `variant_batch_compare` feature flag.
       in the server-computed batch status: `_CANCELLED = {"cancelled",
       "rejected"}` in `api/routes/variant_batches.py`, so a batch whose runs are
       all rejected/cancelled reports `cancelled`, and one mixed with `complete`
-      reports `partial` (`test_variant_batches.py` `TestComputeBatchStatus`) —
+      reports `partial` (`test_variant_batches.py` `TestComputeBatchStatus`) –
       a HITL rejection lowers a batch's completion ratio rather than raising a
       batch-level `failed`
 
@@ -76,7 +76,7 @@ the per-token breakdown comparison the manifest previously parked as the lone
 
 ## QA History
 
-- 2026-09-25: **Improve Architecture product-map walk** — closed the last
+- 2026-09-25: **Improve Architecture product-map walk**: closed the last
   `feat-variants` partial: per-token breakdown comparison now ships end to end.
   `_run_to_variant_run` (`api/routes/variant_batches.py`) and `get_batch_compare`
   / `batch_compare` (`api/routes/variants.py` + `db/crud/variant_group.py`) carry
@@ -85,13 +85,13 @@ the per-token breakdown comparison the manifest previously parked as the lone
   renders a per-node input/output/total-token + cost table per expanded variant
   run (`variant-batch-token-breakdown`, registered in the manifest elements
   inventory). The manifest `feat-variants` status is now `covered`.
-- 2026-09-25: **Improve Architecture product-map walk** — reconciled the
+- 2026-09-25: **Improve Architecture product-map walk**: reconciled the
   manifest `feat-variants` registry entry with this tracker: per-node eval-score
   comparison (the `[x]` "eval scores per node" behaviour above) is now ticked, and
   the unchecked item is narrowed to the genuinely missing per-token breakdown only.
   The tracker's Known Gaps wording ("per-node eval-score / per-token breakdown drafts")
   is clarified by the Behaviours line that already ships per-node eval scores.
-- 2026-09-23: **product-map review pass** — removed the stale
+- 2026-09-23: **product-map review pass**: removed the stale
   `pipelines/run_variants.feature` "Coverage gaps are reported for a variant
   group" scenario (`@awaiting-implementation`, deselected) and its dead step
   definitions. It was a duplicate draft of the real `get_coverage_gaps` seam
@@ -100,22 +100,22 @@ the per-token breakdown comparison the manifest previously parked as the lone
   `PINNED_AWAITING_IMPLEMENTATION` entry for `pipelines/run_variants.feature`
   were archived. Coverage for this entry is unchanged.
 
-- 2026-09-20: **product-map review pass** — closed the
+- 2026-09-20: **product-map review pass**: closed the
   "BDD scenarios tagged `@awaiting-implementation`" gap
   (`variant_groups.feature`). The sequential-order scenario now drives the REAL
   `run_variant_batch` seam with the same mock-session machinery as the batch-run
   scenario (runs created sequentially in variant insertion order under one
   `batch_id`), and the eval-coverage draft was re-anchored to the REAL
-  `get_coverage_gaps` seam (missing `eval_definition_ids` per variant — a
+  `get_coverage_gaps` seam (missing `eval_definition_ids` per variant – a
   variant that claims the eval is not flagged). The two per-node eval-score /
   per-token breakdown comparison drafts were removed: they asserted a wire shape
   the product does not ship (`get_batch_compare` returns per-run
   `eval_pass_rate` / `eval_count` / `total_tokens` / `total_cost_usd` and the
   frozen-snapshot override diff, which the batch-scope comparison scenarios
-  already lock) — leaving them tagged would keep false coverage promises in the
+  already lock) – leaving them tagged would keep false coverage promises in the
   suite. No `@awaiting-implementation` scenarios remain in the feature.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   `JsonViewer` surface (`components/shared/JsonViewer.vue` static testids
   `json-viewer` / `json-viewer-{copy,expand-all,collapse-all,string-expand,string-collapse}`)
   in the manifest `elements:` inventory for `/variants/compare` and
@@ -125,7 +125,7 @@ the per-token breakdown comparison the manifest previously parked as the lone
   `/api/v1/manifest`. The component is now part of both routes' reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`).
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/variants/compare` and `/variants/compare/:batchId`: the whole-page view(s) `VariantCompareView.vue` and `VariantBatchCompareView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -133,7 +133,7 @@ the per-token breakdown comparison the manifest previously parked as the lone
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-17: **FAR-936** — retired the AB Test Models page (`/variants/ab-test`).
+- 2026-09-17: **FAR-936**: retired the AB Test Models page (`/variants/ab-test`).
   Removed route, view, i18n (`views.ABTestModelsView`), manifest entry, elements
   inventory, tests, and sidebar nav entry. The page's variant-builder capability
   moved onto the `/variants/compare` page as an inline builder
@@ -142,7 +142,7 @@ the per-token breakdown comparison the manifest previously parked as the lone
   opens the builder, the `pipeline_id` deep-link from PipelineListView pre-selects
   the pipeline, and firing a batch navigates to the batch-compare detail route.
 
-- 2026-08-27: **product-map review pass** — added this behaviour-tracker
+- 2026-08-27: **product-map review pass**: added this behaviour-tracker
   for the registered manifest feature `feat-variants`, which previously had no
   `docs/product-map/` entry. Behaviours verified against `api/routes/variants.py` and
   `tests/bdd/features/variants/variant_groups.feature`. Status: covered (with the known

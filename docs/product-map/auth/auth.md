@@ -57,14 +57,14 @@ clients.
       one tab refreshes at a time. The frontend uses the Web Locks API
       (`navigator.locks.request('modulo-auth-refresh', ...)`) to serialise
       concurrent refresh attempts across tabs. A tab that acquires the lock
-      re-reads localStorage before POSTing — if a sibling already rotated the
+      re-reads localStorage before POSTing – if a sibling already rotated the
       token, the tab adopts it without a redundant request. When Web Locks are
       unavailable (older browsers, test environments), the refresh runs directly
       with the in-tab single-flight dedup (`frontend/src/lib/api/auth.ts`)
 - [x] Reuse-interval refresh: if a stale refresh token is presented within the
       grace window (`REFRESH_REUSE_GRACE_SECONDS` of the last rotation), the
       server advances and mints normally (reuse_replay=True for logging). The
-      client does NOT need to retry — the stale token was accepted and new
+      client does NOT need to retry – the stale token was accepted and new
       tokens are returned. Reuse outside the window, ahead of max, or from a
       blacklisted family returns 401 (theft). The family is NOT blacklisted on
       a within-window reuse (`frontend/src/lib/api/auth.ts`)
@@ -91,7 +91,7 @@ clients.
 - [x] Access revocation is immediate (ADR 047): every tenant-scoped request
       re-reads the account's LIVE org role from `org_memberships` (deactivated
       rows excluded; INNER JOIN requires `accounts.active IS TRUE`) on each
-      call — a removed member's JWT is rejected 401 (`OrganisationMembershipNotFound`)
+      call – a removed member's JWT is rejected 401 (`OrganisationMembershipNotFound`)
       on the next API call, so they cannot list pipelines or view runs, and a
       removed member's refresh token is rejected 401 ("Account no longer has
       access to this organisation") BEFORE the family sequence advances
@@ -100,7 +100,7 @@ clients.
       `_advance_refresh_sequence`, `backend/src/modulo/db/crud/org_membership.py`)
 
 ## QA History
-- 2026-10-02: **Improve Architecture product-map walk** — closed
+- 2026-10-02: **Improve Architecture product-map walk**: closed
   the `personas/marcus-ciso.feature` "Marcus confirms offboarding immediately
   revokes access" persona-journey gap (pinned `@awaiting-implementation` since
   2026-08 while the feature shipped underneath it). The scenario now executes
@@ -109,21 +109,21 @@ clients.
   REAL minted access + refresh tokens (`create_access_token` /
   `create_refresh_token`), the real `get_current_tenant_user` /
   `get_current_tenant_user_or_api_key` JWT branch (which composes
-  `_verify_identity`'s live-role re-read against the real rows —
+  `_verify_identity`'s live-role re-read against the real rows –
   `pipeline.list` / `run.list` mount it) and the real
   `_advance_refresh_sequence` refresh seam (401 before the family sequence
-  advances, family untouched) — and was removed from
+  advances, family untouched) – and was removed from
   `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`).
-- 2026-09-17: **product-map review pass** — closed the "No
+- 2026-09-17: **product-map review pass**: closed the "No
   dedicated BDD for `/me` password-change forced flow" gap. `auth/change_password.feature`
   gained the "Forced password change clears the admin-reset flag in the same
   transaction" scenario (driven by `steps/test_change_password.py`), asserting the
   `must_change_password` flag App.vue's forced-change gate arms on is cleared by the
-  real `PUT /api/v1/me/password` route in the same transaction as the hash swap —
+  real `PUT /api/v1/me/password` route in the same transaction as the hash swap –
   the flagship forced-flow behaviour that was previously unit-tested only
   (`tests/unit/api/test_me_password.py::test_successful_password_change_clears_must_change_flag`).
 
-- 2026-09-13: **product-map review pass** — removed the phantom
+- 2026-09-13: **product-map review pass**: removed the phantom
   `force-change-password-sign-out` element from the `/admin/my-profile` manifest
   `elements:` inventory: its only render site is the app-level forced-password-gate
   (`frontend/src/views/ForceChangePasswordView.vue`, mounted by `App.vue`), never the
@@ -132,7 +132,7 @@ clients.
   requires every registered element's testid to render within its route's owning-view
   closure, closing the mis-attribution drift direction none of the existing guards covered.
 
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/my-profile`
   and wired the two components into the reverse testid-coverage guard
@@ -140,7 +140,7 @@ clients.
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/oauth/authorize`: the whole-page view(s) `OAuthConsentView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -148,7 +148,7 @@ clients.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-11: **product-map review pass** — extended the reverse
+- 2026-09-11: **product-map review pass**: extended the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`) to
   `/admin/my-profile`: the whole-page view(s) `MyProfileView.vue` render static `data-testid`s that the
   product map `elements:` inventory already documents, but the surface was not yet
@@ -156,7 +156,7 @@ clients.
   testid can no longer silently stay invisible to Assistant's docs indexer /
   `/api/v1/manifest`.
 
-- 2026-09-07: **product-map review pass** — added this
+- 2026-09-07: **product-map review pass**: added this
   behaviour-tracker for `feat-auth`, which previously had behaviours only in
   `manifest.yaml` inline. Behaviours verified against `routes/auth.py`,
   `routes/sso.py`, the auth unit+BDD suites, and frontend views. Status: covered.
