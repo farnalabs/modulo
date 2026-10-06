@@ -314,8 +314,11 @@ async def _resume_and_complete(
     """Dispatch resume_run with the reconstructed payload; the run must end ``expected_status``.
 
     When *live_events* is given, an SSE-style broker subscriber is attached
-    before the resume and every ``(event_type, payload)`` it received (up to the
-    close sentinel) is appended to it (FAR-1534).
+    BEFORE ``resume_run`` creates/uses the broker, and every ``(event_type,
+    payload)`` it received (up to the close sentinel) is drained and appended to
+    it afterwards (FAR-1534). Draining only after ``resume_run`` returns is safe
+    because ``resume_run`` returns after both the live publish and the broker
+    close, and close clears subscribers - so no event can race the drain.
     """
     setup_hub = _run_executor_hub(backend_id, fixtures)
     hub = await setup_hub()

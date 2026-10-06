@@ -1635,7 +1635,9 @@ def _stream_terminal_reason(
     sandbox session routes to the retryable ``sandbox.no_output_json``, a
     self-reported agent failure elevates to ``agent.failed``, and a node that
     stalled takes priority (existing precedence preserved). ``None`` means the
-    caller publishes ``run_completed`` and returns ``complete``.
+    caller returns ``complete``; ``run_completed`` is published later, only after
+    finalize commits the terminal status (FAR-1534), by
+    ``_finalize_then_publish_completed``.
     """
     usage = state.node_token_usage or None
     if state.session_lost_reason and not state.stall_reason:
@@ -4416,7 +4418,8 @@ class PipelineExecutor:
         # would re-run the side-effecting node.
         graph_idempotent = _graph_is_idempotent(graph_json)
         # FAR-228: set when guard B suppressed a transient retry — gates the
-        # eval-suite/fire_agent_signal block and publishes run_completed.
+        # eval-suite/fire_agent_signal block. FAR-1534: it no longer publishes
+        # run_completed; that happens post-finalize like every other complete run.
         gate_suppressed = False
 
         try:
@@ -4814,8 +4817,8 @@ class PipelineExecutor:
         if transient["decision"] == "gate":
             # SKIP the pending-reset, the re-raise and the run_failed publish
             # — fall through to the existing finalization with
-            # final_status="complete". run_completed is published after the
-            # eval-skip point, while the broker is still open.
+            # final_status="complete". FAR-1534: run_completed is published
+            # post-finalize (by ``_finalize_then_publish_completed``), not here.
             completed_node_outputs[transient["gated_node_id"]] = _idempotency_gate_skipped_envelope(
                 transient["gated_node_id"]
             )
