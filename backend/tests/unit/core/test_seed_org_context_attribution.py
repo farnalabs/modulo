@@ -255,3 +255,65 @@ async def test_demo_org_seed_failure_keeps_the_announced_drop_when_no_org_row_su
     assert not sink.orgs_for("demo_org.seed_failed")
     assert any("no_org_context" in record.getMessage() for record in caplog.records)
     assert org_id_var.get() is None
+
+
+async def test_demo_org_seed_failure_with_no_slug_skips_attribution(
+    factory: async_sessionmaker[AsyncSession],
+    capture_demo: None,
+    sink: _RecordingSink,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spec with a falsy slug has no org to resolve — attribute nothing.
+
+    ``seed_demo_orgs`` reads ``spec.get("slug")`` and, once the per-spec seed
+    fails, asks the resolver to find a surviving row. With a falsy slug there
+    is nothing to look up, so the resolver short-circuits to ``None`` and the
+    caller keeps the announced drop. Pins that the empty-slug guard is a real
+    path, not dead defensive code.
+    """
+    assert org_id_var.get() is None
+    no_slug_spec: DemoOrgSpec = {
+        "slug": "",
+        "tier": "community",
+        "full": False,
+        "email": "demo@example.com",
+        "password": "pw",
+    }
+    monkeypatch.setattr(demo_mod, "DEMO_ORGS", [no_slug_spec])
+    monkeypatch.setattr(demo_mod, "get_settings", lambda: types.SimpleNamespace(modulo_license_private_key=""))
+
+    await seed_demo_orgs(factory)
+    await _drain()
+
+    assert not sink.orgs_for("demo_org.seed_failed")
+    assert org_id_var.get() is None
+
+
+async def test_demo_org_resolution_failure_degrades_to_no_attribution(
+    engine: AsyncEngine,
+    factory: async_sessionmaker[AsyncSession],
+    capture_demo: None,
+    sink: _RecordingSink,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A resolver failure logs and degrades to ``None`` — never masks the seed error.
+
+    The org lookup itself fails (``organisations`` dropped), so the resolver's
+    ``except`` must swallow the DB error with a warning and return ``None``;
+    the caller then keeps the announced drop. A resolver that propagated here
+    would replace the per-spec seed ERROR with an unrelated lookup ERROR.
+    """
+    assert org_id_var.get() is None
+    async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE organisations"))
+
+    monkeypatch.setattr(demo_mod, "DEMO_ORGS", [_DEMO_SPEC])
+    monkeypatch.setattr(demo_mod, "get_settings", lambda: types.SimpleNamespace(modulo_license_private_key=""))
+
+    await seed_demo_orgs(factory)
+    await _drain()
+
+    assert any("demo_org.failure_org_resolution_failed" in record.getMessage() for record in caplog.records)
+    assert not sink.orgs_for("demo_org.seed_failed")
+    assert org_id_var.get() is None
