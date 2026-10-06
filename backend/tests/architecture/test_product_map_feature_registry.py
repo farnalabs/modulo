@@ -17,6 +17,8 @@ suite pins the honesty of the checklist itself:
 
 - ``status`` is one of ``covered`` / ``partial`` / ``gap``;
 - a ``behaviours`` checklist is a non-empty list of ``[x]``/``[ ]`` items;
+- ``deferrals`` is a list of non-empty strings (YAML must not reparse a
+  colon-bearing entry into an object);
 - no all-checked feature is marked ``partial`` (it is ``covered``);
 - no feature with an unchecked item is marked ``covered`` (it is ``partial``
   or ``gap``);
@@ -101,6 +103,40 @@ def test_all_checked_features_are_not_partial():
     assert not stale, (
         "feature checklist is fully checked but the feature is still parked at "
         "'status: partial' (the gaps it once tracked have shipped):\n" + "\n".join(stale)
+    )
+
+
+def test_deferrals_are_non_empty_strings():
+    """A feature's ``deferrals`` entries are plain non-empty strings.
+
+    The manifest is consumed by Assistant's ``search_documentation`` indexer and
+    the frontend ``/api/v1/manifest`` route, both of which expect a deferral to
+    be human-readable prose. YAML silently reparses an unquoted item that
+    contains a ``:`` as a single-key **mapping** (e.g. ``... follow-up: pipeline
+    editor consume`` became ``{"... follow-up": "pipeline editor consume"}``),
+    so the four ``feat-runtime`` deferrals shipped as objects instead of strings
+    with no guard catching it. Fail closed on any non-string (or blank) entry so
+    a deferral stays a deferral.
+    """
+    bad: dict[str, str] = {}
+    for feat, spec in _load_features().items():
+        if not isinstance(spec, dict):
+            continue
+        deferrals = spec.get("deferrals")
+        if deferrals is None:
+            continue
+        if not isinstance(deferrals, list):
+            bad[feat] = f"<deferrals must be a list, got {type(deferrals).__name__}>"
+            continue
+        for index, item in enumerate(deferrals):
+            if not isinstance(item, str):
+                bad[f"{feat}[{index}]"] = f"<entry must be a string, got {type(item).__name__}: {item!r}>"
+            elif not item.strip():
+                bad[f"{feat}[{index}]"] = "<entry must not be blank>"
+    assert not bad, (
+        "each 'deferrals' entry must be a non-empty string (quote any entry containing "
+        "a colon so YAML does not parse it as a mapping):\n"
+        + "\n".join(f"  {key} -> {value}" for key, value in sorted(bad.items()))
     )
 
 

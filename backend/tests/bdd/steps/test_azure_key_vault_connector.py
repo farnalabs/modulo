@@ -211,37 +211,43 @@ def akv_delete_secret(ctx: dict, name: str) -> None:
 @then("the result contains secret metadata")
 def akv_records_secret_metadata(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and "secret1" in records[0].get("id", ""), records
+    assert records, records
+    assert "secret1" in records[0].get("id", ""), records
 
 
 @then("the result contains the secret value")
 def akv_records_secret_value(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and records[0].get("value") == "my-secret-value", records
+    assert records, records
+    assert records[0].get("value") == "my-secret-value", records
 
 
 @then("the result contains key metadata")
 def akv_records_key_metadata(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and "key1" in records[0].get("kid", ""), records
+    assert records, records
+    assert "key1" in records[0].get("kid", ""), records
 
 
 @then("the result contains the key details")
 def akv_records_key_details(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and records[0].get("key", {}).get("kty") == "RSA", records
+    assert records, records
+    assert records[0].get("key", {}).get("kty") == "RSA", records
 
 
 @then("the result contains certificate metadata")
 def akv_records_certificate_metadata(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and "cert1" in records[0].get("id", ""), records
+    assert records, records
+    assert "cert1" in records[0].get("id", ""), records
 
 
 @then("the result contains the certificate details")
 def akv_records_certificate_details(ctx: dict) -> None:
     records = ctx["records"]
-    assert records and records[0].get("policy", {}).get("x509_props", {}).get("subject") == "CN=test", records
+    assert records, records
+    assert records[0].get("policy", {}).get("x509_props", {}).get("subject") == "CN=test", records
 
 
 @then("the secret is created successfully")
