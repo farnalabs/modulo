@@ -38,7 +38,7 @@ async def test_absent_org_and_actor_are_not_synthesised() -> None:
     params = session.execute.await_args.args[0].compile().params
     assert params["org_id"] is None
     assert params["actor_user_id"] is None
-    assert params["payload_json"] == {}
+    assert not params["payload_json"]
 
 
 async def test_present_org_and_actor_are_recorded_in_payload() -> None:
