@@ -25,8 +25,9 @@ this module (a flaky test is worse than no test):
    connection-pool checkout (TCP + auth + pre-ping + the RLS ``SET`` checkout
    hook), which on a loaded machine consumed it entirely — observed as a
    ``TimeoutError`` inside ``_check_db_hygiene`` under ``pytest -n 2``, making
-   the healthy test report ``degraded (timed out)``. The budget's TIMEOUT
-   behaviour itself is pinned by the unit test
+   the healthy test report ``degraded`` with the probe-did-not-complete detail
+   (FAR-1510: such an outcome is advisory, so it no longer gates readiness
+   either). The budget's TIMEOUT behaviour itself is pinned by the unit test
    ``test_timeout_reports_degraded_never_unavailable``; what this module
    verifies is the query and the GRADING, which must not depend on machine
    load.
@@ -70,8 +71,9 @@ def _widen_check_budget(monkeypatch: pytest.MonkeyPatch) -> None:
 
     30s: generous enough that connection checkout under parallel test load
     never eats the budget (the observed failure), still bounded so a genuinely
-    hung query surfaces as ``degraded (timed out)`` with a clear detail string
-    instead of hanging the run (``--timeout=600`` bounds the test itself).
+    hung query surfaces as ``degraded`` with the "probe did not complete"
+    detail (advisory since FAR-1510) instead of hanging the run
+    (``--timeout=600`` bounds the test itself).
     The 1s default and its timeout path are covered by unit tests.
     """
     monkeypatch.setenv("MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS", "30")
