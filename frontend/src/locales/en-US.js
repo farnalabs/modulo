@@ -3455,10 +3455,7 @@ export default {
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
       "name": "Name",
-      "description": "Description",
-      "zoom_in": "Zoom in",
-      "zoom_out": "Zoom out",
-      "fit_view": "Fit view"
+      "description": "Description"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
@@ -3541,6 +3538,11 @@ export default {
     }
   },
   "components": {
+    "FlowControls": {
+      "zoom_in": "Zoom in",
+      "zoom_out": "Zoom out",
+      "fit_view": "Fit view"
+    },
     "RunnerTier": {
       "bundled_docker": "Bundled Runner (Docker)",
       "external_e2b": "External Runner (E2B)",
