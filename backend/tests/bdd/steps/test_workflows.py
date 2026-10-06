@@ -635,7 +635,8 @@ def _suggested_name_is(ctx: dict[str, Any], suggestion: str) -> None:
     data = ctx["response"].json()
     conflicts = data.get("name_conflicts", [])
     pipeline_conflicts = [c for c in conflicts if c.get("type") == "pipeline"]
-    assert pipeline_conflicts and pipeline_conflicts[0].get("suggested") == suggestion, (
+    assert pipeline_conflicts, f"Expected suggested name '{suggestion}', got {conflicts}"
+    assert pipeline_conflicts[0].get("suggested") == suggestion, (
         f"Expected suggested name '{suggestion}', got {conflicts}"
     )
 

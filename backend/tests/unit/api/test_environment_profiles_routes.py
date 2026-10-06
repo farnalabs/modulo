@@ -532,10 +532,12 @@ class TestProfileTestEndpoint:
 
         Before the fix, _tier_map.get(provider_type, "e2b") mapped any unknown
         provider to e2b — the fail-open the reviewer flagged. An unknown tier
-        must fail closed with a refusal.
+        must fail closed with a refusal. (FAR-1051 note: this uses a type that
+        is NOT in the PROVIDER_TYPES vocabulary — ``kubernetes`` is a real
+        tier now and is covered by its own test below.)
         """
-        fake = _fake_profile(provider_type="kubernetes", network_policy="outbound")
-        hub = self._stub_hub("kubernetes")
+        fake = _fake_profile(provider_type="quantum_entangler", network_policy="outbound")
+        hub = self._stub_hub("quantum_entangler")
         with (
             patch(f"{_ROUTES}.get_environment_profile") as mock_get,
             patch(f"{_ROUTES}.set_rls_org"),
@@ -549,6 +551,47 @@ class TestProfileTestEndpoint:
         assert "unknown tier" in resp.text.lower()
         # Must NOT have provisioned — the refusal fires before the provider call.
         assert "provisioned" not in resp.text
+
+    def test_profile_test_kubernetes_resolves_as_the_kubernetes_tier(self, client: TestClient) -> None:
+        """FAR-1051: a kubernetes profile is no longer an 'unknown tier'.
+
+        The tier is sourced from the provider registry, so the posture this
+        tier CAN enforce (the unrestricted default behind ``outbound``)
+        provisions normally instead of refusing a supported configuration.
+        """
+        fake = _fake_profile(provider_type="kubernetes", network_policy="outbound")
+        hub = self._stub_hub("kubernetes")
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        assert "command_complete" in resp.text
+        assert "destroyed" in resp.text
+        assert "unknown tier" not in resp.text.lower()
+
+    def test_profile_test_kubernetes_none_refuses_naming_networkpolicy(self, client: TestClient) -> None:
+        """FAR-1051: the unenforceable posture on Kubernetes refuses (fail
+        closed) and the refusal names where the control actually lives —
+        never a silent downgrade to outbound."""
+        fake = _fake_profile(provider_type="kubernetes", network_policy="none")
+        hub = self._stub_hub("kubernetes")
+        with (
+            patch(f"{_ROUTES}.get_environment_profile") as mock_get,
+            patch(f"{_ROUTES}.set_rls_org"),
+            patch(f"{_ROUTES}._get_hub", return_value=hub),
+        ):
+            mock_get.return_value = fake
+            resp = client.post(f"{self.URL}/{_PROFILE_ID}/test")
+        assert resp.status_code == 200
+        body = resp.text.lower()
+        assert "failed" in body
+        assert "refused" in body
+        assert "networkpolicy" in body
+        assert "provisioned" not in body
 
     def test_profile_test_unexpected_provider_error_streams_failed(self, client: TestClient) -> None:
         """An unexpected provider error mid-stream surfaces the generic failed
@@ -584,8 +627,9 @@ def test_egress_tier_for_provider_type_sources_aliases_and_fails_closed() -> Non
     """FAR-1085: the egress tier is sourced from the provider registry.
 
     ``local_docker`` is a Docker alias (``DockerRuntimeProvider.provider_aliases``)
-    so it resolves to the 'docker' tier; an empty or unknown provider type
-    resolves to ``None`` so the caller fails closed.
+    so it resolves to the 'docker' tier; ``k8s`` is the Kubernetes alias
+    (FAR-1051) so it resolves to 'kubernetes'; an empty or unknown provider
+    type resolves to ``None`` so the caller fails closed.
     """
     from modulo.api.routes.environment_profiles import _egress_tier_for_provider_type
 
@@ -594,7 +638,10 @@ def test_egress_tier_for_provider_type_sources_aliases_and_fails_closed() -> Non
     assert _egress_tier_for_provider_type("local_docker") == "docker"
     assert _egress_tier_for_provider_type("local") == "local"
     assert _egress_tier_for_provider_type("") is None
-    assert _egress_tier_for_provider_type("kubernetes") is None
+    assert _egress_tier_for_provider_type("quantum_entangler") is None
+    # FAR-1051: the Kubernetes provider maps to its own tier, alias included.
+    assert _egress_tier_for_provider_type("kubernetes") == "kubernetes"
+    assert _egress_tier_for_provider_type("k8s") == "kubernetes"
 
 
 def test_egress_tier_for_provider_type_skips_unimportable_provider(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -438,6 +438,11 @@ async def _saml_login_redirect(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
+# browser posts the IdP's SAML response with no session, and the identity is
+# established inside the handler, so audited(principal_dep=...) has nothing to
+# resolve. An SSO login is a security event worth auditing; covering it needs an
+# actor-less/system variant of audited() in modulo.core (out of scope here).
 @router.post("/saml/acs/{provider_id}")
 @handle_db_errors("sso.saml_acs_provider")
 async def saml_acs_provider(
@@ -654,6 +659,9 @@ async def saml_login(
     )
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — same
+# gap as /saml/acs/{provider_id}: the assertion establishes the identity inside
+# the handler, so no principal exists for audited(principal_dep=...) to resolve.
 @router.post("/saml/acs")
 @handle_db_errors("sso.saml_acs")
 async def saml_acs(

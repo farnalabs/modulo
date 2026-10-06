@@ -10,7 +10,7 @@ the hardened WorkspaceSpec construction.
 import json
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -105,6 +105,8 @@ async def test_e2b_profile_resolves_e2b_route() -> None:
     assert route.provider_type == "e2b"
     assert route.profile is not None
     assert route.provider is None
+    # The e2b route keeps the node's own template_id; no image override.
+    assert route.image_ref_override is None
 
 
 async def test_legacy_inert_local_provider_is_dispatch_unbound() -> None:
@@ -154,6 +156,78 @@ async def test_runner_docker_without_endpoint_env_is_dispatch_unbound(monkeypatc
 async def test_unknown_provider_type_is_dispatch_unbound() -> None:
     with pytest.raises(SandboxDispatchUnboundError, match="not dispatchable"):
         await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("warp_drive")), _ORG, _PROFILE_ID)
+
+
+# ---------------------------------------------------------------------------
+# Kubernetes route (FAR-1051)
+# ---------------------------------------------------------------------------
+
+
+async def test_kubernetes_profile_resolves_hub_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A kubernetes profile resolves through the hub, mirroring runner_docker:
+    provider + hub ride the route so node_runner reuses that ONE instance as
+    the dispatch provider (and disposes the hub)."""
+    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+    route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID)
+    try:
+        assert route.provider_type == "kubernetes"
+        assert route.profile is not None
+        assert route.provider is not None
+        assert route.hub is not None
+        # FAR-1051 review: the profile's declared image_ref rides the route so
+        # node_runner's sandbox spec uses the same image the bundled-runner
+        # mapper maps, instead of the node's E2B template_id.
+        assert route.image_ref_override == "modulo-runner:opencode@sha256:" + "a" * 64
+        from modulo.core.runtime_provider.k8s import KubernetesRuntimeProvider
+
+        assert isinstance(route.provider, KubernetesRuntimeProvider)
+    finally:
+        if route.hub is not None:
+            await route.hub.aclose()
+
+
+async def test_kubernetes_without_image_ref_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1051 review: a kubernetes profile with no image_ref would fall
+    through to the node's E2B ``template_id`` as the pod image and fail at
+    provision time (ImagePullBackOff). Route resolution fails LOUD instead,
+    naming the missing image_ref, before the hub is even built."""
+    monkeypatch.setenv("MODULO_KUBERNETES_ENABLED", "1")
+
+    with pytest.raises(SandboxDispatchUnboundError, match="image_ref"):
+        await resolve_sandbox_dispatch_route(
+            _session_factory_returning(_profile("kubernetes", image_ref=None)), _ORG, _PROFILE_ID
+        )
+
+
+async def test_kubernetes_without_opt_in_is_dispatch_unbound(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No silent fallback: without ``MODULO_KUBERNETES_ENABLED`` the typed
+    config error carries the remediation env var — never E2B, never local,
+    even with an E2B key sitting in the environment."""
+    monkeypatch.delenv("MODULO_KUBERNETES_ENABLED", raising=False)
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+    monkeypatch.setenv("E2B_API_KEY", "test-key")
+
+    with pytest.raises(SandboxDispatchUnboundError, match="MODULO_KUBERNETES_ENABLED"):
+        await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID)
+
+
+async def test_kubernetes_route_new_family_error_propagates_unwrapped() -> None:
+    """Error-family site map A: the route's config-error handler maps ONLY the
+    config family — a new-family error (rate limit, workspace gone) from the
+    hub must escape as itself, never flattened into a config error."""
+    from modulo.core.bundled_runner import runner_dispatch
+    from modulo.core.runtime_provider import RateLimitedError
+
+    def _boom_hub(**_kwargs: object) -> object:
+        raise RateLimitedError("substrate rate limit / quota exceeded")
+
+    with (
+        patch.object(runner_dispatch, "build_hub", side_effect=_boom_hub),
+        pytest.raises(RateLimitedError, match="rate limit"),
+    ):
+        await runner_dispatch.resolve_sandbox_dispatch_route(
+            _session_factory_returning(_profile("kubernetes")), _ORG, _PROFILE_ID
+        )
 
 
 def test_placeholder_digest_detection() -> None:
@@ -283,6 +357,57 @@ def test_workspace_spec_selected_egress_refused_on_docker_tier() -> None:
     control.  The operator must use 'outbound' or 'none', or switch tiers."""
     profile = _profile("runner_docker", network_policy="selected")
     with pytest.raises(SandboxTierRefusedError, match="egress refused on Docker tier"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# WorkspaceSpec egress tier follows the RESOLVED provider (FAR-1051)
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_spec_kubernetes_tier_refuses_unenforceable_egress() -> None:
+    """FAR-1051: the tier follows the profile's resolved provider instead of
+    the historical hardcoded docker tier. A kubernetes profile with
+    network_policy='none' (canonical deny_all) is refused HERE by name — the
+    Kubernetes tier cannot enforce it — instead of resolving on the docker
+    tier and certifying an enforcement Kubernetes never performs."""
+    profile = _profile("kubernetes", network_policy="none")
+    with pytest.raises(SandboxTierRefusedError, match="egress refused on Kubernetes tier"):
+        _workspace_spec_for_dispatch(
+            profile,
+            org_id=_ORG,
+            run_id="run-123",
+            node_id="node-9",
+            run_uuid=uuid.uuid4(),
+        )
+
+
+def test_workspace_spec_kubernetes_tier_allows_provider_default_egress() -> None:
+    """The same kubernetes profile on the provider-default posture resolves
+    normally — only the unenforceable policy is refused, never the dispatch."""
+    profile = _profile("kubernetes", network_policy="outbound")
+    spec = _workspace_spec_for_dispatch(
+        profile,
+        org_id=_ORG,
+        run_id="run-123",
+        node_id="node-9",
+        run_uuid=uuid.uuid4(),
+    )
+    assert spec.egress_policy == "outbound"
+
+
+def test_workspace_spec_unknown_provider_type_fails_closed() -> None:
+    """An unrecognised provider_type passes through RAW as the tier, so the
+    resolver refuses it as an unknown tier (fail-closed) — it must never
+    silently fall back to an enforceable tier."""
+    profile = _profile("quantum_entangler", network_policy="outbound")
+    with pytest.raises(SandboxTierRefusedError, match="unknown tier"):
         _workspace_spec_for_dispatch(
             profile,
             org_id=_ORG,

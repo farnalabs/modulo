@@ -1,9 +1,12 @@
 # deploy/watchdog — health watchdog (Gatus)
 
-Config-as-code for the `watchdog` service in the root `docker-compose.yml`:
-a [Gatus](https://gatus.io) instance that probes Modulo's readiness and tells
-the operator when the deployment is unhealthy — including when it is fully
-down, which is the one failure the app cannot report about itself.
+Config-as-code for the `watchdog` service in **both** compose deployments —
+the root `docker-compose.yml` and the production compose
+(`deploy/compose/docker-compose.prod.yml`): a [Gatus](https://gatus.io)
+instance that probes Modulo's readiness and tells the operator when the
+deployment is unhealthy — including when it is fully down, which is the one
+failure the app cannot report about itself. Both files build this directory's
+image and mount `config.yaml` from here; neither carries a copy.
 
 Operator-facing documentation lives in [`docs/deployment.md` §Health watchdog](../../docs/deployment.md#health-watchdog-docker-compose);
 this directory is the implementation.
@@ -38,6 +41,22 @@ Both bases are pinned (no `latest`/`stable`): `twinproduction/gatus:v5.37.0`
 The image runs as an unprivileged `gatus` user: the binary is static, the
 dashboard binds the unprivileged port 8080, the config is read-only, and no
 `storage` backend is configured, so root is never needed.
+
+## Probe target (`WATCHDOG_PROBE_URL`)
+
+The endpoint the watchdog probes differs per deployment, so `config.yaml`
+writes `url: ${WATCHDOG_PROBE_URL}` and each deployment supplies the value:
+
+| Deployment | Target | Why |
+|---|---|---|
+| `docker-compose.yml` (root) | `http://backend:8000/healthz/ready` (image default) | Split services; uvicorn is directly reachable over the compose network. |
+| `deploy/compose/docker-compose.prod.yml` | `http://modulo:80/healthz/ready` | All-in-one image: the app is service `modulo` behind nginx on port 80 (its `location /health` prefix proxies `/healthz/ready` through); uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container and unreachable from other containers. |
+
+The default lives in the image (`ENV WATCHDOG_PROBE_URL=...` in the
+Dockerfile), not in `config.yaml`, because Gatus has **no** default syntax —
+`${VAR:-default}` expands to an *empty* value and the container panics at
+startup (verified against v5.37.0). That keeps a bare `docker run` of the
+derived image working without any environment set.
 
 ## Quiet degradation without credentials
 
@@ -99,12 +118,14 @@ against the quote characters literally and never matches (also verified).
 
 - `backend/tests/unit/test_watchdog_config.py` — both credential states
   (alerting block wired to the right variables; config still valid with none),
-  plus the compose wiring and pinning guards.
+  the probe-target wiring in both compose files, and the compose wiring and
+  pinning guards.
+- `backend/tests/architecture/test_compose_loopback_ports.py` — the published
+  dashboard ports, including the production compose's watchdog port.
 - `backend/tests/docker/test_watchdog_container.py` — the real container:
   starts with no credentials, logs the disabled line, probes, stays up.
 
 ## Not yet wired
 
-- `deploy/compose/docker-compose.prod.yml` (production override) — follow-up.
 - The Helm chart (`deploy/helm/**`) — deliberately out of scope; the owner has
   not decided whether the watchdog belongs there.

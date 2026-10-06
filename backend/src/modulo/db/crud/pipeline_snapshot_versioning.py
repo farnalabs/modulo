@@ -203,6 +203,8 @@ async def rollback_to_snapshot(
     is_privileged: bool,
     caller_type: Literal["rest", "mcp"],
     is_guardrail_admin: bool = False,
+    grants_deny_privilege: bool = False,
+    grants_deny_guardrail_admin: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
@@ -247,6 +249,7 @@ async def rollback_to_snapshot(
         account_id=account_id,
         is_privileged=is_privileged,
         caller_type=caller_type,
+        grants_deny_privilege=grants_deny_privilege,
     )
 
     old_rows = list(
@@ -281,6 +284,7 @@ async def rollback_to_snapshot(
         is_guardrail_admin=is_guardrail_admin,
         caller_type=caller_type,
         account_id=account_id,
+        grants_deny_guardrail_admin=grants_deny_guardrail_admin,
     )
     # Historical snapshots: missing/None fields are fail-closed — a snapshot
     # edge that omits a gate field (or carries None) is treated as a genuine

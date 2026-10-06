@@ -121,7 +121,7 @@
 
               <!-- Policy Gate section -->
               <div class="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-4">
-                <h3 class="mb-3 text-sm font-semibold" data-test-id="policy-gate-heading">{{ $t('views.EvalEditorView.policyGate.heading') }}</h3>
+                <h3 class="mb-3 text-sm font-semibold" data-testid="policy-gate-heading">{{ $t('views.EvalEditorView.policyGate.heading') }}</h3>
 
                 <div class="space-y-3">
                   <div class="flex items-center gap-4">
@@ -130,7 +130,7 @@
                         type="radio"
                         value="warn"
                         v-model="policyGate.action"
-                        data-test-id="policy-gate-action-warn"
+                        data-testid="policy-gate-action-warn"
                         class="accent-primary"
                       />
                       <span>{{ $t('views.EvalEditorView.policyGate.actionWarnLabel') }}</span>
@@ -140,7 +140,7 @@
                         type="radio"
                         value="block"
                         v-model="policyGate.action"
-                        data-test-id="policy-gate-action-block"
+                        data-testid="policy-gate-action-block"
                         class="accent-primary"
                       />
                       <span>{{ $t('views.EvalEditorView.policyGate.actionBlockLabel') }}</span>
@@ -161,7 +161,7 @@
                       role="switch"
                       :aria-checked="policyGate.enabled"
                       :aria-label="$t('views.EvalEditorView.policyGate.toggleAriaLabel')"
-                      data-test-id="policy-gate-toggle"
+                      data-testid="policy-gate-toggle"
                       class="inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors"
                       :class="policyGate.enabled ? 'bg-primary' : 'bg-input'"
                       :disabled="gateToggleBusy"
@@ -188,7 +188,7 @@
                     role="dialog"
                     aria-modal="true"
                     :aria-label="$t('views.EvalEditorView.policyGate.toggleDisableConfirm')"
-                    data-test-id="policy-gate-toggle-confirm-dialog"
+                    data-testid="policy-gate-toggle-confirm-dialog"
                     class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
                     @keydown="onGateToggleDialogKeydown"
                   >
@@ -200,7 +200,7 @@
                     </span>
                     <button
                       type="button"
-                      data-test-id="policy-gate-confirm-toggle-disable"
+                      data-testid="policy-gate-confirm-toggle-disable"
                       class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
                       @click="confirmToggleGate"
                       ref="gateToggleConfirmBtnRef"
@@ -209,7 +209,7 @@
                     </button>
                     <button
                       type="button"
-                      data-test-id="policy-gate-cancel-toggle-disable"
+                      data-testid="policy-gate-cancel-toggle-disable"
                       class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
                       @click="cancelToggleGate"
                     >
@@ -222,7 +222,7 @@
                     <template v-if="!gateDeleteConfirming">
                       <button
                         type="button"
-                        data-test-id="policy-gate-delete"
+                        data-testid="policy-gate-delete"
                         ref="gateDeleteBtnRef"
                         :aria-label="$t('views.EvalEditorView.policyGate.deleteAriaLabel')"
                         class="inline-flex items-center gap-1 rounded border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
@@ -237,7 +237,7 @@
                         role="dialog"
                         aria-modal="true"
                         :aria-label="$t('views.EvalEditorView.policyGate.deleteConfirm')"
-                        data-test-id="policy-gate-confirm-dialog"
+                        data-testid="policy-gate-confirm-dialog"
                         class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
                         @keydown="onGateDialogKeydown"
                       >
@@ -249,7 +249,7 @@
                         </span>
                         <button
                           type="button"
-                          data-test-id="policy-gate-confirm-delete"
+                          data-testid="policy-gate-confirm-delete"
                           class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
                           @click="deletePolicyGate"
                           ref="gateDeleteConfirmBtnRef"
@@ -272,13 +272,13 @@
                     v-if="gateError"
                     role="alert"
                     aria-live="assertive"
-                    data-test-id="policy-gate-error"
+                    data-testid="policy-gate-error"
                     class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
                   >
                     <span>{{ $t('views.EvalEditorView.policyGate.errorState') }}</span>
                     <button
                       type="button"
-                      data-test-id="policy-gate-retry"
+                      data-testid="policy-gate-retry"
                       :aria-label="$t('views.EvalEditorView.policyGate.retryAriaLabel')"
                       class="rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive hover:bg-destructive/20"
                       @click="retryPolicyGate"
@@ -296,14 +296,14 @@
                 role="dialog"
                 aria-modal="true"
                 :aria-label="$t('views.EvalEditorView.policyGate.dirtyConfirmAriaLabel')"
-                data-test-id="dirty-confirm-dialog"
+                data-testid="dirty-confirm-dialog"
                 class="flex items-center gap-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-xs"
                 @keydown="onDirtyDialogKeydown"
               >
                 <span>{{ $t('views.EvalEditorView.policyGate.unsavedChangesConfirm') }}</span>
                 <button
                   type="button"
-                  data-test-id="dirty-confirm-proceed"
+                  data-testid="dirty-confirm-proceed"
                   class="rounded bg-destructive px-2 py-0.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/90"
                   @click="resolveDirtyConfirm(true)"
                   ref="dirtyConfirmProceedBtnRef"
@@ -312,7 +312,7 @@
                 </button>
                 <button
                   type="button"
-                  data-test-id="dirty-confirm-stay"
+                  data-testid="dirty-confirm-stay"
                   class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
                   @click="resolveDirtyConfirm(false)"
                 >
@@ -374,7 +374,7 @@
                       v-if="evalGateActions[ev.id]"
                       class="inline-block rounded px-2 py-0.5 text-xs font-medium"
                       :class="evalGateActions[ev.id] === 'block' ? 'bg-destructive/10 text-destructive' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
-                      data-test-id="policy-gate-badge"
+                      data-testid="policy-gate-badge"
                     >
                       {{ evalGateActions[ev.id] === 'block' ? $t('views.EvalEditorView.policyGate.badgeBlock') : $t('views.EvalEditorView.policyGate.badgeWarn') }}
                     </span>

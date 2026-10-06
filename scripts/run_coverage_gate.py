@@ -1810,10 +1810,36 @@ def evaluate(
     json_data = _get_diff_cover_json(report_path.resolve(), compare_branch)
     rc, output = _run_diff_cover(report_path.resolve(), compare_branch, fail_under)
 
-    # --- diff-cover found no coverage data for the changed files -> FAIL ---
+    # --- diff-cover found no coverage data for the changed lines ---
+    # Two situations share diff-cover's "no changed coverable lines" marker and
+    # must be told apart on the raw report's file list (FAR-706):
+    #   (a) the changed production files are absent from the report entirely
+    #       (brand-new, untested files) -> FAIL, scoring the absent files' lines
+    #       at 0%; and
+    #   (b) the changed production files ARE measured by the report, but none of
+    #       their changed lines are instrumentable (static ``.vue`` template
+    #       markup, import-only lines) -> there is no executable changed code to
+    #       cover, so SKIP rather than fail a file the report already measures.
     # Reaching here means changed_lines > 0 (zero changed production lines
-    # already skipped above), so every changed line is unmeasured: 0%.
+    # already skipped above).
     if _NO_CHANGED_LINES_RE.search(output):
+        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+        unmeasured_files = {path: count for path, count in changed_files.items() if path not in present_files}
+        if not unmeasured_files:
+            return GateResult(
+                language=language,
+                skipped=True,
+                skip_reason=(
+                    "no measurable coverage data for changed lines: every changed production file "
+                    "is measured by the report and its changed lines are non-instrumentable "
+                    "(static template markup / import-only lines)"
+                ),
+                passed=True,
+                actual_pct=None,
+                threshold=fail_under,
+                changed_lines=changed_lines,
+                deleted_lines=deleted_lines,
+            )
         return GateResult(
             language=language,
             skipped=False,
@@ -1823,7 +1849,7 @@ def evaluate(
             threshold=fail_under,
             changed_lines=changed_lines,
             measured_lines=0,
-            unmeasured_lines=changed_lines,
+            unmeasured_lines=sum(unmeasured_files.values()),
             deleted_lines=deleted_lines,
             branch_actual_pct=0.0,
             branch_passed=False,
