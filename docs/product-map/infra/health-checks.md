@@ -34,8 +34,8 @@ removed in its favour: the `health_readiness_alert` system-cron email (FAR-1446)
 in-process worker-liveness watchdog (ADR 021 worker-resilience, email + generic
 webhook / Teams) and the compose deployment's out-of-process Gatus sentinel (PR #1260).
 The advisory / dead-sweep class that removed workflow used to scan is tracked by
-FAR-1571, and a TOTAL app outage cannot be alerted from in-app at all – that case
-relies on `deploy.yml`'s `--auto-rollback` plus its post-deploy gate. Every operator
+FAR-1571. A TOTAL app outage cannot be alerted from in-app at all, and `deploy.yml`'s
+`--auto-rollback` runs only around a deploy — see Known Gaps. Every operator
 alert – the readiness cron and the watchdog, across
 email, generic webhook and Teams – identifies the deployment environment and carries the
 operator's `ALERT_CONTEXT` free text through one shared renderer (`core/alert_context.py`,
@@ -162,9 +162,14 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   `dispatcher_reconcile` at its degraded tier) emits nothing in-app. Until FAR-1571
   extends the watchdog's existing channels to that class — sustained failure alerts,
   transient `event_loop_lag` blips do not — only the removed uptime-monitor workflow
-  used to see it. Accepted residual (out of scope for FAR-1571): a TOTAL app outage
-  cannot be alerted from inside an app that is down; that case relies on `deploy.yml`'s
-  `--auto-rollback` plus its post-deploy gate.
+  used to see it.
+- **A TOTAL app outage has no operator channel and no ticket (untracked).**
+  In-app alerting cannot fire from inside an app that is down, and `deploy.yml`'s
+  `--auto-rollback` plus its post-deploy gate run only around a deploy — a runtime
+  crash or hang with no deploy in flight (the ~7h unalerted connection-refused
+  incident that motivated FAR-400) reaches no channel. FAR-1571 explicitly excludes
+  this case, so it needs its own tracked ticket (an external / off-platform probe);
+  this entry records it as a gap rather than an accepted residual.
 - **No PRD section reference.** The health endpoints are an internal infrastructure
   concern spanning deployment, monitoring, and operations; no single PRD section covers
   liveness/readiness.
