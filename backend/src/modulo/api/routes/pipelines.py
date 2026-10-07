@@ -1580,6 +1580,27 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     def _validate_agent_node(self) -> None:
         if self.agent_id is None:
             raise ValueError("Agent nodes require an agent")
+        # FAR-1141 criterion 4: an agent node runs the LLM node factory — the
+        # engine NEVER routes its binding to a connector (the binding branch in
+        # ``graph_cache._make_node_fn`` is skipped for agent + agent_id), so a
+        # dispatch binding here would be declared-but-unread: nothing fires,
+        # yet the run would be stamped ``dispatched`` and its retries disabled
+        # for a graph that dispatches nothing. Reject at the SAVE boundary so a
+        # stored graph can never disagree with the engine's routing (MCP graph
+        # writes go through this same model).
+        #
+        # A plain ``query`` binding stays valid: it is what the convert-to-agent
+        # endpoint persists (which connector the agent works through, and what
+        # the swappable-binding extraction reads), and the engine legitimately
+        # ignores it there. Only the verb that would fire an external job is
+        # refused.
+        if self.connector_binding is not None and self.connector_binding.operation == "dispatch":
+            raise ValueError(
+                "Agent nodes cannot carry connector_binding.operation='dispatch' — the engine runs an "
+                "agent node through the LLM factory and never routes its binding to a connector, so the "
+                "dispatch would never fire while the run read as dispatched; use a dispatch or connector "
+                "node for the dispatch binding",
+            )
 
     def _validate_join_node(self) -> None:
         # A join node is a pure convergence node — it has no agent, no connector
@@ -1692,6 +1713,10 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             return
         probe = {
             "node_type": self.node_type,
+            # Carried because the routing gate reads it: an agent node with an
+            # agent_id never routes its binding to a connector, so a probe that
+            # omitted it would ask a different question than the engine does.
+            "agent_id": self.agent_id,
             "connector_binding": self.connector_binding.model_dump(mode="json"),
         }
         if not node_fires_dispatch_job(probe):

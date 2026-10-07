@@ -341,6 +341,14 @@ class ConnectorType(StrEnum):
 # binding, so a connector node firing a real external job was stamped NULL and
 # a dispatch-typed node running a query was stamped ``dispatched``).
 #
+# One precondition gates the whole question: the engine must ROUTE the binding
+# to a connector at all (``node_routes_binding_to_connector``). Two shapes carry
+# a binding the engine never routes — an ``agent`` node with an ``agent_id``
+# (LLM factory) and a ``sandbox_agent`` (sandbox factory) — so their binding is
+# dead configuration: asking it "which verb?" would read a dispatch that fires
+# nothing (FAR-1141 criterion 4's over-claim: an executed run stamped
+# ``dispatched``).
+#
 # They live HERE — a stdlib-only leaf the API, the engine, the validator AND
 # the DB layer can all import without a cycle — so ``node_runner``,
 # ``executor``, ``runtime_retry``, ``graph_validator``, ``api.routes.pipelines``,
@@ -390,19 +398,60 @@ def connector_type_supports_dispatch(connector_type_id: Any) -> bool:
     return capabilities >= CI_RUNNER_CAPABILITIES
 
 
+def node_routes_binding_to_connector(node: Any) -> bool:
+    """True when the engine routes *node*'s ``connector_binding`` to a connector.
+
+    The ROUTING half of :func:`connector_binding_operation`, mirroring the
+    branch order of ``graph_cache._make_node_fn`` exactly:
+
+    * a node with no binding (or a non-dict / empty one) never reaches a
+      connector at all;
+    * ``sandbox_agent`` builds the sandbox node function BEFORE the binding is
+      considered, so its binding is inert;
+    * an ``agent`` node carrying an ``agent_id`` builds the LLM node function —
+      the binding branch is explicitly skipped for that one shape;
+    * every other node type with a binding runs ``make_connector_fn``.
+
+    A node this reports ``False`` for therefore has NO connector verb: reading
+    its binding as one is how a graph that fires nothing got stamped
+    ``dispatched`` (FAR-1141 criterion 4: an ``agent`` node with a dispatch
+    binding never dispatches, yet the run claimed external execution).
+
+    An unrecognised / missing ``node_type`` is read as the default
+    (``agent``); such a node fails loud at graph build anyway, so no
+    malformed shape can be classified as routed here.
+    """
+    if not isinstance(node, dict):
+        return False
+    binding = node.get("connector_binding")
+    if not isinstance(binding, dict) or not binding:
+        return False
+    node_type = str(node.get("node_type") or "agent")
+    if node_type == "sandbox_agent":
+        return False
+    # agent + agent_id builds the LLM node function: its binding branch is the
+    # one shape the engine explicitly skips.
+    return not (node_type == "agent" and bool(node.get("agent_id")))
+
+
 def connector_binding_operation(node: Any) -> str:
     """The connector verb the ENGINE will route *node* to (``query`` default).
 
-    Mirrors ``node_runner.make_connector_fn`` EXACTLY: an explicit, non-empty
-    ``connector_binding.operation`` wins; otherwise a ``node_type="dispatch"``
-    node falls back to the dispatch verb and every other node type queries.
+    Mirrors ``node_runner.make_connector_fn`` EXACTLY: for a node whose
+    binding the engine actually routes (:func:`node_routes_binding_to_connector`)
+    an explicit, non-empty ``connector_binding.operation`` wins; a
+    ``node_type="dispatch"`` node falls back to the dispatch verb; every other
+    node type queries. A node the engine NEVER routes to a connector — an
+    ``agent`` node with an ``agent_id``, or a ``sandbox_agent`` — has no
+    connector verb, so it reads ``query`` even when its binding declares one
+    (the binding is dead configuration on that shape, never a dispatch).
     Returns ``"query"`` for a non-dict / binding-less / operation-less node so
     a malformed input is never read as a dispatch.
     """
     if not isinstance(node, dict):
         return "query"
     binding = node.get("connector_binding")
-    if isinstance(binding, dict):
+    if isinstance(binding, dict) and binding and node_routes_binding_to_connector(node):
         raw_operation = binding.get("operation")
         if isinstance(raw_operation, str) and raw_operation:
             return raw_operation
@@ -419,7 +468,11 @@ def node_fires_dispatch_job(node: Any) -> bool:
     the customer's substrate will run, so re-executing the graph would fire a
     SECOND job. Keyed on the BINDING (operation + action), never on
     ``node_type``, so it covers a ``connector`` / ``router`` / ``hitl`` node
-    carrying a dispatch binding exactly as it covers a ``dispatch`` node.
+    carrying a dispatch binding exactly as it covers a ``dispatch`` node —
+    and, through :func:`connector_binding_operation`, it is ``False`` for a
+    node the engine never routes to a connector (an ``agent`` node with an
+    ``agent_id``, a ``sandbox_agent``): those fire nothing, so they are safe
+    to re-run.
 
     False for a node with no binding (the engine fails loud on that shape at
     graph build, so it can never fire anything) and for every read-only

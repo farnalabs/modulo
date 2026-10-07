@@ -28,6 +28,7 @@ from typing import Annotated, Any, cast
 import jmespath
 from langgraph.graph import END, StateGraph
 
+from modulo.connectors.base import node_routes_binding_to_connector
 from modulo.core.node_output_split import DEFAULT_NODE_TYPE
 from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 from modulo.core.pipeline_engine.hitl_context import REJECT_DISPOSITION_TERMINATE, resolve_reject_disposition
@@ -595,7 +596,14 @@ def _make_node_fn(
             single_sandbox_node=single_sandbox_node,
             pipeline_stdout_retention_config=pipeline_stdout_retention_config,
         )
-    if connector_binding and not (node_type == "agent" and node_def.get("agent_id")):
+    # The ONE routing predicate, shared with ``connector_binding_operation`` /
+    # ``node_fires_dispatch_job`` (connectors.base): a binding is routed to the
+    # connector unless this node type builds its own node function first
+    # (sandbox_agent above; an ``agent`` node with an ``agent_id`` below, which
+    # runs the LLM factory). Keying the run classifier on the binding WITHOUT
+    # this gate stamped an ``agent``-node graph ``dispatched`` although nothing
+    # fires (FAR-1141 criterion 4), so both sides now ask the same function.
+    if node_routes_binding_to_connector(node_def):
         return make_connector_fn(node_def, timeout=timeout, session_factory=session_factory)
     if node_type == "manual":
         return make_manual_node_fn(node_def, timeout=timeout)

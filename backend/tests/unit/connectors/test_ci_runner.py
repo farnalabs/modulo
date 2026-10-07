@@ -136,6 +136,75 @@ async def test_gh_trigger_run_unresolvable_run_fails_loud(gh_runner, monkeypatch
     assert runs_route.call_count == gh_mod._LATEST_RUN_LOOKUP_ATTEMPTS
 
 
+@respx.mock
+async def test_gh_trigger_run_never_hands_back_a_pre_dispatch_run(gh_runner, monkeypatch):
+    """A repository WITH history must not resolve to the PREVIOUS run.
+
+    The dispatch answers 204 and GitHub materialises the run asynchronously,
+    while the runs listing is newest-first and (unbounded) always answers with
+    the newest run it can see — so ``per_page=1`` alone returns the previous run
+    until the new one appears, and ``await_completion`` then watched an
+    unrelated job. The connector now bounds the lookup to
+    ``created:>=<ISO-8601 dispatch time>`` (GitHub's documented search
+    qualifier).
+
+    The fake honours that bound exactly as GitHub documents it: no bound ->
+    only the stale pre-dispatch run is visible (the unfixed behaviour, which
+    this test fails on); a bound -> only runs created at/after it are returned.
+    """
+    from datetime import UTC, datetime
+
+    from modulo.connectors.ci_runner import github_actions as gh_mod
+
+    monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
+        return_value=httpx.Response(204)
+    )
+
+    previous_run = {
+        "id": 111,
+        "workflow_id": "ci.yml",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/owner/repo/actions/runs/111",
+        "head_branch": "main",
+        "head_sha": "oldsha",
+        "created_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z",
+        "actor": {"login": "octocat"},
+    }
+    observed_bounds: list[str] = []
+
+    def _runs(request: httpx.Request) -> httpx.Response:
+        raw = request.url.params.get("created", "")
+        if not raw.startswith(">="):
+            # no lower bound: the newest run the endpoint can see is the stale one
+            return httpx.Response(200, json={"workflow_runs": [previous_run]})
+        cutoff = datetime.fromisoformat(raw[2:])
+        observed_bounds.append(raw)
+        # the just-dispatched run: created at the bound the client asked for
+        dispatched_run = {
+            **previous_run,
+            "id": 999,
+            "created_at": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        return httpx.Response(200, json={"workflow_runs": [dispatched_run]})
+
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(side_effect=_runs)
+
+    dispatched_at = datetime.now(UTC)
+    run = await gh_runner.trigger_run(pipeline_id="owner/repo/ci.yml", branch="main")
+
+    assert run.id == "owner/repo/999"
+    assert run.id != "owner/repo/111", "the previous run must never be handed back as the dispatched run"
+    assert observed_bounds, "the lookup must carry a created lower bound"
+    cutoff = datetime.fromisoformat(observed_bounds[0][2:])
+    # The bound is the dispatch instant (floored to the second by the ISO-8601
+    # format): never before it, never a date-only midnight bound that would
+    # re-admit every run from earlier the same day.
+    assert dispatched_at.replace(microsecond=0) <= cutoff <= datetime.now(UTC)
+
+
 # ---------------------------------------------------------------------------
 # GitHub Actions — get_run_status (respx)
 # ---------------------------------------------------------------------------

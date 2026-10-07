@@ -180,9 +180,32 @@ class GitHubActionsCIRunner(CIRunnerBase):
         owner_repo: str,
         workflow_filename: str,
         branch: str,
+        dispatched_after: datetime,
     ) -> CIRun | None:
-        """Fetch the most recent run for a just-dispatched workflow, or None."""
-        params: dict[str, Any] = {"per_page": 1, "branch": branch or "main"}
+        """Fetch the run created for a just-dispatched workflow, or None.
+
+        GitHub answers a dispatch with 204 No Content and materialises the run
+        asynchronously, so the id can only come from this listing — and the
+        listing is NEWEST-FIRST with no time bound of its own. On a repository
+        with history an unbounded ``per_page=1`` lookup therefore resolves to
+        the PREVIOUS run while the new one is not visible yet, and that stale id
+        was handed to ``await_completion``, which then watched an unrelated job.
+
+        The lookup is bounded to runs created at/after *dispatched_after* —
+        captured BEFORE the dispatch POST, floored to the second by the ISO-8601
+        format — via GitHub's documented ``created`` search qualifier
+        (``>=YYYY-MM-DDTHH:MM:SSZ``), so a pre-dispatch run can never be
+        returned. An empty page means the new run is not visible YET: the
+        caller's bounded retry re-asks, then fails loud if it never appears.
+        (A local clock more than ~1 s AHEAD of GitHub's would exclude even the
+        new run — the failure is loud "no run id could be resolved", never a
+        wrong id.)
+        """
+        params: dict[str, Any] = {
+            "per_page": 1,
+            "branch": branch or "main",
+            "created": f">={dispatched_after:%Y-%m-%dT%H:%M:%SZ}",
+        }
         if workflow_filename:
             params["workflow_id"] = workflow_filename
         workflows_r = await client.get(
@@ -205,6 +228,11 @@ class GitHubActionsCIRunner(CIRunnerBase):
             raise ValueError("pipeline_id is required")
         owner_repo, workflow_filename = self._split_pipeline_id(pipeline_id)
 
+        # Captured BEFORE the dispatch: the lower bound that keeps the
+        # post-dispatch listing from answering with a PREVIOUS run (see
+        # _latest_dispatched_run). One timestamp, floored to the second by the
+        # format, so it can only ever include the run we are about to fire.
+        dispatched_after = datetime.now(UTC)
         try:
             async with self._client() as client:
                 r = await self._post_dispatch(client, owner_repo, workflow_filename, branch, variables)
@@ -217,14 +245,21 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 # get_run_status call would reject is never handed back.
                 attempts = _LATEST_RUN_LOOKUP_ATTEMPTS
                 for attempt in range(attempts):
-                    latest = await self._latest_dispatched_run(client, owner_repo, workflow_filename, branch)
+                    latest = await self._latest_dispatched_run(
+                        client,
+                        owner_repo,
+                        workflow_filename,
+                        branch,
+                        dispatched_after,
+                    )
                     if latest is not None and latest.id:
                         return latest
                     if attempt + 1 < attempts:
                         await asyncio.sleep(_LATEST_RUN_LOOKUP_RETRY_SECONDS)
                 raise ValueError(
                     f"GitHub accepted the dispatch for {owner_repo} but no run id could be resolved "
-                    f"(looked up the latest run {attempts} times) — refusing to return an unusable run id; "
+                    f"(looked up the latest run {attempts} times, bounded to created>="
+                    f"{dispatched_after:%Y-%m-%dT%H:%M:%SZ}) — refusing to return an unusable run id; "
                     f"check https://github.com/{owner_repo}/actions",
                 )
         except httpx.HTTPStatusError as exc:

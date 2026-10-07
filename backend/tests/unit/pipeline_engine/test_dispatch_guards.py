@@ -29,10 +29,17 @@ import uuid
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 import modulo.core.pipeline_engine.node_runner as nr
-from modulo.connectors.base import CIRun, CIRunStatus, connector_binding_operation, node_fires_dispatch_job
+from modulo.connectors.base import (
+    CIRun,
+    CIRunStatus,
+    ConnectorPermissionError,
+    connector_binding_operation,
+    node_fires_dispatch_job,
+)
 from modulo.core.node_output_split import DISPATCH_PROVENANCE_FIELDS, split_node_output
 from modulo.core.pipeline_engine.decorator import set_connector_hub
 from modulo.core.pipeline_engine.executor import _graph_is_idempotent, _retry_policy_applies
@@ -330,6 +337,129 @@ async def test_connector_node_with_a_dispatch_binding_executes_the_ci_method():
 
 
 # ---------------------------------------------------------------------------
+# iteration 2 (FAR-1141) FIX D — the classifier never claims a dispatch the
+# engine will not fire
+# ---------------------------------------------------------------------------
+
+
+def _agent_node(**overrides: Any) -> dict[str, Any]:
+    node: dict[str, Any] = {"id": "a1", "node_type": "agent", "agent_id": str(uuid.uuid4())}
+    node.update(overrides)
+    return node
+
+
+def _engine_route(node: dict[str, Any]) -> str:
+    """Which node factory ``graph_cache._make_node_fn`` picks for *node*.
+
+    Every factory it can select is patched with a recorder, so the routing is
+    OBSERVED (which branch ran) rather than inferred from the source.
+    """
+    import modulo.core.pipeline_engine.graph_cache as gc
+
+    picked: list[str] = []
+
+    def _record(name: str):
+        def _fn(*args: Any, **kwargs: Any) -> str:
+            picked.append(name)
+            return f"<{name}>"
+
+        return _fn
+
+    with (
+        patch.object(gc, "make_connector_fn", _record("connector")),
+        patch.object(gc, "make_node_fn", _record("agent")),
+        patch.object(gc, "make_manual_node_fn", _record("manual")),
+        patch.object(gc, "make_sandbox_agent_fn", _record("sandbox_agent")),
+    ):
+        gc._make_node_fn(node, timeout=5, session_factory=None, single_sandbox_node=False)
+    return picked[0] if picked else "unrouted"
+
+
+@pytest.mark.parametrize(
+    ("node", "expected_operation", "expected_route"),
+    [
+        # routed: the engine builds the connector node fn, so the binding's verb is real
+        (
+            {"id": "c1", "node_type": "connector", "connector_binding": _binding()},
+            "dispatch",
+            "connector",
+        ),
+        (
+            {"id": "d1", "node_type": "dispatch", "connector_binding": _binding()},
+            "dispatch",
+            "connector",
+        ),
+        (
+            {"id": "h1", "node_type": "hitl", "connector_binding": _binding()},
+            "dispatch",
+            "connector",
+        ),
+        # a hitl node with an agent still routes its BINDING to the connector
+        (
+            _agent_node(id="h2", node_type="hitl", connector_binding=_binding()),
+            "dispatch",
+            "connector",
+        ),
+        # NOT routed: the engine runs the LLM factory for agent + agent_id, so
+        # the binding is dead configuration and the run must NOT read dispatched
+        (
+            _agent_node(connector_binding=_binding()),
+            "query",
+            "agent",
+        ),
+        # NOT routed: sandbox_agent builds the sandbox fn before the binding
+        (
+            {
+                "id": "s1",
+                "node_type": "sandbox_agent",
+                "template_id": "opencode",
+                "connector_binding": _binding(),
+            },
+            "query",
+            "sandbox_agent",
+        ),
+        (_agent_node(), "query", "agent"),
+        ({"id": "m1", "node_type": "manual"}, "query", "manual"),
+    ],
+    ids=[
+        "connector-dispatch-binding",
+        "dispatch-node-dispatch-binding",
+        "hitl-dispatch-binding",
+        "hitl-agent-dispatch-binding",
+        "agent-agent-id-dispatch-binding",
+        "sandbox-agent-dispatch-binding",
+        "agent-no-binding",
+        "manual-no-binding",
+    ],
+)
+def test_classifier_and_engine_agree_on_every_node_type(
+    node: dict[str, Any],
+    expected_operation: str,
+    expected_route: str,
+):
+    """CRITICAL 2 extended to the ROUTING gate (FAR-1141 criterion 4): a graph
+    the run classifier calls ``dispatched`` must contain a node the engine
+    actually routes to a connector — and the two must agree node-for-node on
+    the verb too."""
+    assert connector_binding_operation(node) == expected_operation
+    assert _engine_route(node) == expected_route
+    if graph_contains_dispatch(_graph_with(node)):
+        assert expected_route == "connector", (
+            f"graph_contains_dispatch claimed dispatch for a node the engine routes to {expected_route!r}",
+        )
+
+
+def test_an_agent_node_with_a_dispatch_binding_fires_nothing():
+    """The over-claim itself: an agent node's binding is never routed, so it is
+    never a dispatch and never fires a job (the save path now rejects it — see
+    ``test_api_agent_node_rejects_a_dispatch_connector_binding``)."""
+    node = _agent_node(connector_binding=_binding())
+    assert connector_binding_operation(node) == "query"
+    assert node_fires_dispatch_job(node) is False
+    assert graph_contains_dispatch(_graph_with(node)) is False
+
+
+# ---------------------------------------------------------------------------
 # MAJOR 3 / MAJOR 4 — the engine fails loud instead of silently no-opping
 # ---------------------------------------------------------------------------
 
@@ -415,6 +545,42 @@ class _PollConnector:
         return CIRun(id=run_id, pipeline_id="p", status=item)
 
 
+def _http_status_error(status: int) -> httpx.HTTPStatusError:
+    """A real ``httpx`` status fault, shaped exactly as a connector's own
+    ``raise_for_status()`` raises it (request + response attached)."""
+    request = httpx.Request("GET", "https://api.example.com/runs/1")
+    return httpx.HTTPStatusError(
+        f"HTTP {status}",
+        request=request,
+        response=httpx.Response(status, request=request),
+    )
+
+
+def _wrapped_http_status_error(status: int, message: str) -> ValueError:
+    """The connector's fail-loud wrap of an HTTP fault: ``raise ValueError(...)
+    from httpx.HTTPStatusError`` — the shape GitHub Actions and GitLab CI
+    actually produce, so the retry classifier has to read the cause chain."""
+    error = ValueError(message)
+    error.__cause__ = _http_status_error(status)
+    return error
+
+
+class _SlowStatusConnector:
+    """``get_run_status`` that always takes *delay* seconds, then reports a
+    terminal status — one call, one outcome (no script, so a cancelled call
+    cannot consume the next scripted item)."""
+
+    def __init__(self, delay: float, status: CIRunStatus = CIRunStatus.SUCCESS) -> None:
+        self.delay = delay
+        self.status = status
+        self.calls: list[float] = []
+
+    async def get_run_status(self, run_id: str) -> Any:
+        self.calls.append(asyncio.get_running_loop().time())
+        await asyncio.sleep(self.delay)
+        return CIRun(id=run_id, pipeline_id="p", status=self.status)
+
+
 async def test_deadline_is_checked_before_each_poll_so_no_poll_outlives_the_window():
     """The old loop checked the deadline only AFTER a poll, so every wait fired
     one extra poll once the window had closed."""
@@ -432,10 +598,15 @@ async def test_deadline_is_checked_before_each_poll_so_no_poll_outlives_the_wind
 
 async def test_transient_poll_errors_are_retried_inside_the_window():
     """A single 429/5xx/network blip must NOT abort the wait — the external job
-    is already fired and abandoning the observation misreports the run."""
-    connector = _PollConnector(
-        [RuntimeError("429 too many requests"), RuntimeError("503 unavailable"), CIRunStatus.SUCCESS]
-    )
+    is already fired and abandoning the observation misreports the run.
+
+    The faults are the real transient shapes (an HTTP 429 and an HTTP 503,
+    exactly what a CI status endpoint raises), not a generic stand-in: the loop
+    classifies before retrying, so only a genuinely transient fault may land
+    here (``test_a_permanent_poll_error_is_never_retried_and_never_relabelled``
+    pins the other side of that split).
+    """
+    connector = _PollConnector([_http_status_error(429), _http_status_error(503), CIRunStatus.SUCCESS])
     with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001):
         state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=10)
     assert state["status"] == "success"
@@ -443,10 +614,13 @@ async def test_transient_poll_errors_are_retried_inside_the_window():
 
 
 async def test_a_persistent_poll_failure_surfaces_as_itself_not_a_wait_timeout():
-    connector = _PollConnector([RuntimeError("endpoint is dead")] * 50)
+    """A transient fault that never recovers surfaces AS ITSELF once the
+    consecutive-error cap is hit — never as ``dispatch.wait_timeout`` (which
+    would blame the substrate for a dead status endpoint)."""
+    connector = _PollConnector([TimeoutError("status endpoint keeps timing out")] * 50)
     with (
         patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001),
-        pytest.raises(RuntimeError, match="endpoint is dead"),
+        pytest.raises(TimeoutError, match="status endpoint keeps timing out"),
     ):
         await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=30)
     assert len(connector.calls) == nr._DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS + 1
@@ -479,6 +653,104 @@ async def test_a_wait_timeout_only_reads_never_fires_a_job():
         await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=0.05)
     assert connector.calls  # it really polled ...
     assert connector.trigger_calls == 0  # ... and only ever READ
+
+
+# ---------------------------------------------------------------------------
+# iteration 2 (FAR-1141) FIX A — the per-CALL budget is not the poll interval
+# ---------------------------------------------------------------------------
+
+
+async def test_a_status_call_slower_than_the_poll_interval_is_not_cancelled():
+    """The call gets its own budget (the connectors' ~30 s HTTP client timeout,
+    clamped by the remaining window); the poll INTERVAL only bounds the SLEEP
+    between polls.
+
+    Before the fix the call was capped at the interval, so a status endpoint
+    slower than ~2 s was cancelled on EVERY attempt, each cancellation counted
+    as a consecutive poll error, and the wait failed after the cap while the
+    external job was still running.
+    """
+    connector = _SlowStatusConnector(delay=0.4)  # 8x the patched interval below
+    with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.05):
+        state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=30)
+    assert state["status"] == "success"
+    assert len(connector.calls) == 1, "the slow call must complete on its own budget, not be cancelled at the interval"
+
+
+async def test_a_capped_per_call_timeout_never_escapes_with_an_empty_message():
+    """A bare ``asyncio.TimeoutError`` renders as ``""`` — an operator would
+    read a nameless, causeless failure. When the consecutive-error cap lets one
+    through it must carry a message naming the run and the cap that fired."""
+    connector = _SlowStatusConnector(delay=0.2)  # far beyond the patched cap
+    with (
+        patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001),
+        patch.object(nr, "_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS", 0.01),
+        pytest.raises(TimeoutError) as excinfo,
+    ):
+        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=30)
+    message = str(excinfo.value)
+    assert message, "the surfaced timeout must not be an empty-message TimeoutError"
+    assert "job-1" in message
+    assert "per-call cap" in message
+
+
+# ---------------------------------------------------------------------------
+# iteration 2 (FAR-1141) FIX B — permanent faults propagate, never relabelled
+# ---------------------------------------------------------------------------
+
+
+async def test_a_permanent_poll_error_is_never_retried_and_never_relabelled():
+    """An ACL denial (raised before any I/O) surfaces on the FIRST poll, as
+    itself. The blanket ``except Exception`` used to retry it until the window
+    closed and then raise ``dispatch.wait_timeout`` over the top, so an ACL
+    denial read as a substrate-side timeout."""
+    denial = ConnectorPermissionError("Operation 'trigger_run' is not in allowed_operations")
+    connector = _PollConnector([denial])
+    with (
+        patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001),
+        pytest.raises(ConnectorPermissionError, match="not in allowed_operations"),
+    ):
+        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=0.05)
+    assert len(connector.calls) == 1
+
+
+async def test_a_connector_contract_value_error_propagates_on_the_first_poll():
+    """Jenkins' intentional queue-404 (and every connector's fail-loud
+    ``ValueError``) is permanent: retrying cannot resurrect the run, and
+    relabelling it would hide the real cause."""
+    connector = _PollConnector([ValueError("Jenkins queue item 7 for run job/queue/7 no longer exists")])
+    with (
+        patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001),
+        pytest.raises(ValueError, match="no longer exists"),
+    ):
+        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=0.05)
+    assert len(connector.calls) == 1
+
+
+async def test_an_http_4xx_poll_fault_is_permanent():
+    """A 4xx is not a fault a second poll can fix — and when a connector wraps
+    it (``raise ValueError(...) from HTTPStatusError``) the STATUS in the cause
+    chain decides, not the ValueError's presence."""
+    connector = _PollConnector([_wrapped_http_status_error(404, "GitHub API error (404): no such run")])
+    with (
+        patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001),
+        pytest.raises(ValueError, match="404"),
+    ):
+        await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=0.05)
+    assert len(connector.calls) == 1
+
+
+async def test_a_wrapped_5xx_is_still_classified_transient():
+    """The same wrap for a 503 MUST be retried — the connectors fail loud by
+    wrapping the HTTP status, so classifying only the outer ``ValueError``
+    would have abandoned a live run over a recoverable upstream blip."""
+    connector = _PollConnector(
+        [_wrapped_http_status_error(503, "GitHub API error (503): upstream"), CIRunStatus.SUCCESS]
+    )
+    with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001):
+        state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=10)
+    assert state["status"] == "success"
+    assert len(connector.calls) == 2
 
 
 # ---------------------------------------------------------------------------

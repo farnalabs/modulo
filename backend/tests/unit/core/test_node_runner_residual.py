@@ -1763,6 +1763,48 @@ def test_api_dispatch_wait_field_value_rules():
     assert _api_dispatch_node(idempotent=True).idempotent is False
 
 
+def test_api_agent_node_rejects_a_dispatch_connector_binding():
+    """FAR-1141 criterion 4, at the SAVE boundary: an agent node runs the LLM
+    node factory — the engine never routes its binding to a connector — so a
+    dispatch binding would be declared-but-unread: nothing fires, yet the run is
+    stamped ``dispatched`` and retries are disabled for a graph that dispatches
+    nothing. Rejected here so a stored graph can never disagree with the
+    engine's routing (REST, MCP and ``modulo apply`` all model-validate through
+    this class; the classifier additionally reads such a binding as ``query``)."""
+    from modulo.api.routes.pipelines import PipelineGraphNode
+
+    agent_payload = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "position": {"x": 0, "y": 0},
+        "agent_id": str(uuid.uuid4()),
+    }
+    dispatch_binding = {
+        "type": "github_actions_ci",
+        "instance_id": str(uuid.uuid4()),
+        "operation": "dispatch",
+        "dispatch_action": "trigger_run",
+    }
+    with pytest.raises(ValidationError, match="cannot carry connector_binding"):
+        PipelineGraphNode.model_validate({**agent_payload, "connector_binding": dispatch_binding})
+
+    # The plain query binding the convert-to-agent flow persists keeps saving:
+    # it records which connector the agent works through, and the engine
+    # legitimately ignores it on this node type.
+    node = PipelineGraphNode.model_validate(
+        {**agent_payload, "connector_binding": {**dispatch_binding, "operation": "query"}},
+    )
+    assert node.connector_binding is not None
+    assert node.connector_binding.operation == "query"
+    # An absent operation key is the same default (query) and must keep saving.
+    assert (
+        PipelineGraphNode.model_validate(
+            {**agent_payload, "connector_binding": {"type": "github_actions_ci", "instance_id": str(uuid.uuid4())}},
+        ).connector_binding
+        is not None
+    )
+
+
 def test_guard_connector_secret_output_violation(monkeypatch: pytest.MonkeyPatch):
     from modulo.core.capability_scope import ScopeViolationError
 

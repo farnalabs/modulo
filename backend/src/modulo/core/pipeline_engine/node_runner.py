@@ -67,6 +67,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard
 
+import httpx
 import jinja2
 from jinja2.sandbox import SandboxedEnvironment
 from langchain_core.messages import HumanMessage
@@ -5914,8 +5915,25 @@ def _dispatch_result_to_state(value: Any) -> Any:
 
 #: Internal poll interval for a ``dispatch`` node's ``await_completion`` loop.
 #: Module-level (never inlined) so tests patch it to a sub-millisecond value
-#: instead of sleeping in wall-clock time.
+#: instead of sleeping in wall-clock time. This bounds the SLEEP between two
+#: polls — never the status call itself (see
+#: :data:`_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS`).
 _DISPATCH_WAIT_POLL_INTERVAL_SECONDS = 2.0
+
+#: Per-CALL budget for ONE ``get_run_status`` poll inside the wait loop.
+#:
+#: Deliberately separate from :data:`_DISPATCH_WAIT_POLL_INTERVAL_SECONDS`:
+#: the interval is how long the loop SLEEPS between polls, while this caps how
+#: long a single status call may run. The value is the HTTP client timeout the
+#: CI connectors themselves configure (``httpx`` ``timeout=30`` in
+#: ``connectors/ci_runner/github_actions.py`` et al.), so a status call that is
+#: slow but within its own client's contract is given its full budget instead
+#: of being cancelled at ~2 s. Capping the call at the poll interval made every
+#: slower call time out, each cancellation counted as a consecutive poll error,
+#: and the wait failed after N attempts while the external job was still
+#: running. Clamped by the remaining window at the call site, so the deadline
+#: still wins every race.
+_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS = 30.0
 
 #: ``wait_timeout`` used when ``await_completion`` is set and the node declares
 #: none. Documented default: 300 s.
@@ -5938,10 +5956,13 @@ _DISPATCH_WAIT_NODE_MARGIN_SECONDS = 1.0
 #: failure (429 / 5xx / network blip) used to abort the whole wait through the
 #: generic connector-failure path, leaving the already-fired external job
 #: running while the run reported a misleading failure — so a poll error is now
-#: retried inside the window with a bounded backoff. The cap keeps a genuinely
-#: dead / permanently-broken status endpoint from spinning for the whole
-#: window: past it the fault surfaces AS ITSELF (a loud connector failure),
-#: not as a wait timeout that would blame the substrate.
+#: retried inside the window with a bounded backoff. Only faults classified
+#: transient by :func:`_is_transient_dispatch_poll_error` ever reach this
+#: counter; a permanent one (ACL denial / contract ``ValueError`` / 4xx)
+#: propagates immediately instead. The cap keeps a genuinely dead /
+#: permanently-broken status endpoint from spinning for the whole window: past
+#: it the fault surfaces AS ITSELF (a loud connector failure), not as a wait
+#: timeout that would blame the substrate.
 _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS = 8
 
 #: FAR-1141 / ADR-042 mapping-table artefact: substrate ``CIRunStatus`` code ->
@@ -5974,6 +5995,50 @@ DISPATCH_STATUS_OUTCOME_MAP: dict[str, str] = {
     "cancelled": "failed",
     "timed_out": "failed",
 }
+
+
+def _is_transient_dispatch_poll_error(exc: BaseException) -> bool:
+    """FAR-1141 iteration 2: is this ``get_run_status`` fault worth RETRYING?
+
+    Minimal transient-vs-permanent split for the await-completion poll loop:
+
+    * **Transient** (retry inside the window): a timeout — the loop's own
+      per-call cap or the connector's — an HTTP **429 / 5xx**, or a
+      transport/connection failure. These are the faults a second poll can
+      plausibly survive, and the external job is already fired, so abandoning
+      the observation would misreport a run that is still going.
+    * **Permanent** (propagate immediately, as itself): everything else — the
+      ACL's :class:`~modulo.connectors.base.ConnectorPermissionError`, a
+      connector's fail-loud ``ValueError`` (including Jenkins' intentional
+      queue-404), an HTTP **4xx**, and any error we cannot classify. Retrying
+      these cannot succeed, and the old blanket ``except Exception`` not only
+      retried them N times, it then re-raised the wait window's
+      ``dispatch.wait_timeout`` over the top — an ACL denial or a contract
+      breach reported as a substrate-side timeout.
+
+    HTTP faults are frequently WRAPPED by the connectors (``raise ValueError(...)
+    from httpx.HTTPStatusError``), so the ``__cause__`` / ``__context__`` chain
+    is walked: the first member of the chain that this function can classify
+    decides, and an unclassifiable member (``ValueError``, ``RuntimeError``, ...)
+    never makes a fault transient. ``asyncio.CancelledError`` is a
+    ``BaseException`` and never reaches here (it propagates untouched).
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, TimeoutError):
+            # asyncio.wait_for's own cancellation (3.11+: asyncio.TimeoutError
+            # IS the builtin) and any connector-side timeout.
+            return True
+        if isinstance(current, httpx.HTTPStatusError):
+            status = current.response.status_code
+            return status == 429 or status >= 500
+        if isinstance(current, httpx.TransportError | ConnectionError):
+            # connect/read/write/pool timeouts, DNS and socket failures.
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _resolve_dispatch_wait_timeout(
@@ -6021,17 +6086,29 @@ async def _await_dispatch_terminal(
 
     * the deadline is checked BEFORE every poll (checking only after a poll let
       the loop fire one extra poll past the window);
-    * each poll call is bounded by ``min(poll_interval, remaining)``, so a slow
-      status endpoint cannot hand the remaining budget to an unbounded await;
+    * each poll call is bounded by ``min(_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS,
+      remaining)`` — its own ~30 s budget (the connectors' HTTP client timeout),
+      NOT the poll interval: the interval only bounds the inter-poll SLEEP, so
+      a status call slower than ~2 s is no longer cancelled on every attempt
+      and counted as a consecutive failure while the job runs;
     * the inter-poll sleep is bounded by the remaining time too.
 
-    A transient poll failure (429 / 5xx / network blip) is RETRIED inside the
-    window with a bounded backoff — at most
-    :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS` consecutive failures —
-    instead of aborting the wait through the generic connector-failure path.
-    Aborting there left the already-fired external job running while the run
-    reported a misleading failure. A persistent fault surfaces AS ITSELF once
-    the cap is hit, never disguised as a wait timeout.
+    Faults are classified (:func:`_is_transient_dispatch_poll_error`), never
+    blanket-retried:
+
+    * a **transient** fault (timeout / 429 / 5xx / transport) is RETRIED inside
+      the window with a bounded backoff — at most
+      :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS` consecutive failures —
+      instead of aborting the wait through the generic connector-failure path
+      (which left the already-fired external job running while the run reported
+      a misleading failure). A persistent transient fault surfaces AS ITSELF
+      once the cap is hit — with a non-empty message, even when the fault is a
+      bare ``asyncio.TimeoutError`` (whose ``str()`` is ``""``) — never
+      disguised as a wait timeout.
+    * a **permanent** fault (ACL denial, contract ``ValueError``, HTTP 4xx)
+      propagates IMMEDIATELY as itself: not retried, and never relabelled
+      ``dispatch.wait_timeout``, because the window ending is not what broke
+      the poll.
 
     ``asyncio.CancelledError`` is a ``BaseException`` and is deliberately NOT
     caught: a run cancel or the node's own deadline stops the wait immediately.
@@ -6058,17 +6135,29 @@ async def _await_dispatch_terminal(
         try:
             polled = await asyncio.wait_for(
                 connector.get_run_status(run_id=run_id),
-                timeout=min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, remaining),
+                timeout=min(_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS, remaining),
             )
         except Exception as exc:
-            # Poll faults (timeouts, 429/5xx, transport errors) are retried
-            # inside the window; a fault that lands after the window closed is
-            # reported as the typed wait timeout, which is what actually ended
-            # the wait.
+            if not _is_transient_dispatch_poll_error(exc):
+                # Permanent: an ACL denial, a contract breach or a 4xx. It
+                # cannot succeed on a retry and the wait window is not what
+                # broke — surface it AS ITSELF, now, never as wait_timeout.
+                raise
             if loop.time() >= deadline:
+                # The window closed on a transient fault: the typed wait
+                # timeout is what actually ended the wait (cause chained).
                 raise _timeout_error() from exc
             consecutive_errors += 1
             if consecutive_errors > _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS:
+                if not str(exc):
+                    # A bare asyncio.TimeoutError renders as "" — an empty
+                    # error tells an operator nothing about which run failed or
+                    # why, so the cap never lets one escape unwrapped.
+                    raise TimeoutError(
+                        f"dispatch get_run_status(run_id={run_id!r}) timed out on "
+                        f"{consecutive_errors} consecutive polls "
+                        f"(per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
+                    ) from exc
                 raise
             _log.warning(
                 "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
