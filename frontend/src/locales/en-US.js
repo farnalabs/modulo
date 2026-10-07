@@ -74,6 +74,7 @@ export default {
       "auto_update": "Auto-update",
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
+      "remove_type_filter": "Remove {type} filter",
       "no_primitives_found": "No modules found",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
