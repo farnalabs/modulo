@@ -460,3 +460,113 @@ def test_tag_snapshot_in_txn_denial_overrides_a_passing_request_time_gate() -> N
         )
     assert resp.status_code == 403, resp.text
     assert resp.json()["detail"] == _NON_MEMBER_DETAIL
+
+
+# ---------------------------------------------------------------------------
+# FAR-1515 MAJOR 3: POST /snapshots/{snapshot_id}/rollback runs the
+# connector-team gate under the row lock, over the TARGET snapshot's bindings
+# against the pipeline's CURRENT owner team.
+#
+# The gate rides the route's ``post_lock_gate`` callback into
+# ``rollback_to_snapshot`` (right after the row lock, before any write), so it
+# refuses with the SAME named 409 ``connector_team_mismatch`` every other
+# graph-write path uses. Without the callback wiring the rollback proceeds
+# (asserted here only as "not stopped by this gate" - the downstream snapshot
+# machinery is stubbed by the session double's empty results, so it settles on
+# its own None -> 404 shape; that 404 is NOT what these tests are about).
+# ---------------------------------------------------------------------------
+
+_BOUND_CONNECTOR_ID = uuid.uuid4()
+_OTHER_CONNECTOR_ID = uuid.uuid4()
+
+
+def _snapshot_bound_to(connector_id: uuid.UUID) -> MagicMock:
+    """A target snapshot whose graph pins ``connector_id``."""
+    return _make_snapshot(
+        graph_json={
+            "nodes": [
+                {
+                    "id": str(uuid.uuid4()),
+                    "node_type": "agent",
+                    "agent_id": str(uuid.uuid4()),
+                    "position": {"x": 0, "y": 0},
+                    "connector_binding": {"type": "github", "instance_id": str(connector_id)},
+                }
+            ],
+            "edges": [],
+        }
+    )
+
+
+def _rollback_session(*, snapshot: MagicMock, connector_rows: list[MagicMock]) -> AsyncMock:
+    """The team session double, extended with the snapshot + connector reads.
+
+    ``rollback_to_snapshot`` resolves the target snapshot first
+    (``FROM pipeline_snapshots``), locks the pipeline (``FROM pipelines ...
+    FOR UPDATE``), then the connector-team gate SELECTs the bound connector
+    (``FROM connector_instances``) - each dispatched on SQL text so statement
+    ORDER changes cannot silently swap answers.
+    """
+    session = _make_team_session(is_member=True)
+    base_execute = session.execute.side_effect
+
+    async def _execute(stmt: object, *_args: Any, **_kwargs: Any) -> MagicMock:
+        sql = str(stmt)
+        if "FROM pipeline_snapshots" in sql:
+            return _result(scalar_one_or_none=snapshot)
+        if "connector_instances" in sql:
+            result = MagicMock()
+            scalars = MagicMock()
+            scalars.all.return_value = connector_rows
+            result.scalars.return_value = scalars
+            return result
+        return await base_execute(stmt, *_args, **_kwargs)
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _org_only_connector_row(connector_id: uuid.UUID) -> MagicMock:
+    row = MagicMock()
+    row.id = connector_id
+    row.name = "shared-ci"
+    row.visibility = "org"
+    row.owner_team_id = None
+    return row
+
+
+def test_rollback_to_a_snapshot_pinning_an_org_only_connector_is_409() -> None:
+    """FAILS without the fix: no post_lock_gate -> the rollback is not stopped
+    by the connector-team gate (some other status, never this named 409)."""
+    session = _rollback_session(
+        snapshot=_snapshot_bound_to(_BOUND_CONNECTOR_ID),
+        connector_rows=[_org_only_connector_row(_BOUND_CONNECTOR_ID)],
+    )
+    with _client_for(session, role="admin") as http:
+        resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAPSHOT_ID}/rollback")
+
+    assert resp.status_code == 409, resp.text
+    detail = str(resp.json()["detail"])
+    assert detail.startswith("connector_team_mismatch"), detail
+    assert "shared-ci" in detail
+    assert "is org-only" in detail
+
+
+def test_rollback_to_a_snapshot_pinning_the_pipeline_own_team_connector_is_not_409() -> None:
+    """The gate must not blanket-block: the pipeline's OWN team's team-private
+    connector passes the predicate, so this rollback is not stopped by the
+    connector-team gate (whatever the downstream stubbed machinery settles on)."""
+    own_team_row = MagicMock()
+    own_team_row.id = _OTHER_CONNECTOR_ID
+    own_team_row.name = "team-secrets"
+    own_team_row.visibility = "team"
+    own_team_row.owner_team_id = _TEAM_ID
+    session = _rollback_session(
+        snapshot=_snapshot_bound_to(_OTHER_CONNECTOR_ID),
+        connector_rows=[own_team_row],
+    )
+    with _client_for(session, role="admin") as http:
+        resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAPSHOT_ID}/rollback")
+
+    assert resp.status_code != 409, resp.text
+    assert "connector_team_mismatch" not in resp.text

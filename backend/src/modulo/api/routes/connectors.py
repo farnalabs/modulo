@@ -35,6 +35,12 @@ from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
 from modulo.connectors.rest import RestConnector
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.team_visibility import (
+    ConnectorTeamMismatch,
+    connector_team_mismatch,
+    connector_team_mismatch_detail,
+    extract_connector_bindings,
+)
 from modulo.db.crud.connector_instance import (
     create_connector_instance,
     delete_connector_instance,
@@ -42,6 +48,7 @@ from modulo.db.crud.connector_instance import (
     list_connector_instances,
     update_connector_instance,
 )
+from modulo.db.crud.team_scope import pipelines_binding_connector
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import Settings, get_settings
@@ -691,6 +698,60 @@ async def connector_health_endpoint(
     return ConnectorHealthResponse(ok=result.ok, detail=result.detail)
 
 
+async def _reject_re_scope_that_breaks_a_bound_pipeline(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    connector: ConnectorInstance,
+    updates: dict[str, Any],
+) -> None:
+    """FAR-1515 MAJOR 5: a visibility/owner re-scope may not strand a binding.
+
+    ``validate_team_transition_for_update`` (called first) checks TEAM
+    MEMBERSHIP only. Flipping a connector that pipelines already bind to
+    ``org`` (or handing it to another team) recreates exactly the state the
+    graph-save gate refuses: a team pipeline pinning an org-only connector, or
+    another team's pipeline pinning this team's private connector. The bound
+    pipelines are prefiltered by a text-contains query, then confirmed against
+    the REAL stored bindings, and each confirmed binding is judged with the
+    same predicate the save path uses — so the rejection names the offending
+    pipeline's team via the same 409 ``connector_team_mismatch`` detail.
+
+    A PATCH that does not actually change ``visibility``/``owner_team_id``
+    never reaches the query.
+    """
+    new_visibility = updates.get("visibility", connector.visibility)
+    new_owner_team_id = updates.get("owner_team_id", connector.owner_team_id)
+    if new_visibility == connector.visibility and new_owner_team_id == connector.owner_team_id:
+        return
+
+    candidates = await pipelines_binding_connector(session, org_id, connector.id)
+    mismatches: list[ConnectorTeamMismatch] = []
+    for pipeline in candidates:
+        bindings = extract_connector_bindings(list(pipeline.graph_nodes_json or []))
+        node_ids = [b["node_id"] for b in bindings if str(b.get("connector_instance_id")) == str(connector.id)]
+        if not node_ids:
+            continue  # text-contains prefilter false positive; no real binding
+        if not connector_team_mismatch(new_visibility, new_owner_team_id, pipeline.owner_team_id):
+            continue
+        mismatches.extend(
+            ConnectorTeamMismatch(
+                connector_id=connector.id,
+                connector_name=connector.name,
+                connector_owner_team_id=new_owner_team_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+                connector_visibility=new_visibility,
+                node_id=node_id,
+            )
+            for node_id in node_ids
+        )
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(mismatches),
+        )
+
+
 @router.patch("/{connector_id}", dependencies=[Depends(deny_break_glass_mint)])
 @handle_db_errors(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
 async def update_connector_endpoint(
@@ -788,6 +849,16 @@ async def update_connector_endpoint(
                     current_visibility=existing.visibility,
                     new_owner_team_id=updates.get("owner_team_id", existing.owner_team_id),
                     new_visibility=updates.get("visibility", existing.visibility),
+                )
+                # FAR-1515 MAJOR 5: membership validation does NOT check the
+                # pipelines that already bind this connector. Re-scoping a
+                # bound connector must not strand those bindings in the state
+                # the graph-save gate refuses.
+                await _reject_re_scope_that_breaks_a_bound_pipeline(
+                    session,
+                    org_id=principal.organisation_id,
+                    connector=existing,
+                    updates=updates,
                 )
             ci = await update_connector_instance(session, connector_id, updates)
     except IntegrityError:

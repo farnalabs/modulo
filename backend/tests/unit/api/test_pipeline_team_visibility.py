@@ -17,8 +17,18 @@ team-gated even for a non-member.
 A second section (FAR-1515) covers the WRITE direction: the REST graph-save
 team gate must refuse a team pipeline that pins an org-only connector, while
 leaving the org-pipeline rule alone.
+
+A third section (FAR-1515 expansion) covers the four write paths that used to
+re-create the forbidden state WITHOUT running that gate: an ownership-transfer
+PATCH (stored graph gated against the EFFECTIVE NEW owner team), a confirmed
+workflow import (gated after node rewiring, inside the import transaction),
+and a connector visibility/owner re-scope (every bound pipeline judged with
+the same predicate). Each test drives the real endpoint with only the
+innermost lookup stubbed, so it fails (200 / helper never called) without the
+fix.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, datetime
@@ -307,3 +317,306 @@ class TestOrgOnlyConnectorRejectedAtGraphSave:
         await _enforce_connector_team_bindings(session, _ORG_ID, _TEAM_A, _binding_for(connector))
 
         session.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1515 expansion — the write paths that used to bypass the gate:
+# MAJOR 2 (ownership-transfer PATCH), MAJOR 4 (workflow import confirm),
+# MAJOR 5 (connector visibility/owner re-scope).
+# ---------------------------------------------------------------------------
+
+_PREFIX = "modulo.api.routes.pipelines."
+_LIB_PREFIX = "modulo.api.routes.library."
+_CONN_PREFIX = "modulo.api.routes.connectors."
+
+
+def _pipeline_row_with_binding(
+    *,
+    owner_team_id: uuid.UUID | None,
+    visibility: str,
+    instance_id: uuid.UUID,
+) -> MagicMock:
+    """A pipeline whose STORED graph pins ``instance_id`` (the bindings the
+    ownership-transfer gate extracts when no graph_json ships in the PATCH)."""
+    p = _make_pipeline(owner_team_id=owner_team_id, visibility=visibility)
+    p.graph_nodes_json = [
+        {
+            "id": "node-1",
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {"type": "github", "instance_id": str(instance_id)},
+        }
+    ]
+    return p
+
+
+def _mismatch(*, connector_id: uuid.UUID, pipeline_owner_team_id: uuid.UUID | None) -> MagicMock:
+    return MagicMock(
+        connector_id=connector_id,
+        connector_name="shared-ci",
+        connector_owner_team_id=None,
+        pipeline_owner_team_id=pipeline_owner_team_id,
+        connector_visibility="org",
+        node_id="node-1",
+    )
+
+
+class TestOwnershipTransferRunsConnectorTeamGate:
+    """FAR-1515 MAJOR 2: a PATCH that changes only owner_team_id/visibility.
+
+    The gate used to run ONLY when the payload also carried ``graph_json``
+    (``_apply_graph_update``); ``connector_rebind_required`` on the response
+    was advisory and consumed by nothing, so a transfer re-created the
+    forbidden state (stored graph still pinning a connector the NEW owner
+    team may not use) with no 409.
+    """
+
+    def test_owner_team_change_gates_the_stored_graph(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
+        """FAILS without the fix: the endpoint never calls find_connector_team_mismatches -> 200."""
+        conn_id = uuid.uuid4()
+        current = _pipeline_row_with_binding(owner_team_id=None, visibility="org", instance_id=conn_id)
+        updated = _make_pipeline(owner_team_id=_TEAM_A, visibility="team")
+        client, _ = make_client(org_role="admin", owner_team_id=None, visibility="org")
+        with (
+            patch(f"{_PREFIX}_get_pipeline_or_404", new=AsyncMock(return_value=current)),
+            patch(f"{_PREFIX}update_pipeline", new=AsyncMock(return_value=updated)),
+            patch(
+                f"{_PREFIX}find_connector_team_mismatches",
+                new=AsyncMock(return_value=[_mismatch(connector_id=conn_id, pipeline_owner_team_id=_TEAM_A)]),
+            ) as find_mismatches,
+        ):
+            resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"owner_team_id": str(_TEAM_A)})
+
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert detail.startswith("connector_team_mismatch"), detail
+        assert "shared-ci" in detail
+        # The gate ran against the EFFECTIVE NEW owner team and the STORED
+        # bindings — not the payload's (absent) graph and not the old owner.
+        find_mismatches.assert_awaited_once()
+        kwargs = find_mismatches.await_args.kwargs
+        assert kwargs["pipeline_owner_team_id"] == _TEAM_A
+        assert kwargs["connector_bindings"] == [{"node_id": "node-1", "connector_instance_id": str(conn_id)}]
+
+    def test_owner_team_change_with_an_unbound_graph_skips_the_gate(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """No stored bindings -> nothing to gate -> the transfer still succeeds.
+
+        Pins that the gate is scoped to the stored bindings (no spurious 409
+        for an unbound pipeline).
+        """
+        current = _make_pipeline(owner_team_id=None, visibility="org")
+        current.graph_nodes_json = []
+        updated = _make_pipeline(owner_team_id=_TEAM_A, visibility="team")
+        client, _ = make_client(org_role="admin", owner_team_id=None, visibility="org")
+        with (
+            patch(f"{_PREFIX}_get_pipeline_or_404", new=AsyncMock(return_value=current)),
+            patch(f"{_PREFIX}update_pipeline", new=AsyncMock(return_value=updated)),
+            patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock()) as find_mismatches,
+        ):
+            resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"owner_team_id": str(_TEAM_A)})
+
+        assert resp.status_code == 200, resp.text
+        find_mismatches.assert_not_awaited()
+
+    def test_a_patch_that_keeps_the_team_boundary_does_not_gate(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """Only owner_team_id/visibility CHANGES trigger the gate — a rename
+        (or a same-value owner assignment) must not issue the lookup."""
+        current = _pipeline_row_with_binding(owner_team_id=_TEAM_A, visibility="team", instance_id=uuid.uuid4())
+        updated = _make_pipeline(owner_team_id=_TEAM_A, visibility="team")
+        updated.name = "Renamed"
+        client, _ = make_client(org_role="admin", owner_team_id=_TEAM_A, visibility="team")
+        with (
+            patch(f"{_PREFIX}_get_pipeline_or_404", new=AsyncMock(return_value=current)),
+            patch(f"{_PREFIX}update_pipeline", new=AsyncMock(return_value=updated)),
+            patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock()) as find_mismatches,
+        ):
+            resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"name": "Renamed"})
+
+        assert resp.status_code == 200, resp.text
+        find_mismatches.assert_not_awaited()
+
+
+class TestConfirmImportRunsConnectorTeamGate:
+    """FAR-1515 MAJOR 4: POST /libraries/import/confirm.
+
+    The import accepts an ``owner_team_id``, rewires node bindings to real org
+    connectors, and writes the graph — with no team check of its own. The gate
+    runs after materialisation (rewired ids in hand) inside the import
+    transaction, so the named 409 rolls the whole import back.
+    """
+
+    def test_import_of_a_team_pipeline_pinning_an_org_connector_is_409(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """FAILS without the fix: no gate call -> the import completes 200."""
+        conn_id = uuid.uuid4()
+        materialized = {
+            "pipeline_id": str(_PIPELINE_ID),
+            "pipeline_name": "Imported",
+            "primitive_id": str(uuid.uuid4()),
+            "agent_count": 0,
+            "edge_count": 0,
+            "schema_count": 0,
+            "warnings": [],
+            # The rewired bindings materialize_import returns for the gate.
+            "connector_bindings": [{"node_id": "node-1", "connector_instance_id": str(conn_id)}],
+        }
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_LIB_PREFIX}validate_owner_team_for_create", new=AsyncMock()),
+            patch(f"{_LIB_PREFIX}materialize_import", new=AsyncMock(return_value=materialized)),
+            patch(
+                f"{_LIB_PREFIX}find_connector_team_mismatches",
+                new=AsyncMock(return_value=[_mismatch(connector_id=conn_id, pipeline_owner_team_id=_TEAM_A)]),
+            ) as find_mismatches,
+        ):
+            resp = client.post(
+                "/api/v1/libraries/import/confirm",
+                json={
+                    "bundle_json": json.dumps({"format_version": 1, "pipeline": {}}),
+                    "owner_team_id": str(_TEAM_A),
+                },
+            )
+
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert detail.startswith("connector_team_mismatch"), detail
+        assert "shared-ci" in detail
+        find_mismatches.assert_awaited_once()
+        kwargs = find_mismatches.await_args.kwargs
+        assert kwargs["pipeline_owner_team_id"] == _TEAM_A
+        assert kwargs["connector_bindings"] == [{"node_id": "node-1", "connector_instance_id": str(conn_id)}]
+
+    def test_import_without_resolvable_bindings_still_completes(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """An import whose graph carries no connector bindings is not gated."""
+        materialized = {
+            "pipeline_id": str(_PIPELINE_ID),
+            "pipeline_name": "Imported",
+            "primitive_id": str(uuid.uuid4()),
+            "agent_count": 0,
+            "edge_count": 0,
+            "schema_count": 0,
+            "warnings": [],
+            "connector_bindings": [],
+        }
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_LIB_PREFIX}validate_owner_team_for_create", new=AsyncMock()),
+            patch(f"{_LIB_PREFIX}materialize_import", new=AsyncMock(return_value=materialized)),
+            patch(f"{_LIB_PREFIX}find_connector_team_mismatches", new=AsyncMock()) as find_mismatches,
+        ):
+            resp = client.post(
+                "/api/v1/libraries/import/confirm",
+                json={"bundle_json": json.dumps({"format_version": 1, "pipeline": {}})},
+            )
+
+        assert resp.status_code == 200, resp.text
+        find_mismatches.assert_not_awaited()
+
+
+def _connector_instance_row(*, visibility: str, owner_team_id: uuid.UUID | None) -> MagicMock:
+    ci = MagicMock()
+    ci.id = uuid.uuid4()
+    ci.organisation_id = _ORG_ID
+    ci.name = "shared-ci"
+    ci.connector_type_id = "github"
+    ci.credentials_ciphertext = b"encrypted"
+    ci.config_json = {}
+    ci.allowed_operations = []
+    ci.status = "active"
+    ci.visibility = visibility
+    ci.owner_team_id = owner_team_id
+    ci.tier = "native"
+    ci.created_at = _NOW
+    ci.updated_at = _NOW
+    ci.degraded_at = None
+    ci.last_skip_error = None
+    ci.validation_level = None
+    return ci
+
+
+def _bound_pipeline(*, owner_team_id: uuid.UUID | None, instance_id: uuid.UUID) -> MagicMock:
+    p = MagicMock()
+    p.owner_team_id = owner_team_id
+    p.graph_nodes_json = [
+        {
+            "id": "node-1",
+            "node_type": "agent",
+            "agent_id": str(uuid.uuid4()),
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {"type": "github", "instance_id": str(instance_id)},
+        }
+    ]
+    return p
+
+
+class TestConnectorReScopeRunsConnectorTeamGate:
+    """FAR-1515 MAJOR 5: PATCH /connectors/{id} changing visibility/owner.
+
+    ``validate_team_transition_for_update`` checks team MEMBERSHIP only, so
+    flipping a bound connector to ``org`` (or handing it to another team)
+    used to recreate the state the graph-save gate refuses, with no check of
+    the pipelines already binding it.
+    """
+
+    def test_flipping_a_bound_connector_to_org_is_409(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
+        """FAILS without the fix: the bound-pipeline lookup never runs -> 200."""
+        existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
+        updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
+        bound = _bound_pipeline(owner_team_id=_TEAM_A, instance_id=existing.id)
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock(return_value=[bound])) as find_bound,
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
+
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert detail.startswith("connector_team_mismatch"), detail
+        assert "shared-ci" in detail
+        # Same named error the save path uses: team pipeline + org-only connector.
+        assert "is org-only" in detail
+        find_bound.assert_awaited_once()
+
+    def test_a_re_scope_with_no_actual_change_does_not_query(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """PATCHing the SAME visibility back is a no-op: no bound-pipeline lookup."""
+        existing = _connector_instance_row(visibility="org", owner_team_id=None)
+        updated = _connector_instance_row(visibility="org", owner_team_id=None)
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock()) as find_bound,
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
+
+        assert resp.status_code == 200, resp.text
+        find_bound.assert_not_awaited()
+
+    def test_a_re_scope_with_no_bound_pipeline_succeeds(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """Nothing binds it -> the re-scope is allowed (predicate never fires)."""
+        existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
+        updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock(return_value=[])) as find_bound,
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
+
+        assert resp.status_code == 200, resp.text
+        find_bound.assert_awaited_once()

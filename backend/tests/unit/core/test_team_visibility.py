@@ -358,19 +358,69 @@ async def test_mixed_valid_and_invalid_instance_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_connector_is_ignored() -> None:
+async def test_missing_connector_raises_the_named_refusal() -> None:
+    """FAR-1515 CRITICAL 1: absent from the team-blind org read = fail closed.
+
+    This used to return no mismatches (the id was silently skipped), which is
+    exactly how a team-private row HIDDEN by ``rls_team_isolation`` slipped
+    through the gate. The candidate read is now team-blind, so an absent row
+    can only mean the organisation has no such connector - and a binding the
+    gate cannot validate must be refused, never waved through. The refusal
+    carries the same machine-readable ``connector_team_mismatch`` prefix so
+    every surface maps it to the same named 409.
+    """
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
     session = _mock_session([])
-    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(uuid.uuid4())}]
-    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    missing_id = uuid.uuid4()
+    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(missing_id)}]
+    with pytest.raises(ConnectorBindingMissingError) as excinfo:
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert excinfo.value.missing == [(missing_id, _NODE_ID)]
+    detail = str(excinfo.value)
+    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
+    assert str(missing_id) in detail
+    assert "does not resolve to a connector in this organisation" in detail
 
 
 @pytest.mark.asyncio
-async def test_connector_from_other_org_is_ignored() -> None:
+async def test_connector_from_other_org_raises_the_named_refusal() -> None:
+    """Another org's connector is absent from the org-scoped read -> refused.
+
+    Same fail-closed rule as the missing-id case: the gate only ever judges
+    rows it can see, so a binding it cannot see cannot be judged - and an
+    unjudged binding must not save.
+    """
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
     conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="other-org")
     conn.organisation_id = uuid.uuid4()
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([])
-    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    with pytest.raises(ConnectorBindingMissingError) as excinfo:
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert excinfo.value.missing == [(conn.id, _NODE_ID)]
+
+
+@pytest.mark.asyncio
+async def test_a_found_mismatch_takes_precedence_over_a_missing_id() -> None:
+    """When BOTH a cross-team violation and an unresolvable id are present the
+    real mismatch is returned (the caller refuses with its actionable detail);
+    the missing id only raises when it is the SOLE refusal."""
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
+    conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
+    bindings = [
+        {"node_id": _NODE_ID, "connector_instance_id": str(conn.id)},
+        {"node_id": _NODE_ID, "connector_instance_id": str(uuid.uuid4())},
+    ]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert [m.connector_name for m in mismatches] == ["eng-db"]
+    # ...and the sole-refusal case still raises rather than returning [].
+    session = _mock_session([])
+    with pytest.raises(ConnectorBindingMissingError):
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
 
 
 @pytest.mark.asyncio

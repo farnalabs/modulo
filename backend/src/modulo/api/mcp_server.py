@@ -3028,6 +3028,7 @@ async def _update_pipeline_graph_impl(
     _check_agent_tool_scope("update_pipeline_graph")
     from modulo.core.team_visibility import (
         CONNECTOR_TEAM_MISMATCH,
+        ConnectorBindingMissingError,
         connector_team_mismatch_detail,
         extract_connector_bindings,
         find_connector_team_mismatches,
@@ -3159,12 +3160,21 @@ async def _update_pipeline_graph_impl(
             # resolved against the stored graph before the write commits — the
             # same parity routes/pipelines.py applies on REST graph writes.
             nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
-            mismatches = await find_connector_team_mismatches(
-                s,
-                org_id=org_id,
-                pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_bindings=extract_connector_bindings(nodes),
-            )
+            try:
+                mismatches = await find_connector_team_mismatches(
+                    s,
+                    org_id=org_id,
+                    pipeline_owner_team_id=pipeline.owner_team_id,
+                    connector_bindings=extract_connector_bindings(nodes),
+                )
+            except ConnectorBindingMissingError as exc:
+                # FAR-1515 CRITICAL 1: a binding the team-blind org-scoped read
+                # cannot resolve is the same named refusal the REST surface
+                # returns (409 connector_team_mismatch), never a silent skip.
+                return {
+                    "error": CONNECTOR_TEAM_MISMATCH,
+                    "detail": str(exc),
+                }
             if mismatches:
                 return {
                     "error": CONNECTOR_TEAM_MISMATCH,

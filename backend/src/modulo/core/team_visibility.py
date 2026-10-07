@@ -28,6 +28,18 @@ named error:
     save-time rejection would refuse a graph the run would happily execute —
     an unenforceable rule. See the parity note on
     :func:`model_backend_team_mismatch`.
+
+The candidate rows behind both rules are read team-blind but org-scoped
+(FAR-1515 CRITICAL 1): the ``rls_team_isolation`` policy hides another team's
+``visibility='team'`` rows from the request session, so a read in the caller's
+own context used to return NOTHING for the very connector the predicate had to
+judge — the binding looked absent and was skipped, and the save was accepted.
+:func:`team_blind_org_scope` (``db.crud.team_scope``) temporarily sets the
+policy's ``app.execution_context`` escape hatch (still AND-gated by
+``app.organisation_id``), reads, and restores the caller's GUCs. A connector
+binding the organisation genuinely cannot resolve — after that team-blind
+read an absent row is definitive — is the named ``connector_team_mismatch``
+refusal :class:`ConnectorBindingMissingError`, never a silent skip.
 """
 
 from __future__ import annotations
@@ -41,6 +53,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.graph_validator._types import try_parse_uuid, try_parse_uuids
+from modulo.db.crud.team_scope import team_blind_org_scope
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
 
@@ -112,6 +125,39 @@ def connector_team_mismatch_detail(mismatches: list[ConnectorTeamMismatch]) -> s
                 f"every run of this pipeline is team-scoped and would be rejected at the "
                 f"connector gate - flip the connector to `team`, or duplicate it"
             )
+    return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
+
+
+class ConnectorBindingMissingError(Exception):
+    """A parsed connector binding the team-blind org-scoped read could not resolve.
+
+    FAR-1515 CRITICAL 1: candidate rows are read team-blind but org-scoped, so
+    an id absent from the result is DEFINITIVE — this organisation has no such
+    connector (another team's row would have been visible to the widened read).
+    A binding the gate cannot validate must fail closed, never ride through as
+    "no mismatch found"; the message carries the same machine-readable
+    ``connector_team_mismatch`` prefix as the mismatch detail so every surface
+    maps it to the same named 409 / error envelope.
+
+    Raised by :func:`find_connector_team_mismatches` when unresolvable
+    bindings are the only refusal (a real cross-team mismatch takes precedence
+    and is returned normally). Callers — the REST enforcement helper, the MCP
+    graph-update tool, the import gate — catch it and translate.
+    """
+
+    def __init__(self, missing: list[tuple[uuid.UUID, str | None]]) -> None:
+        self.missing = missing
+        super().__init__(connector_binding_missing_detail(missing))
+
+
+def connector_binding_missing_detail(missing: Sequence[tuple[uuid.UUID, str | None]]) -> str:
+    """Build the named ``connector_team_mismatch`` detail for unresolvable ids."""
+    parts = [
+        f"connector id {connector_id} (node {node_id}) does not resolve to a connector in this "
+        f"organisation - the binding cannot be team-validated, so it is refused; fix or remove the "
+        f"binding (the connector may have been deleted, or belongs to another organisation)"
+        for connector_id, node_id in missing
+    ]
     return f"{CONNECTOR_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
@@ -196,6 +242,28 @@ def model_backend_team_mismatch_detail(mismatches: list[ModelBackendTeamMismatch
     return f"{MODEL_BACKEND_TEAM_MISMATCH}: {'; '.join(parts)}"
 
 
+async def _select_candidate_rows(
+    session: AsyncSession,
+    model: type[Any],
+    org_id: uuid.UUID,
+    ids: set[uuid.UUID],
+) -> Sequence[Any]:
+    """Read the candidate rows TEAM-BLIND but ORG-SCOPED (FAR-1515 CRITICAL 1).
+
+    Under ``rls_team_isolation`` a request session cannot see another team's
+    ``visibility='team'`` rows, so reading candidates in the caller's own
+    context silently dropped the exact rows the predicate must judge (a
+    Team-A member binding Team-B's connector looked "absent" and was skipped).
+    The widened read lives in ``db.crud.team_scope.team_blind_org_scope`` (the
+    db-layer seam both ``modulo.db`` and ``modulo.core`` may import), and an id
+    the widened read still cannot resolve is a named refusal rather than a
+    skip (see ``find_connector_team_mismatches``).
+    """
+    stmt = select(model).where(model.organisation_id == org_id, model.id.in_(ids))
+    async with team_blind_org_scope(session, org_id):
+        return (await session.execute(stmt)).scalars().all()
+
+
 async def _find_team_scope_mismatches[MismatchT](
     session: AsyncSession,
     *,
@@ -206,37 +274,31 @@ async def _find_team_scope_mismatches[MismatchT](
     model: type[Any],
     check_mismatch: Callable[[str | None, uuid.UUID | None, uuid.UUID | None], bool],
     build_mismatch: Callable[[Any, uuid.UUID | None, str | None], MismatchT],
-) -> list[MismatchT]:
+) -> tuple[list[MismatchT], list[tuple[uuid.UUID, str | None]]]:
     """Shared fetch-and-filter pattern for team-scoped binding enforcement.
 
-    Looks up the org-scoped resource rows referenced by ``entries`` and keeps
-    only those that the team-scope rule flags as cross-team. Resources that
-    cannot be resolved (missing, or in another org) are ignored — the graph
-    validator reports them separately.
+    Looks up the org-scoped resource rows referenced by ``entries`` - read
+    team-blind via :func:`_select_candidate_rows` - and returns
+    ``(mismatches, missing)``: the entries the team-scope rule flags as
+    cross-team, plus every parsed id the team-blind read could NOT resolve
+    (``[(connector/backend id, node_id), ...]``). What each caller does with
+    ``missing`` is its own contract: the connector half refuses (FAR-1515
+    CRITICAL 1 - with team-blind visibility an absent row is definitive), the
+    model-backend half keeps ignoring it (parity note: its rule is unchanged).
     """
     if not entries:
-        return []
+        return [], []
 
     raw_ids = [entry.get(id_key) for entry in entries]
     parsed_ids, _ = try_parse_uuids(raw_ids)
     if not parsed_ids:
-        return []
+        return [], []
 
-    rows: Sequence[Any] = (
-        (
-            await session.execute(
-                select(model).where(
-                    model.organisation_id == org_id,
-                    model.id.in_(parsed_ids),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await _select_candidate_rows(session, model, org_id, parsed_ids)
     found: dict[uuid.UUID, Any] = {r.id: r for r in rows}
 
     mismatches: list[MismatchT] = []
+    missing: list[tuple[uuid.UUID, str | None]] = []
     for entry in entries:
         node_id = str(entry.get("node_id")) if entry.get("node_id") else None
         rid = try_parse_uuid(entry.get(id_key))
@@ -244,11 +306,12 @@ async def _find_team_scope_mismatches[MismatchT](
             continue
         resource = found.get(rid)
         if resource is None:
+            missing.append((rid, node_id))
             continue
         if not check_mismatch(resource.visibility, resource.owner_team_id, pipeline_owner_team_id):
             continue
         mismatches.append(build_mismatch(resource, pipeline_owner_team_id, node_id))
-    return mismatches
+    return mismatches, missing
 
 
 async def find_model_backend_team_mismatches(
@@ -260,11 +323,15 @@ async def find_model_backend_team_mismatches(
     """Return cross-team model-backend pin violations for a graph save.
 
     ``model_backend_pins`` uses the snapshot pin shape:
-    ``[{"node_id": ..., "model_backend_id": ...}, ...]``. Model backends that
-    cannot be resolved (missing, or in another org) are ignored — the graph
-    validator reports them separately.
+    ``[{"node_id": ..., "model_backend_id": ...}, ...]``. The candidate rows
+    are read team-blind but org-scoped (same read as the connector half, so a
+    hidden cross-team backend is judged rather than skipped); pins that cannot
+    be resolved (missing, or in another org) remain ignored - the graph
+    validator reports them separately. That asymmetry with the connector half
+    is deliberate (FAR-1515 parity note above): the model-backend RULE is
+    unchanged here.
     """
-    return await _find_team_scope_mismatches(
+    mismatches, _missing = await _find_team_scope_mismatches(
         session,
         org_id=org_id,
         pipeline_owner_team_id=pipeline_owner_team_id,
@@ -274,6 +341,7 @@ async def find_model_backend_team_mismatches(
         check_mismatch=model_backend_team_mismatch,
         build_mismatch=_build_model_backend_mismatch,
     )
+    return mismatches
 
 
 async def find_connector_team_mismatches(
@@ -286,10 +354,17 @@ async def find_connector_team_mismatches(
 
     ``connector_bindings`` uses the same shape as snapshot
     ``connector_bindings_json`` entries: ``{"node_id": ..., "connector_instance_id": ...}``.
-    Connectors that cannot be resolved (missing, or in another org) are ignored —
-    the graph validator reports them separately as ``CONNECTOR_NOT_FOUND``.
+
+    The candidate rows are read team-blind but org-scoped
+    (:func:`_select_candidate_rows`), so another team's team-private connector
+    is judged rather than hidden (FAR-1515 CRITICAL 1). A binding id the
+    organisation genuinely cannot resolve raises
+    :class:`ConnectorBindingMissingError` (the named ``connector_team_mismatch``
+    refusal), never a silent skip: a binding this gate cannot validate must
+    not ride through it. A real cross-team mismatch takes precedence and is
+    returned normally — the caller refuses either way.
     """
-    return await _find_team_scope_mismatches(
+    mismatches, missing = await _find_team_scope_mismatches(
         session,
         org_id=org_id,
         pipeline_owner_team_id=pipeline_owner_team_id,
@@ -299,6 +374,11 @@ async def find_connector_team_mismatches(
         check_mismatch=connector_team_mismatch,
         build_mismatch=_build_connector_mismatch,
     )
+    if mismatches:
+        return mismatches
+    if missing:
+        raise ConnectorBindingMissingError(missing)
+    return []
 
 
 def _build_model_backend_mismatch(
