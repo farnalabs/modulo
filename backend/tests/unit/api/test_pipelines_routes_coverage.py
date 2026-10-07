@@ -144,6 +144,41 @@ def _install_auth(role: str = "admin") -> None:
     )
 
 
+def _install_any_credential_default() -> None:
+    """Give this module's fixtures their own any-credential principal.
+
+    ``update_pipeline_endpoint`` (and the other FAR-681 apply-moved routes)
+    resolve through ``get_current_tenant_user_or_api_key``, NOT
+    ``get_current_user``. ``tests/unit/api/conftest.py`` supplies a default for
+    that dependency as an autouse fixture, but it is order-dependent: in some
+    multi-directory subsets it is never applied to this module's items at all,
+    and then every ``update_pipeline`` request answers 401 "Invalid or expired
+    token" before it reaches the handler — a pre-existing pollution this file
+    should not have to inherit (reproducible on origin/main with
+    ``test_node_conversion_save_enforcement`` + ``test_pipeline_node_conversion``
+    collected first).
+
+    Installed with ``setdefault`` so an explicit per-test override still wins,
+    and derived from whatever ``get_current_user`` override the fixture set —
+    the same contract the conftest default provides. No test here exercises the
+    real ``mk_`` resolution, so deriving from the JWT override loses nothing.
+    """
+    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+    from modulo.auth.jwt import TenantPrincipal
+
+    def _derived() -> TenantPrincipal:
+        auth = app.dependency_overrides[get_current_user]()
+        return TenantPrincipal(
+            username=auth.username,
+            organisation_id=auth.organisation_id,
+            account_id=auth.account_id,
+            org_role=auth.org_role,
+            is_system_admin=auth.is_system_admin,
+        )
+
+    app.dependency_overrides.setdefault(get_current_tenant_user_or_api_key, _derived)
+
+
 def _install_common(session: AsyncMock) -> None:
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield session
@@ -154,6 +189,7 @@ def _install_common(session: AsyncMock) -> None:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     _install_auth("admin")
+    _install_any_credential_default()
 
 
 @pytest.fixture
@@ -200,6 +236,7 @@ def operator_client() -> Generator[TestClient, AsyncMock, None]:
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
         username="operator@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator"
     )
+    _install_any_credential_default()
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan

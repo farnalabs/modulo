@@ -37,6 +37,18 @@ class ProblemType(enum.StrEnum):
     STORAGE_EXHAUSTED = "storage_exhausted"
     GATEWAY_TIMEOUT = "gateway_timeout"
     INTERNAL_ERROR = "internal_error"
+    # FAR-1545: route-specific problem types. RFC 9457 §3.1.1 designates
+    # ``type`` as the problem type's PRIMARY identifier, so a route error code
+    # that names a genuinely distinct problem (not a status-derived generic
+    # one) gets its own member: the wire ``type`` becomes
+    # ``urn:problem:modulo:<code>`` instead of collapsing to the status-derived
+    # type. The ``code`` extension member (#1336) still carries the same value.
+    INVALID_TOKEN = "invalid_token"
+    TOKEN_MISMATCH = "token_mismatch"
+    ALREADY_CONFIGURED = "already_configured"
+    ENCRYPTION_CONFIG_ERROR = "encryption_config_error"
+    ENCRYPTION_ERROR = "encryption_error"
+    UPDATE_FAILED = "update_failed"
 
 
 _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
@@ -60,6 +72,40 @@ _PROBLEM_METADATA: dict[ProblemType, dict[str, Any]] = {
     ProblemType.STORAGE_EXHAUSTED: {"status": 503, "title": "Storage Exhausted"},
     ProblemType.GATEWAY_TIMEOUT: {"status": 504, "title": "Gateway Timeout"},
     ProblemType.INTERNAL_ERROR: {"status": 500, "title": "Internal Error"},
+    # FAR-1545: per-type status/title (RFC 9457 §3.1.3 — short, per-type
+    # title). Each ``status`` equals the HTTP status the raising route
+    # declares (§3.1.2), so the problem object's ``status`` never disagrees
+    # with the actual response.
+    ProblemType.INVALID_TOKEN: {"status": 404, "title": "Invalid Token"},
+    ProblemType.TOKEN_MISMATCH: {"status": 400, "title": "Token Mismatch"},
+    ProblemType.ALREADY_CONFIGURED: {"status": 400, "title": "Already Configured"},
+    ProblemType.ENCRYPTION_CONFIG_ERROR: {"status": 500, "title": "Encryption Not Configured"},
+    ProblemType.ENCRYPTION_ERROR: {"status": 500, "title": "Encryption Error"},
+    ProblemType.UPDATE_FAILED: {"status": 500, "title": "Update Failed"},
+}
+
+# FAR-1545: ``code -> ProblemType`` for route error codes that name a DISTINCT
+# problem type (RFC 9457 §4). ``problem_from_http_exception`` prefers this map
+# over the coarse status lookup, so the wire ``type`` is specific instead of
+# collapsing to the status-derived generic (500s to ``internal_error``).
+#
+# Deliberately ABSENT — truly generic conditions that stay status-derived
+# (RFC §4: do not mint a type for a generic problem):
+#
+# * ``backend_not_found`` — a plain resource 404 (the RFC's own generic
+#   example); the ``code`` extension member still carries the specificity.
+# * ``database_error`` — a generic 503 outage; the status lookup already
+#   resolves it to ``service_unavailable``.
+# * ``conflict`` / ``internal_error`` / ``migration_required`` — their status
+#   lookup resolves to exactly the same type the code names (409/500/501), so
+#   a map entry would change nothing.
+_CODE_TYPE_MAP: dict[str, ProblemType] = {
+    "invalid_token": ProblemType.INVALID_TOKEN,
+    "token_mismatch": ProblemType.TOKEN_MISMATCH,
+    "already_configured": ProblemType.ALREADY_CONFIGURED,
+    "encryption_config_error": ProblemType.ENCRYPTION_CONFIG_ERROR,
+    "encryption_error": ProblemType.ENCRYPTION_ERROR,
+    "update_failed": ProblemType.UPDATE_FAILED,
 }
 
 
@@ -191,6 +237,12 @@ def problem_from_http_exception(
         504: ProblemType.GATEWAY_TIMEOUT,
     }
     problem_type = lookup.get(status, ProblemType.INTERNAL_ERROR)
+    # FAR-1545: prefer the route's ``code`` over the coarse status lookup
+    # (RFC 9457 §3.1.1 — ``type`` is the problem type's primary identifier).
+    # The map only holds codes naming a distinct problem type; an unknown (or
+    # deliberately generic) code falls back to the status-derived type above.
+    if code is not None:
+        problem_type = _CODE_TYPE_MAP.get(code, problem_type)
     return ProblemDetail.from_type(
         problem_type=problem_type,
         detail=detail,

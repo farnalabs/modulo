@@ -525,8 +525,13 @@ class TestBindConnectorToNodeTeamScope(_OperatorAuthContext):
         session = AsyncMock()
         connector = MagicMock()
         connector.organisation_id = _PLACEHOLDER_ORG_ID
-        connector.visibility = "org"
-        connector.owner_team_id = None
+        # The connector belongs to the PIPELINE's team: this test is about the
+        # team-SCOPE key passing its own boundary and then reaching the node
+        # lookup. Since FAR-1515 an org-only connector on this team pipeline
+        # would be its own ``connector_team_mismatch``, which fires first and
+        # would mask the assertion under test.
+        connector.visibility = "team"
+        connector.owner_team_id = _TEAM_A
         connector.name = "github-conn"
         session.execute.return_value = _make_execute_result(mock_pipeline)
         with (
