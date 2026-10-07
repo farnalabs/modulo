@@ -5,9 +5,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +21,12 @@ from modulo.api.dependencies import (
     require_team_membership_or_admin_any_credential,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
-from modulo.api.team_scope import resolve_lifecycle_map_team_scope, validate_owner_team_for_create
+from modulo.api.team_scope import (
+    TeamScopedResource,
+    resolve_lifecycle_map_team_scope,
+    validate_owner_team_for_create,
+    validate_team_transition_for_update,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
@@ -52,8 +57,11 @@ from modulo.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     LifecycleMapPipelineConflictError,
 )
+from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
+from modulo.db.sqlstates import sqlstate_of
 
 _CODE_LIFECYCLE_MAPS_AUDIT_FAILED = "lifecycle_maps.audit_failed"
 _CODE_LIFECYCLE_MAP_LIST = "lifecycle_map.list"
@@ -71,6 +79,17 @@ _CODE_LIFECYCLE_MAPS_UPDATE_VERSION = "lifecycle_maps.update_version_endpoint"
 _CODE_LIFECYCLE_MAPS_GRADUATE_STAGE = "lifecycle_maps.graduate_stage_endpoint"
 _CODE_LIFECYCLE_MAPS_LIST_JOURNEYS = "lifecycle_maps.list_journeys_endpoint"
 _CODE_LIFECYCLE_MAPS_GET_JOURNEY = "lifecycle_maps.get_journey_endpoint"
+
+# SQLSTATE ``insufficient_privilege``: Postgres refused a statement because an
+# RLS policy's WITH CHECK (for ``FOR ALL`` policies Postgres defaults WITH CHECK
+# to the USING expression) rejected the NEW row — here a team-ownership /
+# visibility transfer to a team the caller is not a member of. ``update`` now
+# validates the transition up front (``validate_team_transition_for_update``),
+# so this arm is the race backstop: the DB refusal is a permission denial, not a
+# database outage, and must never surface as 503 "Database temporarily
+# unavailable" (that was the FAR-1514 QA Major 2 finding).
+_RLS_WITH_CHECK_DENIED_SQLSTATE = "42501"
+_MSG_TEAM_POLICY_DENIED = "Not permitted to change this resource's team ownership or visibility."
 
 
 _log = logging.getLogger(__name__)
@@ -778,6 +797,25 @@ async def update_lifecycle_map_endpoint(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            if "visibility" in updates or "owner_team_id" in updates:
+                # FAR-1514: the RLS policy's WITH CHECK rejects a
+                # team-ownership/visibility transfer to a team the caller is
+                # not a member of (SQLSTATE 42501, which would otherwise land
+                # in the SQLAlchemyError arm below as a 503 "database
+                # unavailable"). Validate the transition BEFORE the write so
+                # the caller gets the real 404/403, mirroring
+                # connectors.update_connector_endpoint (#1793).
+                current = await get_lifecycle_map(session, lifecycle_map_id)
+                if current is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
+                await validate_team_transition_for_update(
+                    session,
+                    principal,
+                    current_owner_team_id=current.owner_team_id,
+                    current_visibility=current.visibility,
+                    new_owner_team_id=updates.get("owner_team_id", current.owner_team_id),
+                    new_visibility=updates.get("visibility", current.visibility),
+                )
             lifecycle_map = await update_lifecycle_map(
                 session,
                 lifecycle_map_id,
@@ -813,6 +851,16 @@ async def update_lifecycle_map_endpoint(
         ) from exc
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "lifecycle_maps.update_lifecycle_map_endpoint")
+        if sqlstate_of(exc) == _RLS_WITH_CHECK_DENIED_SQLSTATE:
+            # Race backstop for the pre-write validation above: the row's team
+            # ownership/visibility changed between the gate and the write, so
+            # the RLS WITH CHECK refused the NEW row. That is a permission
+            # denial — never the 503 outage the generic arm reports.
+            _log.warning("%s.rls_with_check_denied", _CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=_MSG_TEAM_POLICY_DENIED,
+            ) from exc
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -884,6 +932,59 @@ async def delete_lifecycle_map_endpoint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_LIFECYCLE_MAP_NOT_FOUND)
 
 
+async def _resolve_lifecycle_map_team_scope_including_deleted(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """``resolve_lifecycle_map_team_scope`` for a SOFT-DELETED target row.
+
+    FAR-1514: ``POST /{lifecycle_map_id}/restore`` is the one lifecycle-map
+    mutation whose target row is soft-deleted — that is the whole point of the
+    endpoint. The shared ``team_scope_resolver`` cannot see such a row (it adds
+    an explicit ``deleted_at IS NULL`` predicate), so reusing it here would
+    resolve ``None`` for a non-admin caller and the dependency would answer 404
+    "Resource not found" BEFORE the handler — breaking restore for every
+    non-admin while admins (who bypass the gate) kept working.
+
+    Two things exclude a deleted row, and BOTH are handled here:
+
+    * ``team_scope_resolver`` adds an explicit ``deleted_at IS NULL``
+      predicate, and
+    * a global ``do_orm_execute`` listener (``db.soft_delete``) injects the
+      same predicate into EVERY ORM SELECT on a ``SoftDeleteMixin`` model —
+      which is why the explicit one is redundant everywhere else. The
+      statement is marked with ``include_soft_deleted`` to opt out of it.
+
+    Same path-param read, same ``TeamScopedResource`` shape, so the
+    dependency's membership-or-admin matrix is unchanged; only the visibility
+    predicate matches what the endpoint acts on. Under RLS the row is still
+    subject to ``rls_team_isolation`` (which does NOT filter on deletion), so
+    a non-member's deleted row stays invisible and the dependency still 404s.
+
+    Mirrors pipelines' ``_resolve_pipeline_team_scope_including_deleted``
+    (FAR-1362); wired on the restore endpoint ONLY.
+    """
+    raw = request.path_params.get("lifecycle_map_id")
+    if raw is None:
+        return None
+    try:
+        obj_id = uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid lifecycle_map_id path parameter",
+        ) from None
+    # ``Select[Any]`` cast: ``include_soft_deleted``'s ``T: Select[Any]`` bound
+    # rejects the concrete ``Select[UUID | None, str]`` a two-column select
+    # infers (SQLAlchemy's type parameters are invariant).
+    scope_stmt = select(LifecycleMap.owner_team_id, LifecycleMap.visibility).where(LifecycleMap.id == obj_id)
+    result = await session.execute(include_soft_deleted(cast(Select[Any], scope_stmt)))
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
 @router.post(
     "/{lifecycle_map_id}/restore",
     dependencies=[Depends(audited("lifecycle_map_restored", "lifecycle_map", principal_dep=get_current_tenant_user))],
@@ -893,7 +994,11 @@ async def restore_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_CREATE),
-    _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
+    # FAR-1514: the deleted-inclusive resolver is REQUIRED here — the stock
+    # ``resolve_lifecycle_map_team_scope`` filters soft-deleted rows, and this
+    # endpoint's target IS soft-deleted, so it would 404 every non-admin
+    # restore before the handler ran. See the resolver's docstring.
+    _: TenantPrincipal = require_team_membership_or_admin(_resolve_lifecycle_map_team_scope_including_deleted),
 ) -> LifecycleMapResponse:
     try:
         async with session.begin():

@@ -23,7 +23,6 @@ def ctx():
         "memberships": {},
         "pipelines": {},
         "connectors": {},
-        "lifecycle_maps": {},
     }
 
 
@@ -65,27 +64,6 @@ def connector_has_visibility(name: str, visibility: str, ctx) -> None:
             "owner_team_id": None,
             "visibility": visibility,
         }
-
-
-@given(parsers.parse('a lifecycle map "{name}" is owned by team "{team_name}" with visibility "{visibility}"'))
-def lifecycle_map_owned_by_team(name: str, team_name: str, visibility: str, ctx) -> None:
-    team_id = ctx["teams"].get(team_name, {}).get("id", str(uuid.uuid4()))
-    ctx["lifecycle_maps"][name] = {
-        "id": str(uuid.uuid4()),
-        "name": name,
-        "owner_team_id": team_id,
-        "visibility": visibility,
-    }
-
-
-@given(parsers.parse('a lifecycle map "{name}" has visibility "{visibility}"'))
-def lifecycle_map_has_visibility(name: str, visibility: str, ctx) -> None:
-    ctx["lifecycle_maps"][name] = {
-        "id": str(uuid.uuid4()),
-        "name": name,
-        "owner_team_id": None,
-        "visibility": visibility,
-    }
 
 
 @given(parsers.parse('I am a member of team "{team_name}"'))
@@ -140,37 +118,6 @@ def user_requests_pipeline_list(username: str, request, ctx) -> None:
     resp.status_code = 200
     resp.json = lambda: {"items": result, "total": len(result)}
     request.node._resp = resp
-
-
-@when(parsers.parse('user "{username}" requests the lifecycle map list'))
-def user_requests_lifecycle_map_list(username: str, request, ctx) -> None:
-    user_team_id = ctx["memberships"].get(username, {}).get("team_id")
-    result = [
-        mdata
-        for mdata in ctx["lifecycle_maps"].values()
-        if mdata.get("visibility") == "org" or (user_team_id and mdata.get("owner_team_id") == user_team_id)
-    ]
-
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json = lambda: {"items": result, "total": len(result)}
-    request.node._resp = resp
-
-
-@then(parsers.parse('the lifecycle map list contains "{name}"'))
-def lifecycle_map_list_contains(name: str, request) -> None:
-    data = request.node._resp.json()
-    items = data.get("items", [])
-    names = [m["name"] for m in items] if isinstance(items, list) else []
-    assert name in names, f"Lifecycle map '{name}' should be in response, got {names}"
-
-
-@then(parsers.parse('the lifecycle map list does not contain "{name}"'))
-def lifecycle_map_list_does_not_contain(name: str, request) -> None:
-    data = request.node._resp.json()
-    items = data.get("items", [])
-    names = [m["name"] for m in items] if isinstance(items, list) else []
-    assert name not in names, f"Lifecycle map '{name}' should not be in response, got {names}"
 
 
 @when(parsers.parse('user "{username}" requests GET /api/connectors/{connector_name}'))
