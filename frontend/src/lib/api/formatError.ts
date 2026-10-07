@@ -11,6 +11,10 @@ export interface ProblemDetail {
   code?: string
 }
 
+// Titles for every urn:problem:modulo:<type> the backend can emit. Kept in
+// sync with `_PROBLEM_METADATA` in backend/src/modulo/api/models/problem.py
+// (the wire `title` is per-type per RFC 9457 §3.1.3; this table is the
+// client-side label for contexts that only carry the `type`).
 const PROBLEM_TITLES: Record<string, string> = {
   bad_request: 'Bad Request',
   validation_error: 'Validation Error',
@@ -18,11 +22,26 @@ const PROBLEM_TITLES: Record<string, string> = {
   forbidden: 'Forbidden',
   not_found: 'Not Found',
   conflict: 'Conflict',
+  gone: 'Gone',
+  method_not_allowed: 'Method Not Allowed',
+  hitl_review_already_claimed: 'Conflict',
+  hitl_review_already_decided: 'Conflict',
+  hitl_run_not_awaiting: 'Conflict',
   rate_limited: 'Rate Limited',
   feature_required: 'Feature Not Available',
   pipeline_error: 'Pipeline Error',
   migration_required: 'Migration Required',
+  bad_gateway: 'Bad Gateway',
+  service_unavailable: 'Service Unavailable',
+  storage_exhausted: 'Storage Exhausted',
+  gateway_timeout: 'Gateway Timeout',
   internal_error: 'Internal Error',
+  invalid_token: 'Invalid Token',
+  token_mismatch: 'Token Mismatch',
+  already_configured: 'Already Configured',
+  encryption_config_error: 'Encryption Not Configured',
+  encryption_error: 'Encryption Error',
+  update_failed: 'Update Failed',
 }
 
 export function getProblemTypeLabel(type: string): string {
