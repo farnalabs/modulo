@@ -2307,7 +2307,7 @@ async def _advance_terminalised_run(
     run_id: uuid.UUID,
     org_id: uuid.UUID,
 ) -> None:
-    """Advance a terminalised sweep run's journeys and record its daily fact.
+    """Advance a terminalised sweep run's journeys, fact and audit record.
 
     The sweep's raw terminal UPDATEs never run ``finalize_cost``, so the swept
     runs' journeys would never advance (FAR-143 follow-up) and the runs would
@@ -2316,11 +2316,13 @@ async def _advance_terminalised_run(
     (``run_terminal_advance.advance_terminalised_run`` — FAR-604 F4), which
     ``run_admission``'s slot-reconciliation sweep also uses. Call signature
     unchanged. Fail-open per run — one run's facts failure must not fail the
-    whole sweep.
+    whole sweep. The shared orchestration also records the terminalisation on
+    the org's audit chain, tagged with THIS sweep as the ``actor_source``
+    (FAR-1549).
     """
     from modulo.core.run_terminal_advance import advance_terminalised_run
 
-    await advance_terminalised_run(async_engine, run_id, org_id)
+    await advance_terminalised_run(async_engine, run_id, org_id, source="stale_run_recovery")
 
 
 async def stale_run_recovery_sweep(

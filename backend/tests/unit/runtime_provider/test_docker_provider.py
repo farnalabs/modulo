@@ -1,6 +1,7 @@
 """Unit tests for DockerRuntimeProvider."""
 
 import asyncio
+import time
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -816,3 +817,74 @@ async def test_create_workspace_no_new_privileges_preserved(
     config = mock_docker_client.containers.create.call_args[1]["config"]
     security_opt = config["HostConfig"]["SecurityOpt"]
     assert "no-new-privileges:true" in security_opt
+
+
+# ------------------------------------------------------------------
+# FAR-1493: reserved identity labels are provider-authoritative
+# ------------------------------------------------------------------
+
+
+async def test_create_workspace_reserved_identity_labels_cannot_be_restamped(
+    provider: DockerRuntimeProvider,
+    mock_docker_client: MagicMock,
+) -> None:
+    """FAR-1493: operator metadata must NOT re-stamp reserved identity labels.
+
+    The reserved keys are stamped AFTER the operator metadata (assignment,
+    not ``setdefault``) so identity stays this provider's own fact. A
+    caller-supplied ``modulo.machine.id`` would hide the container from THIS
+    deployment's orphan sweep (the reconciler lists by that exact label —
+    a foreign value makes the container invisible to its own deployment's
+    reclamation); a caller-supplied ``modulo.created_at`` would defeat the
+    5-minute grace window and the 24-hour max-lifetime backstop (a backdated
+    stamp ages the container past reclaim-on-sight; a future stamp makes it
+    look age-new forever). Both are permanent orphan leaks.
+
+    Non-reserved attribution keys still flow through unchanged.
+    """
+    spec = WorkspaceSpec(
+        environment_profile_id=uuid.uuid4(),
+        organisation_id=uuid.uuid4(),
+        workspace_metadata={
+            "modulo.machine.id": "evil-deployment",
+            "modulo.created_at": "1",
+            "modulo.run.id": "7d9f0000-0000-4000-8000-000000000001",
+            "custom.key": "custom-value",
+        },
+    )
+    await provider.create_workspace(spec)
+
+    labels = mock_docker_client.containers.create.call_args[1]["config"]["Labels"]
+    # The identity keys win outright — assignment, not setdefault.
+    assert labels["modulo.machine.id"] == provider._deployment_identity()
+    # A fresh creation stamp, never the caller's backdated value.
+    assert int(labels["modulo.created_at"]) > 1
+    # Non-reserved keys still round-trip exactly as supplied.
+    assert labels["modulo.run.id"] == "7d9f0000-0000-4000-8000-000000000001"
+    assert labels["custom.key"] == "custom-value"
+
+
+def test_build_workspace_labels_identity_is_authoritative(
+    provider: DockerRuntimeProvider,
+) -> None:
+    """FAR-1493 (unit): ``_build_workspace_labels`` itself is leak-proof.
+
+    Direct probe of the label mapper: even when the whole reserved set is
+    pre-populated in ``workspace_metadata``, the returned mapping carries the
+    provider's own deployment identity and a current (non-backdated) epoch.
+    """
+    labels = provider._build_workspace_labels(
+        WorkspaceSpec(
+            environment_profile_id=uuid.uuid4(),
+            organisation_id=uuid.uuid4(),
+            workspace_metadata={
+                "modulo.machine.id": "someone-else",
+                "modulo.created_at": "1",
+            },
+        )
+    )
+
+    assert labels["modulo.machine.id"] == provider._deployment_identity()
+    created = int(labels["modulo.created_at"])
+    assert created > 1
+    assert created <= int(time.time()) + 60

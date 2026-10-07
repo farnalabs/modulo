@@ -971,6 +971,47 @@ class TestOauthTokenAndRefreshHandlers:
             response = await _oauth_token_impl(self._request())
         assert response is not None
 
+    async def test_token_impl_refresh_credential_error(self) -> None:
+        error = MagicMock()
+        with (
+            patch(
+                "modulo.api.mcp_server._parse_oauth_form",
+                new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
+            ),
+            patch("modulo.api.mcp_server._extract_oauth_refresh_credentials", return_value=({}, error)),
+        ):
+            assert await _oauth_token_impl(self._request()) is error
+
+    async def test_token_impl_refresh_exchange_error(self) -> None:
+        error = MagicMock()
+        with (
+            patch(
+                "modulo.api.mcp_server._parse_oauth_form",
+                new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
+            ),
+            patch(
+                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                return_value=({"refresh_token": "r"}, None),
+            ),
+            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, error))),
+        ):
+            assert await _oauth_token_impl(self._request()) is error
+
+    async def test_token_impl_refresh_degenerate_exchange(self) -> None:
+        with (
+            patch(
+                "modulo.api.mcp_server._parse_oauth_form",
+                new=AsyncMock(return_value=({"grant_type": "refresh_token"}, None)),
+            ),
+            patch(
+                "modulo.api.mcp_server._extract_oauth_refresh_credentials",
+                return_value=({"refresh_token": "r"}, None),
+            ),
+            patch("modulo.api.mcp_server._exchange_refresh_token", new=AsyncMock(return_value=(None, None))),
+            pytest.raises(RuntimeError),
+        ):
+            await _oauth_token_impl(self._request())
+
     async def test_token_http_exception_handler(self) -> None:
         with patch("modulo.api.mcp_server._oauth_token_impl", side_effect=StarletteHTTPException(422, "nope")):
             response = await _oauth_token(self._request())

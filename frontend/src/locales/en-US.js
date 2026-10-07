@@ -482,7 +482,8 @@ export default {
       "no_raw_events_description": "Events for this group will appear here once they are ingested.",
       "events_of": "{count} of {total} events",
       "previous": "Previous",
-      "next": "Next"
+      "next": "Next",
+      "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only."
     },
     "AdminProductAnalyticsView": {
       "title": "Product Analytics",
@@ -840,7 +841,18 @@ export default {
       "opt_settings_updated": "Updated",
       "opt_api_key_created": "Created",
       "opt_api_key_deleted": "Deleted",
-      "opt_export_csv": "CSV Export"
+      "opt_export_csv": "CSV Export",
+      "audit_source_group": "Audit source",
+      "tab_org_events": "Organisation trail",
+      "tab_system_events": "Organisation lifecycle",
+      "system_subtitle": "Durable organisation-lifecycle records that survive an organisation deletion",
+      "system_organisation": "Organisation",
+      "system_records_count": "{count} record | {count} records",
+      "system_loading": "Loading organisation lifecycle records...",
+      "system_failed_to_load": "Failed to load organisation lifecycle records:",
+      "system_none_found": "No organisation lifecycle records found",
+      "system_try_adjusting": "Try adjusting your filters or wait for lifecycle activity to be recorded.",
+      "system_page_of_total": "Page {page} \u00b7 {count} of {total} records"
     },
     "SettingsHitlReviewView": {
       "title": "HITL Review",
@@ -1004,7 +1016,15 @@ export default {
       "scheduler_starvation_age_minutes": "{minutes}m",
       "scheduler_starvation_age_hours": "{hours}h",
       "expand_message": "Expand error message",
-      "collapse_message": "Collapse error message"
+      "collapse_message": "Collapse error message",
+      "no_error_groups_description": "Try adjusting your filters or wait for errors to be ingested.",
+      "no_instance_error_groups_found": "No instance-scope error groups found",
+      "no_instance_error_groups_description": "Instance-level errors appear here once they are ingested by the public frontend endpoint or an org-less backend error.",
+      "scope_group_label": "Error scope",
+      "scope_label": "Scope",
+      "scope_organisation": "Organisation",
+      "scope_instance": "Instance",
+      "scope_instance_hint": "Instance-level errors are not attributed to any organisation (public frontend ingest and org-less backend errors). This view is read-only and for system admins."
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",

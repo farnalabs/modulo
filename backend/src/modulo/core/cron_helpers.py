@@ -5981,6 +5981,41 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
         _log.warning("cron_helpers.terminalized_facts_failed run=%s", run_id, exc_info=True)
 
 
+async def _record_terminalisation_audits(entries: list[tuple[uuid.UUID, uuid.UUID]]) -> None:
+    """Record every run terminalised by dispatcher_reconcile on its audit chain (FAR-1549).
+
+    The terminalizer UPDATEs above commit inside the per-org transaction; this
+    helper runs AFTER those commits and opens its own RLS-scoped sessions — one
+    per organisation — so an audit failure can neither roll back nor be rolled
+    back by the sweep. Each run is re-selected and only recorded when its live
+    status is still terminal (the same phantom guard the facts helper applies),
+    so ids collected from a transaction that later rolled back are skipped.
+
+    SYSTEM actor (no request principal exists for a cron tick), fail-open: a
+    failure is logged under ``log_key`` and swallowed — the terminal write has
+    already happened and must not be turned into a tick failure by its own
+    record.
+    """
+    if not entries:
+        return
+    from modulo.core.audit_logger.background import record_run_state_change_audits
+
+    try:
+        await record_run_state_change_audits(
+            _open_factory(),
+            entries,
+            event_type="run.sweep_terminalised",
+            expected_statuses=TERMINAL_STATUSES,
+            actor_source="dispatcher_reconcile",
+            log_key="cron_helpers.terminalized_audit_failed",
+            summary_prefix="Run terminalised by background sweep:",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.terminalized_audits_failed", exc_info=True)
+
+
 async def run_classification_reconcile() -> dict[str, int]:
     """FAR-189 backfill: classify terminal runs missed by the inline hook.
 
@@ -6486,6 +6521,13 @@ async def _dispatcher_reconcile_body(
             summary["facts_deferred"] += len(terminalized_run_ids) - facts_written
             break
         await _record_fact_for_terminalized_run(run_id, run_org_id)
+    # FAR-1549 — record every run terminalised this tick on its org's audit
+    # chain. Unlike the facts loop above this is deliberately UNCAPPED: a
+    # dropped daily fact is re-derivable from the run row on the next backfill,
+    # a dropped audit event is not, and the helper amortises the cost across
+    # ONE session per ORG (not one per run) so a terminalizer backlog cannot
+    # blow the tick budget the way per-run sessions would.
+    await _record_terminalisation_audits(terminalized_run_ids)
     # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
     # dispatched a node are the recurring ~30/week executor_stalled class;
     # a burst here points at degraded workers/sandboxes, not capacity.

@@ -37,6 +37,8 @@ from modulo.auth.oauth import (
     UnauthorizedClientError,
     compute_pkce_challenge,
     create_oauth_access_token,
+    create_oauth_refresh_token,
+    decode_oauth_refresh_token,
     validate_client_scopes,
 )
 from modulo.core.audit_coverage import audit_session
@@ -873,6 +875,130 @@ class TestPKCEEnforcement:
 
         assert resp.status_code == 400
         assert resp.json()["error"] == "invalid_grant"
+
+
+# ---------------------------------------------------------------------------
+# Scenario: refresh_token grant served at the advertised token_endpoint
+# (FAR-1544)
+# ---------------------------------------------------------------------------
+
+
+class TestTokenEndpointRefreshGrant:
+    """RFC 6749 §6: ``POST /mcp/oauth/token`` must serve the refresh grant.
+
+    A standards-compliant client refreshes at the advertised
+    ``token_endpoint`` from discovery, not at the bespoke
+    ``/mcp/oauth/refresh`` alias — before FAR-1544 this route answered
+    ``unsupported_grant_type`` and the client lost its session at token
+    expiry. These tests drive the real handler's grant dispatch: only the
+    DB-backed seams (client lookup, live-role check, session factory) are
+    stubbed — the refresh token is minted and decoded for real.
+    """
+
+    ENDPOINT = "/mcp/oauth/token"
+
+    @staticmethod
+    def _mint_refresh_token(sequence: int = 0) -> str:
+        return create_oauth_refresh_token(
+            "oauth_client_1",
+            _VALID_32,
+            organisation_id=str(_ORG_ID),
+            account_id=str(_USER_ID),
+            scopes=["trigger:run"],
+            token_family="family_1",
+            token_sequence=sequence,
+        )
+
+    def test_refresh_grant_returns_rotated_pair(self, admin_client: TestClient) -> None:
+        old_refresh_token = self._mint_refresh_token()
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+            patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+            patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            mock_validate.return_value = _make_mock_client()
+
+            resp = admin_client.post(
+                self.ENDPOINT,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": old_refresh_token,
+                    "client_id": "oauth_client_1",
+                    "client_secret": "correct_secret",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["token_type"] == "Bearer"
+        assert data["access_token"]
+        # Rotation: the presented refresh token is invalidated by a new one.
+        new_refresh_token = data["refresh_token"]
+        assert new_refresh_token != old_refresh_token
+        claims = decode_oauth_refresh_token(new_refresh_token, _VALID_32)
+        assert claims.token_sequence == 1
+        assert claims.token_family == "family_1"
+        assert claims.account_id == _USER_ID
+
+    def test_malformed_refresh_token_is_invalid_grant_not_500(self, admin_client: TestClient) -> None:
+        """A bad refresh token must not fall through to the generic 500 handler."""
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+            patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            mock_validate.return_value = _make_mock_client()
+
+            resp = admin_client.post(
+                self.ENDPOINT,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": "not-a-jwt",
+                    "client_id": "oauth_client_1",
+                    "client_secret": "correct_secret",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["error"] == "invalid_grant"
+
+    def test_demoted_account_refresh_via_token_endpoint_denied(self, admin_client: TestClient) -> None:
+        """Error parity with ``/mcp/oauth/refresh``: invalid_grant 400."""
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+            patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+            patch(
+                "modulo.auth.oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(side_effect=InvalidGrantError("Account role does not cover the granted scopes")),
+            ),
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            mock_validate.return_value = _make_mock_client()
+
+            resp = admin_client.post(
+                self.ENDPOINT,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._mint_refresh_token(),
+                    "client_id": "oauth_client_1",
+                    "client_secret": "correct_secret",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["error"] == "invalid_grant"
+        assert body["detail"] == "Refresh token exchange failed"
 
 
 # ---------------------------------------------------------------------------

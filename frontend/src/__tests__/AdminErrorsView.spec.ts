@@ -14,43 +14,58 @@ vi.mock('../lib/api/client', () => ({
 
 vi.mock('../lib/api/schema', () => ({}))
 
+const authState = vi.hoisted(() => ({ isSystemAdmin: false }))
+
+vi.mock('../composables/useCurrentUser', async () => {
+  const { ref } = await import('vue')
+  return {
+    useCurrentUser: () => ({ isSystemAdmin: ref(authState.isSystemAdmin) }),
+  }
+})
+
 const routerMocks = vi.hoisted(() => ({
   push: vi.fn().mockResolvedValue(undefined),
+  query: null as Record<string, unknown> | null,
 }))
 
-vi.mock('vue-router', () => ({
-  useRoute: vi.fn(() => ({
-    path: '/admin/errors',
-    fullPath: '/admin/errors',
-    params: {},
-    query: {},
-    hash: '',
-    matched: [],
-    name: 'admin-errors',
-    redirectedFrom: undefined,
-    meta: {},
-  })),
-  useRouter: vi.fn(() => ({
-    push: routerMocks.push,
-    replace: vi.fn(),
-    resolve: vi.fn(),
-    go: vi.fn(),
-    back: vi.fn(),
-    forward: vi.fn(),
-    beforeEach: vi.fn(),
-    afterEach: vi.fn(),
-    onError: vi.fn(),
-    currentRoute: { value: {} },
-    getRoutes: vi.fn(() => []),
-    addRoute: vi.fn(),
-    removeRoute: vi.fn(),
-    hasRoute: vi.fn(() => false),
-    isReady: vi.fn().mockResolvedValue(undefined),
-    install: vi.fn(),
-  })),
-  createRouter: vi.fn(),
-  createWebHistory: vi.fn(() => ({})),
-}))
+vi.mock('vue-router', async () => {
+  const { reactive } = await import('vue')
+  const query = reactive<Record<string, unknown>>({})
+  routerMocks.query = query as Record<string, unknown>
+  return {
+    useRoute: vi.fn(() => ({
+      path: '/admin/errors',
+      fullPath: '/admin/errors',
+      params: {},
+      query,
+      hash: '',
+      matched: [],
+      name: 'admin-errors',
+      redirectedFrom: undefined,
+      meta: {},
+    })),
+    useRouter: vi.fn(() => ({
+      push: routerMocks.push,
+      replace: vi.fn(),
+      resolve: vi.fn(),
+      go: vi.fn(),
+      back: vi.fn(),
+      forward: vi.fn(),
+      beforeEach: vi.fn(),
+      afterEach: vi.fn(),
+      onError: vi.fn(),
+      currentRoute: { value: {} },
+      getRoutes: vi.fn(() => []),
+      addRoute: vi.fn(),
+      removeRoute: vi.fn(),
+      hasRoute: vi.fn(() => false),
+      isReady: vi.fn().mockResolvedValue(undefined),
+      install: vi.fn(),
+    })),
+    createRouter: vi.fn(),
+    createWebHistory: vi.fn(() => ({})),
+  }
+})
 
 import AdminErrorsView from '../views/AdminErrorsView.vue'
 import { api } from '../lib/api/client'
@@ -67,6 +82,8 @@ function mountView() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  authState.isSystemAdmin = false
+  if (routerMocks.query) delete routerMocks.query.scope
   getMock.mockResolvedValue({ items: [], total: 0 })
 })
 
@@ -366,6 +383,97 @@ describe('AdminErrorsView', () => {
 
     const scrollRoot = tableWrapper.find('div')
     expect(scrollRoot.classes()).toContain('overflow-x-auto')
+    wrapper.unmount()
+  })
+
+  it('system admin sees the scope control and the instance scope reads the sentinel endpoint (FAR-1547)', async () => {
+    authState.isSystemAdmin = true
+    routerMocks.query!.scope = 'instance'
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-errors-scope"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-errors-scope-instance"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="admin-errors-scope-organisation"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.find('[data-testid="admin-errors-scope-hint"]').exists()).toBe(true)
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors/instance', expect.objectContaining({
+      params: { query: expect.objectContaining({ offset: 0, limit: 20 }) },
+    }))
+    expect(api.GET).not.toHaveBeenCalledWith('/api/v1/errors/scheduler-starvation')
+    expect(wrapper.text()).toContain('No instance-scope error groups found')
+    wrapper.unmount()
+  })
+
+  it('system admin scope switch pushes the query and the scope watcher reloads (FAR-1547)', async () => {
+    authState.isSystemAdmin = true
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    // Organisation is the default; the block renders and the hint is absent.
+    expect(wrapper.find('[data-testid="admin-errors-scope"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-errors-scope-organisation"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="admin-errors-scope-hint"]').exists()).toBe(false)
+
+    const vm = wrapper.vm as unknown as { setScope: (s: 'organisation' | 'instance') => void }
+    // No-op when re-selecting the active scope.
+    vm.setScope('organisation')
+    expect(routerMocks.push).not.toHaveBeenCalled()
+
+    vm.setScope('instance')
+    expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors', query: { scope: 'instance' } })
+
+    // Driving the reactive route query flips the computed scope -> watcher
+    // resets pagination/expand state and reloads through the new endpoint.
+    routerMocks.query!.scope = 'instance'
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors/instance', expect.anything())
+
+    vm.setScope('organisation')
+    expect(routerMocks.push).toHaveBeenLastCalledWith({ path: '/admin/errors', query: {} })
+    wrapper.unmount()
+  })
+
+  it('instance scope navigates to the detail view carrying the scope query (FAR-1547)', async () => {
+    authState.isSystemAdmin = true
+    routerMocks.query!.scope = 'instance'
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { navigateToDetail: (id: string) => void }
+    vm.navigateToDetail('eg-instance-1')
+    expect(routerMocks.push).toHaveBeenCalledWith({ path: '/admin/errors/eg-instance-1', query: { scope: 'instance' } })
+    wrapper.unmount()
+  })
+
+  it('a forged ?scope=instance is ignored for a non-system-admin (FAR-1547)', async () => {
+    authState.isSystemAdmin = false
+    routerMocks.query!.scope = 'instance'
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-errors-scope"]').exists()).toBe(false)
+    expect(api.GET).toHaveBeenCalledWith('/api/v1/errors', expect.anything())
+    expect(api.GET).not.toHaveBeenCalledWith('/api/v1/errors/instance', expect.anything())
+    wrapper.unmount()
+  })
+
+  it('swallows a scheduler-starvation fetch failure and renders no banner (FAR-604)', async () => {
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors/scheduler-starvation') throw new Error('starvation boom')
+      return { items: [], total: 0 }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="scheduler-starvation"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

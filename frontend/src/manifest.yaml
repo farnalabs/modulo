@@ -1026,6 +1026,42 @@ elements:
       - testid: admin-audit-next
         type: button
         dynamic_testid: false
+      - testid: admin-audit-source-tabs
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-tab-org
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-tab-system
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-section
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-event-type
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-org-id
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-reset
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-status
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-next
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -1414,6 +1450,18 @@ elements:
       - testid: admin-errors-reset
         type: button
         dynamic_testid: false
+      - testid: admin-errors-scope
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-scope-hint
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-scope-instance
+        type: button
+        dynamic_testid: false
+      - testid: admin-errors-scope-organisation
+        type: button
+        dynamic_testid: false
       - testid: filter-bar-search
         type: input
         dynamic_testid: false
@@ -1441,6 +1489,9 @@ elements:
         dynamic_testid: false
       - testid: admin-error-detail-events-prev
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-instance-readonly
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-loading
         type: element
@@ -5694,6 +5745,7 @@ features:
         behaviours:
             # OTel trace span capture (FAR-198 instrumentation)
             - "[x] OTel *trace* span capture is BDD-exercised against the REAL LangGraphOtelBridge seams (otel_traces.feature, network-free and DB-free): chain spans stamp the set_run_context organisation_id / pipeline_id attributes per node execution, a tool callback becomes a child span under its parent node span (child parent.span_id == parent context.span_id), connector callbacks carry no credential fields in span attributes, and a telemetry-disabled provider (no span processor) exports no spans"
+            - "[x] The error dashboard reads BOTH partitions with a hard tenancy boundary (FAR-1547): /admin/errors defaults to the caller's organisation (GET /api/v1/errors pinned to principal.organisation_id), while a system admin can switch to the instance scope and read the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed errors from the public frontend ingest and org-less backend errors) through GET /api/v1/errors/instance, /instance/{error_id} and /instance/{error_id}/events, gated by the system permission errors.resolve_instance; a tenant principal is refused 403 before any query runs (the scope toggle is not even rendered without the is_system_admin claim), each instance read RLS-pins the transaction to the sentinel org so the org-only policies pass, and the instance detail is read-only (no instance-scope PATCH) — AdminErrorsView.vue / AdminErrorDetailView.vue scope switch, backend/src/modulo/api/routes/errors.py, backend/tests/unit/error_tracking/test_error_instance_scope.py"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
         status: covered

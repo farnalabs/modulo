@@ -11,9 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_system_permission
+from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
 from modulo.api.middleware.sensitive_mask import is_sensitive_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.db.crud.system_config import delete_config, list_config, update_config
@@ -87,7 +86,7 @@ class SetConfigRequest(BaseModel):
 
 @router.put(
     "/{key}",
-    dependencies=[Depends(audited("system_config_updated", "system_config", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("system_config_updated", "system_config", principal_dep=resolve_audit_principal))],
     responses={
         409: {"description": "Conflict"},
         500: {"description": "Internal Server Error"},
@@ -144,7 +143,7 @@ async def admin_set_config(
             audited(
                 "system_config_deleted",
                 "system_config",
-                principal_dep=get_current_tenant_user,
+                principal_dep=resolve_audit_principal,
                 fail_closed=True,
             )
         )

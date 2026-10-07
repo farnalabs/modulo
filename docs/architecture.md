@@ -777,10 +777,17 @@ Compose files (`docker-compose*.yml` at the repo root; the non-default ones live
 
 A maintained, vendor-neutral Helm chart ships at `deploy/helm/modulo/`
 (validated end-to-end on EKS, FAR-1052, 2026-09-23). It deploys the Modulo
-stack; the Kubernetes runtime provider that runs agent workspaces as pods is
-not built yet (FAR-1051), so agents still execute via the Docker/E2B
-providers. Docker Compose (`deploy/compose/docker-compose.prod.yml`) remains
-the default self-hosted install; the managed deployment path is Fly.io.
+stack; the Kubernetes runtime provider that runs agent workspaces as
+long-lived pods also ships (FAR-1051) - enabled with
+`MODULO_KUBERNETES_ENABLED` and selected per dispatch via an Environment
+Profile with `provider_type: kubernetes`, so agents run under the customer's
+ServiceAccount in their own cluster - and its kind conformance gate is green
+(FAR-1053), while the scheduled managed-cluster leg has not run yet (its
+kubeconfig secrets are not provisioned); see
+`docs/deployment/k8s-conformance-parity.md`, or the public reader-facing
+guide at https://modulo.run/docs/kubernetes. Docker Compose
+(`deploy/compose/docker-compose.prod.yml`) remains the default self-hosted
+install; the managed deployment path is Fly.io.
 
 ### Redis dependency
 

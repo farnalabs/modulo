@@ -5,7 +5,18 @@ import { nextTick } from 'vue'
 
 const routeState = vi.hoisted(() => ({
   params: { id: 'err-1' } as Record<string, string>,
+  query: {} as Record<string, unknown>,
 }))
+
+const authState = vi.hoisted(() => ({ isSystemAdmin: false }))
+const routerPush = vi.hoisted(() => vi.fn())
+
+vi.mock('../composables/useCurrentUser', async () => {
+  const { ref } = await import('vue')
+  return {
+    useCurrentUser: () => ({ isSystemAdmin: ref(authState.isSystemAdmin) }),
+  }
+})
 
 const { fetchGroupMock, updateGroupMock, fetchEventsMock, getMock } = vi.hoisted(() => ({
   fetchGroupMock: vi.fn(),
@@ -19,14 +30,14 @@ vi.mock('vue-router', () => ({
     path: '/admin/errors/err-1',
     fullPath: '/admin/errors/err-1',
     params: routeState.params,
-    query: {},
+    query: routeState.query,
     hash: '',
     matched: [],
     name: 'admin-error-detail',
     redirectedFrom: undefined,
     meta: {},
   })),
-  useRouter: vi.fn(() => ({ push: vi.fn(), replace: vi.fn() })),
+  useRouter: vi.fn(() => ({ push: routerPush, replace: vi.fn() })),
   createRouter: vi.fn(),
   createWebHistory: vi.fn(() => ({})),
 }))
@@ -43,6 +54,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import AdminErrorDetailView from '../views/AdminErrorDetailView.vue'
+import BackLink from '../components/BackLink.vue'
 
 function groupDetail(over: Record<string, unknown> = {}) {
   return {
@@ -93,7 +105,10 @@ describe('AdminErrorDetailView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    authState.isSystemAdmin = false
     routeState.params = { id: 'err-1' }
+    routeState.query = {}
+    routerPush.mockClear()
     fetchGroupMock.mockResolvedValue(groupDetail())
     fetchEventsMock.mockResolvedValue(eventsPage([eventRow()], 1))
     getMock.mockResolvedValue({
@@ -258,5 +273,64 @@ describe('AdminErrorDetailView', () => {
 
     expect(wrapper.text()).toContain('Error Group Detail')
     expect(wrapper.text()).not.toContain('Acknowledge')
+  })
+
+  it('instance scope reads the sentinel endpoints, renders read-only and skips tenant actions (FAR-1547)', async () => {
+    authState.isSystemAdmin = true
+    routeState.query = { scope: 'instance' }
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors/instance/{error_id}') {
+        return { data: groupDetail(), error: undefined }
+      }
+      if (path === '/api/v1/errors/instance/{error_id}/events') {
+        return { data: eventsPage([eventRow()], 1), error: undefined }
+      }
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountView()
+    await flush()
+
+    expect(getMock).toHaveBeenCalledWith('/api/v1/errors/instance/{error_id}', {
+      params: { path: { error_id: 'err-1' } },
+    })
+    expect(fetchGroupMock).not.toHaveBeenCalled()
+    expect(fetchEventsMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="admin-error-detail-instance-readonly"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Acknowledge')
+    // The assignee picker lives in the tenant-only actions card.
+    expect(getMock).not.toHaveBeenCalledWith('/api/v1/admin/users')
+    wrapper.unmount()
+  })
+
+  it('instance scope back link and goBack carry the scope query (FAR-1547)', async () => {
+    authState.isSystemAdmin = true
+    routeState.query = { scope: 'instance' }
+    getMock.mockImplementation(async (path: string) => {
+      if (path === '/api/v1/errors/instance/{error_id}') {
+        return { data: groupDetail(), error: undefined }
+      }
+      if (path === '/api/v1/errors/instance/{error_id}/events') {
+        return { data: eventsPage([], 0), error: undefined }
+      }
+      return { data: { items: [] }, error: undefined }
+    })
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.findComponent(BackLink).props('to')).toBe('/admin/errors?scope=instance')
+    const vm = wrapper.vm as unknown as { goBack: () => void }
+    vm.goBack()
+    expect(routerPush).toHaveBeenCalledWith({ path: '/admin/errors', query: { scope: 'instance' } })
+    wrapper.unmount()
+  })
+
+  it('organisation scope goBack returns to the dashboard without a scope query (FAR-1547)', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    const vm = wrapper.vm as unknown as { goBack: () => void }
+    vm.goBack()
+    expect(routerPush).toHaveBeenCalledWith('/admin/errors')
+    wrapper.unmount()
   })
 })
