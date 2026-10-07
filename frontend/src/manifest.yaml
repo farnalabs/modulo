@@ -3677,6 +3677,9 @@ elements:
       - testid: run-detail-breadcrumb-runs
         type: link
         dynamic_testid: false
+      - testid: run-detail-dispatched
+        type: element
+        dynamic_testid: false
       - testid: run-detail-copy-run-id
         type: button
         dynamic_testid: false
