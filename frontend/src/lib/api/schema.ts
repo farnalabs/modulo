@@ -10274,7 +10274,7 @@ export interface components {
          * AnalyticsDimension
          * @enum {string}
          */
-        AnalyticsDimension: "trigger_type" | "trigger_id" | "status" | "pipeline" | "folder" | "team" | "error_code";
+        AnalyticsDimension: "trigger_type" | "trigger_id" | "status" | "pipeline" | "folder" | "team" | "error_code" | "execution_origin";
         /**
          * AnalyticsExportItem
          * @description One raw fact row — all fact columns, serialised to JSON-safe values.
@@ -10362,6 +10362,8 @@ export interface components {
             dispatch_phase_entered_at?: string | null;
             /** Node Deadline Watchdog Fired Count */
             node_deadline_watchdog_fired_count?: number | null;
+            /** Execution Origin */
+            execution_origin?: string | null;
             /** Created At */
             created_at: string;
         };
@@ -13845,6 +13847,8 @@ export interface components {
             completed_at?: string | null;
             /** Provenance */
             provenance?: string | null;
+            /** Execution Origin */
+            execution_origin?: string | null;
         };
         /**
          * JourneySelfReportRequest
@@ -17505,6 +17509,8 @@ export interface components {
             status: string;
             /** Trigger Type */
             trigger_type: string;
+            /** Execution Origin */
+            execution_origin?: string | null;
             /**
              * Created At
              * Format: date-time
