@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick as vueNextTick } from 'vue'
 import type { Mock } from 'vitest'
 
 async function nextTick() { await vueNextTick(); await flushPromises() }
+
+// The view schedules debounced refetches; without unmounting, a pending timer
+// leaks past its spec and fires into a later spec's shared API mock (observed
+// as a flaky system-ledger pagination assertion). Auto-unmount every wrapper so
+// the component cancels its timers on teardown.
+enableAutoUnmount(afterEach)
 
 vi.mock('../lib/api/client', () => ({
   api: {
