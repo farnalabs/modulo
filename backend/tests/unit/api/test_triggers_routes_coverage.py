@@ -19,13 +19,16 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.triggers import _require_team_gate_in_txn
+from modulo.api.team_scope import TeamGateDenial
 from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.settings import Settings, get_settings
 
@@ -1060,3 +1063,59 @@ def test_list_pipeline_triggers_happy_path_with_type_filter(client: tuple[TestCl
     body = resp.json()
     assert len(body["items"]) == 2
     assert body["items"][0]["created_at"] == _NOW.isoformat()
+
+
+def _tenant_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+def _pipeline_result(pipeline: MagicMock | None) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=pipeline)
+    return result
+
+
+class TestRequireTeamGateInTxn:
+    """FAR-1513: the in-txn re-verification guard's own deny/allow branches.
+
+    The route coverage matrix stubs this helper, so its two deny arms (absent
+    pipeline -> 404, shared-matrix denial -> denial status) are exercised here
+    directly against a mocked session.
+    """
+
+    async def test_absent_pipeline_raises_404(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_pipeline_result(None))
+
+        with (
+            patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
+            patch(f"{_PREFIX}set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await _require_team_gate_in_txn(session, _tenant_principal(), _PIPELINE_ID)
+
+        assert exc.value.status_code == 404
+
+    async def test_shared_matrix_denial_raises_with_denial_status(self) -> None:
+        pipeline = MagicMock()
+        pipeline.owner_team_id = uuid.uuid4()
+        pipeline.visibility = "team"
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_pipeline_result(pipeline))
+        denial = TeamGateDenial(kind="membership", status_code=403, detail="Not a member")
+
+        with (
+            patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
+            patch(f"{_PREFIX}set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            patch(f"{_PREFIX}evaluate_team_gate", AsyncMock(return_value=denial)),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await _require_team_gate_in_txn(session, _tenant_principal(), _PIPELINE_ID)
+
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "Not a member"

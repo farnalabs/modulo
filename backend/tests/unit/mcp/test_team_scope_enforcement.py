@@ -23,6 +23,7 @@ import pytest
 from modulo.api.mcp_server import (
     _ctx_team_id,
     _ctx_team_id_val,
+    _pipeline_team_gate,
     _team_scope_error,
     _team_scoped_key_mismatch,
     bind_connector_to_node,
@@ -1560,3 +1561,39 @@ class TestTriggerUserMembershipGate(_OperatorAuthContext):
     # tool resolves _ctx_user_id_val() BEFORE the gate and raises
     # McpAuthContextError — so the fail-closed unset-user row is asserted at
     # the matrix level (TestUserTeamPrivateDenial::test_unset_user_context_denied).
+
+
+class TestPipelineTeamGateHelper(_AuthContext):
+    """Direct unit coverage of ``_pipeline_team_gate`` (FAR-1513).
+
+    The tool-level tests patch ``pipeline_team_scope_team_blind`` and assert on
+    the tools; these assert the helper's own resolved-row branches: an absent
+    row yields the ``pipeline_not_found`` envelope, and a team-scoped key on
+    its own team's row passes (returned owner, no denial) without consulting
+    the membership matrix.
+    """
+
+    async def test_absent_row_returns_pipeline_not_found(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",
+            AsyncMock(return_value=None),
+        ):
+            owner, denial = await _pipeline_team_gate(session, uuid.uuid4())
+
+        assert owner is None
+        assert denial is not None
+        assert denial["error"] == "pipeline_not_found"
+
+    async def test_team_scoped_key_on_own_team_row_passes(self) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with patch(
+            "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",
+            AsyncMock(return_value=scope),
+        ):
+            owner, denial = await _pipeline_team_gate(session, uuid.uuid4())
+
+        assert owner == _TEAM_A
+        assert denial is None

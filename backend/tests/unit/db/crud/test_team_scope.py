@@ -9,11 +9,16 @@ that path without a database.
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.db.crud.team_scope import pipelines_binding_connector
+from modulo.db.crud.team_scope import (
+    BlindPipelineScope,
+    pipeline_team_scope_team_blind,
+    pipelines_binding_connector,
+)
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_PIPELINE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
 
 
 async def test_pipelines_binding_connector_returns_the_prefilter_rows() -> None:
@@ -47,3 +52,54 @@ async def test_pipelines_binding_connector_returns_empty_when_nothing_binds() ->
 
     assert rows == []
     assert session.execute.await_count == 1
+
+
+def _first_result(row: object) -> MagicMock:
+    result = MagicMock()
+    result.first = MagicMock(return_value=row)
+    return result
+
+
+async def test_pipeline_team_scope_team_blind_non_postgres_absent_row_returns_none() -> None:
+    # Off Postgres there is no team RLS policy, so the plain org-scoped read IS
+    # the team-blind view. An absent row must resolve to None (not raise).
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_first_result(None))
+
+    with patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="sqlite")):
+        scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
+
+    assert scope is None
+    assert session.execute.await_count == 1
+
+
+async def test_pipeline_team_scope_team_blind_postgres_reads_then_clears_guc() -> None:
+    # On Postgres the read flips the execution-context GUC on, reads the row,
+    # then clears the GUC in the finally so the rest of the txn stays
+    # caller-facing. Two execute calls: the read + the GUC clear.
+    owner = uuid.uuid4()
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_first_result((owner, "team")))
+
+    with (
+        patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
+        patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_set,
+    ):
+        scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
+
+    assert scope == BlindPipelineScope(owner_team_id=owner, visibility="team")
+    mock_set.assert_awaited_once_with(session)
+    assert session.execute.await_count == 2
+
+
+async def test_pipeline_team_scope_team_blind_postgres_absent_row_returns_none() -> None:
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_first_result(None))
+
+    with (
+        patch("modulo.db.rls._ensure_active_transaction", AsyncMock(return_value="postgresql")),
+        patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock),
+    ):
+        scope = await pipeline_team_scope_team_blind(session, _PIPELINE_ID)
+
+    assert scope is None
