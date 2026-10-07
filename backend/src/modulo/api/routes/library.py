@@ -72,6 +72,12 @@ from modulo.core.lifecycle_map.import_export import (
 )
 from modulo.core.lifecycle_map.validation import LifecycleMapContentError, LifecycleMapPipelineConflictError
 from modulo.core.pipeline_engine.git_content import GitContentRefError
+from modulo.core.team_visibility import (
+    ConnectorBindingMissingError,
+    connector_team_mismatch_detail,
+    extract_connector_bindings,
+    find_connector_team_mismatches,
+)
 from modulo.core.workflow_import_export import (
     export_pipeline_bundle,
     export_pipeline_bundle_v2,
@@ -1443,6 +1449,46 @@ async def analyse_import_bundle_endpoint(
 # ---------------------------------------------------------------------------
 
 
+async def _enforce_imported_connector_team_gate(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    owner_team_id: uuid.UUID | None,
+    bindings: list[dict[str, Any]],
+) -> None:
+    """FAR-1515 MAJOR 4: a confirmed import must not bypass the connector gate.
+
+    ``materialize_import`` accepts an ``owner_team_id``, rewires each node's
+    ``connector_binding`` to a real org connector, and writes the graph — with
+    no team check of its own, so an import could persist a team pipeline
+    pinning an org-only (or another team's) connector, which every graph-save
+    path refuses. ``bindings`` are the REWIRED bindings materialize just
+    returned (after rewiring, in hand without a second read), and this runs
+    INSIDE the import transaction, so the named 409 rolls the whole import
+    back rather than leaving half-created entities.
+
+    An empty binding list is a no-op — the gate has nothing to judge.
+    """
+    if not bindings:
+        return
+    try:
+        mismatches = await find_connector_team_mismatches(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=owner_team_id,
+            connector_bindings=bindings,
+        )
+    except ConnectorBindingMissingError as exc:
+        # FAR-1515 CRITICAL 1: same named 409 as the graph-save paths — an
+        # unresolvable binding must not import any more than it must save.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(mismatches),
+        )
+
+
 @router.post(
     "/import/confirm",
     dependencies=[Depends(audited("library_import_confirmed", "pipeline", principal_dep=get_current_tenant_user))],
@@ -1482,6 +1528,16 @@ async def confirm_import_endpoint(
                 schema_id_overrides=req.schema_overrides,
                 schema_version_overrides=req.schema_version_overrides,
                 connector_instance_overrides=req.connector_overrides,
+            )
+            # FAR-1515 MAJOR 4: the import rewires and writes the graph with
+            # the import's owner team — gate the REWIRED bindings materialize
+            # just returned the same way every graph-save path does, inside
+            # the same transaction.
+            await _enforce_imported_connector_team_gate(
+                session,
+                org_id=principal.organisation_id,
+                owner_team_id=req.owner_team_id,
+                bindings=list(result.get("connector_bindings") or []),
             )
     except GitContentRefError as exc:
         _log.warning("confirm_import_endpoint: unpinned git-content agent prompt rejected: %s", exc)
@@ -2327,6 +2383,28 @@ async def install_collection_endpoint(
                 created_by=principal.account_id,
                 collection_id=primitive_id,
             )
+            # FAR-1515 MAJOR 4: a collection install materialises the same
+            # rewired graph as a workflow import — run the same connector-team
+            # gate (collection installs carry no owner team, so only the
+            # team-private-connector direction can fire). Rolls the whole
+            # install back with the import it guards. The freshly-created
+            # pipeline is read back inside the same transaction; a manifest
+            # without a pipeline id (test doubles, partial provenance) has
+            # nothing to gate.
+            installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
+            if installed_pipeline_id:
+                # str() accepts both the real str id and a UUID instance.
+                installed_pipeline = await get_pipeline(session, uuid.UUID(str(installed_pipeline_id)))
+                await _enforce_imported_connector_team_gate(
+                    session,
+                    org_id=org_id,
+                    owner_team_id=None,
+                    bindings=(
+                        extract_connector_bindings(list(installed_pipeline.graph_nodes_json or []))
+                        if installed_pipeline is not None
+                        else []
+                    ),
+                )
     except GitContentRefError as exc:
         _log.warning("install_collection_endpoint: unpinned git-content agent prompt rejected: %s", exc)
         raise HTTPException(

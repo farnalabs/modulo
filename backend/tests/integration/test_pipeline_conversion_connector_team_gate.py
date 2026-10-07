@@ -26,6 +26,12 @@ the caller's rights are not under test here.
 The third test is the load-bearing one: the SAME request, with the enforcement
 patched out of the save path, must get past the connector gate. Without it, a
 green 409 would only prove that SOMETHING rejected the request.
+
+FAR-1515 widened the gate to BOTH directions, so the direction matrix here is:
+a team-private connector from another team -> 409; a team pipeline pinning an
+ORG-ONLY connector -> 409 (every run of that graph is team-scoped and would be
+rejected at the connector gate); a team pipeline with its own team's connector
+-> accepted; an ORG pipeline with an org connector -> accepted (unchanged).
 """
 
 from __future__ import annotations
@@ -155,11 +161,18 @@ async def _seed_pipeline_with_manual_node(
     db_engine: AsyncEngine,
     org_id: uuid.UUID,
     account_id: uuid.UUID,
-    team_id: uuid.UUID,
+    team_id: uuid.UUID | None,
     *,
     node: dict[str, object],
 ) -> uuid.UUID:
+    """A committed pipeline holding one manual node.
+
+    ``team_id=None`` seeds an ORG-scoped pipeline (``visibility='org'``,
+    ``owner_team_id=NULL``) — the FAR-1515 "does an org pipeline still save"
+    direction needs it, and the team gate only fires for a team-owned row.
+    """
     pipeline_id = uuid.uuid4()
+    visibility = "team" if team_id is not None else "org"
     async with db_engine.begin() as conn:
         await conn.execute(
             text(
@@ -167,13 +180,14 @@ async def _seed_pipeline_with_manual_node(
                 "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, "
                 "graph_nodes_json, default_autonomy_level, visibility, owner_team_id) "
                 "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, CAST(:nodes AS json), "
-                "'manual_approval', 'team', :tid)"
+                "'manual_approval', :visibility, :tid)"
             ),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
                 "aid": str(account_id),
-                "tid": str(team_id),
+                "tid": str(team_id) if team_id is not None else None,
+                "visibility": visibility,
                 "name": f"conv-conn-{pipeline_id.hex[:8]}",
                 "nodes": json.dumps([node]),
             },
@@ -256,8 +270,13 @@ async def _seed_scenario(
     *,
     capability_scope: dict[str, object] | None = None,
     agent_connector_type_refs: list[dict[str, object]] | None = None,
+    pipeline_scoped_to_team: bool = True,
 ) -> _Scenario:
     """Team A owns the pipeline; Team B owns the connector bound into it.
+
+    ``pipeline_scoped_to_team=False`` seeds an ORG-scoped pipeline instead
+    (``visibility='org'``, ``owner_team_id=NULL``) — the FAR-1515 direction
+    that must KEEP saving an org-only connector.
 
     ``agent_connector_type_refs`` defaults to a GitHub grant (so the ordinary
     cases have a conforming Agent); the scope-widening test passes ``[]`` so the
@@ -289,7 +308,13 @@ async def _seed_scenario(
         connector_id = await _seed_connector(db_engine, test_org, test_user, team_b)
         created["connectors"].append(connector_id)
         node = _manual_node(capability_scope=capability_scope)
-        pipeline_id = await _seed_pipeline_with_manual_node(db_engine, test_org, test_user, team_a, node=node)
+        pipeline_id = await _seed_pipeline_with_manual_node(
+            db_engine,
+            test_org,
+            test_user,
+            team_a if pipeline_scoped_to_team else None,
+            node=node,
+        )
         created["pipelines"].append(pipeline_id)
     except Exception:
         await _cleanup_partial_seed(db_engine, test_org, created)
@@ -451,6 +476,86 @@ async def test_rejection_comes_from_the_enforcement_itself(
 
 
 # ---------------------------------------------------------------------------
+# 1b. FAR-1515: team pipeline + ORG-ONLY connector is rejected 409
+# ---------------------------------------------------------------------------
+
+
+async def test_org_only_connector_on_team_pipeline_is_rejected_409(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1515: the save must refuse a graph whose every run is dead on arrival.
+
+    The executor scopes a run by ``run.owner_team_id`` and the ConnectorHub ACL
+    fails closed on team-scoped access to an org-only connector (FAR-516), so
+    before this change an operator could persist a team pipeline whose runs
+    could never execute. The 409 carries the named error AND the fix.
+    """
+    scenario = await _seed_scenario(db_engine, test_org, test_user)
+    org_connector = await _seed_org_connector(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{scenario.pipeline_id}/nodes/{scenario.node_id}/convert-to-agent",
+            json=_convert_body(scenario, connector_id=org_connector),
+            headers=_auth_headers(test_org, test_user, role="admin"),
+            timeout=30.0,
+        )
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert "connector_team_mismatch" in detail, resp.text
+        assert "is org-only" in detail, resp.text
+        assert "flip the connector to `team`" in detail, resp.text
+
+        # Nothing was written: the gate fires BEFORE the graph write.
+        async with db_engine.begin() as conn:
+            await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
+            await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
+            raw = (
+                await conn.execute(
+                    text("SELECT graph_nodes_json FROM pipelines WHERE id = :id"),
+                    {"id": str(scenario.pipeline_id)},
+                )
+            ).scalar_one()
+        nodes = json.loads(raw) if isinstance(raw, str) else raw
+        assert nodes, "the seeded node must still be there"
+        assert nodes[0]["node_type"] == "manual", "the rejected conversion must not have been persisted"
+    finally:
+        await _cleanup(db_engine, test_org, scenario, org_connector)
+
+
+async def test_org_pipeline_with_org_connector_is_accepted(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1515: the ORG-pipeline rule must NOT change - org + org still saves.
+
+    Mirrors ``test_same_team_connector_binding_is_accepted``: what matters is
+    that the request is NOT stopped by this gate, so it must not answer 409 /
+    ``connector_team_mismatch``. Whatever the NEXT save-time gate says is out
+    of scope here.
+    """
+    scenario = await _seed_scenario(db_engine, test_org, test_user, pipeline_scoped_to_team=False)
+    org_connector = await _seed_org_connector(db_engine, test_org, test_user)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{scenario.pipeline_id}/nodes/{scenario.node_id}/convert-to-agent",
+            json=_convert_body(scenario, connector_id=org_connector),
+            headers=_auth_headers(test_org, test_user, role="admin"),
+            timeout=30.0,
+        )
+        assert resp.status_code != 409, (
+            f"org pipeline + org connector must not be a connector_team_mismatch: {resp.text}"
+        )
+        assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
+    finally:
+        await _cleanup(db_engine, test_org, scenario, org_connector)
+
+
+# ---------------------------------------------------------------------------
 # 2. FAR-418 capability-scope widening: 422
 # ---------------------------------------------------------------------------
 
@@ -477,20 +582,22 @@ async def test_scope_widening_binding_is_rejected_422(
         # widen (github not in the grant set) rather than a narrowing.
         agent_connector_type_refs=[],
     )
-    # The connector must be ORG-visible here: a cross-team 409 would fire first
-    # and mask the scope violation this test is about.
-    org_connector = await _seed_org_connector(db_engine, test_org, test_user)
+    # The connector must clear the team gate here: since FAR-1515 an ORG-only
+    # connector on this TEAM pipeline is its own 409, which would fire first
+    # and mask the scope violation this test is about. Team A owns the
+    # pipeline, so a Team-A connector is the one binding that passes.
+    team_a_connector = await _seed_connector(db_engine, test_org, test_user, scenario.team_a)
     try:
         resp = await integration_client.post(
             f"/api/v1/pipelines/{scenario.pipeline_id}/nodes/{scenario.node_id}/convert-to-agent",
-            json=_convert_body(scenario, connector_id=org_connector),
+            json=_convert_body(scenario, connector_id=team_a_connector),
             headers=_auth_headers(test_org, test_user, role="admin"),
             timeout=30.0,
         )
         assert resp.status_code == 422, resp.text
         assert "scope.violation" in str(resp.json()["detail"]), resp.text
     finally:
-        await _cleanup(db_engine, test_org, scenario, org_connector)
+        await _cleanup(db_engine, test_org, scenario, team_a_connector)
 
 
 async def _seed_org_connector(db_engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:

@@ -30,6 +30,7 @@ from modulo.core.graph_validator._types import ValidationResult
 from modulo.core.pipeline_engine.git_content import GitContentRefError, validate_agent_git_content_values
 from modulo.core.runner_bindings import BindingValidationError, validate_binding_pair
 from modulo.core.secret_patterns import is_sensitive_env_key, is_sensitive_key, mask_secret_values_in_text
+from modulo.core.team_visibility import extract_connector_bindings
 from modulo.db.crud.account import get_account_by_email
 from modulo.db.crud.agent import create_agent
 from modulo.db.crud.agent_runner_binding import replace_agent_bindings
@@ -1478,7 +1479,15 @@ def _build_import_result(
     schema_id_map: dict[str, str],
     warnings: list[str],
 ) -> dict[str, Any]:
-    """Build the import result dict and log the completion summary."""
+    """Build the import result dict and log the completion summary.
+
+    ``connector_bindings`` (FAR-1515 MAJOR 4) carries the REWIRED connector
+    bindings of the just-created pipeline (snapshot binding shape) so the
+    confirm endpoint can run the connector-team gate on exactly what was
+    written — after rewiring, inside the import transaction — without a
+    second read of the session. Callers that patch ``materialize_import``
+    and omit the key are treated as importing a graph with no bindings.
+    """
     logger.info(
         "Imported pipeline '%s' (id=%s) with %d agents, %d edges, %d schemas",
         _sanitise_log_value(pname),
@@ -1498,6 +1507,7 @@ def _build_import_result(
         "agents": agent_id_map,
         "schemas": schema_id_map,
         "warnings": warnings,
+        "connector_bindings": extract_connector_bindings(list(pipeline.graph_nodes_json or [])),
     }
 
 
