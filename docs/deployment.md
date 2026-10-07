@@ -563,9 +563,15 @@ and which follow-ups remain open.
 
 **Stack versus runtime provider.** The chart installs the stack, not the agent
 runtime. The Kubernetes *runtime provider*, which runs agent workspaces as
-pods, is not available yet (tracked as FAR-1051). On Kubernetes today, agents
-therefore still execute through the Docker or E2B runtime providers; the K8s
-runtime provider is the recommended future shape.
+long-lived pods, ships on main (FAR-1051): an admin enables it with
+`MODULO_KUBERNETES_ENABLED` and selects it per dispatch with an Environment
+Profile whose `provider_type` is `kubernetes`, and agents then run as
+long-lived pods in the customer's cluster under that cluster's ServiceAccount
+(`MODULO_KUBERNETES_SERVICE_ACCOUNT`). The kind conformance gate is green
+(FAR-1053); the scheduled managed-cluster leg has not run yet - its kubeconfig
+secrets are not provisioned - so no managed cluster is claimed
+(`docs/deployment/k8s-conformance-parity.md` records exactly what each leg
+proves). Chart setup and validation status: `deploy/helm/modulo/README.md`.
 
 **Supported paths remain unchanged:** Docker Compose
 (`deploy/compose/docker-compose.prod.yml`) is the default server/production
