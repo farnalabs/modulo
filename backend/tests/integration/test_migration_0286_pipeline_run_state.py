@@ -77,6 +77,21 @@ def _swap_db_name(db_url: str, new_db: str) -> str:
     return urlunparse(parsed._replace(path=f"/{new_db}"))
 
 
+def _migrate(db_url: str, target: str) -> None:
+    """Run an Alembic upgrade with env.py's URL resolution pinned to ``db_url``.
+
+    env.py prefers ``DATABASE_ADMIN_URL``/``DATABASE_URL`` over the Config's
+    ``sqlalchemy.url``, and the session ``db_url`` fixture points those at the
+    shared testcontainer — so an unpinned upgrade silently runs against that
+    already-at-head database and no-ops, leaving the isolated database at
+    ``PREV_REV`` with none of the new columns.
+    """
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setenv("DATABASE_URL", db_url)
+        mp.setenv("DATABASE_ADMIN_URL", db_url)
+        command.upgrade(_alembic_config(db_url), target)
+
+
 def _migration_module() -> Any:
     """Load 0286's module (constants only — ``upgrade()`` needs Alembic's
     migration context, which ``command.upgrade`` provides; the module-level
@@ -114,10 +129,7 @@ async def isolated_db_url(db_url: str) -> AsyncIterator[str]:
         await conn.commit()
     await eng.dispose()
 
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setenv("DATABASE_URL", iso_url)
-        mp.setenv("DATABASE_ADMIN_URL", iso_url)
-        command.upgrade(_alembic_config(iso_url), PREV_REV)
+    _migrate(iso_url, PREV_REV)
 
     yield iso_url
 
@@ -197,7 +209,7 @@ async def test_backfill_folds_tripped_witnesses_into_the_unified_state(isolated_
         )
         clean = await _seed_pipeline(engine, org_id=org_id, account_id=account_id, tripped=False, tripped_at=None)
 
-        command.upgrade(_alembic_config(isolated_db_url), MIGRATION_REV)
+        _migrate(isolated_db_url, MIGRATION_REV)
 
         stamped = await _state(engine, tripped_stamped)
         assert stamped["run_enabled"] is False, "backfill must disable a tripped pipeline"
@@ -246,7 +258,7 @@ async def test_ddl_is_existence_gated_and_the_backfill_is_rerunnable(isolated_db
         async with engine.begin() as conn:
             await conn.execute(text("ALTER TABLE pipelines ADD COLUMN run_enabled BOOLEAN NOT NULL DEFAULT true"))
 
-        command.upgrade(_alembic_config(isolated_db_url), MIGRATION_REV)
+        _migrate(isolated_db_url, MIGRATION_REV)
 
         state = await _state(engine, tripped)
         assert state["run_enabled"] is False
