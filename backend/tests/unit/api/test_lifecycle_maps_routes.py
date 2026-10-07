@@ -1213,6 +1213,46 @@ def test_update_same_team_transfer_still_succeeds() -> None:
     assert resp.status_code == 200, resp.text
 
 
+def test_update_transfer_missing_map_returns_404_before_the_write() -> None:
+    """A transfer for a map that vanished since the team gate answers 404 itself.
+
+    The pre-write ``get_lifecycle_map`` re-read added with the FAR-1514
+    transition check is the route's only chance to observe a row missing from
+    the handler's own view (the gate resolver resolved it, but a concurrent
+    delete can drop it before the write). It must answer 404 BEFORE calling
+    ``update_lifecycle_map`` — not fall through to the write and discover the
+    absence there.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
+        updater = AsyncMock(return_value=_map_row())
+        harness.stub("update_lifecycle_map", updater)
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_TEAM_ID)})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Lifecycle map not found"
+    updater.assert_not_awaited()
+
+
+def test_update_visibility_only_missing_map_returns_404_before_the_write() -> None:
+    """The same pre-write read guards a ``visibility``-only update.
+
+    ``visibility`` alone (no ``owner_team_id``) still triggers the transition
+    check, so a missing row must 404 there too rather than reach the write.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
+        updater = AsyncMock(return_value=_map_row())
+        harness.stub("update_lifecycle_map", updater)
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"visibility": "org"})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Lifecycle map not found"
+    updater.assert_not_awaited()
+
+
 def _rls_denial(sqlstate: str = "42501") -> Exception:
     """A driver error carrying ``sqlstate``, as asyncpg's does."""
 
