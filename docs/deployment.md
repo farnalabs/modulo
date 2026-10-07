@@ -572,6 +572,9 @@ long-lived pods in the customer's cluster under that cluster's ServiceAccount
 secrets are not provisioned - so no managed cluster is claimed
 (`docs/deployment/k8s-conformance-parity.md` records exactly what each leg
 proves). Chart setup and validation status: `deploy/helm/modulo/README.md`.
+The reader-facing guide covering both halves - installing the stack and
+running agent workspaces as pods - is published at
+https://modulo.run/docs/kubernetes.
 
 **Supported paths remain unchanged:** Docker Compose
 (`deploy/compose/docker-compose.prod.yml`) is the default server/production

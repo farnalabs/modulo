@@ -296,7 +296,7 @@ cheaper *and* lower-effort; at sustained high utilisation a modest flat VM
 is usually cheaper — but T2b then carries the whole ops surface and the
 accepted egress gap below. The egress-allowlist requirement is a
 hard discriminator: if you need bounded egress now, T2b cannot provide it
-(choose T2a, or wait for T3).
+(choose T2a, or T3 — its provider ships on main, FAR-1051).
 
 ## 5. What a remote engine does NOT give you
 
@@ -311,10 +311,14 @@ can reach*:
   `network_policy: none` → `--network=none` (loopback only).
 - This is a **decision, not an omission**: a vendor-built egress gateway
   would own a control the operator should own. The bounded answer for
-  self-hosted compute is the **Kubernetes tier (T3, still "to build")**:
-  run Modulo's runner on your cluster and bound the workspace with *your*
-  NetworkPolicy, RBAC, and admission policy. There will be no bespoke
-  egress gateway (this supersedes FAR-1039 — dropped, not deferred).
+  self-hosted compute is the **Kubernetes tier (T3 — provider shipped,
+  FAR-1051)**: run Modulo's runner on your cluster and bound the workspace
+  with *your* NetworkPolicy, RBAC, and admission policy. Its kind
+  conformance gate is green (FAR-1053) but does not exercise workload
+  identity or NetworkPolicy enforcement, and the scheduled managed-cluster
+  leg has not run yet (`docs/deployment/k8s-conformance-parity.md`). There
+  will be no bespoke egress gateway (this supersedes FAR-1039 — dropped,
+  not deferred).
 - The managed-sandbox tier (**T2a / E2B**) is the separate case that
   *does* support bounded egress today: node-level `egress_policy:
   selected` + `egress_allowlist`, an enforced fail-closed allowlist inside

@@ -784,7 +784,8 @@ Profile with `provider_type: kubernetes`, so agents run under the customer's
 ServiceAccount in their own cluster - and its kind conformance gate is green
 (FAR-1053), while the scheduled managed-cluster leg has not run yet (its
 kubeconfig secrets are not provisioned); see
-`docs/deployment/k8s-conformance-parity.md`. Docker Compose
+`docs/deployment/k8s-conformance-parity.md`, or the public reader-facing
+guide at https://modulo.run/docs/kubernetes. Docker Compose
 (`deploy/compose/docker-compose.prod.yml`) remains the default self-hosted
 install; the managed deployment path is Fly.io.
 
