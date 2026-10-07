@@ -1038,7 +1038,7 @@ async def test_dispatch_trigger_run_rejects_non_dict_variables():
     stub = _DispatchVerbStub()
     with pytest.raises(ValueError, match="'variables' must be an object"):
         await nr._run_connector_dispatch(stub, "p", {}, {"variables": "oops"}, "trigger_run")
-    assert stub.calls == []
+    assert not stub.calls
 
 
 async def test_dispatch_trigger_run_passes_dict_variables_through():
