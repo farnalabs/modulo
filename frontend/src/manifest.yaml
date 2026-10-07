@@ -3614,6 +3614,15 @@ elements:
       - testid: copy-wizard-step-indicator
         type: element
         dynamic_testid: false
+      - testid: copy-wizard-loading-skeleton
+        type: element
+        dynamic_testid: false
+      - testid: copy-wizard-empty-no-pipelines
+        type: element
+        dynamic_testid: false
+      - testid: copy-wizard-empty-no-match
+        type: element
+        dynamic_testid: false
       - testid: filter-bar-search
         type: input
         dynamic_testid: false

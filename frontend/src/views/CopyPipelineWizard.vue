@@ -2,7 +2,7 @@
   <div class="min-h-screen bg-background">
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
-        <BackLink to="/pipelines" label="Back to Pipelines" class="mb-2" />
+        <BackLink to="/pipelines" :label="$t('views.CopyPipelineWizard.back_to_pipelines')" class="mb-2" />
         <PageHeader :title="$t('views.CopyPipelineWizard.copy_pipeline')" :subtitle="$t('views.CopyPipelineWizard.duplicate_an_existing_pipeline_and_adapt_it_for_a_new_purpos')" />
       </div>
     </header>
@@ -17,17 +17,23 @@
           <div
             class="flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium transition-colors"
             :class="step === i + 1 ? 'bg-primary text-primary-foreground' : step > i + 1 ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'"
+            :aria-current="step === i + 1 ? 'step' : undefined"
             data-testid="copy-wizard-step-indicator"
           >
-            <svg v-if="step > i + 1" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+            <Check v-if="step > i + 1" class="h-3.5 w-3.5" aria-hidden="true" />
             <span v-else>{{ i + 1 }}</span>
           </div>
-          <span class="text-sm" :class="step === i + 1 ? 'text-foreground font-medium' : 'text-muted-foreground'">{{ s }}</span>
-          <svg v-if="i < steps.length - 1" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" class="text-muted-foreground/40"><polyline points="9 18 15 12 9 6"/></svg>
+          <span class="text-sm" :class="step === i + 1 ? 'text-foreground font-medium' : 'text-muted-foreground'">{{ $t(s) }}</span>
+          <ChevronRight v-if="i < steps.length - 1" class="h-4 w-4 text-muted-foreground/40" aria-hidden="true" />
         </div>
       </div>
 
-      <LoadingSpinner v-if="loading" />
+      <div v-if="loading" class="space-y-2" data-testid="copy-wizard-loading-skeleton">
+        <div v-for="i in 4" :key="i" class="rounded-lg border border-input p-3">
+          <SkeletonBlock height-class="h-4 w-40" />
+          <SkeletonBlock height-class="h-3 w-64 mt-2" />
+        </div>
+      </div>
 
       <ErrorAlert v-else-if="error" :message="error" :on-retry="retry" class="mb-6" />
 
@@ -56,16 +62,21 @@
             </button>
           </div>
 
-          <div v-if="!searchQuery && visibilityFilter === 'all' && pipelines.length === 0" class="card p-8 text-center">
-            <p class="text-lg font-medium">{{ $t('views.CopyPipelineWizard.no_pipelines_available') }}</p>
-            <p class="mt-1 text-sm text-muted-foreground">
-              Create one from the Library first.
-            </p>
-          </div>
+          <EmptyState
+            v-if="!searchQuery && visibilityFilter === 'all' && pipelines.length === 0"
+            class="mt-4"
+            data-testid="copy-wizard-empty-no-pipelines"
+            :title="$t('views.CopyPipelineWizard.no_pipelines_available')"
+            :description="$t('views.CopyPipelineWizard.create_one_from_the_library_first')"
+          />
 
-          <div v-else-if="filteredPipelines.length === 0" class="py-12 text-center text-sm text-muted-foreground">
-            No pipelines match your search.
-          </div>
+          <EmptyState
+            v-else-if="filteredPipelines.length === 0"
+            class="mt-4"
+            data-testid="copy-wizard-empty-no-match"
+            :title="$t('views.CopyPipelineWizard.no_pipelines_match_your_search')"
+            :description="$t('views.CopyPipelineWizard.try_a_different_search_or_visibility_filter')"
+          />
 
           <div v-else class="space-y-2 max-h-96 overflow-y-auto">
             <button
@@ -86,11 +97,11 @@
                   class="shrink-0 badge text-xs"
                   :class="p.visibility === 'org' ? 'badge-context-blue' : 'badge-context-purple'"
                 >
-                  {{ p.visibility === 'org' ? 'Org' : 'Team' }}
+                  {{ p.visibility === 'org' ? $t('views.CopyPipelineWizard.org') : $t('views.CopyPipelineWizard.team') }}
                 </span>
               </div>
               <p class="text-xs text-muted-foreground mt-1.5">
-                Created {{ formatDate(p.created_at) }}
+                {{ $t('views.CopyPipelineWizard.created_on', { date: formatDate(p.created_at) }) }}
               </p>
             </button>
           </div>
@@ -98,7 +109,7 @@
 
         <div class="flex justify-end mt-6">
               <Button :disabled="!selectedPipeline" class="px-6 py-2.5" @click="step = 2" data-testid="copy-wizard-next-step1">
-            Next: Configure Copy
+            {{ $t('views.CopyPipelineWizard.next_configure_copy') }}
           </Button>
         </div>
       </template>
@@ -114,7 +125,7 @@
                 v-model="pipelineName"
                 type="text"
                 class="w-full px-3 py-2 border border-input bg-background rounded-lg text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :placeholder="`Copy of ${selectedPipeline?.name ?? 'Pipeline'}`"
+                :placeholder="defaultName"
                 data-testid="copy-wizard-pipeline-name"
               />
             </div>
@@ -196,10 +207,10 @@
             @click="step = 1"
             data-testid="copy-wizard-back-step2"
           >
-            Back
+            {{ $t('views.CopyPipelineWizard.back') }}
           </button>
           <Button class="px-6 py-2.5" @click="step = 3" data-testid="copy-wizard-next-step2">
-            Next: Review
+            {{ $t('views.CopyPipelineWizard.next_review') }}
           </Button>
         </div>
       </template>
@@ -211,7 +222,7 @@
           <div class="space-y-4">
             <div class="bg-muted rounded-lg p-4">
               <h3 class="text-sm font-medium text-foreground mb-2">{{ $t('views.CopyPipelineWizard.source_pipeline') }}</h3>
-              <p class="text-sm text-foreground">{{ selectedPipeline?.name }}</p>
+              <p class="text-sm text-foreground">{{ selectedPipeline?.name || '—' }}</p>
               <p v-if="selectedPipeline?.description" class="text-xs text-muted-foreground mt-0.5">{{ selectedPipeline?.description }}</p>
             </div>
 
@@ -222,7 +233,7 @@
               </div>
               <div class="bg-muted rounded-lg p-4">
                 <p class="text-xs text-muted-foreground mb-1">{{ $t('views.CopyPipelineWizard.visibility') }}</p>
-                <p class="text-sm font-medium text-foreground">{{ ownership.visibility === 'org' ? 'Org-wide' : 'Team' }}</p>
+                <p class="text-sm font-medium text-foreground">{{ ownership.visibility === 'org' ? $t('views.CopyPipelineWizard.org_wide') : $t('views.CopyPipelineWizard.team') }}</p>
               </div>
             </div>
 
@@ -230,24 +241,24 @@
               <h3 class="text-sm font-medium text-foreground mb-2">{{ $t('views.CopyPipelineWizard.copy_options') }}</h3>
               <ul class="space-y-1.5 text-sm">
                 <li class="flex items-center gap-2">
-                  <svg v-if="copyScope === 'all'" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  <span :class="copyScope === 'all' ? 'text-foreground' : 'text-muted-foreground'">{{ copyScope === 'all' ? 'All nodes will be copied' : 'Selected nodes only' }}</span>
+                  <Check v-if="copyScope === 'all'" class="h-3.5 w-3.5 text-success" aria-hidden="true" />
+                  <X v-else class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  <span :class="copyScope === 'all' ? 'text-foreground' : 'text-muted-foreground'">{{ copyScope === 'all' ? $t('views.CopyPipelineWizard.all_nodes_will_be_copied') : $t('views.CopyPipelineWizard.selected_nodes_only') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <svg v-if="keepEvalConfigs" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  <span :class="keepEvalConfigs ? 'text-foreground' : 'text-muted-foreground'">{{ keepEvalConfigs ? 'Eval configurations preserved' : 'Eval configurations excluded' }}</span>
+                  <Check v-if="keepEvalConfigs" class="h-3.5 w-3.5 text-success" aria-hidden="true" />
+                  <X v-else class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  <span :class="keepEvalConfigs ? 'text-foreground' : 'text-muted-foreground'">{{ keepEvalConfigs ? $t('views.CopyPipelineWizard.eval_configurations_preserved') : $t('views.CopyPipelineWizard.eval_configurations_excluded') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <svg v-if="keepTriggers" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  <span :class="keepTriggers ? 'text-foreground' : 'text-muted-foreground'">{{ keepTriggers ? 'Triggers preserved' : 'Triggers excluded' }}</span>
+                  <Check v-if="keepTriggers" class="h-3.5 w-3.5 text-success" aria-hidden="true" />
+                  <X v-else class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  <span :class="keepTriggers ? 'text-foreground' : 'text-muted-foreground'">{{ keepTriggers ? $t('views.CopyPipelineWizard.triggers_preserved') : $t('views.CopyPipelineWizard.triggers_excluded') }}</span>
                 </li>
                 <li class="flex items-center gap-2">
-                  <svg v-if="shareConnectors" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  <span :class="shareConnectors ? 'text-foreground' : 'text-muted-foreground'">{{ shareConnectors ? 'Connector bindings shared' : 'Connector bindings unbound' }}</span>
+                  <Check v-if="shareConnectors" class="h-3.5 w-3.5 text-success" aria-hidden="true" />
+                  <X v-else class="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  <span :class="shareConnectors ? 'text-foreground' : 'text-muted-foreground'">{{ shareConnectors ? $t('views.CopyPipelineWizard.connector_bindings_shared') : $t('views.CopyPipelineWizard.connector_bindings_unbound') }}</span>
                 </li>
               </ul>
             </div>
@@ -268,10 +279,10 @@
             @click="step = 2"
             data-testid="copy-wizard-back-step3"
           >
-            Back
+            {{ $t('views.CopyPipelineWizard.back') }}
           </button>
           <Button :disabled="executing" class="px-6 py-2.5" @click="executeCopy" data-testid="copy-wizard-execute">
-            {{ executing ? 'Copying...' : 'Copy Pipeline' }}
+            {{ executing ? $t('views.CopyPipelineWizard.copying') : $t('views.CopyPipelineWizard.copy_pipeline') }}
           </Button>
         </div>
       </template>
@@ -286,7 +297,7 @@
           <div v-else-if="progressStep === 'cloning'" class="text-center py-8">
             <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
             <p class="text-sm text-foreground font-medium mb-1">{{ $t('views.CopyPipelineWizard.cloning_pipeline') }}</p>
-            <p class="text-sm text-muted-foreground">Creating copy of {{ selectedPipeline?.name }}</p>
+            <p class="text-sm text-muted-foreground">{{ $t('views.CopyPipelineWizard.creating_copy_of', { name: selectedPipeline?.name || '—' }) }}</p>
             <div class="w-full bg-muted rounded-full h-2 mt-4 max-w-xs mx-auto">
               <div class="bg-primary h-2 rounded-full transition-all duration-500" style="width: 60%" />
             </div>
@@ -303,13 +314,13 @@
 
           <div v-else-if="progressStep === 'complete'" class="text-center py-8">
             <div class="w-12 h-12 rounded-full bg-success/20 flex items-center justify-center mx-auto mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-success"><polyline points="20 6 9 17 4 12"/></svg>
+              <Check class="h-6 w-6 text-success" aria-hidden="true" />
             </div>
             <p class="text-lg font-medium text-foreground mb-1">{{ $t('views.CopyPipelineWizard.pipeline_copied') }}</p>
-            <p class="text-sm text-muted-foreground mb-6">{{ result?.name }} is ready for adaptation.</p>
+            <p class="text-sm text-muted-foreground mb-6">{{ $t('views.CopyPipelineWizard.is_ready_for_adaptation', { name: result?.name || '—' }) }}</p>
             <div class="flex items-center justify-center gap-3">
               <Button class="px-6 py-2.5" @click="openInEditor" data-testid="copy-wizard-open-editor">
-                Open in Editor
+                {{ $t('views.CopyPipelineWizard.open_in_editor') }}
               </Button>
               <button
                 type="button"
@@ -317,27 +328,27 @@
                 @click="reset"
                 data-testid="copy-wizard-copy-another"
               >
-                Copy Another
+                {{ $t('views.CopyPipelineWizard.copy_another') }}
               </button>
             </div>
           </div>
 
           <div v-else-if="progressStep === 'error'" class="text-center py-8">
             <div class="w-12 h-12 rounded-full bg-destructive/20 flex items-center justify-center mx-auto mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-destructive"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+              <X class="h-6 w-6 text-destructive" aria-hidden="true" />
             </div>
             <p class="text-lg font-medium text-destructive mb-1">{{ $t('views.CopyPipelineWizard.copy_failed') }}</p>
-            <p class="text-sm text-muted-foreground mb-6">{{ executeError }}</p>
+            <p class="text-sm text-muted-foreground mb-6">{{ executeError || $t('views.CopyPipelineWizard.failed_to_copy_pipeline') }}</p>
             <div class="flex items-center justify-center gap-3">
               <Button class="px-6 py-2.5" @click="executeCopy" data-testid="copy-wizard-retry">
-                Retry
+                {{ $t('views.CopyPipelineWizard.retry') }}
               </Button>
               <button type="button"
                 class="px-6 py-2.5 border border-input bg-background text-foreground text-sm font-medium rounded-lg hover:bg-accent transition-colors"
                 @click="step = 3"
                 data-testid="copy-wizard-back-error"
               >
-                Back to Review
+                {{ $t('views.CopyPipelineWizard.back_to_review') }}
               </button>
             </div>
           </div>
@@ -350,18 +361,23 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { Check, ChevronRight, X } from '@lucide/vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import Button from 'primevue/button'
 import { useDataFetch } from '../composables/useDataFetch'
 import BackLink from '../components/BackLink.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
 import { api } from '../lib/api/client'
 import { formatDateShort } from '../lib/formatDate'
 import { shortId } from '../utils/format'
+
+const { t } = useI18n()
 
 interface PipelineItem {
   id: string
@@ -387,7 +403,12 @@ interface CloneResponse {
   updated_at: string
 }
 
-const steps = ['Select Pipeline', 'Configure', 'Review', 'Execute']
+const steps = computed(() => [
+  t('views.CopyPipelineWizard.select_pipeline'),
+  t('views.CopyPipelineWizard.configure'),
+  t('views.CopyPipelineWizard.review'),
+  t('views.CopyPipelineWizard.execute'),
+])
 const router = useRouter()
 
 const { loading, error, data: pipelinesResp, load: fetchPipelines } = useDataFetch<PipelineListResponse>(
@@ -414,13 +435,17 @@ const executeError = ref<string | null>(null)
 const progressStep = ref<'preparing' | 'cloning' | 'configuring' | 'complete' | 'error'>('preparing')
 const result = ref<CloneResponse | null>(null)
 
-const visibilityFilters = [
-  { label: 'All', value: 'all' as const },
-  { label: 'Org', value: 'org' as const },
-  { label: 'Team', value: 'team' as const },
-]
+const visibilityFilters = computed(() => [
+  { label: t('views.CopyPipelineWizard.all'), value: 'all' as const },
+  { label: t('views.CopyPipelineWizard.org'), value: 'org' as const },
+  { label: t('views.CopyPipelineWizard.team'), value: 'team' as const },
+])
 
-const displayName = computed(() => pipelineName.value || `Copy of ${selectedPipeline.value?.name ?? 'Pipeline'}`)
+const defaultName = computed(() =>
+  t('views.CopyPipelineWizard.copy_of', { name: selectedPipeline.value?.name || t('views.CopyPipelineWizard.pipeline') }),
+)
+
+const displayName = computed(() => pipelineName.value || defaultName.value)
 
 const filteredPipelines = computed(() => {
   let list = pipelines.value
@@ -469,7 +494,7 @@ async function executeCopy() {
     step.value = 4
   } catch (e) {
     progressStep.value = 'error'
-    executeError.value = e instanceof Error ? e.message : 'Failed to copy pipeline'
+    executeError.value = e instanceof Error ? e.message : t('views.CopyPipelineWizard.failed_to_copy_pipeline')
     step.value = 4
   } finally {
     executing.value = false
