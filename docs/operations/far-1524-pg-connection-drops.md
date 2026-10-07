@@ -123,22 +123,39 @@ are **refuted for the error window by observation** (below).
   documented at the field.
 - `db/session.py`: `_build_engine` reads the setting instead of the
   hardcoded 3600; `pool_pre_ping=True` unchanged.
+- **Engine-build sweep (follow-up commit):** every remaining long-lived
+  pooled engine now honours the same setting —
+  `api/dependencies.py` (`_SYSTEM_ASYNC_ENGINE`, system role),
+  `core/reports/scheduler.py`, `core/error_tracking/saq_hooks.py`, and
+  `core/saq_worker.py` (`_get_system_async_engine` — which previously passed
+  **no** `pool_recycle` at all, i.e. age-unbounded pooling, strictly worse
+  than the 3600 s mismatch). `grep 'pool_recycle.*3600'` over
+  `backend/src/**` returns **0 matches**.
 - `docs/configuration-reference.md`: the new knob documented.
 - Tests: `tests/unit/db/test_session.py` gains the proxy-window contract
   (default below 1800, configurable, pre-ping on, Settings fails fast
-  at/above the window); existing 3600 pins updated. One pin in
-  `tests/unit/test_dependencies.py` (line ~44) also had to be updated —
-  **that file is outside this task's allowlist; the two-line change is
-  flagged to the Conductor for adjudication** (it pins the exact invariant
-  this task changes; leaving it red would ship a failing suite).
+  at/above the window); per-site pins added in
+  `tests/unit/api/test_dependencies_gates.py`,
+  `tests/unit/reports/test_report_scheduler.py`,
+  `tests/unit/error_tracking/test_saq_hooks.py`,
+  `tests/unit/core/test_saq_worker.py`. The pre-existing pin in
+  `tests/unit/test_dependencies.py` was updated (adjudicated) and two
+  settings-stub classes in `test_dependencies_gates.py` gained the new
+  field.
+- Not applicable to the sweep (no pooled connection can outlive the
+  window): the `NullPool` engines (`db/crud/pipeline.py`,
+  `db/crud/pipeline_snapshot.py` — connections live exactly one
+  operation), and the short-lived CLI/diagnostic engines
+  (`cli/users.py`, `cli/break_glass.py`, `launcher/doctor.py` — process
+  lifetime ≪ 1800 s).
 
 ## Known deferred items (outside the allowlist, deliberately untouched)
 
-1. Three other engine-build sites still hardcode `pool_recycle=3600`:
-   `api/dependencies.py` (system engine, ~line 864),
-   `core/reports/scheduler.py` (~line 118),
-   `core/error_tracking/saq_hooks.py` (~line 102). They should consume
-   `settings.db_pool_recycle_seconds` in a follow-up sweep.
+1. **`core/cron_helpers.py` `_get_system_engine()` (~line 651)** — the
+   mirror of `saq_worker._get_system_async_engine`, also passes **no**
+   `pool_recycle` (age-unbounded pooling). It needs the same one-line
+   `pool_recycle=settings.db_pool_recycle_seconds` — cron_helpers.py was
+   not in this task's allowlist.
 2. Bounded `SET LOCAL lock_timeout` for the dispatch-path
    `UPDATE runs SET dispatched_at=now()` (the statement observed blocked in
    O11) — `dispatch.py`/`cron_helpers.py` are outside this allowlist.

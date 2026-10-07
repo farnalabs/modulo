@@ -861,7 +861,10 @@ def get_or_create_system_engine() -> AsyncEngine:
                         pool_pre_ping=True,
                         pool_size=20,
                         max_overflow=10,
-                        pool_recycle=3600,
+                        # FAR-1524: settings-driven recycle window, strictly
+                        # below the Fly HAProxy 30m session timeout — same
+                        # contract as db.session._build_engine.
+                        pool_recycle=settings.db_pool_recycle_seconds,
                         pool_timeout=30,
                         connect_args=system_connect_args,
                     )

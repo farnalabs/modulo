@@ -99,7 +99,11 @@ def _get_engine() -> AsyncEngine:
                 if ssl_arg is not None:
                     kw["connect_args"] = {"timeout": 10, "ssl": ssl_arg, "statement_cache_size": 0}
                     kw["pool_pre_ping"] = True
-                    kw["pool_recycle"] = 3600
+                    # FAR-1524: settings-driven recycle window, strictly below
+                    # the Fly HAProxy 30m session timeout (the old hardcoded
+                    # 3600 s exceeded it) — same contract as
+                    # db.session._build_engine.
+                    kw["pool_recycle"] = settings.db_pool_recycle_seconds
                     kw["pool_timeout"] = 30
                 _ENGINE = create_async_engine(**kw)
     return _ENGINE

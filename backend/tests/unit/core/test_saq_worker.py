@@ -29,6 +29,7 @@ def _settings(system_url: str = "") -> SimpleNamespace:
         modulo_db="postgres",
         saq_worker_db_pool_size=7,
         saq_worker_concurrency=2,
+        db_pool_recycle_seconds=1500,
     )
 
 
@@ -51,6 +52,26 @@ def test_creates_engine_with_system_url_when_configured(reset_system_engine, mon
     assert engine is create_engine.return_value
     create_engine.assert_called_once()
     assert create_engine.call_args.args[0] == system_url
+
+
+def test_system_engine_pool_recycle_from_settings_below_the_proxy_window(
+    reset_system_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FAR-1524: the worker's system engine must take pool_recycle from
+    Settings.db_pool_recycle_seconds (default 1500 s), strictly below the
+    Fly HAProxy 30-minute session window (1800 s) — never unbounded, never
+    the old 3600 s pattern."""
+    system_url = "postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo"
+    monkeypatch.setattr(sw, "get_settings", lambda: _settings(system_url))
+    create_engine = MagicMock(return_value=MagicMock())
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", create_engine)
+
+    sw._get_system_async_engine()
+
+    kwargs = create_engine.call_args.kwargs
+    assert kwargs["pool_recycle"] == 1500
+    assert kwargs["pool_recycle"] < 1800
+    assert kwargs["pool_pre_ping"] is True
 
 
 def test_fails_closed_when_unset(reset_system_engine, monkeypatch: pytest.MonkeyPatch) -> None:
