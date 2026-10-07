@@ -45,6 +45,29 @@ export async function fetchErrorGroupEvents(id: string, params: { limit?: number
   })) as ErrorEventListResponse
 }
 
+// FAR-1547 instance-scope reads: the SYSTEM_ORG_ID sentinel partition, gated
+// server-side by require_system_permission("errors.resolve_instance"). The
+// client mirrors the gate by only calling these when the is_system_admin
+// claim is present; a forged ?scope=instance without the claim resolves to
+// the tenant helpers above and the backend refuses any instance read 403.
+export async function fetchInstanceErrorGroups(params: FetchErrorGroupsParams = {}): Promise<ErrorListResponse> {
+  return throwOnError(await api.GET('/api/v1/errors/instance', {
+    params: { query: params as unknown as Record<string, unknown> },
+  })) as ErrorListResponse
+}
+
+export async function fetchInstanceErrorGroup(id: string): Promise<ErrorGroupDetail> {
+  return throwOnError(await api.GET('/api/v1/errors/instance/{error_id}', {
+    params: { path: { error_id: id } },
+  })) as ErrorGroupDetail
+}
+
+export async function fetchInstanceErrorGroupEvents(id: string, params: { limit?: number; offset?: number } = {}): Promise<ErrorEventListResponse> {
+  return throwOnError(await api.GET('/api/v1/errors/instance/{error_id}/events', {
+    params: { path: { error_id: id }, query: params as unknown as Record<string, unknown> },
+  })) as ErrorEventListResponse
+}
+
 export async function fetchSchedulerStarvation(): Promise<SchedulerStarvationResponse> {
   return throwOnError(await api.GET('/api/v1/errors/scheduler-starvation')) as SchedulerStarvationResponse
 }

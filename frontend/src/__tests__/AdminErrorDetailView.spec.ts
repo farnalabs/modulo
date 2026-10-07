@@ -18,11 +18,13 @@ vi.mock('../composables/useCurrentUser', async () => {
   }
 })
 
-const { fetchGroupMock, updateGroupMock, fetchEventsMock, getMock } = vi.hoisted(() => ({
+const { fetchGroupMock, updateGroupMock, fetchEventsMock, getMock, fetchInstanceGroupMock, fetchInstanceEventsMock } = vi.hoisted(() => ({
   fetchGroupMock: vi.fn(),
   updateGroupMock: vi.fn(),
   fetchEventsMock: vi.fn(),
   getMock: vi.fn(),
+  fetchInstanceGroupMock: vi.fn(),
+  fetchInstanceEventsMock: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({
@@ -46,6 +48,10 @@ vi.mock('../lib/api/errors', () => ({
   fetchErrorGroup: fetchGroupMock,
   updateErrorGroup: updateGroupMock,
   fetchErrorGroupEvents: fetchEventsMock,
+  // FAR-1555: the instance-scope reads are hoisted into the API layer too, so
+  // they are mocked at the same boundary as their tenant counterparts.
+  fetchInstanceErrorGroup: fetchInstanceGroupMock,
+  fetchInstanceErrorGroupEvents: fetchInstanceEventsMock,
 }))
 
 vi.mock('../lib/api/client', () => ({
@@ -111,6 +117,8 @@ describe('AdminErrorDetailView', () => {
     routerPush.mockClear()
     fetchGroupMock.mockResolvedValue(groupDetail())
     fetchEventsMock.mockResolvedValue(eventsPage([eventRow()], 1))
+    fetchInstanceGroupMock.mockResolvedValue(groupDetail())
+    fetchInstanceEventsMock.mockResolvedValue(eventsPage([eventRow()], 1))
     getMock.mockResolvedValue({
       data: { items: [{ id: 'u1', email: 'a@b.c', display_name: 'Alice' }] },
       error: undefined,
@@ -278,42 +286,45 @@ describe('AdminErrorDetailView', () => {
   it('instance scope reads the sentinel endpoints, renders read-only and skips tenant actions (FAR-1547)', async () => {
     authState.isSystemAdmin = true
     routeState.query = { scope: 'instance' }
-    getMock.mockImplementation(async (path: string) => {
-      if (path === '/api/v1/errors/instance/{error_id}') {
-        return { data: groupDetail(), error: undefined }
-      }
-      if (path === '/api/v1/errors/instance/{error_id}/events') {
-        return { data: eventsPage([eventRow()], 1), error: undefined }
-      }
-      return { data: { items: [] }, error: undefined }
-    })
     const wrapper = mountView()
     await flush()
 
-    expect(getMock).toHaveBeenCalledWith('/api/v1/errors/instance/{error_id}', {
-      params: { path: { error_id: 'err-1' } },
-    })
+    // The instance reads are hoisted into the API layer (FAR-1555); the path
+    // each helper hits is pinned in errors.spec.ts.
+    expect(fetchInstanceGroupMock).toHaveBeenCalledWith('err-1')
+    expect(fetchInstanceEventsMock).toHaveBeenCalledWith('err-1', { limit: 20, offset: 0 })
     expect(fetchGroupMock).not.toHaveBeenCalled()
     expect(fetchEventsMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="admin-error-detail-instance-readonly"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('Acknowledge')
-    // The assignee picker lives in the tenant-only actions card.
+    expect(wrapper.find('[data-testid="admin-error-detail-resolve"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-error-detail-archive"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-error-detail-assignee"]').exists()).toBe(false)
+    // The assignee picker lives in the tenant-only actions card, so the
+    // instance view never fires the admin user lookup behind it.
     expect(getMock).not.toHaveBeenCalledWith('/api/v1/admin/users')
+    wrapper.unmount()
+  })
+
+  it('a forged ?scope=instance without the system-admin claim stays on the tenant detail (FAR-1555)', async () => {
+    authState.isSystemAdmin = false
+    routeState.query = { scope: 'instance' }
+    const wrapper = mountView()
+    await flush()
+
+    expect(fetchGroupMock).toHaveBeenCalledWith('err-1')
+    expect(fetchInstanceGroupMock).not.toHaveBeenCalled()
+    expect(fetchInstanceEventsMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="admin-error-detail-instance-readonly"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-error-detail-acknowledge"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="admin-error-detail-assignee"]').exists()).toBe(true)
+    expect(wrapper.findComponent(BackLink).props('to')).toBe('/admin/errors')
     wrapper.unmount()
   })
 
   it('instance scope back link and goBack carry the scope query (FAR-1547)', async () => {
     authState.isSystemAdmin = true
     routeState.query = { scope: 'instance' }
-    getMock.mockImplementation(async (path: string) => {
-      if (path === '/api/v1/errors/instance/{error_id}') {
-        return { data: groupDetail(), error: undefined }
-      }
-      if (path === '/api/v1/errors/instance/{error_id}/events') {
-        return { data: eventsPage([], 0), error: undefined }
-      }
-      return { data: { items: [] }, error: undefined }
-    })
     const wrapper = mountView()
     await flush()
 
