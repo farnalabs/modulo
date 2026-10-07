@@ -2603,3 +2603,22 @@ class TestFireSuiteRunTriggerEnqueueFailure:
         assert kwargs["actor_source"] == "fire_suite_run_trigger"
         assert kwargs["payload_json"]["trigger_id"] == trigger_id
         assert kwargs["payload_json"]["pipeline_id"] == pipeline_id
+
+    @pytest.mark.asyncio
+    async def test_terminalise_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        """If the terminalisation transaction itself fails (DB down), the fire
+        job must still return cleanly — the error is logged, never propagated
+        (re-raising would retry the fire and duplicate the SuiteRun)."""
+        factory_cm = MagicMock()
+        factory_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
+        factory_cm.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=factory_cm)
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            # Must return without raising.
+            await sw._fail_suite_run_on_enqueue_error(_UUID_1, _UUID_ORG)
+
+        assert any("failed to terminalise suite_run" in record.message for record in caplog.records)

@@ -11,6 +11,7 @@ by an autouse monkeypatch fixture, so the mutation is scoped to each test and
 reverted instead of leaking into the whole pytest process.
 """
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -402,3 +403,18 @@ async def test_audit_failure_never_fails_the_seed(
 
     assert session.add.call_count == 2  # account + membership, unharmed
     assert any("db.seed.boot_user_audit_failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_audit_cancellation_is_never_swallowed(
+    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``CancelledError`` is the one exception the fail-open record must not
+    swallow — a cancelled boot seed must actually stop."""
+    audit_append_spy.side_effect = asyncio.CancelledError()
+    org = SimpleNamespace(id=uuid.uuid4())
+    session = _mock_session(_result(scalar_one_or_none=None))
+    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+
+    with pytest.raises(asyncio.CancelledError):
+        await seed_modulo_user(session, org, "admin:secret1")

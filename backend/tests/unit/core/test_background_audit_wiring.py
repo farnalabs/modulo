@@ -634,6 +634,30 @@ class TestSuiteRunAudit:
         assert payload["state"] == "pending"
         assert payload["passed_cases"] == 2
 
+    async def test_extra_payload_json_is_merged_over_row_fields(self) -> None:
+        """A caller-supplied ``payload_json`` (the fire path's ``trigger_id`` /
+        ``pipeline_id``) is merged over the row-derived fields — the event
+        carries both, and caller keys win on collision."""
+        factory, _ = _suite_factory(_suite_run(state="pending"))
+        with patch.object(background, "append_audit_event", new=AsyncMock()) as append:
+            recorded = await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_created",
+                expected_states=background.SUITE_RUN_PENDING_STATES,
+                actor_source="fire_suite_run_trigger",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun created by",
+                payload_json={"trigger_id": "trigger-1", "state": "caller-wins"},
+            )
+
+        assert recorded is True
+        payload = append.await_args.kwargs["payload_json"]
+        assert payload["trigger_id"] == "trigger-1"
+        assert payload["state"] == "caller-wins"
+        assert payload["actor_source"] == "fire_suite_run_trigger"
+
     async def test_missing_row_is_skipped_not_invented(self, caplog: pytest.LogCaptureFixture) -> None:
         """A row that is gone (or cross-org) proves the change never landed —
         the phantom-event guard must skip, never fabricate the event."""
