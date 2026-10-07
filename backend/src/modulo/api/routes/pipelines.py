@@ -3399,14 +3399,16 @@ async def _toggle_pipeline_archive_state(
     principal: TenantPrincipal,
     pipeline_id: uuid.UUID,
     *,
-    toggle: Callable[[AsyncSession, uuid.UUID], Awaitable[Pipeline | None]],
+    toggle: Callable[..., Awaitable[Pipeline | None]],
 ) -> PipelineResponse:
     """Archive or unarchive a pipeline inside the shared team-gated transaction.
 
     ``archive_pipeline_endpoint`` and ``unarchive_pipeline_endpoint`` differ only
     in the CRUD function they apply, so the in-txn team re-check, the
     404-on-missing guard and the post-flush ``session.refresh`` live here once
-    instead of being copy-pasted into both endpoints.
+    instead of being copy-pasted into both endpoints. The CRUD toggle is passed
+    the same organisation scope as the existence read above, so its re-fetch
+    cannot resolve a row the scoped read rejected.
     """
     pipeline: Pipeline | None = None
     try:
@@ -3416,7 +3418,7 @@ async def _toggle_pipeline_archive_state(
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-            pipeline = await toggle(session, pipeline_id)
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
             # Refresh the ORM row inside the transaction so the DB-computed
             # `updated_at` (onupdate=func.current_timestamp()) is loaded while
             # the transaction is active. The UPDATE flush expires it, and after
@@ -3484,8 +3486,13 @@ async def _set_pipeline_run_state(
 
     * RESUME is REFUSED 409 while the spend circuit breaker's witness holds —
       an operator must reset the breaker first, so a resume can never revive a
-      tripped pipeline. The check runs AFTER the in-txn locked row-read, so it
-      observes the committed witness (same transaction as the write).
+      tripped pipeline. The check reads the row with an organisation-scoped,
+      unlocked SELECT and then the write re-fetches it in the same
+      transaction; a concurrent trip that commits between the two is the same
+      accepted bounded race the pause gate documents (``crud/run.py``
+      deliberately holds no row locks), so a resume can at worst clear a
+      programmatic pause while a trip lands, never revive a row that was
+      already tripped at read time.
     * Both directions are idempotent no-ops when the pipeline is already in
       the requested state — FIRST CAUSE OWNS THE REASON: pausing an
       already-disabled pipeline never overwrites the original
@@ -3513,7 +3520,7 @@ async def _set_pipeline_run_state(
                     ),
                 )
             toggle = resume_pipeline if resume else pause_pipeline
-            pipeline = await toggle(session, pipeline_id)
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
             # Refresh inside the transaction (same rationale as the archive
             # toggle): the UPDATE flush expires the DB-computed `updated_at`,
             # and reading it after commit raises outside the async greenlet ->

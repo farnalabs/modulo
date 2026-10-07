@@ -34,6 +34,7 @@ from __future__ import annotations
 import importlib.util
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +133,7 @@ async def _seed_pipeline(
     org_id: uuid.UUID,
     account_id: uuid.UUID,
     tripped: bool,
-    tripped_at: str | None,
+    tripped_at: datetime | None,
 ) -> uuid.UUID:
     """Seed one pipeline in the 0285 shape (NO run_* columns yet)."""
     pipeline_id = uuid.uuid4()
@@ -185,7 +186,11 @@ async def test_backfill_folds_tripped_witnesses_into_the_unified_state(isolated_
         org_id = await _seed_org(engine, "m0286-backfill")
         account_id = await _seed_user(engine, org_id, "m0286-backfill@example.test")
         tripped_stamped = await _seed_pipeline(
-            engine, org_id=org_id, account_id=account_id, tripped=True, tripped_at="2026-10-01T04:05:06+00:00"
+            engine,
+            org_id=org_id,
+            account_id=account_id,
+            tripped=True,
+            tripped_at=datetime.fromisoformat("2026-10-01T04:05:06+00:00"),
         )
         tripped_null_stamp = await _seed_pipeline(
             engine, org_id=org_id, account_id=account_id, tripped=True, tripped_at=None
@@ -228,7 +233,11 @@ async def test_ddl_is_existence_gated_and_the_backfill_is_rerunnable(isolated_db
         org_id = await _seed_org(engine, "m0286-partial")
         account_id = await _seed_user(engine, org_id, "m0286-partial@example.test")
         tripped = await _seed_pipeline(
-            engine, org_id=org_id, account_id=account_id, tripped=True, tripped_at="2026-10-01T00:00:00+00:00"
+            engine,
+            org_id=org_id,
+            account_id=account_id,
+            tripped=True,
+            tripped_at=datetime.fromisoformat("2026-10-01T00:00:00+00:00"),
         )
 
         # Simulate a partially-applied upgrade: one of the new columns already
