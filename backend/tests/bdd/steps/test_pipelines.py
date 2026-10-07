@@ -1582,11 +1582,29 @@ def create_cron_trigger(
 def toggle_trigger(client, request: pytest.FixtureRequest, patches: list[Any], mock_session) -> None:
     trigger_id = getattr(request.node, "_trigger_id", uuid.uuid4())
 
-    mock_trigger = MagicMock(spec=["id", "active", "trigger_type", "config_json", "next_fire_at"])
+    # FAR-1513: toggle re-verifies the pipeline team gate inside the mutation
+    # transaction. The mocked session returns this same row for the pipeline
+    # FOR UPDATE select, so it must also carry the gate's inputs; the scenario
+    # authenticates as an org admin, so an ownerless org-visible row is allowed.
+    mock_trigger = MagicMock(
+        spec=[
+            "id",
+            "active",
+            "trigger_type",
+            "config_json",
+            "next_fire_at",
+            "pipeline_id",
+            "owner_team_id",
+            "visibility",
+        ]
+    )
     mock_trigger.id = trigger_id
     mock_trigger.trigger_type = "cron"
     mock_trigger.active = True
     mock_trigger.config_json = {}
+    mock_trigger.pipeline_id = getattr(getattr(request.node, "_mock_pipeline", None), "id", None) or uuid.uuid4()
+    mock_trigger.owner_team_id = None
+    mock_trigger.visibility = "org"
 
     result = MagicMock()
     result.scalar_one_or_none.return_value = mock_trigger
