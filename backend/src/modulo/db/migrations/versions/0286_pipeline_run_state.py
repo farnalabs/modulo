@@ -52,14 +52,19 @@ depends_on: tuple[str, ...] | None = None
 
 # Guarded ADD CONSTRAINT blocks (0284/0285 pattern): no-op when the named
 # constraint already exists, so a re-run or a partially-applied upgrade is safe.
+# The guard is scoped to ``conrelid = 'public.pipelines'::regclass`` as well as
+# ``conname``: a same-named constraint on ANY OTHER table must not make the
+# guard skip creating this table's CHECK.
 _ADD_TIE_CHECK = (
-    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_run_enabled') "
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
+    "WHERE conname='ck_pipelines_run_enabled' AND conrelid = 'public.pipelines'::regclass) "
     "THEN ALTER TABLE public.pipelines ADD CONSTRAINT ck_pipelines_run_enabled CHECK "
     "(run_enabled OR (run_disabled_reason IS NOT NULL AND run_disabled_at IS NOT NULL)); "
     "END IF; END $$;"
 )
 _ADD_REASON_CHECK = (
-    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_pipelines_run_disabled_reason') "
+    "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint "
+    "WHERE conname='ck_pipelines_run_disabled_reason' AND conrelid = 'public.pipelines'::regclass) "
     "THEN ALTER TABLE public.pipelines ADD CONSTRAINT ck_pipelines_run_disabled_reason CHECK "
     "(run_disabled_reason IS NULL OR run_disabled_reason IN ('operator', 'circuit_breaker')); "
     "END IF; END $$;"
@@ -70,9 +75,10 @@ _ADD_REASON_CHECK = (
 # matches nothing. COALESCE guards a legacy tripped row whose
 # circuit_breaker_tripped_at is NULL against the tie CHECK (the cause still
 # gets a real timestamp). A row somehow already disabled keeps its existing
-# cause (first cause owns the reason).
+# cause (first cause owns the reason). The target is schema-qualified to match
+# the DDL above — never rely on search_path inside a migration.
 _BACKFILL = (
-    "UPDATE pipelines SET run_enabled = false, "
+    "UPDATE public.pipelines SET run_enabled = false, "
     "run_disabled_reason = 'circuit_breaker', "
     "run_disabled_at = COALESCE(circuit_breaker_tripped_at, CURRENT_TIMESTAMP) "
     "WHERE circuit_breaker_tripped = true AND run_enabled = true"
