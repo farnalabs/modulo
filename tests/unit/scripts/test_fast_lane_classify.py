@@ -320,6 +320,34 @@ class TestMainExitCode:
         )
         assert rc == 2, "a genuine fetch error must fail closed (rc=2)"
 
+    @patch("fast_lane_classify.subprocess.run")
+    def test_diff_fetch_timeout_is_neutral_not_a_failure(self, mock_run: MagicMock) -> None:
+        """A transient ``gh pr diff`` timeout must deny (rc=1), never paint red.
+
+        Every other check in the module (check_cap, check_suspension,
+        check_no_test_weakening, check_sha_pinning) fails closed to rc=1
+        (neutral) on its own timeout. The diff fetch now matches them: a red
+        ``fast-lane-eligible`` blocks the PR and dispatches the Branch Fixer
+        for an infra blip (observed 2026-10-07 on PR #1373: ``gh pr diff``
+        exceeded its 30s bound and the check run concluded ``failure``).
+        """
+        import subprocess as _sp
+
+        mock_run.side_effect = _sp.TimeoutExpired(cmd="gh", timeout=30)
+        rc = classify_main(
+            [
+                "--pr-number",
+                "1373",
+                "--head-sha",
+                "abc123",
+                "--repo",
+                "farnalabs/modulo",
+                "--base-ref",
+                "origin/main",
+            ]
+        )
+        assert rc == 1, "a diff-fetch timeout must exit 1 (neutral), not 2 (failure)"
+
     @patch("fast_lane_classify.check_sha_pinning", return_value=(True, "SHA-pinned"))
     @patch("fast_lane_classify.check_no_test_weakening", return_value=(True, []))
     @patch("fast_lane_classify.check_suspension", return_value=(True, "no suspension"))
