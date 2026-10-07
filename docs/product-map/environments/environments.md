@@ -62,7 +62,7 @@ into the Runners page as redirects.)
 - [x] Profiles resolve against the RuntimeProviderHub by capabilities / provider hint;
       local is the default provider (only `local_docker` auto-registers and stays
       authoritative when no provider hint is set), and `e2b` resolves when the profile
-      declares a `provider_hint` — see the hub-resolution scenarios in
+      declares a `provider_hint` – see the hub-resolution scenarios in
       `backend/tests/bdd/features/environments/environment_profiles.feature`
 - [x] `POST /api/v1/environment-profiles/{id}/test` provisions a sandbox from the
       profile, runs a hello command and destroys it, streaming a Server-Sent Events
@@ -81,7 +81,7 @@ into the Runners page as redirects.)
       "Test connection" (SSE) and new/edit form (`/admin/runners/profiles/new`,
       `/admin/runners/profiles/:id/edit`), plus the concurrency tab
       (`/admin/runners/concurrency`); the legacy `/environment-profiles*` and
-      `/admin/environments` deep links redirect to the profiles tab — testids
+      `/admin/environments` deep links redirect to the profiles tab – testids
       enumerated in the product map
 
 ## Known Gaps
@@ -92,7 +92,7 @@ into the Runners page as redirects.)
   actual agent graph inside the workspace before release.
 
 ## QA History
-- 2026-09-12: **product-map review pass** — registered the shared
+- 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/runners/concurrency`, `/admin/runners/profiles`
   and wired the two components into the reverse testid-coverage guard
@@ -100,7 +100,7 @@ into the Runners page as redirects.)
   surface on those pages stays visible to Assistant's docs indexer / `/api/v1/manifest` and
   can no longer drift unguarded.
 
-- 2026-09-11: **product-map review pass** — finished the
+- 2026-09-11: **product-map review pass**: finished the
   Runners-page element-inventory walk by registering the TAB-surface testids
   that lived in the route-per-tab leaf components rather than the layout: the
   profiles tab's tier badge, template detail box, drift banner and apply control
@@ -116,7 +116,7 @@ into the Runners page as redirects.)
   now maps those two routes to the layout + tab + status-strip owning views, so
   a newly shipped Runners-page testid can no longer drift invisible to Assistant's
   docs indexer / `/api/v1/manifest`.
-- 2026-09-11: **product-map review pass** — closed the
+- 2026-09-11: **product-map review pass**: closed the
   remaining element-inventory drift on the Runners page: `runner-status-error`
   (the `AdminRunnersView.vue` reload-error surface) is now registered on
   `/admin/runners/concurrency` as well as `/admin/runners/profiles`, and the
@@ -126,25 +126,25 @@ into the Runners page as redirects.)
   reverse testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`)
   so a newly shipped Runners-page testid can no longer drift invisible to Assistant's
   docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **product-map review pass** — registered the
+- 2026-09-10: **product-map review pass**: registered the
   `runner-status-error` testid of the `AdminRunnersView.vue` layout on
   `/admin/runners/profiles` and added that whole-page view to the reverse
   testid-coverage guard (`test_mapped_route_elements_cover_owning_view_testids`),
   so the Runners page's reload-error surface can no longer ship invisible to
   Assistant's docs indexer / `/api/v1/manifest`.
-- 2026-09-10: **product-map review pass** — reconciled this entry
+- 2026-09-10: **product-map review pass**: reconciled this entry
   and the graph-root registry index with the FAR-591 D5 Runners page: the
   canonical routes are `/admin/runners/profiles{,/new,/:id/edit}` and
   `/admin/runners/concurrency`, and the old `/environment-profiles*` /
   `/admin/environments` URLs are redirects. No shipped behaviour changed.
-- 2026-09-02: **FAR-551** — collapsed the duplicate `/admin/environments` UI +
+- 2026-09-02: **FAR-551**: collapsed the duplicate `/admin/environments` UI +
   `environments.py` router (`/api/v1/environments`) into `/environment-profiles`;
   ported the `POST /{id}/test` connectivity check onto the survivor with a dedicated
   `environment_profile.test` permission; added the API-layer `require_feature`
   gate the new router was missing; `/admin/environments` now redirects.
-- 2026-09-01: **product-map review pass** — added this behaviour-tracker
+- 2026-09-01: **product-map review pass**: added this behaviour-tracker
   for the registered manifest feature `feat-environments`, which previously had no
   `docs/product-map/` entry. Behaviours verified against
-  `api/routes/environment_profiles.py`, `api/routes/environments.py`,
-  `api/routes/admin.py`, `core/runtime_provider`, `core/graph_validator` and the
+  `api/routes/environment_profiles.py`, `api/routes/admin.py`,
+  `core/runtime_provider`, `core/graph_validator` and the
   env unit/integration/BDD suites. Status: covered.

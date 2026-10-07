@@ -388,4 +388,4 @@ class TestQueryAnalyticsConcurrency(_AuthContext):
             for p in patches:
                 stack.enter_context(p)
             result = await query_analytics_concurrency()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"

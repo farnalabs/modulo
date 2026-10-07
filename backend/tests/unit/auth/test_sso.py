@@ -5,7 +5,8 @@ import contextlib
 import json
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -35,8 +36,27 @@ from modulo.auth.sso import (
 )
 from modulo.core.feature_flags import DbPlanContext, FeatureFlagRegistry
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: stub the fresh ``audit_session`` the fail-closed
+    ``audited_system(...)`` dependency writes on (a real engine — no database
+    in the unit tier); the dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _override(**kwargs: str | bool) -> Settings:
@@ -3322,3 +3342,77 @@ class TestSamlRelayStateRouteIntegration:
             # Legacy path doesn't pass relay_state arg
             call_kwargs = mock_process.call_args
             assert "relay_state" not in call_kwargs.kwargs
+
+    def _free_system_session(self) -> AsyncMock:
+        """A SYSTEM session whose read-only guard reports no open transaction."""
+        session = _mock_session()
+        session.in_transaction = MagicMock(return_value=False)
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        return session
+
+    def test_legacy_acs_attributes_attempt_to_the_resolved_provider_org(self, client: TestClient) -> None:
+        """FAR-1516: when the SYSTEM session is free, the legacy ACS route reads
+        the enabled provider once and rebinds the audit org to its organisation."""
+        provider = _make_saml_provider(provider_id="okta-saml")
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        system_session = self._free_system_session()
+
+        async def override_system() -> AsyncGenerator[AsyncMock, None]:
+            yield system_session
+
+        _app.dependency_overrides[get_system_db_session] = override_system
+        try:
+            with (
+                patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_provider,
+                patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+            ):
+                mock_provider.return_value = provider
+                mock_process.return_value = {
+                    "access_token": "at-legacy",
+                    "refresh_token": "rt-legacy",
+                    "token_type": "bearer",
+                }
+                resp = client.post(
+                    "/api/v1/auth/saml/acs",
+                    data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                    follow_redirects=False,
+                )
+        finally:
+            _app.dependency_overrides.pop(get_system_db_session, None)
+
+        assert resp.status_code == 307, resp.text
+        mock_provider.assert_awaited_once()
+
+    def test_legacy_acs_keeps_sentinel_org_when_no_provider_resolves(self, client: TestClient) -> None:
+        """FAR-1516: an env-only (or absent) provider leaves the sentinel org in place."""
+        _override_settings(modulo_license_key="lic-123", modulo_saml_enabled=True)
+        system_session = self._free_system_session()
+
+        async def override_system() -> AsyncGenerator[AsyncMock, None]:
+            yield system_session
+
+        _app.dependency_overrides[get_system_db_session] = override_system
+        try:
+            with (
+                patch("modulo.api.routes.sso.get_enabled_saml_provider", new_callable=AsyncMock) as mock_provider,
+                patch("modulo.api.routes.sso.saml_process_response", new_callable=AsyncMock) as mock_process,
+            ):
+                mock_provider.return_value = None
+                mock_process.return_value = {
+                    "access_token": "at-legacy",
+                    "refresh_token": "rt-legacy",
+                    "token_type": "bearer",
+                }
+                resp = client.post(
+                    "/api/v1/auth/saml/acs",
+                    data={"SAMLResponse": base64.b64encode(b"<saml/>").decode()},
+                    follow_redirects=False,
+                )
+        finally:
+            _app.dependency_overrides.pop(get_system_db_session, None)
+
+        assert resp.status_code == 307, resp.text
+        mock_provider.assert_awaited_once()

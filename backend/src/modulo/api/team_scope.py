@@ -121,8 +121,8 @@ async def evaluate_team_gate(
         )
     if org_role == "admin":
         return None
-    is_team_private = visibility not in ("org", None) and owner_team_id is not None
-    if not is_team_private:
+    is_team_private = visibility not in ("org", None)
+    if not is_team_private or owner_team_id is None:
         return None
     if team_key_id is not None:
         if owner_team_id == team_key_id:

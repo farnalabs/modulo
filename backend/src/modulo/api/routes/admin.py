@@ -760,7 +760,7 @@ async def _create_or_adopt_account(
 
 @router.post(
     "/users",
-    dependencies=[Depends(audited("user_created_by_admin", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.admin_create_user")
@@ -843,7 +843,7 @@ class AdminCreateTeamResponse(BaseModel):
     "/teams",
     status_code=status.HTTP_201_CREATED,
     dependencies=[
-        Depends(audited("team_created", "team", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_post", "team", principal_dep=get_current_tenant_user)),
         require_feature("team_rbac"),
     ],
 )
@@ -1381,7 +1381,7 @@ def _raise_bg_pgcode(
 
 @router.post(
     "/users/{user_id}/deactivate",
-    dependencies=[Depends(audited("user_deactivated", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ADMIN_ADMIN_DEACTIVATE_USER)
 async def admin_deactivate_user(
@@ -1510,7 +1510,7 @@ async def admin_deactivate_user(
 
 @router.post(
     "/users/{user_id}/reactivate",
-    dependencies=[Depends(audited("user_reactivated", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors(_CODE_ADMIN_ADMIN_REACTIVATE_USER)
 async def admin_reactivate_user(
@@ -1611,7 +1611,7 @@ class AdminResetPasswordResponse(BaseModel):
 
 @router.post(
     "/users/{user_id}/reset-password",
-    dependencies=[Depends(audited("user_password_reset_by_admin", "user", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "user", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("admin.admin_reset_password")
 async def admin_reset_password(
@@ -1789,7 +1789,7 @@ async def _append_invite_audit_event_fail_open(
 
 @router.post(
     "/users/invite",
-    dependencies=[Depends(audited("invite_created", "invitation", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "invitation", principal_dep=get_current_tenant_user))],
     status_code=status.HTTP_201_CREATED,
 )
 @handle_db_errors("admin.admin_invite_user")
@@ -1917,7 +1917,7 @@ async def admin_list_invitations(
     dependencies=[
         Depends(
             audited(
-                "invite_revoked",
+                "api_access_delete",
                 "invitation",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -2092,7 +2092,7 @@ async def _update_team_or_raise(
 @router.put(
     "/teams/{team_id}",
     dependencies=[
-        Depends(audited("team_updated", "team", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_put", "team", principal_dep=get_current_tenant_user)),
         require_feature("team_rbac"),
     ],
 )
@@ -2230,7 +2230,7 @@ async def admin_reassign_all_team_resources(
     dependencies=[
         Depends(
             audited(
-                "team_deleted",
+                "api_access_delete",
                 "team",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -2493,7 +2493,7 @@ class DeletionRequestResponse(BaseModel):
     dependencies=[
         Depends(
             audited(
-                "org_deletion_requested",
+                "api_access_post",
                 "organisation",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,
@@ -3643,7 +3643,7 @@ class ManualPurgeRequest(BaseModel):
     dependencies=[
         Depends(
             audited(
-                "run_purge",
+                "api_access_post",
                 "run",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,

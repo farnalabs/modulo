@@ -4483,12 +4483,31 @@ class TestTransientFailureDetail:
         assert "killed" in detail
 
     def test_sandbox_node_failed_error_detail(self) -> None:
-        exc = SandboxNodeFailedError("stalled", node_id="node-a")
+        """FAR-1526: a retries-exhausted SandboxNodeFailedError surfaces its
+        OWN canonical sandbox code (the one LEGACY_ALIASES maps the exception
+        class name to), not the generic ``node_cancelled`` — a no-output stall
+        must not be bucketed as a cancellation."""
+        exc = SandboxNodeFailedError("agent produced no output for 600s", node_id="node-a")
+        code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
+            exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
+        )
+        assert code == "sandbox.no_output_json"
+        assert "Sandbox node failed (transient) after retries exhausted: agent produced no output for 600s" in detail
+
+    def test_hang_death_keeps_generic_cancelled_code(self) -> None:
+        """FAR-136 guard: a hang death carries the "likely hung" marker and is
+        excluded from ``failure`` retries ONLY while its code resolves to
+        ``node.cancelled`` — the FAR-1526 sandbox-code upgrade must not apply."""
+        exc = SandboxNodeFailedError(
+            "Sandbox agent command produced no output within 3300s. "
+            "No stdout/stderr was captured — the agent likely hung before writing any result.",
+            node_id="node-a",
+        )
         code, detail = TestTransientFailureDetail._executor()._transient_failure_detail(
             exc=exc, script_lease_ok=True, graph_idempotent=True, node_attempt_count=1, retries=1
         )
         assert code == "node_cancelled"
-        assert "Sandbox node failed (transient) after retries exhausted: stalled" in detail
+        assert "likely hung" in detail
 
     def test_non_idempotent_graph_retry_suppression_detail(self) -> None:
         exc = SandboxNodeFailedError("side-effect fail", node_id="node-a")

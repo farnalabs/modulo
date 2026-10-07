@@ -117,8 +117,12 @@ network defaults) while preserving operator-owned ones.
   allowlist in the Docker tier (T1, and T2b). This is a DECISION, not an
   omission: bounded egress belongs to your cluster's controls, not a
   vendor-built gateway. For self-hosted compute, the supported bounded
-  answer is the Kubernetes tier (T3, still "to build"): run Modulo's runner
-  on your cluster and bound the workspace with your own NetworkPolicy. The
+  answer is the Kubernetes tier (T3 — the provider ships on main,
+  FAR-1051): run Modulo's runner on your cluster and bound the workspace
+  with your own NetworkPolicy. Its kind conformance gate is green
+  (FAR-1053) but does not exercise workload identity or NetworkPolicy
+  enforcement, and the scheduled managed-cluster leg has not run yet
+  (`docs/deployment/k8s-conformance-parity.md`). The
   managed-sandbox tier (T2a / E2B) is a separate case — it supports egress
   allowlists today via node-level `egress_policy: selected` +
   `egress_allowlist` (an enforced, fail-closed allowlist inside the
@@ -138,14 +142,14 @@ compute lives; T4 swaps in the customer's agent image.
 | **T1** Bundled Runner (self-hosted Docker) — this guide | simplest, self-contained; **deliberately permissive networking** — bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
 | **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
 | **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* — T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
-| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | to build |
+| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) — workload identity / NetworkPolicy enforcement not exercised by the gate, managed leg pending |
 | **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
 T1 is deliberately the permissive end of the spectrum. For bounded egress
-on self-hosted compute, choose T3 (once built) and enforce with your own
-NetworkPolicy; the managed-sandbox tier (T2a / E2B) already supports
-node-level egress allowlists today.
+on self-hosted compute, choose T3 (the provider ships on main, FAR-1051)
+and enforce with your own NetworkPolicy; the managed-sandbox tier
+(T2a / E2B) already supports node-level egress allowlists today.
 
 ## 6. Reconciler (leak repair)
 

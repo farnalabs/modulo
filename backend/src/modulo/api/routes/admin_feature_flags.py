@@ -22,8 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_system_permission
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_system_permission, resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
@@ -462,7 +461,7 @@ class ToggleFlagRequest(BaseModel):
 
 @router.put(
     "/{flag_name}",
-    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_put", "org", principal_dep=resolve_audit_principal))],
     response_model=None,
 )
 @handle_db_errors("admin.feature_flags.toggle_feature_flag")
@@ -594,7 +593,7 @@ async def get_org_flag_override(
 
 @router.put(
     "/{flag_name}/org-override",
-    dependencies=[Depends(audited("feature_flag_override_set", "org", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_put", "org", principal_dep=resolve_audit_principal))],
     response_model=None,
 )
 @handle_db_errors("admin.feature_flags.set_org_flag_override")
@@ -657,9 +656,9 @@ async def set_org_flag_override(
     dependencies=[
         Depends(
             audited(
-                "feature_flag_override_cleared",
+                "api_access_delete",
                 "org",
-                principal_dep=get_current_tenant_user,
+                principal_dep=resolve_audit_principal,
                 fail_closed=True,
             )
         )

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -22,7 +22,8 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.audit_coverage import audit_session, audited
+from modulo.core import audit_coverage
+from modulo.core.audit_coverage import audit_session, audited, audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -349,6 +350,259 @@ async def test_dependency_propagates_append_cancellation() -> None:
 async def test_dependency_rethrows_cancellation_at_yield() -> None:
     """A cancelled request re-raises at the yield — no audit write after cancel."""
     gen = _drive_to_yield()
+    assert await gen.asend(None) is None
+    with pytest.raises(asyncio.CancelledError):
+        await gen.athrow(asyncio.CancelledError())
+
+
+# ---------------------------------------------------------------------------
+# audited_system() — the actor-less variant (FAR-1516)
+# ---------------------------------------------------------------------------
+
+
+def _mini_system_client(
+    *,
+    fail_closed: bool = False,
+    publish_org: bool = True,
+    promote_actor_source: bool = False,
+    handler_raises: bool = False,
+) -> tuple[TestClient, AsyncMock]:
+    """One-route app on the real ``audited_system()`` dependency (no DB/auth).
+
+    The route stands in for the pre-auth / webhook handlers: it publishes the
+    org (and optionally promotes ``actor_source``) exactly as the real routes
+    do, then returns — or raises, to exercise the error arm.
+    """
+    api = FastAPI()
+    audit_session_mock = _make_mock_session()
+
+    async def override_audit_session() -> AsyncGenerator[AsyncMock, None]:
+        yield audit_session_mock
+
+    @api.post(
+        "/system",
+        dependencies=[
+            Depends(
+                audited_system(
+                    "login_attempted",
+                    "session",
+                    actor_source="unauthenticated",
+                    fail_closed=fail_closed,
+                )
+            )
+        ],
+    )
+    async def system_route(request: Request) -> dict[str, str]:
+        if publish_org:
+            bind_audit_org(request, _ORG_ID)
+        if promote_actor_source:
+            bind_audit_actor_source(request, "signature_verified")
+        if handler_raises:
+            raise RuntimeError("handler exploded")
+        return {"ok": "true"}
+
+    api.dependency_overrides[audit_session] = override_audit_session
+    return TestClient(api), audit_session_mock
+
+
+def test_audited_system_records_a_system_event_without_an_actor() -> None:
+    """One POST -> one chained event: NULL actor, SYSTEM marker, route's org."""
+    client, audit_session_mock = _mini_system_client()
+    append = AsyncMock()
+    rls_org = AsyncMock()
+    with (
+        patch("modulo.core.audit_coverage.append_audit_event", new=append),
+        patch("modulo.core.audit_coverage.set_rls_org", new=rls_org),
+    ):
+        resp = client.post("/system")
+
+    assert resp.status_code == 200, resp.text
+    assert append.call_count == 1, f"expected exactly one audit event, got {append.call_count}"
+
+    kwargs = append.call_args.kwargs
+    assert kwargs["org_id"] == _ORG_ID
+    assert kwargs["event_type"] == "login_attempted"
+    assert kwargs["resource_type"] == "session"
+    # Provenance: never a fabricated actor — NULL column + explicit marker.
+    assert kwargs["actor_user_id"] is None
+
+    payload = kwargs["payload_json"]
+    assert payload["actor"] == "system"
+    assert payload["actor_source"] == "unauthenticated"
+    assert payload["outcome"] == "success"
+    assert payload["path"] == "/system"
+    # RLS context is pinned to the published org for the fresh transaction.
+    assert rls_org.call_args.args[1] == _ORG_ID
+    assert audit_session_mock.begin.call_count == 1
+
+
+def test_audited_system_records_the_promoted_actor_source() -> None:
+    """A route that promotes provenance records the promotion, not the default."""
+    client, _ = _mini_system_client(promote_actor_source=True)
+    append = AsyncMock()
+    with patch("modulo.core.audit_coverage.append_audit_event", new=append):
+        resp = client.post("/system")
+
+    assert resp.status_code == 200, resp.text
+    assert append.call_count == 1
+    assert append.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
+
+
+def test_audited_system_skips_and_logs_when_no_org_was_published(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """No published org -> nowhere honest to record: logged, never invented."""
+    client, _ = _mini_system_client(publish_org=False)
+    append = AsyncMock()
+    with patch("modulo.core.audit_coverage.append_audit_event", new=append):
+        resp = client.post("/system")
+
+    assert resp.status_code == 200, resp.text
+    append.assert_not_called()
+    messages = [record.getMessage() for record in caplog.records]
+    assert "audit_coverage.login_attempted.no_org_context" in messages
+
+
+def test_audited_system_fail_closed_reraises_an_append_failure() -> None:
+    """fail_closed=True: the append error reaches the caller instead of a log."""
+    client, _ = _mini_system_client(fail_closed=True)
+    failing = AsyncMock(side_effect=RuntimeError("audit store is down"))
+    with (
+        patch("modulo.core.audit_coverage.append_audit_event", new=failing),
+        pytest.raises(RuntimeError, match="audit store is down"),
+    ):
+        client.post("/system")
+
+
+def test_audited_system_records_a_handler_error_without_masking_it() -> None:
+    """A handler crash is audited (outcome=error) and still reaches the caller."""
+    client, _ = _mini_system_client(handler_raises=True)
+    append = AsyncMock()
+    with (
+        patch("modulo.core.audit_coverage.append_audit_event", new=append),
+        pytest.raises(RuntimeError, match="handler exploded"),
+    ):
+        client.post("/system")
+
+    assert append.call_count == 1
+    assert append.call_args.kwargs["payload_json"]["outcome"] == "error"
+
+
+def test_audited_system_rejects_blank_arguments() -> None:
+    """Fails at decoration time, not silently at request time."""
+    with pytest.raises(ValueError, match="event_type"):
+        audited_system("  ", "session", actor_source="pre_auth")
+    with pytest.raises(ValueError, match="resource_type"):
+        audited_system("login_attempted", "", actor_source="pre_auth")
+    with pytest.raises(ValueError, match="actor_source"):
+        audited_system("login_attempted", "session", actor_source="  ")
+
+
+def test_bind_audit_org_never_clobbers_a_published_org_with_an_empty_value() -> None:
+    """None / "" mean \"not known yet\" — they must not unpublish a good org."""
+    request = Request({"type": "http", "method": "POST", "path": "/", "headers": [], "query_string": b""})
+    bind_audit_org(request, _ORG_ID)
+    bind_audit_org(request, None)
+    bind_audit_org(request, "")
+    assert request.state.audit_org_id == str(_ORG_ID)
+
+
+# ---------------------------------------------------------------------------
+# Provenance binding + resolution helpers (FAR-1516)
+# ---------------------------------------------------------------------------
+
+
+def _bare_request() -> Request:
+    """A minimal real ``Request`` whose ``state`` the helpers can publish onto."""
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": [], "query_string": b""})
+
+
+def test_bind_audit_actor_source_rejects_a_blank_or_non_string_source() -> None:
+    """An empty/missing provenance basis is a programming error, not a silent no-op."""
+    request = _bare_request()
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, "")
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, "   ")
+    with pytest.raises(ValueError, match="actor_source"):
+        bind_audit_actor_source(request, None)  # type: ignore[arg-type]
+
+
+def test_resolve_audit_org_reads_only_a_honest_org(caplog: pytest.LogCaptureFixture) -> None:
+    """Every published spelling is resolved; anything else is refused, never coerced."""
+    request = _bare_request()
+    # Nothing published -> unattributed; never invent an org.
+    assert audit_coverage._resolve_audit_org(request) is None
+    # A raw uuid.UUID is accepted directly.
+    request.state.audit_org_id = _ORG_ID
+    assert audit_coverage._resolve_audit_org(request) == _ORG_ID
+    # A UUID string round-trips.
+    request.state.audit_org_id = str(_ORG_ID)
+    assert audit_coverage._resolve_audit_org(request) == _ORG_ID
+    # A non-string, non-UUID value is refused.
+    request.state.audit_org_id = 12345
+    assert audit_coverage._resolve_audit_org(request) is None
+    # A malformed UUID string is logged and refused.
+    request.state.audit_org_id = "not-a-uuid"
+    assert audit_coverage._resolve_audit_org(request) is None
+    assert any("not a UUID" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_actor_source_falls_back_on_a_blank_or_non_string_value() -> None:
+    """Only a non-empty string is a real promotion; everything else is the default."""
+    request = _bare_request()
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+    request.state.audit_actor_source = "signature_verified"
+    assert audit_coverage._resolve_actor_source(request, "declared") == "signature_verified"
+    request.state.audit_actor_source = "   "
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+    request.state.audit_actor_source = 123
+    assert audit_coverage._resolve_actor_source(request, "declared") == "declared"
+
+
+async def test_emit_system_propagates_a_cancelled_append() -> None:
+    """A cancellation is never swallowed by the audit failure policy."""
+    session = _make_mock_session()
+    with (
+        patch(
+            "modulo.core.audit_coverage._append_system_or_raise",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await audit_coverage._emit_system(
+            session=session,
+            org_id=_ORG_ID,
+            event_type="login_attempted",
+            resource_type="session",
+            payload={"outcome": "success"},
+            fail_closed=False,
+        )
+
+
+async def test_emit_system_fail_open_logs_and_swallows(caplog: pytest.LogCaptureFixture) -> None:
+    """Default policy: an append failure is logged under its stable key, not raised."""
+    session = _make_mock_session()
+    with patch(
+        "modulo.core.audit_coverage._append_system_or_raise",
+        new=AsyncMock(side_effect=RuntimeError("audit store is down")),
+    ):
+        await audit_coverage._emit_system(
+            session=session,
+            org_id=_ORG_ID,
+            event_type="login_attempted",
+            resource_type="session",
+            payload={"outcome": "success"},
+            fail_closed=False,
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert "audit_coverage.login_attempted.append_failed" in messages, messages
+
+
+async def test_audited_system_dependency_rethrows_cancellation_at_yield() -> None:
+    """A cancelled request re-raises at the yield — no system event after cancel."""
+    dep = audited_system("login_attempted", "session", actor_source="unauthenticated")
+    gen = dep(_bare_request(), _make_mock_session())
     assert await gen.asend(None) is None
     with pytest.raises(asyncio.CancelledError):
         await gen.athrow(asyncio.CancelledError())

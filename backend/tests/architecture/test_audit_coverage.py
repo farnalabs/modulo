@@ -86,6 +86,35 @@ async def list_widgets() -> dict[str, str]:
     return {"ok": "true"}
 """
 
+
+_SYSTEM_DEPENDENCIES_FORM = """\
+from fastapi import APIRouter, Depends
+
+from modulo.core.audit_coverage import audited_system
+
+router = APIRouter()
+
+
+@router.post("/widgets", dependencies=[Depends(audited_system("widget_seen", "widget", actor_source="pre_auth"))])
+async def create_widget() -> dict[str, str]:
+    return {"ok": "true"}
+"""
+
+
+_SYSTEM_DECORATOR_FORM = """\
+from fastapi import APIRouter
+
+from modulo.core.audit_coverage import audited_system
+
+router = APIRouter()
+
+
+@router.post("/widgets")
+@audited_system("widget_seen", "widget", actor_source="unauthenticated")
+async def create_widget() -> dict[str, str]:
+    return {"ok": "true"}
+"""
+
 _MULTILINE_DECORATOR = """\
 from fastapi import APIRouter, Depends
 
@@ -179,6 +208,16 @@ def test_scanner_accepts_a_multiline_route_decorator():
 def test_scanner_never_flags_reads():
     """GET routes are out of scope: reads are not mutations."""
     assert not scanner.scan_source(_READ_ROUTE, "widgets.py")
+
+
+def test_scanner_accepts_the_audited_system_form():
+    """``audited_system(...)`` (actor-less, FAR-1516) counts as annotated."""
+    assert not scanner.scan_source(_SYSTEM_DEPENDENCIES_FORM, "widgets.py")
+
+
+def test_scanner_accepts_the_audited_system_decorator_form():
+    """The actor-less variant is accepted in the decorator shape too."""
+    assert not scanner.scan_source(_SYSTEM_DECORATOR_FORM, "widgets.py")
 
 
 def test_scan_covers_the_whole_route_tree():

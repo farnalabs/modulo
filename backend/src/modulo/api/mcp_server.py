@@ -47,7 +47,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 from tenacity import before_sleep_log, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from modulo.api.db_error_handling import raise_session_contract_error
+from modulo.api.db_error_handling import raise_session_contract_error, session_contract_error_payload
 from modulo.api.dependencies import (
     get_or_create_engine,
     get_or_create_session_factory,
@@ -132,7 +132,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.core.hitl_manager import (
@@ -1809,9 +1809,16 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 
-def _tool_error(msg: str) -> dict[str, Any]:
-    """Return a safe error dict so internal traces don't leak to the MCP client."""
-    return {"error": "internal_error", "detail": msg}
+def _tool_error(msg: str, *, code: str) -> dict[str, Any]:
+    """Return a safe error dict so internal traces don't leak to the MCP client.
+
+    ``code`` is REQUIRED (FAR-1502): the consuming agent branches on it, so no
+    call site may fall back to a generic code. Every site that can name its
+    failure mode passes a specific one (``invalid_id``, ``database_unavailable``,
+    ``feature_required``, ...); ``server_error`` is the reserved catch-all for
+    genuinely unexpected failures where nothing more specific is knowable.
+    """
+    return {"error": code, "detail": msg}
 
 
 def _tool_auth_error(msg: str) -> dict[str, Any]:
@@ -1820,34 +1827,56 @@ def _tool_auth_error(msg: str) -> dict[str, Any]:
 
 
 def _tool_session_contract_error(exc: SQLAlchemyError, log_key: str) -> dict[str, Any] | None:
-    """MCP payload form of the shared session-contract classifier (FAR-1482).
+    """MCP payload rendering of the shared session-contract classifier (FAR-1482).
 
-    ``raise_session_contract_error`` is the ONE classifier for "is this a
-    client-side session-contract violation?"; its documented contract is to
-    RAISE ``HTTPException(500, MSG_SESSION_CONTRACT)`` for one and to RETURN
-    for every other exception. MCP tool results carry no status code — the
-    payload IS the response — so this adapter reads that verdict off the raise
-    and re-emits the classifier's own message as this surface's internal-error
-    payload::
-
-        {"error": "internal_error", "detail": MSG_SESSION_CONTRACT}
-
-    One classifier, two renderings: REST answers 500, MCP answers an
-    ``internal_error`` payload carrying the same ``MSG_SESSION_CONTRACT`` text,
-    so a caller reading either surface gets the same verdict. The detail is
-    taken from the exception the classifier raised rather than restated here,
-    so the two surfaces cannot drift apart.
-
-    Returns ``None`` for any exception the classifier does not flag, so the
-    caller's own database-unavailable handling runs unchanged — a genuine
-    transient ``OperationalError`` / ``PendingRollbackError`` still reports
-    ``database_unavailable``.
+    The rendering itself lives next to ``raise_session_contract_error`` in
+    ``db_error_handling`` (FAR-1502 review: a shared home), so the MCP tool
+    surface and the run WebSocket control-frame surface share ONE
+    implementation and neither has to import the other's module.
     """
-    try:
-        raise_session_contract_error(exc, log_key)
-    except FastAPIHTTPException as http_exc:
-        return _tool_error(str(http_exc.detail))
-    return None
+    return session_contract_error_payload(exc, log_key)
+
+
+def _tool_exception_error(msg: str, exc: BaseException, log_key: str) -> dict[str, Any]:
+    """Map an exception that escaped a tool body to a SPECIFIC, branchable code.
+
+    FAR-1502: the consuming agent branches on the ``error`` code, so an
+    ``except Exception`` arm must not answer with a generic code when the
+    exception itself names the failure mode. The ladder, most specific first:
+
+    * ``MCPAuthorizationError`` → ``insufficient_scope`` (the same rendering
+      every tool's explicit authz arm gives — some tools reach the generic
+      arm without peeling it, e.g. ``list_api_keys``).
+    * ``StarletteHTTPException`` → ``validation_failed`` (4xx — the same
+      rendering the shell's ``handle_http_exception`` arm gives) /
+      ``server_error`` (5xx).
+    * a session-contract violation (``InvalidRequestError`` /
+      ``MissingGreenlet``) → ``session_contract_error`` via the shared
+      FAR-1482/FAR-1464 classifier, so the generic arm cannot re-introduce
+      the misclassification FAR-1482 fixed on the explicit arms.
+    * ``IntegrityError`` → ``conflict``; ``ProgrammingError`` →
+      ``migration_required``; any other ``SQLAlchemyError`` (incl. a transient
+      ``OperationalError`` / ``PendingRollbackError``) → ``database_unavailable``.
+    * anything else → ``server_error`` — the reserved catch-all, the ONLY
+      place a not-further-specifiable code is allowed (FAR-1502).
+
+    ``msg`` stays the payload detail so the consuming agent keeps the
+    operation context; only the session-contract detail is taken from the
+    shared classifier (it must match the REST 500 text exactly).
+    """
+    if isinstance(exc, MCPAuthorizationError):
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    if isinstance(exc, StarletteHTTPException):
+        return _tool_error(msg, code="validation_failed" if exc.status_code < 500 else "server_error")
+    if isinstance(exc, SQLAlchemyError):
+        if (contract_error := _tool_session_contract_error(exc, log_key)) is not None:
+            return contract_error
+        if isinstance(exc, IntegrityError):
+            return _tool_error(msg, code="conflict")
+        if isinstance(exc, ProgrammingError):
+            return _tool_error(msg, code="migration_required")
+        return _tool_error(msg, code="database_unavailable")
+    return _tool_error(msg, code="server_error")
 
 
 def _parse_uuid_param(value: str, field: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
@@ -1884,16 +1913,17 @@ class _DbShellConfig(NamedTuple):
 def _db_shell_integrity_response(exc: IntegrityError, cfg: _DbShellConfig) -> dict[str, Any]:
     """The ``IntegrityError`` arm of the shared DB/tool exception ladder.
 
-    ``cfg.db_errors_to_fallback`` skips the clause entirely (the exception
-    falls through to the generic ``Exception`` behaviour — shells such as
-    ``get_trigger`` had no IntegrityError clause at all); a None
-    ``integrity_detail`` yields the ``SQLAlchemyError`` behaviour (what
-    shells without an IntegrityError clause did); otherwise the conflict is
-    formatted with ``orig``.
+    ``cfg.db_errors_to_fallback`` skips the detail clause and answers
+    ``conflict`` with the ``fallback`` detail (a specific, branchable code —
+    FAR-1502; shells such as ``get_trigger`` had no IntegrityError clause at
+    all); a None ``integrity_detail`` yields the ``SQLAlchemyError``
+    behaviour (log + ``database_unavailable``), which is what shells without
+    an IntegrityError clause did; otherwise the conflict is formatted with
+    ``orig``.
     """
     if cfg.db_errors_to_fallback:
         _log.exception(cfg.log_constant)
-        return _tool_error(cfg.fallback)
+        return _tool_error(cfg.fallback, code="conflict")
     if cfg.integrity_detail is None:
         _log.exception(cfg.log_constant)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
@@ -1911,29 +1941,32 @@ async def _run_db_shell[**TOOL_SHELL_P](
 
     Reproduces the verbatim per-tool ``try/except`` shells the ladder
     replaces, keyed by ``cfg`` so the remaining tools can adopt it without
-    hardcoding:
+    hardcoding. Clauses carry specific, branchable codes (FAR-1502):
 
     - ``MCPAuthorizationError`` → ``insufficient_scope`` (all shells).
     - ``StarletteHTTPException`` → ``validation_failed`` when
-      ``cfg.handle_http_exception`` is True; otherwise the generic
-      ``Exception`` behaviour (log + ``cfg.fallback``), which is what shells
-      without the clause did.
+      ``cfg.handle_http_exception`` is True; otherwise the shared exception
+      classifier (``_tool_exception_error``), which renders 4xx as
+      ``validation_failed`` and 5xx as ``server_error`` with the ``cfg.fallback``
+      detail — what shells without the clause did, plus a branchable code.
     - ``IntegrityError`` → ``conflict`` with ``cfg.integrity_detail``
       formatted with ``orig``; when ``integrity_detail`` is None the
       ``SQLAlchemyError`` behaviour (log + ``database_unavailable``), which is
       what shells without an IntegrityError clause did. When
-      ``cfg.db_errors_to_fallback`` is True the clause is skipped entirely
-      and the exception falls through to the generic ``Exception``
-      behaviour, reproducing shells (e.g. ``get_trigger``) that had no
-      IntegrityError clause at all.
+      ``cfg.db_errors_to_fallback`` is True the detail clause is skipped and
+      the arm answers ``conflict`` with the ``cfg.fallback`` detail,
+      reproducing shells (e.g. ``get_trigger``) that had no IntegrityError
+      clause at all.
     - ``ProgrammingError`` → ``migration_required``.
     - ``SQLAlchemyError`` → the FAR-1482 session-contract classifier first
       (a programming bug surfaces as ``.session_contract_error``, never as
       the generic fallback), then ``database_unavailable``; when
-      ``cfg.db_errors_to_fallback`` is True the clause is skipped entirely
-      and the exception falls through to the generic ``Exception``
-      behaviour, reproducing shells that had no SQLAlchemyError clause.
-    - ``Exception`` → log + ``_tool_error(cfg.fallback)``.
+      ``cfg.db_errors_to_fallback`` is True the detail clause is skipped and
+      the arm answers ``database_unavailable`` with the ``cfg.fallback``
+      detail, reproducing shells that had no SQLAlchemyError clause.
+    - ``Exception`` → log + ``_tool_exception_error(cfg.fallback, exc, log_key)``
+      — classified by exception type (FAR-1502), ``server_error`` only when
+      nothing more specific is knowable.
     """
     # `fn.__name__` is the only per-tool identity available here —
     # ``cfg.log_constant`` is a "<tool> failed" log MESSAGE, not a key. The
@@ -1947,7 +1980,7 @@ async def _run_db_shell[**TOOL_SHELL_P](
         if cfg.handle_http_exception:
             return {"error": "validation_failed", "detail": str(exc.detail)}
         _log.exception(cfg.log_constant)
-        return _tool_error(cfg.fallback)
+        return _tool_exception_error(cfg.fallback, exc, log_key)
     except IntegrityError as exc:
         return _db_shell_integrity_response(exc, cfg)
     except ProgrammingError:
@@ -1961,12 +1994,12 @@ async def _run_db_shell[**TOOL_SHELL_P](
             return contract_error
         if cfg.db_errors_to_fallback:
             _log.exception(cfg.log_constant)
-            return _tool_error(cfg.fallback)
+            return _tool_error(cfg.fallback, code="database_unavailable")
         _log.exception(cfg.log_constant)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log.exception(cfg.log_constant)
-        return _tool_error(cfg.fallback)
+        return _tool_exception_error(cfg.fallback, exc, log_key)
 
 
 def _tool_db_shell(
@@ -2134,9 +2167,9 @@ async def list_pipelines_tool(
     except ProgrammingError:
         _log.exception("list_pipelines_tool failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_pipelines_tool failed")
-        return _tool_error("Failed to list pipelines")
+        return _tool_exception_error("Failed to list pipelines", exc, "mcp.list_pipelines_tool")
 
 
 class _CreatePipelineParsed(NamedTuple):
@@ -2324,9 +2357,9 @@ async def create_pipeline(
     except ProgrammingError:
         _log.exception("create_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_pipeline failed")
-        return _tool_error("Failed to create pipeline")
+        return _tool_exception_error("Failed to create pipeline", exc, "mcp.create_pipeline")
 
 
 def _circuit_breaker_threshold_error(value: float | None) -> dict[str, Any] | None:
@@ -2490,9 +2523,9 @@ async def set_pipeline_circuit_breaker(
     except ProgrammingError:
         _log.exception("set_pipeline_circuit_breaker failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("set_pipeline_circuit_breaker failed")
-        return _tool_error("Failed to set pipeline circuit breaker")
+        return _tool_exception_error("Failed to set pipeline circuit breaker", exc, "mcp.set_pipeline_circuit_breaker")
 
 
 @mcp.tool(
@@ -2567,9 +2600,9 @@ async def set_pipeline_owners(
     except ProgrammingError:
         _log.exception("set_pipeline_owners failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("set_pipeline_owners failed")
-        return _tool_error("Failed to set pipeline owners")
+        return _tool_exception_error("Failed to set pipeline owners", exc, "mcp.set_pipeline_owners")
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
@@ -2612,9 +2645,9 @@ async def list_runs(
     except ProgrammingError:
         _log.exception("list_runs failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_runs failed")
-        return _tool_error("Failed to list runs")
+        return _tool_exception_error("Failed to list runs", exc, "mcp.list_runs")
 
 
 async def _list_runs_impl(
@@ -2630,7 +2663,11 @@ async def _list_runs_impl(
     from modulo.db.crud.run import list_runs as db_list_runs
 
     org_id = _ctx_org_id_val()
-    pid = uuid.UUID(pipeline_id) if pipeline_id else None
+    # FAR-1540: a malformed filter id is a client error (``invalid_id``), not a
+    # generic ``internal_error`` from the wrapper's ``except Exception`` arm.
+    pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+    if pid_err is not None:
+        return pid_err
     async with _session(org_id) as s:
         if pid is not None:
             owner_team_id = await _pipeline_owner_team_id(s, pid)
@@ -2987,9 +3024,9 @@ async def query_analytics(
     except ProgrammingError:
         _log.exception("query_analytics failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("query_analytics failed")
-        return _tool_error("Failed to query analytics")
+        return _tool_exception_error("Failed to query analytics", exc, "mcp.query_analytics")
 
 
 async def _query_analytics_concurrency_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
@@ -3085,9 +3122,9 @@ async def query_analytics_concurrency(
     except ProgrammingError:
         _log.exception("query_analytics_concurrency failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("query_analytics_concurrency failed")
-        return _tool_error("Failed to query analytics concurrency")
+        return _tool_exception_error("Failed to query analytics concurrency", exc, "mcp.query_analytics_concurrency")
 
 
 @mcp.tool(
@@ -3144,9 +3181,9 @@ async def get_pipeline_graph_tool(
             "error": "migration_required",
             "detail": "Database migration may be required. Run alembic upgrade heads.",
         }
-    except Exception:
+    except Exception as exc:
         _log.exception("get_pipeline_graph_tool failed")
-        return _tool_error("Failed to get pipeline graph")
+        return _tool_exception_error("Failed to get pipeline graph", exc, "mcp.get_pipeline_graph_tool")
 
 
 async def _append_mcp_hitl_denial_audit(
@@ -3481,9 +3518,9 @@ async def update_pipeline_graph(
     except ProgrammingError:
         _log.exception("update_pipeline_graph failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("update_pipeline_graph failed")
-        return _tool_error("Failed to update pipeline graph")
+        return _tool_exception_error("Failed to update pipeline graph", exc, "mcp.update_pipeline_graph")
 
 
 def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -3626,9 +3663,9 @@ async def bind_connector_to_node(
     except ProgrammingError:
         _log.exception("bind_connector_to_node failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("bind_connector_to_node failed")
-        return _tool_error("Failed to bind connector to node")
+        return _tool_exception_error("Failed to bind connector to node", exc, "mcp.bind_connector_to_node")
 
 
 def _trigger_pipeline_validate_id(pipeline_id: str) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
@@ -3771,15 +3808,33 @@ async def trigger_pipeline(
         if exc.deleted:
             return {"error": "org_deleted", "detail": f"Organisation {exc.org_id} is deleted"}
         return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a disabled pipeline must never return the generic tool
+        # error — surface the refusing lifecycle state as a structured,
+        # branchable envelope (caught at the tool level, exactly like
+        # OrgDeletedError, so the transaction unwinds and the snapshot created
+        # above rolls back with the refusal). FAR-1530's Paused state arrives
+        # on the same envelope with state="paused".
+        _log.warning(
+            "trigger_pipeline pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        return {
+            "error": "pipeline_not_runnable",
+            "state": exc.state,
+            "pipeline_id": pipeline_id,
+            "detail": f"Pipeline {pipeline_id} is {exc.state} and cannot start a run",
+        }
     except StorageExhaustedError as exc:
         _log.warning("trigger_pipeline refused — storage exhausted (FAR-426)")
         return {"error": "storage_exhausted", "detail": str(exc)}
     except ProgrammingError:
         _log.exception("trigger_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("trigger_pipeline failed")
-        return _tool_error("Failed to trigger pipeline")
+        return _tool_exception_error("Failed to trigger pipeline", exc, "mcp.trigger_pipeline")
 
 
 async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
@@ -3903,9 +3958,9 @@ async def get_run_status(run_id: str, detail: bool = False) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_run_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_run_status failed")
-        return _tool_error("Failed to get run status")
+        return _tool_exception_error("Failed to get run status", exc, "mcp.get_run_status")
 
 
 def _resolve_run_node_output(outputs: dict[str, Any], telemetry: dict[str, Any], node_id: str) -> dict[str, Any] | None:
@@ -3943,9 +3998,9 @@ async def get_run_output(run_id: str, node_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_run_output failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_run_output failed")
-        return _tool_error("Failed to get node output")
+        return _tool_exception_error("Failed to get node output", exc, "mcp.get_run_output")
 
 
 async def _get_run_output_impl(run_id: str, node_id: str) -> dict[str, Any]:
@@ -4004,9 +4059,9 @@ async def get_run_evals(run_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_run_evals failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_run_evals failed")
-        return _tool_error("Failed to get run evals")
+        return _tool_exception_error("Failed to get run evals", exc, "mcp.get_run_evals")
 
 
 async def _get_run_evals_impl(run_id: str) -> dict[str, Any]:
@@ -4052,7 +4107,10 @@ async def list_eval_definitions(
         _check_agent_tool_scope("list_eval_definitions")
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        # FAR-1540: malformed filter id -> ``invalid_id``, not ``internal_error``.
+        pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+        if pid_err is not None:
+            return pid_err
         lim = max(1, min(limit, 100))
 
         from modulo.db.crud.pagination import CursorPaginator
@@ -4098,9 +4156,9 @@ async def list_eval_definitions(
     except ProgrammingError:
         _log.exception("list_eval_definitions failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_eval_definitions failed")
-        return _tool_error("Failed to list eval definitions")
+        return _tool_exception_error("Failed to list eval definitions", exc, "mcp.list_eval_definitions")
 
 
 # Mirrors the REST ``max_length=255`` on the eval-definition name field so an
@@ -4647,9 +4705,9 @@ async def cancel_run(run_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("cancel_run failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("cancel_run failed")
-        return _tool_error("Failed to cancel run")
+        return _tool_exception_error("Failed to cancel run", exc, "mcp.cancel_run")
 
 
 async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
@@ -4708,9 +4766,9 @@ async def list_pending_hitl(page: int = 1, page_size: int = 20) -> dict[str, Any
     except ProgrammingError:
         _log.exception("list_pending_hitl failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_pending_hitl failed")
-        return _tool_error("Failed to list pending HITL gates")
+        return _tool_exception_error("Failed to list pending HITL gates", exc, "mcp.list_pending_hitl")
 
 
 async def _list_pending_hitl_impl(page: int, page_size: int) -> dict[str, Any]:
@@ -4835,9 +4893,9 @@ async def list_hitl_reviews(limit: int = 20) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("list_hitl_reviews failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_hitl_reviews failed")
-        return _tool_error("Failed to list HITL reviews")
+        return _tool_exception_error("Failed to list HITL reviews", exc, "mcp.list_hitl_reviews")
 
 
 async def _list_hitl_reviews_impl(limit: int) -> dict[str, Any]:
@@ -4909,9 +4967,9 @@ async def get_hitl_review(run_id: str, review_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_hitl_review failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_hitl_review failed")
-        return _tool_error("Failed to get HITL review")
+        return _tool_exception_error("Failed to get HITL review", exc, "mcp.get_hitl_review")
 
 
 async def _get_hitl_review_impl(run_id: str, review_id: str) -> dict[str, Any]:
@@ -4980,9 +5038,9 @@ async def get_pipeline_reviews(pipeline_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_pipeline_reviews failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_pipeline_reviews failed")
-        return _tool_error("Failed to get pipeline reviews")
+        return _tool_exception_error("Failed to get pipeline reviews", exc, "mcp.get_pipeline_reviews")
 
 
 async def _get_pipeline_reviews_impl(pipeline_id: str) -> dict[str, Any]:
@@ -5515,7 +5573,7 @@ def _hitl_error_response(exc: BaseException, run_id: str, review_id: str) -> dic
         _log.exception("review_hitl failed")
         return {"error": "migration_required", "detail": "DB migration required. Run alembic upgrade head."}
     _log.exception("review_hitl failed")
-    return _tool_error("Failed to process HITL action")
+    return _tool_exception_error("Failed to process HITL action", exc, "mcp.review_hitl")
 
 
 async def _review_hitl_impl(
@@ -5627,9 +5685,9 @@ async def review_hitl(
         return await _review_hitl_impl(run_id, review_id, action, claim_token, reason, output, answer)
     except OperationalError:
         raise
-    except Exception:
+    except Exception as exc:
         _log.exception("review_hitl operation failed")
-        return _tool_error("Failed to process HITL action")
+        return _tool_exception_error("Failed to process HITL action", exc, "mcp.review_hitl")
 
 
 @mcp.tool(
@@ -5665,9 +5723,9 @@ async def copy_library_primitive(
         except ProgrammingError:
             _log.exception("copy_library_primitive failed")
             return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-        except Exception:
+        except Exception as exc:
             _log.exception("copy_library_primitive failed")
-            return _tool_error("Failed to copy library primitive")
+            return _tool_exception_error("Failed to copy library primitive", exc, "mcp.copy_library_primitive")
 
     return {
         "status": "copied",
@@ -5732,9 +5790,9 @@ async def search_library(
     except ProgrammingError:
         _log.exception("search_library failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("search_library failed")
-        return _tool_error("Failed to search library")
+        return _tool_exception_error("Failed to search library", exc, "mcp.search_library")
 
 
 async def _apply_trigger_event_trigger_filter(
@@ -5939,9 +5997,9 @@ async def list_trigger_events(
     except ProgrammingError:
         _log.exception("list_trigger_events failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_trigger_events failed")
-        return _tool_error("Failed to list trigger events")
+        return _tool_exception_error("Failed to list trigger events", exc, "mcp.list_trigger_events")
 
 
 @mcp.tool(
@@ -5962,7 +6020,10 @@ async def list_triggers(
         from modulo.db.crud.trigger import list_triggers as db_list_triggers
 
         org_id = _ctx_org_id_val()
-        pid = uuid.UUID(pipeline_id) if pipeline_id else None
+        # FAR-1540: malformed filter id -> ``invalid_id``, not ``internal_error``.
+        pid, pid_err = _parse_optional_uuid(pipeline_id, "pipeline_id")
+        if pid_err is not None:
+            return pid_err
         lim = max(1, min(limit, 100))
 
         async with _session(org_id) as s:
@@ -6008,9 +6069,9 @@ async def list_triggers(
     except ProgrammingError:
         _log.exception("list_triggers failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_triggers failed")
-        return _tool_error("Failed to list triggers")
+        return _tool_exception_error("Failed to list triggers", exc, "mcp.list_triggers")
 
 
 def _assert_create_model_backend_provider(provider: str) -> dict[str, Any] | None:
@@ -6120,9 +6181,9 @@ async def create_model_backend(
     except ProgrammingError:
         _log.exception("create_model_backend failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_model_backend failed")
-        return _tool_error("Failed to create model backend")
+        return _tool_exception_error("Failed to create model backend", exc, "mcp.create_model_backend")
 
 
 def _model_backend_item(mb: Any) -> dict[str, Any]:
@@ -6184,9 +6245,9 @@ async def list_model_backends(
     except ProgrammingError:
         _log.exception("list_model_backends failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_model_backends failed")
-        return _tool_error("Failed to list model backends")
+        return _tool_exception_error("Failed to list model backends", exc, "mcp.list_model_backends")
 
 
 @mcp.tool(
@@ -6228,9 +6289,9 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_model_backend failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_model_backend failed")
-        return _tool_error("Failed to get model backend")
+        return _tool_exception_error("Failed to get model backend", exc, "mcp.get_model_backend")
 
 
 @mcp.tool(
@@ -6286,9 +6347,9 @@ async def create_connector(
     except ProgrammingError:
         _log.exception("create_connector failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_connector failed")
-        return _tool_error("Failed to create connector")
+        return _tool_exception_error("Failed to create connector", exc, "mcp.create_connector")
 
 
 def _validate_trigger_create_inputs(
@@ -6477,9 +6538,9 @@ async def create_trigger(
     except ProgrammingError:
         _log.exception("create_trigger failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_trigger failed")
-        return _tool_error("Failed to create trigger")
+        return _tool_exception_error("Failed to create trigger", exc, "mcp.create_trigger")
 
 
 def _trigger_detail_dict(trigger: Any, in_flight: int, streak_status: Any) -> dict[str, Any]:
@@ -6885,9 +6946,9 @@ async def update_trigger(
     except ProgrammingError:
         _log.exception("update_trigger failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("update_trigger failed")
-        return _tool_error("Failed to update trigger")
+        return _tool_exception_error("Failed to update trigger", exc, "mcp.update_trigger")
 
 
 @mcp.tool(description="Soft-delete a trigger by ID.")
@@ -6940,9 +7001,9 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("delete_trigger failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("delete_trigger failed")
-        return _tool_error("Failed to delete trigger")
+        return _tool_exception_error("Failed to delete trigger", exc, "mcp.delete_trigger")
 
 
 @mcp.tool(
@@ -7006,9 +7067,9 @@ async def set_org_triggers_paused(paused: bool) -> dict[str, Any]:
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except StarletteHTTPException:
         return {"error": "not_found", "detail": "Organisation not found"}
-    except Exception:
+    except Exception as exc:
         _log.exception("set_org_triggers_paused failed")
-        return _tool_error("Failed to update org trigger pause state")
+        return _tool_exception_error("Failed to update org trigger pause state", exc, "mcp.set_org_triggers_paused")
 
 
 @mcp.tool(description="Delete a pipeline by ID.")
@@ -7045,9 +7106,9 @@ async def delete_pipeline(
     except ProgrammingError:
         _log.exception("delete_pipeline failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("delete_pipeline failed")
-        return _tool_error("Failed to delete pipeline")
+        return _tool_exception_error("Failed to delete pipeline", exc, "mcp.delete_pipeline")
 
 
 @mcp.tool(description="Delete a connector instance by ID.")
@@ -7085,9 +7146,9 @@ async def delete_connector(
     except ProgrammingError:
         _log.exception("delete_connector failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except Exception:
+    except Exception as exc:
         _log.exception("delete_connector failed")
-        return _tool_error("Failed to delete connector")
+        return _tool_exception_error("Failed to delete connector", exc, "mcp.delete_connector")
 
 
 def _connector_item(ci: Any) -> dict[str, Any]:
@@ -7154,9 +7215,9 @@ async def list_connectors(
     except ProgrammingError:
         _log.exception("list_connectors failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_connectors failed")
-        return _tool_error("Failed to list connectors")
+        return _tool_exception_error("Failed to list connectors", exc, "mcp.list_connectors")
 
 
 @mcp.tool(description="Get a single connector instance by ID. Returns metadata — never credential values.")
@@ -7194,9 +7255,9 @@ async def get_connector(connector_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_connector failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_connector failed")
-        return _tool_error("Failed to get connector")
+        return _tool_exception_error("Failed to get connector", exc, "mcp.get_connector")
 
 
 def _connector_type_field_metadata(type_id: str) -> dict[str, Any] | None:
@@ -7258,9 +7319,9 @@ async def list_connector_types() -> dict[str, Any]:
         return {"data": items, "total": len(items)}
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_connector_types failed")
-        return _tool_error("Failed to list connector types")
+        return _tool_exception_error("Failed to list connector types", exc, "mcp.list_connector_types")
 
 
 @mcp.tool(
@@ -7306,9 +7367,9 @@ async def create_secret(
     except ProgrammingError:
         _log.exception("create_secret failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_secret failed")
-        return _tool_error("Failed to create secret")
+        return _tool_exception_error("Failed to create secret", exc, "mcp.create_secret")
 
 
 @mcp.tool(
@@ -7362,9 +7423,9 @@ async def list_secrets(
     except ProgrammingError:
         _log.exception("list_secrets failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_secrets failed")
-        return _tool_error("Failed to list secrets")
+        return _tool_exception_error("Failed to list secrets", exc, "mcp.list_secrets")
 
 
 @mcp.tool(description="Delete a secret from the organisation vault by key.")
@@ -7401,9 +7462,9 @@ async def delete_secret(
     except ProgrammingError:
         _log.exception("delete_secret failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED_HEADS}
-    except Exception:
+    except Exception as exc:
         _log.exception("delete_secret failed")
-        return _tool_error("Failed to delete secret")
+        return _tool_exception_error("Failed to delete secret", exc, "mcp.delete_secret")
 
 
 # ---------------------------------------------------------------------------
@@ -7642,9 +7703,9 @@ async def get_hitl_email_alerts() -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_hitl_email_alerts failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_hitl_email_alerts failed")
-        return _tool_error("Failed to get HITL email alert preferences")
+        return _tool_exception_error("Failed to get HITL email alert preferences", exc, "mcp.get_hitl_email_alerts")
 
 
 @mcp.tool(
@@ -7716,9 +7777,9 @@ async def set_hitl_email_alerts(
     except ProgrammingError:
         _log.exception("set_hitl_email_alerts failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("set_hitl_email_alerts failed")
-        return _tool_error("Failed to set HITL email alert preferences")
+        return _tool_exception_error("Failed to set HITL email alert preferences", exc, "mcp.set_hitl_email_alerts")
 
 
 class _CreateApiKeyParsed(NamedTuple):
@@ -7938,10 +7999,10 @@ async def create_api_key(
         if (contract_error := _tool_session_contract_error(exc, "mcp.create_api_key")) is not None:
             return contract_error
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
-        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
-    except Exception:
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
+    except Exception as exc:
         _log.exception(_MSG_CREATE_API_KEY_FAILED)
-        return _tool_error("Failed to create API key")
+        return _tool_exception_error("Failed to create API key", exc, "mcp.create_api_key")
 
 
 @mcp.tool(
@@ -7970,10 +8031,10 @@ async def list_api_keys() -> dict[str, Any]:
         if (contract_error := _tool_session_contract_error(exc, "mcp.list_api_keys")) is not None:
             return contract_error
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
-        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
-    except Exception:
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
+    except Exception as exc:
         _log.exception(_MSG_LIST_API_KEYS_FAILED)
-        return _tool_error("Failed to list API keys")
+        return _tool_exception_error("Failed to list API keys", exc, "mcp.list_api_keys")
 
 
 @mcp.tool(
@@ -8034,10 +8095,10 @@ async def revoke_api_key(key_id: str) -> dict[str, Any]:
         if (contract_error := _tool_session_contract_error(exc, "mcp.revoke_api_key")) is not None:
             return contract_error
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
-        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE)
-    except Exception:
+        return _tool_error(_MSG_DB_TEMPORARILY_UNAVAILABLE, code="database_unavailable")
+    except Exception as exc:
         _log.exception(_MSG_REVOKE_API_KEY_FAILED)
-        return _tool_error("Failed to revoke API key")
+        return _tool_exception_error("Failed to revoke API key", exc, "mcp.revoke_api_key")
 
 
 @mcp.tool(description="Create a new agent. Returns the created agent details.")
@@ -8075,14 +8136,31 @@ async def create_agent(
         except GitContentRefError as exc:
             return {"error": "validation_failed", "detail": str(exc)}
 
-        from modulo.db.crud.agent import create_agent as db_create_agent
-
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
 
-        parsed_model_backend_id = uuid.UUID(model_backend_id) if model_backend_id else None
-        parsed_input_schema_id = uuid.UUID(input_schema_id) if input_schema_id else None
-        parsed_output_schema_id = uuid.UUID(output_schema_id) if output_schema_id else None
+        # FAR-1540: every id-shaped param here is parsed BEFORE any DB session
+        # is opened. A malformed id used to raise ``ValueError`` out of
+        # ``uuid.UUID(...)``, land in the generic ``except Exception`` arm and
+        # come back as ``internal_error`` — a code the consuming agent cannot
+        # branch on (and, for ``template_id``, the failure was worse: the CRUD
+        # layer's lenient ``coerce_uuid`` silently DROPPED it, so the agent was
+        # created with no template and no error at all). Same helper, same
+        # ``invalid_id`` payload, as every other tool on this surface.
+        parsed_model_backend_id, model_backend_err = _parse_optional_uuid(model_backend_id, "model_backend_id")
+        if model_backend_err is not None:
+            return model_backend_err
+        parsed_input_schema_id, input_schema_err = _parse_optional_uuid(input_schema_id, "input_schema_id")
+        if input_schema_err is not None:
+            return input_schema_err
+        parsed_output_schema_id, output_schema_err = _parse_optional_uuid(output_schema_id, "output_schema_id")
+        if output_schema_err is not None:
+            return output_schema_err
+        parsed_template_id, template_err = _parse_optional_uuid(template_id, "template_id")
+        if template_err is not None:
+            return template_err
+
+        from modulo.db.crud.agent import create_agent as db_create_agent
 
         async with _session(org_id) as s:
             agent = await db_create_agent(
@@ -8099,7 +8177,7 @@ async def create_agent(
                 model_backend_id=parsed_model_backend_id,
                 description=description,
                 connector_type_refs=connector_type_refs or [],
-                template_id=template_id,
+                template_id=str(parsed_template_id) if parsed_template_id is not None else None,
                 agent_commands=agent_commands,
                 required_environment_capabilities=required_environment_capabilities,
             )
@@ -8116,9 +8194,9 @@ async def create_agent(
     except ProgrammingError:
         _log.exception("create_agent failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("create_agent failed")
-        return _tool_error("Failed to create agent")
+        return _tool_exception_error("Failed to create agent", exc, "mcp.create_agent")
 
 
 def _agent_item(a: Any) -> dict[str, Any]:
@@ -8171,9 +8249,9 @@ async def list_agents(
     except ProgrammingError:
         _log.exception("list_agents failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_agents failed")
-        return _tool_error("Failed to list agents")
+        return _tool_exception_error("Failed to list agents", exc, "mcp.list_agents")
 
 
 def _agent_to_dict(agent: Agent) -> dict[str, Any]:
@@ -8234,9 +8312,9 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_agent failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_agent failed")
-        return _tool_error("Failed to get agent")
+        return _tool_exception_error("Failed to get agent", exc, "mcp.get_agent")
 
 
 _doc_index: DocumentationIndex | None = None
@@ -8319,9 +8397,9 @@ async def search_documentation(query: str, section: str | None = None) -> dict[s
             return {"results": "No documentation found for query.", "count": 0}
         formatted = index.format_results(results)
         return {"results": formatted, "count": len(results)}
-    except Exception:
+    except Exception as exc:
         _log.exception("search_documentation failed")
-        return _tool_error("Failed to search documentation")
+        return _tool_exception_error("Failed to search documentation", exc, "mcp.search_documentation")
 
 
 @mcp.tool(
@@ -8416,9 +8494,9 @@ async def get_integration_status() -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_integration_status failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_integration_status failed")
-        return _tool_error("Failed to get integration status")
+        return _tool_exception_error("Failed to get integration status", exc, "mcp.get_integration_status")
 
 
 _VALID_CONFIG_SECTIONS = {"assistant", "plan", "rate_limits"}
@@ -8487,9 +8565,9 @@ async def get_org_config(section: str | None = None) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_org_config failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_org_config failed")
-        return _tool_error("Failed to get org configuration")
+        return _tool_exception_error("Failed to get org configuration", exc, "mcp.get_org_config")
 
 
 @mcp.tool(
@@ -8524,9 +8602,9 @@ async def get_available_features() -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("get_available_features failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_available_features failed")
-        return _tool_error("Failed to get available features")
+        return _tool_exception_error("Failed to get available features", exc, "mcp.get_available_features")
 
 
 @mcp.tool(
@@ -8592,9 +8670,9 @@ async def create_schema(
             return contract_error
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log.exception(_MSG_CREATE_SCHEMA_FAILED)
-        return _tool_error("Failed to create schema")
+        return _tool_exception_error("Failed to create schema", exc, "mcp.create_schema")
 
 
 @mcp.tool(
@@ -8632,9 +8710,9 @@ async def list_schemas(
     except ProgrammingError:
         _log.exception("list_schemas failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_schemas failed")
-        return _tool_error("Failed to list schemas")
+        return _tool_exception_error("Failed to list schemas", exc, "mcp.list_schemas")
 
 
 @mcp.tool(
@@ -8693,9 +8771,9 @@ async def list_environment_profiles(
     except ProgrammingError:
         _log.exception("list_environment_profiles failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_environment_profiles failed")
-        return _tool_error("Failed to list environment profiles")
+        return _tool_exception_error("Failed to list environment profiles", exc, "mcp.list_environment_profiles")
 
 
 @mcp.tool(
@@ -8744,9 +8822,9 @@ async def list_parameter_schemas(
     except ProgrammingError:
         _log.exception("list_parameter_schemas failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_parameter_schemas failed")
-        return _tool_error("Failed to list parameter schemas")
+        return _tool_exception_error("Failed to list parameter schemas", exc, "mcp.list_parameter_schemas")
 
 
 # ---------------------------------------------------------------------------
@@ -8835,9 +8913,9 @@ async def create_parameter_schema(
             return contract_error
         _log_tool_failure("create_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("create_parameter_schema")
-        return _tool_error("Failed to create parameter schema")
+        return _tool_exception_error("Failed to create parameter schema", exc, "mcp.create_parameter_schema")
 
 
 @mcp.tool(
@@ -8873,9 +8951,9 @@ async def get_parameter_schema(
     except ProgrammingError:
         _log.exception("get_parameter_schema failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_parameter_schema failed")
-        return _tool_error("Failed to get parameter schema")
+        return _tool_exception_error("Failed to get parameter schema", exc, "mcp.get_parameter_schema")
 
 
 @mcp.tool(
@@ -8936,9 +9014,9 @@ async def update_parameter_schema(
             return contract_error
         _log_tool_failure("update_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("update_parameter_schema")
-        return _tool_error("Failed to update parameter schema")
+        return _tool_exception_error("Failed to update parameter schema", exc, "mcp.update_parameter_schema")
 
 
 @mcp.tool(
@@ -8991,9 +9069,9 @@ async def delete_parameter_schema(
             return contract_error
         _log_tool_failure("delete_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("delete_parameter_schema")
-        return _tool_error("Failed to delete parameter schema")
+        return _tool_exception_error("Failed to delete parameter schema", exc, "mcp.delete_parameter_schema")
 
 
 @mcp.tool(
@@ -9049,9 +9127,9 @@ async def restore_parameter_schema(
             return contract_error
         _log_tool_failure("restore_parameter_schema")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("restore_parameter_schema")
-        return _tool_error("Failed to restore parameter schema")
+        return _tool_exception_error("Failed to restore parameter schema", exc, "mcp.restore_parameter_schema")
 
 
 @mcp.tool(
@@ -9094,9 +9172,11 @@ async def get_parameter_schema_references(
     except ProgrammingError:
         _log.exception("get_parameter_schema_references failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_parameter_schema_references failed")
-        return _tool_error("Failed to get parameter schema references")
+        return _tool_exception_error(
+            "Failed to get parameter schema references", exc, "mcp.get_parameter_schema_references"
+        )
 
 
 @mcp.tool(
@@ -9136,9 +9216,9 @@ async def validate_parameter_schema(
     except ProgrammingError:
         _log.exception("validate_parameter_schema failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("validate_parameter_schema failed")
-        return _tool_error("Failed to validate parameter schema")
+        return _tool_exception_error("Failed to validate parameter schema", exc, "mcp.validate_parameter_schema")
 
 
 # ---------------------------------------------------------------------------
@@ -9181,9 +9261,9 @@ async def list_parameter_sets(
     except ProgrammingError:
         _log.exception("list_parameter_sets failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_parameter_sets failed")
-        return _tool_error("Failed to list parameter sets")
+        return _tool_exception_error("Failed to list parameter sets", exc, "mcp.list_parameter_sets")
 
 
 @mcp.tool(
@@ -9243,9 +9323,9 @@ async def create_parameter_set(
             return contract_error
         _log_tool_failure("create_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("create_parameter_set")
-        return _tool_error("Failed to create parameter set")
+        return _tool_exception_error("Failed to create parameter set", exc, "mcp.create_parameter_set")
 
 
 @mcp.tool(
@@ -9283,9 +9363,9 @@ async def get_parameter_set(
     except ProgrammingError:
         _log.exception("get_parameter_set failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("get_parameter_set failed")
-        return _tool_error("Failed to get parameter set")
+        return _tool_exception_error("Failed to get parameter set", exc, "mcp.get_parameter_set")
 
 
 @mcp.tool(
@@ -9353,9 +9433,9 @@ async def update_parameter_set(
             return contract_error
         _log_tool_failure("update_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("update_parameter_set")
-        return _tool_error("Failed to update parameter set")
+        return _tool_exception_error("Failed to update parameter set", exc, "mcp.update_parameter_set")
 
 
 @mcp.tool(
@@ -9415,9 +9495,9 @@ async def delete_parameter_set(
             return contract_error
         _log_tool_failure("delete_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("delete_parameter_set")
-        return _tool_error("Failed to delete parameter set")
+        return _tool_exception_error("Failed to delete parameter set", exc, "mcp.delete_parameter_set")
 
 
 @mcp.tool(
@@ -9471,9 +9551,9 @@ async def restore_parameter_set(
             return contract_error
         _log_tool_failure("restore_parameter_set")
         return {"error": "database_unavailable", "detail": _MSG_DB_OPERATION_FAILED}
-    except Exception:
+    except Exception as exc:
         _log_tool_failure("restore_parameter_set")
-        return _tool_error("Failed to restore parameter set")
+        return _tool_exception_error("Failed to restore parameter set", exc, "mcp.restore_parameter_set")
 
 
 @mcp.tool(
@@ -9500,7 +9580,8 @@ async def infer_schema(
         if not settings.modulo_dev_mode:
             return _tool_error(
                 "Schema inference requires developer mode. "
-                "Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags."
+                "Set MODULO_DEV_MODE=true or toggle Developer Mode in Admin > Feature Flags.",
+                code="feature_required",
             )
         from modulo.core.schema_registry import SchemaInferenceError, SchemaInferenceService
 
@@ -9543,9 +9624,9 @@ async def infer_schema(
     except ProgrammingError:
         _log.exception("infer_schema failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("infer_schema failed")
-        return _tool_error("Failed to infer schema")
+        return _tool_exception_error("Failed to infer schema", exc, "mcp.infer_schema")
 
 
 @mcp.tool(
@@ -9612,9 +9693,9 @@ async def validate_payload(
     except ProgrammingError:
         _log.exception("validate_payload failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("validate_payload failed")
-        return _tool_error("Failed to validate payload")
+        return _tool_exception_error("Failed to validate payload", exc, "mcp.validate_payload")
 
 
 @mcp.tool(
@@ -9652,9 +9733,9 @@ async def list_housekeeping(limit: int = 100) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("list_housekeeping failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("list_housekeeping failed")
-        return _tool_error("Failed to list housekeeping candidates")
+        return _tool_exception_error("Failed to list housekeeping candidates", exc, "mcp.list_housekeeping")
 
 
 def _group_housekeeping_items(items: list[dict[str, str]], errors: list[dict[str, str]]) -> dict[str, list[str]]:
@@ -9774,9 +9855,9 @@ async def perform_housekeeping(items: list[dict[str, str]]) -> dict[str, Any]:
     except ProgrammingError:
         _log.exception("perform_housekeeping failed")
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
-    except Exception:
+    except Exception as exc:
         _log.exception("perform_housekeeping failed")
-        return _tool_error("Failed to perform housekeeping")
+        return _tool_exception_error("Failed to perform housekeeping", exc, "mcp.perform_housekeeping")
 
 
 # ---------------------------------------------------------------------------
@@ -10791,6 +10872,25 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
     if params is None:
         raise RuntimeError("_oauth_token_impl: form parse returned no error and no params")
 
+    # FAR-1544: RFC 6749 §6 — a standards-compliant client refreshes at the
+    # advertised token_endpoint, so this route must serve the refresh_token
+    # grant too. Dispatch on grant_type BEFORE the authorization-code
+    # credential extraction hard-rejects anything that isn't
+    # authorization_code; any other grant still falls through to
+    # ``unsupported_grant_type`` unchanged.
+    grant_type = params.get("grant_type", "")
+    request.state.oauth_grant_type = grant_type
+    if grant_type == "refresh_token":
+        refresh_creds, refresh_err = _extract_oauth_refresh_credentials(request, params)
+        if refresh_err:
+            return refresh_err
+        refresh_resp, refresh_resp_err = await _exchange_refresh_token(refresh_creds, get_settings())
+        if refresh_resp_err:
+            return refresh_resp_err
+        if refresh_resp is None:
+            raise RuntimeError("_oauth_token_impl: refresh exchange returned no error and no response")
+        return JSONResponse(refresh_resp)
+
     creds, cred_err = _extract_oauth_client_credentials(request, params)
     if cred_err:
         return cred_err
@@ -10812,15 +10912,19 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
 
 
 async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token — exchange code for access token.
+    """POST /mcp/oauth/token — exchange a code or refresh token for tokens.
 
     RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
     bodies accepted for backwards compatibility; anything else is
-    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
-    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
-    may arrive in the form body OR an HTTP Basic Authorization header. The
-    consenting account's LIVE org role is re-verified against the granted
-    scopes — a demoted account is denied a token (ADR 047).
+    ``invalid_request``. Serves both grants a client discovers at the
+    advertised ``token_endpoint``: ``authorization_code`` (the PKCE
+    ``code_verifier`` is required and verified against the stored S256
+    challenge, RFC 7636 §4.5/§4.6) and ``refresh_token`` (FAR-1544, RFC 6749
+    §6 — identical behaviour to the ``/mcp/oauth/refresh`` alias). Any other
+    grant is ``unsupported_grant_type``. ``client_secret`` may arrive in the
+    form body OR an HTTP Basic Authorization header. The consenting account's
+    LIVE org role is re-verified against the granted scopes — a demoted
+    account is denied a token (ADR 047).
     """
     from modulo.auth.oauth import (
         InvalidClientError,
@@ -10830,8 +10934,20 @@ async def _oauth_token(request: Request) -> JSONResponse:
     try:
         return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
+        # Mirror ``_oauth_refresh``: the detail names the grant that failed.
+        if getattr(request.state, "oauth_grant_type", "") == "refresh_token":
+            detail = "Refresh token exchange failed"
+        else:
+            detail = "Authorization code exchange failed"
         return JSONResponse(
-            {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
+            {"error": "invalid_grant", "detail": detail},
+            status_code=400,
+        )
+    except (ValueError, JWTError) as exc:
+        # A malformed/expired refresh token raises here — without this branch
+        # it would fall through to ``Exception`` and surface as a 500.
+        return JSONResponse(
+            {"error": "invalid_grant", "detail": str(exc)},
             status_code=400,
         )
     except StarletteHTTPException as e:
@@ -11076,7 +11192,10 @@ def _mcp_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     )
     return JSONResponse(
         status_code=500,
-        content={"error": "internal_error", "detail": _MSG_UNEXPECTED_ERROR},
+        # FAR-1502: ``server_error`` is the surface's reserved catch-all
+        # (the OAuth endpoints above already render it for this exact
+        # frame); the generic ``internal_error`` is disallowed.
+        content={"error": "server_error", "detail": _MSG_UNEXPECTED_ERROR},
     )
 
 

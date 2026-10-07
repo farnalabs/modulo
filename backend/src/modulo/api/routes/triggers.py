@@ -44,6 +44,7 @@ from modulo.api.middleware.sensitive_mask import (
     mask_config_json,
     merge_masked_config_json,
 )
+from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.team_scope import (
     evaluate_team_gate,
     resolve_pipeline_team_scope,
@@ -58,7 +59,7 @@ from modulo.core.cron_helpers import (
     compute_next_fire,
     validate_cron_expression,
 )
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -1669,6 +1670,17 @@ async def test_trigger(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the test run is refused at the create_run choke point when
+        # the target pipeline is archived/soft-deleted — 409 Conflict, never a
+        # generic 500. Raised inside the transaction, so
+        # the snapshot + test TriggerEvent roll back with the refusal.
+        _log.warning(
+            "triggers.test_trigger pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except StorageExhaustedError:
         raise
     except HTTPException:
