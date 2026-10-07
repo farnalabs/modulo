@@ -14,8 +14,10 @@ Covers the four contract requirements:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -677,6 +679,195 @@ async def test_real_failure_alongside_benign_advisory_alerts_and_names_both() ->
     assert "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)" in alert["html"]
     # Healthy checks are not reported as problems.
     assert "database:" not in alert["html"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1571 follow-up: recovery honesty, unavailable-precedence, and the
+# taxonomy drift-guard.
+# ---------------------------------------------------------------------------
+
+
+async def test_recovery_reports_only_conditions_that_actually_cleared() -> None:
+    """The alert-time condition list can contain a BENIGN advisory that is
+    still degraded when the real sweep recovers. The recovery email must
+    report only what ACTUALLY cleared: exactly one recovery email, the
+    cleared sweep named, and the still-failing benign advisory never claimed
+    as resolved (it appears nowhere in the recovery email)."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    lag_bullet = "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)"
+    sweep_bullet = "runner_marker_sweep: degraded (no sweep in 22m)"
+
+    # Incident: real sweep dead AND the benign advisory degraded, aggregate ok.
+    observer.observation = _advisory_observation(
+        sweep=ha.SubCheck(status="degraded", detail="no sweep in 22m"),
+        benign=ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+    )
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    # The alert recorded BOTH conditions (both were non-ok at alert time).
+    assert sweep_bullet in sender.sent[0]["html"]
+    assert lag_bullet in sender.sent[0]["html"]
+
+    # The sweep recovers; the benign advisory is STILL degraded.
+    observer.observation = _advisory_observation(
+        sweep=ha.SubCheck(status="ok", detail="sweep ran 1m ago"),
+        benign=ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+    )
+    pending = await _tick(observer, sender, store, settings, clock)
+    assert pending["action"] == "none"  # hysteresis still applies
+    result = await _tick(observer, sender, store, settings, clock)
+    assert result["action"] == "recovery"
+    assert len(sender.sent) == 2
+
+    recovery = sender.sent[1]
+    assert "recovered" in recovery["subject"].lower()
+    # What actually cleared IS reported...
+    assert sweep_bullet in recovery["html"]
+    assert sweep_bullet in recovery["text"]
+    # ...and the still-failing benign advisory is NOT claimed cleared — it
+    # appears nowhere in either part of the recovery email.
+    assert "event_loop_lag" not in recovery["html"]
+    assert "event_loop_lag" not in recovery["text"]
+
+    # Exactly one recovery: staying that way emails nothing further.
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+
+async def test_unavailable_aggregate_with_real_advisory_reports_unavailable_once() -> None:
+    """Precedence: aggregate ``unavailable`` WITH a real-failure advisory
+    non-ok -> the reported status is ``unavailable`` (the unavailable branch
+    wins over the advisory-degraded branch) and exactly ONE alert fires."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = ha.HealthObservation(
+        status="unavailable",
+        checks={
+            "database": ha.SubCheck(status="unavailable", detail="connection refused"),
+            "runner_marker_sweep": ha.SubCheck(status="degraded", detail="no sweep in 22m"),
+        },
+    )
+    assert observer.observation.reported_status == "unavailable"
+
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    assert sender.sent[0]["subject"] == "[Modulo] Readiness unavailable"
+
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+
+async def test_recovery_lists_remaining_when_no_alert_time_condition_cleared() -> None:
+    """Defensive branch: when NOTHING can be confirmed cleared, the recovery
+    says so honestly and lists what remains — it never claims an empty (or
+    false) set of cleared conditions."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+    # Seeded incident record whose only alert-time condition is the benign
+    # advisory — still non-ok in the current observation.
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": ["event_loop_lag: degraded (stall)"],
+            "since": 999_000.0,
+        }
+    )
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="connected"),
+            "event_loop_lag": ha.SubCheck(status="degraded", detail="stall"),
+        },
+    )
+
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "recovery"
+    assert len(sender.sent) == 1
+    recovery = sender.sent[0]
+    # Honest copy: nothing cleared is SAID, and what remains is listed.
+    assert "no alert-time condition has cleared" in recovery["html"]
+    assert "event_loop_lag: degraded (stall)" in recovery["html"]
+    assert "The following conditions have cleared" not in recovery["html"]
+
+
+async def test_recovery_says_so_when_no_alert_time_condition_was_recorded() -> None:
+    """Defensive branch: an incident record with NO alert-time conditions
+    recovers with an honest sentence instead of an empty 'cleared' list."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": [],
+            "since": 999_000.0,
+        }
+    )
+    observer.observation = _healthy()
+
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "recovery"
+    assert len(sender.sent) == 1
+    recovery = sender.sent[0]
+    assert "no alert-time condition is still failing" in recovery["html"]
+    assert "no alert-time condition is still failing" in recovery["text"]
+    assert "The following conditions have cleared" not in recovery["html"]
+
+
+def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
+    """FAR-1571 drift-guard: the classification must stay in sync with the
+    readiness route, which IS the taxonomy (``api.routes.health`` — PR #1372
+    owns that file; this test only READS its source).
+
+    Parse ``evaluate_readiness``'s own ``checks`` dict literal for every
+    check name and its ``statuses`` aggregation list for the GATING names;
+    the ADVISORY remainder must equal this module's real-failure set plus
+    the three deliberate benign exclusions. A check added/renamed/removed
+    over there fails HERE rather than silently losing alert coverage.
+    """
+    from modulo.api.routes import health as health_module
+
+    source = inspect.getsource(health_module.evaluate_readiness)
+    checks_block = re.search(r"checks: dict\[str, CheckResult\] = \{(.*?)\n    \}", source, re.DOTALL)
+    assert checks_block is not None, "readiness `checks` dict literal not found — health.py changed shape"
+    name_to_var = dict(re.findall(r'^[ ]{8}"([a-z0-9_]+)": [ ]*([a-z_]+),[ ]*$', checks_block.group(1), re.MULTILINE))
+    assert len(name_to_var) >= 10, f"parsed only {sorted(name_to_var)!r} — health.py checks dict shape changed"
+
+    statuses_block = re.search(r"statuses = \[(.*?)\]", source, re.DOTALL)
+    assert statuses_block is not None, "aggregate `statuses` list not found — health.py changed shape"
+    gating_vars = set(re.findall(r"([a-z_]+_check)\b", statuses_block.group(1)))
+    advisory_names = {name for name, var in name_to_var.items() if var not in gating_vars}
+
+    benign = {"event_loop_lag", "break_glass", "db_hygiene"}
+    assert advisory_names == ha.REAL_FAILURE_ADVISORY_CHECKS | benign
 
 
 # ---------------------------------------------------------------------------

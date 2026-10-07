@@ -38,7 +38,10 @@ inventing a mechanism):
   gates the aggregate — so it already alerts — while its NOT-MEASURED probe
   is advisory per FAR-1510 and is not a hygiene failure at all). The
   hysteresis below is unchanged, so a single transient advisory blip still
-  never emails.
+  never emails. On recovery the email reports ONLY the alert-time conditions
+  that actually cleared — the alert-time list can contain a benign advisory
+  that is STILL degraded when the real failure recovers, and claiming that
+  one "cleared" would be false.
 * **Edge-triggered, confirmed by hysteresis.** A new state must be observed on
   ``CONFIRM_TICKS`` consecutive ticks before any notification. A single-probe
   blip never emails, and a one-tick flap produces ZERO emails (neither the
@@ -122,6 +125,15 @@ _MAX_PERSISTED_CONDITIONS = 50
 #:   * ``db_hygiene`` — a GRADED failure already gates the aggregate (so it
 #:     already alerts); its NOT-MEASURED probe is advisory (FAR-1510) and is
 #:     not a hygiene failure.
+#:
+#: ``dispatcher_reconcile`` is the one member that is ALSO a gating check: it
+#: gates the aggregate at its ``unavailable`` tier (a silently dead reconcile
+#: cron); only its ``degraded`` tier (a single missed 60s tick) is advisory —
+#: see the aggregation in ``api.routes.health``. Both routes merge into the
+#: same binary ``observed_state``, so an incident there still yields exactly
+#: ONE alert email and ONE recovery email (never double-counted, no second
+#: edge — the state machine has one unhealthy edge regardless of which route
+#: made it unhealthy).
 REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
     {
         "dispatcher_reconcile",
@@ -236,6 +248,15 @@ class HealthObservation:
                 bullet += f" ({check.detail})"
             bullets.append(bullet)
         return bullets
+
+    def non_ok_names(self) -> set[str]:
+        """Names of the checks that are non-``ok`` RIGHT NOW.
+
+        The recovery split keys on these: an alert-time condition has cleared
+        exactly when its check name is absent here (FAR-1571) — a benign
+        advisory still degraded at recovery time is NOT reported as cleared.
+        """
+        return {name for name, check in self.checks.items() if check.status != "ok"}
 
 
 async def _observe_readiness() -> HealthObservation:
@@ -376,19 +397,70 @@ def _alert_text(settings: Settings, status: str, conditions: list[str], observed
     )
 
 
+def _split_cleared_conditions(
+    alert_conditions: list[str],
+    current_non_ok_names: set[str],
+) -> tuple[list[str], list[str]]:
+    """Partition the alert-time conditions into ``(cleared, still_failing)``.
+
+    A condition bullet is ``"<name>: <status> (<detail>)"`` — its check NAME
+    is everything before the first ``":"``. An alert-time condition has
+    CLEARED exactly when its check is no longer non-``ok`` in the current
+    observation. This matters under FAR-1571: the alert-time list can contain
+    benign advisories (``event_loop_lag``, ``break_glass``, a not-measured
+    ``db_hygiene``) that are STILL degraded when the real failure recovers —
+    the recovery email must not claim those cleared.
+    """
+    cleared: list[str] = []
+    still_failing: list[str] = []
+    for condition in alert_conditions:
+        name = condition.split(":", 1)[0].strip()
+        if name in current_non_ok_names:
+            still_failing.append(condition)
+        else:
+            cleared.append(condition)
+    return cleared, still_failing
+
+
+def _recovery_summary(
+    cleared: list[str],
+    still_failing: list[str],
+    duration_seconds: float | None,
+) -> tuple[str, list[str]]:
+    """``(intro sentence, conditions to list)`` — honest about what cleared.
+
+    * Some cleared -> list ONLY those (a still-failing benign advisory is
+      deliberately not re-listed: the email must never claim it cleared, and
+      listing only true statements keeps that impossible).
+    * None cleared -> say so, and list what remains (nothing was confirmed
+      cleared, so there is nothing else to report as such).
+    * Nothing recorded at alert time -> say that instead of an empty list.
+    """
+    duration = f" after {duration_seconds:.0f}s" if duration_seconds is not None else ""
+    if cleared:
+        return f"The following conditions have cleared{duration}:", cleared
+    if still_failing:
+        return (
+            f"The incident recovered{duration}, but no alert-time condition has cleared — still failing:",
+            still_failing,
+        )
+    return f"The incident recovered{duration}; no alert-time condition is still failing.", []
+
+
 def _recovery_html(
     settings: Settings,
-    prior_conditions: list[str],
+    cleared: list[str],
+    still_failing: list[str],
     duration_seconds: float | None,
     resolved_at: str,
 ) -> str:
-    items = "".join(f"<li>{html.escape(condition)}</li>" for condition in prior_conditions)
-    duration = f" after {duration_seconds:.0f}s" if duration_seconds is not None else ""
+    intro, items = _recovery_summary(cleared, still_failing, duration_seconds)
+    list_html = "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in items) + "</ul>" if items else ""
     return (
         "<html><body>"
         "<h2>Modulo: readiness recovered</h2>"
-        f"<p>The following conditions have cleared{html.escape(duration)}:</p>"
-        f"<ul>{items}</ul>"
+        f"<p>{html.escape(intro)}</p>"
+        f"{list_html}"
         f"<p>Resolved at {html.escape(resolved_at)} on {html.escape(_host())}</p>"
         f"{alert_context_html(settings)}"
         "</body></html>"
@@ -397,17 +469,19 @@ def _recovery_html(
 
 def _recovery_text(
     settings: Settings,
-    prior_conditions: list[str],
+    cleared: list[str],
+    still_failing: list[str],
     duration_seconds: float | None,
     resolved_at: str,
 ) -> str:
-    duration = f" after {duration_seconds:.0f}s" if duration_seconds is not None else ""
+    intro, items = _recovery_summary(cleared, still_failing, duration_seconds)
+    listing = "\n".join(f"- {item}" for item in items)
+    if listing:
+        listing = f"\n{listing}"
     return (
         "Modulo: readiness recovered\n"
-        f"The following conditions have cleared{duration}:\n"
-        + "\n".join(f"- {condition}" for condition in prior_conditions)
-        + f"\nResolved at {resolved_at} on {_host()}\n"
-        + alert_context_text(settings)
+        f"{intro}{listing}\n"
+        f"Resolved at {resolved_at} on {_host()}\n" + alert_context_text(settings)
     )
 
 
@@ -458,22 +532,29 @@ async def _notify_recovery(
     sender: EmailSender,
     *,
     configured: bool,
+    cleared: list[str],
+    still_failing: list[str],
     state: _AlertState,
     now: float,
 ) -> str:
-    """Recovery edge: email that the incident ended, then close it out."""
+    """Recovery edge: email that the incident ended, then close it out.
+
+    ``cleared`` / ``still_failing`` are the caller's split of the alert-time
+    conditions against the CURRENT observation (FAR-1571): only ``cleared``
+    is ever reported as cleared — an alert-time benign advisory that is still
+    degraded must not be claimed as resolved.
+    """
     if not configured:
         return "disabled"
     recipients = _recipients(settings)
     resolved_at = datetime.now(UTC).isoformat()
     duration_seconds = (now - state.since) if state.since is not None else None
-    prior_conditions = list(state.conditions)
     delivered = await sender(
         settings,
         recipients,
         "[Modulo] Readiness recovered",
-        _recovery_html(settings, prior_conditions, duration_seconds, resolved_at),
-        _recovery_text(settings, prior_conditions, duration_seconds, resolved_at),
+        _recovery_html(settings, cleared, still_failing, duration_seconds, resolved_at),
+        _recovery_text(settings, cleared, still_failing, duration_seconds, resolved_at),
     )
     if not delivered:
         return "send_failed"
@@ -482,10 +563,16 @@ async def _notify_recovery(
     state.since = None
     # Best-effort stamp (see alert_context.stamp_stdout): the state above is
     # already mutated in memory and committed by the caller after this returns
-    # — a print failure must not abort the commit.
+    # — a print failure must not abort the commit. The stamp mirrors the
+    # email's honesty: it names only what actually cleared.
+    if cleared:
+        stamp_summary = "; ".join(cleared)
+    elif still_failing:
+        stamp_summary = "no alert-time condition cleared; still failing: " + "; ".join(still_failing)
+    else:
+        stamp_summary = "no alert-time condition is still failing"
     stamp_stdout(
-        f"[health-alert] RECOVERY readiness=ok: {'; '.join(prior_conditions) or 'conditions cleared'}"
-        f" | {alert_environment_line(settings)}",
+        f"[health-alert] RECOVERY readiness=ok: {stamp_summary} | {alert_environment_line(settings)}",
         logger=_log,
         log_event="health_alerts.stamp_print_failed",
     )
@@ -557,10 +644,16 @@ async def run_health_alert_check(
                 now=current_time,
             )
         elif confirmed and observed == "healthy" and state.notified == "unhealthy":
+            # Split the alert-time conditions against the CURRENT observation:
+            # only what actually cleared is reported as cleared (a benign
+            # advisory still degraded here must not be claimed resolved).
+            cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
             action = await _notify_recovery(
                 settings,
                 send_fn,
                 configured=configured,
+                cleared=cleared,
+                still_failing=still_failing,
                 state=state,
                 now=current_time,
             )
