@@ -1027,7 +1027,10 @@ regression that silently weakens the suite:
   (the ``@then`` assertions consuming the stored response) are deliberately
   left alone: they are the assertion half of a step that must have been
   produced by a real request, which is exactly what this lens forces at the
-  producer side
+  producer side. The pre-existing offenders (the FAR-1578 sweep backlog) are
+  frozen in ``self_asserting_bdd_baseline.txt`` under the same shrink-only
+  ratchet as the audit-coverage baseline, so the guard blocks NEW
+  self-asserting steps immediately while the backlog is rewritten file by file
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -14124,11 +14127,13 @@ def _fabricated_response_reason(target: ast.expr, value: ast.expr | None) -> str
     return None
 
 
-def _self_asserting_bdd_step_violations(tree: ast.AST) -> list[tuple[int, str]]:
-    """Return ``(lineno, detail)`` pairs for BDD steps that fabricate the
-    response they are about to assert on instead of exercising the app."""
-    found: list[tuple[int, str]] = []
-    module_funcs: dict[str, ast.AST] = {
+def _self_asserting_bdd_step_violation_functions(tree: ast.AST) -> list[tuple[str, int, str]]:
+    """Return ``(funcname, lineno, detail)`` triples for BDD steps that
+    fabricate the response they are about to assert on instead of exercising
+    the app. The step function name is the stable baseline key: line numbers
+    drift, function names do not."""
+    found: list[tuple[str, int, str]] = []
+    module_funcs: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {
         node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     for fn in module_funcs.values():
@@ -14147,8 +14152,66 @@ def _self_asserting_bdd_step_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 if reason is not None:
                     reasons.append((node.lineno, reason))
         if reasons and not _step_invokes_app(fn, module_funcs):
-            found.extend(reasons)
+            found.extend((fn.name, lineno, detail) for lineno, detail in reasons)
     return found
+
+
+def _self_asserting_bdd_step_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for BDD steps that fabricate the
+    response they are about to assert on instead of exercising the app."""
+    return [(lineno, detail) for _funcname, lineno, detail in _self_asserting_bdd_step_violation_functions(tree)]
+
+
+#: Pre-existing self-asserting BDD step functions, frozen so the whole-tree
+#: guard blocks only NEW offenders while the FAR-1578 sweep proceeds. Mirrors
+#: the audit-coverage ratchet (``audit_coverage_baseline.txt``): new violations
+#: fail, and a fixed entry must leave the baseline so the list can only shrink.
+_BDD_BASELINE_PATH = Path(__file__).resolve().parent / "self_asserting_bdd_baseline.txt"
+_BDD_BASELINE_HEADER = (
+    "# Self-asserting pytest-BDD step baseline (FAR-1578).\n"
+    "#\n"
+    "# BDD step functions that fabricate the HTTP response/status they later\n"
+    "# assert on instead of driving the real route; they are PRE-EXISTING false\n"
+    "# green tests the FAR-1578 sweep rewrites file by file. Generated, never\n"
+    "# hand-edited. Regenerate with:\n"
+    "#\n"
+    "#   cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py\n"
+    "#\n"
+    "# This list can only SHRINK:\n"
+    "#   * test_no_self_asserting_bdd_step_responses fails on any step NOT listed\n"
+    "#     here (a NEW self-asserting step), and\n"
+    "#   * test_self_asserting_bdd_baseline_has_no_stale_entries fails when a\n"
+    "#     listed step is fixed but not removed from the baseline.\n"
+    "#\n"
+    "# Entry format: <path relative to backend/tests>:<step-function-name>\n"
+)
+
+
+def _self_asserting_bdd_baseline_keys() -> set[str]:
+    """Every current violation key (``<relpath>:<funcname>``), tree-wide."""
+    keys: set[str] = set()
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS).as_posix()
+        for funcname, _lineno, _detail in _self_asserting_bdd_step_violation_functions(tree):
+            keys.add(f"{rel}:{funcname}")
+    return keys
+
+
+def _read_self_asserting_bdd_baseline() -> set[str]:
+    """Baseline entries (comments and blank lines stripped)."""
+    return {
+        line.strip()
+        for line in _BDD_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def _render_self_asserting_bdd_baseline(keys: set[str]) -> str:
+    """Canonical baseline text: fixed header + one sorted entry per line."""
+    return _BDD_BASELINE_HEADER + "".join(f"{key}\n" for key in sorted(keys))
 
 
 def test_no_self_asserting_bdd_step_responses():
@@ -14161,19 +14224,50 @@ def test_no_self_asserting_bdd_step_responses():
     real route through ``TestClient`` (patching only the DB/CRUD doubles the
     route needs). Response *reads* in ``@then`` steps are the assertion half
     of the contract and are deliberately not flagged; only producers that
-    never call the app are."""
+    never call the app are.
+
+    The pre-existing offenders are frozen in
+    ``self_asserting_bdd_baseline.txt`` so this guard blocks NEW self-asserting
+    steps immediately while the FAR-1578 sweep burns the baseline down; the
+    stale-entry test keeps the sweep honest."""
+    baseline = _read_self_asserting_bdd_baseline()
     violations = []
     for path in _iter_test_modules():
         tree = _parse(path)
         if tree is None:
             continue
-        rel = path.relative_to(TESTS)
-        for lineno, detail in _self_asserting_bdd_step_violations(tree):
+        rel = path.relative_to(TESTS).as_posix()
+        for funcname, lineno, detail in _self_asserting_bdd_step_violation_functions(tree):
+            if f"{rel}:{funcname}" in baseline:
+                continue
             violations.append(f"  {rel}:{lineno}  {detail}")
     assert not violations, (
-        f"Found {len(violations)} self-asserting BDD step response assignment(s).\n"
+        f"Found {len(violations)} self-asserting BDD step response assignment(s) outside the\n"
+        "FAR-1578 baseline (tests/architecture/self_asserting_bdd_baseline.txt).\n"
         "A BDD step must exercise the product: drive the real route through TestClient\n"
         "(patching only the necessary DB/CRUD doubles) instead of fabricating the response.\n" + "\n".join(violations)
+    )
+
+
+def test_self_asserting_bdd_baseline_has_no_stale_entries():
+    """A step listed in the baseline but no longer a violation (because it was
+    rewritten to drive the app) must leave the baseline: the ratchet only
+    shrinks, so a completed sweep is recorded and never silently re-opens."""
+    stale = _read_self_asserting_bdd_baseline() - _self_asserting_bdd_baseline_keys()
+    assert not stale, (
+        f"{len(stale)} baseline entr(ies) no longer violate the lens - regenerate the baseline\n"
+        "with `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`:\n  "
+        + "\n  ".join(sorted(stale))
+    )
+
+
+def test_self_asserting_bdd_baseline_is_sorted_and_regenerable():
+    """The baseline must be byte-stable (fixed header + sorted entries) so
+    regeneration is idempotent and review diffs stay minimal."""
+    current = _BDD_BASELINE_PATH.read_text(encoding="utf-8")
+    assert current == _render_self_asserting_bdd_baseline(_read_self_asserting_bdd_baseline()), (
+        "baseline is not in canonical form - regenerate it with "
+        "`cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`"
     )
 
 
