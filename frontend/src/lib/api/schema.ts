@@ -9395,6 +9395,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/errors/instance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Instance Error Groups
+         * @description List the instance-scope (unattributed) error groups — system admin only.
+         */
+        get: operations["list_instance_error_groups_api_v1_errors_instance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/errors/instance/{error_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Instance Error Group Detail
+         * @description Read one instance-scope error group — system admin only.
+         */
+        get: operations["get_instance_error_group_detail_api_v1_errors_instance__error_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/errors/instance/{error_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Instance Error Events
+         * @description List the raw events of one instance-scope error group — system admin only.
+         */
+        get: operations["list_instance_error_events_api_v1_errors_instance__error_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/errors/{error_id}": {
         parameters: {
             query?: never;
@@ -41349,6 +41409,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SchedulerStarvationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_instance_error_groups_api_v1_errors_instance_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                level?: string | null;
+                source?: string | null;
+                environment?: string | null;
+                search?: string | null;
+                limit?: number;
+                offset?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_instance_error_group_detail_api_v1_errors_instance__error_id__get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                error_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorGroupDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_instance_error_events_api_v1_errors_instance__error_id__events_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                error_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEventListResponse"];
                 };
             };
             /** @description Validation Error */
