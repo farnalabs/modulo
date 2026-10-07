@@ -318,6 +318,26 @@ class TestOrgOnlyConnectorRejectedAtGraphSave:
 
         session.execute.assert_awaited_once()
 
+    async def test_an_unresolvable_binding_is_a_named_409(self) -> None:
+        """FAR-1515 CRITICAL 1: a binding the team-blind read cannot resolve is
+        the same named ``connector_team_mismatch`` 409 as a real mismatch."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+        from modulo.core.team_visibility import ConnectorBindingMissingError
+
+        session = AsyncMock()
+        connector_bindings = [{"node_id": "node-1", "connector_instance_id": str(uuid.uuid4())}]
+        missing = ConnectorBindingMissingError([(uuid.uuid4(), "node-1")])
+        with (
+            patch(f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(side_effect=missing)),
+            pytest.raises(HTTPException) as excinfo,
+        ):
+            await _enforce_connector_team_bindings(session, _ORG_ID, _TEAM_A, connector_bindings)
+
+        assert excinfo.value.status_code == 409
+        assert str(excinfo.value.detail).startswith("connector_team_mismatch")
+
 
 # ---------------------------------------------------------------------------
 # FAR-1515 expansion — the write paths that used to bypass the gate:
@@ -520,6 +540,75 @@ class TestConfirmImportRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_mismatches.assert_not_awaited()
 
+    def test_import_with_a_resolvable_binding_that_does_not_mismatch_completes(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """The gate's clean path (bindings present, no mismatch) must not block."""
+        conn_id = uuid.uuid4()
+        materialized = {
+            "pipeline_id": str(_PIPELINE_ID),
+            "pipeline_name": "Imported",
+            "primitive_id": str(uuid.uuid4()),
+            "agent_count": 0,
+            "edge_count": 0,
+            "schema_count": 0,
+            "warnings": [],
+            "connector_bindings": [{"node_id": "node-1", "connector_instance_id": str(conn_id)}],
+        }
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_LIB_PREFIX}validate_owner_team_for_create", new=AsyncMock()),
+            patch(f"{_LIB_PREFIX}materialize_import", new=AsyncMock(return_value=materialized)),
+            patch(f"{_LIB_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[])) as find_mismatches,
+        ):
+            resp = client.post(
+                "/api/v1/libraries/import/confirm",
+                json={
+                    "bundle_json": json.dumps({"format_version": 1, "pipeline": {}}),
+                    "owner_team_id": str(_TEAM_A),
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        find_mismatches.assert_awaited_once()
+
+    def test_import_with_an_unresolvable_binding_is_409(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """FAR-1515 CRITICAL 1: an unresolvable binding is the same named 409."""
+        from modulo.core.team_visibility import ConnectorBindingMissingError
+
+        conn_id = uuid.uuid4()
+        materialized = {
+            "pipeline_id": str(_PIPELINE_ID),
+            "pipeline_name": "Imported",
+            "primitive_id": str(uuid.uuid4()),
+            "agent_count": 0,
+            "edge_count": 0,
+            "schema_count": 0,
+            "warnings": [],
+            "connector_bindings": [{"node_id": "node-1", "connector_instance_id": str(conn_id)}],
+        }
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_LIB_PREFIX}validate_owner_team_for_create", new=AsyncMock()),
+            patch(f"{_LIB_PREFIX}materialize_import", new=AsyncMock(return_value=materialized)),
+            patch(
+                f"{_LIB_PREFIX}find_connector_team_mismatches",
+                new=AsyncMock(side_effect=ConnectorBindingMissingError([(conn_id, "node-1")])),
+            ),
+        ):
+            resp = client.post(
+                "/api/v1/libraries/import/confirm",
+                json={
+                    "bundle_json": json.dumps({"format_version": 1, "pipeline": {}}),
+                    "owner_team_id": str(_TEAM_A),
+                },
+            )
+
+        assert resp.status_code == 409, resp.text
+        assert str(resp.json()["detail"]).startswith("connector_team_mismatch")
+
 
 def _connector_instance_row(*, visibility: str, owner_team_id: uuid.UUID | None) -> MagicMock:
     ci = MagicMock()
@@ -620,3 +709,39 @@ class TestConnectorReScopeRunsConnectorTeamGate:
 
         assert resp.status_code == 200, resp.text
         find_bound.assert_awaited_once()
+
+    def test_a_prefilter_false_positive_does_not_block(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """A candidate whose graph mentions the id in text but binds a DIFFERENT
+        connector is not a real binding, so the re-scope proceeds."""
+        existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
+        updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
+        candidate = _bound_pipeline(owner_team_id=_TEAM_A, instance_id=uuid.uuid4())
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock(return_value=[candidate])),
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
+
+        assert resp.status_code == 200, resp.text
+
+    def test_a_bound_pipeline_without_a_mismatch_does_not_block(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """A pipeline binding the connector from a scope the rule allows (org
+        pipeline + org-only connector) is not a mismatch."""
+        existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
+        updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
+        candidate = _bound_pipeline(owner_team_id=None, instance_id=existing.id)
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock(return_value=[candidate])),
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
+
+        assert resp.status_code == 200, resp.text

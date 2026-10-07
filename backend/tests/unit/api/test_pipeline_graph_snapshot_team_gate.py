@@ -570,3 +570,21 @@ def test_rollback_to_a_snapshot_pinning_the_pipeline_own_team_connector_is_not_4
 
     assert resp.status_code != 409, resp.text
     assert "connector_team_mismatch" not in resp.text
+
+
+def test_rollback_to_a_snapshot_without_bindings_skips_the_connector_gate() -> None:
+    """A target snapshot with no connector bindings is a no-op for the gate."""
+    session = _rollback_session(
+        snapshot=_make_snapshot(
+            graph_json={
+                "nodes": [{"id": str(uuid.uuid4()), "node_type": "manual", "position": {"x": 0, "y": 0}}],
+                "edges": [],
+            }
+        ),
+        connector_rows=[],
+    )
+    with _client_for(session, role="admin") as http:
+        resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAPSHOT_ID}/rollback")
+
+    assert resp.status_code != 409, resp.text
+    assert "connector_team_mismatch" not in resp.text
