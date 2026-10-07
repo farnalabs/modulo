@@ -123,14 +123,16 @@ are **refuted for the error window by observation** (below).
   documented at the field.
 - `db/session.py`: `_build_engine` reads the setting instead of the
   hardcoded 3600; `pool_pre_ping=True` unchanged.
-- **Engine-build sweep (follow-up commit):** every remaining long-lived
+- **Engine-build sweep (follow-up commits):** every remaining long-lived
   pooled engine now honours the same setting —
   `api/dependencies.py` (`_SYSTEM_ASYNC_ENGINE`, system role),
-  `core/reports/scheduler.py`, `core/error_tracking/saq_hooks.py`, and
-  `core/saq_worker.py` (`_get_system_async_engine` — which previously passed
-  **no** `pool_recycle` at all, i.e. age-unbounded pooling, strictly worse
-  than the 3600 s mismatch). `grep 'pool_recycle.*3600'` over
-  `backend/src/**` returns **0 matches**.
+  `core/reports/scheduler.py`, `core/error_tracking/saq_hooks.py`,
+  `core/saq_worker.py` (`_get_system_async_engine`) and
+  `core/cron_helpers.py` (`_get_system_engine`) — the last two of which
+  previously passed **no** `pool_recycle` at all, i.e. age-unbounded pooling,
+  strictly worse than the 3600 s mismatch. A `pool_recycle` grep over
+  `backend/src/**` shows **every** code site reading
+  `settings.db_pool_recycle_seconds` (0 exceptions).
 - `docs/configuration-reference.md`: the new knob documented.
 - Tests: `tests/unit/db/test_session.py` gains the proxy-window contract
   (default below 1800, configurable, pre-ping on, Settings fails fast
@@ -151,12 +153,7 @@ are **refuted for the error window by observation** (below).
 
 ## Known deferred items (outside the allowlist, deliberately untouched)
 
-1. **`core/cron_helpers.py` `_get_system_engine()` (~line 651)** — the
-   mirror of `saq_worker._get_system_async_engine`, also passes **no**
-   `pool_recycle` (age-unbounded pooling). It needs the same one-line
-   `pool_recycle=settings.db_pool_recycle_seconds` — cron_helpers.py was
-   not in this task's allowlist.
-2. Bounded `SET LOCAL lock_timeout` for the dispatch-path
+1. Bounded `SET LOCAL lock_timeout` for the dispatch-path
    `UPDATE runs SET dispatched_at=now()` (the statement observed blocked in
-   O11) — `dispatch.py`/`cron_helpers.py` are outside this allowlist.
-3. Fly-side establishment-closure investigation (needs-human, above).
+   O11) — `dispatch.py` is outside the FAR-1524 allowlists.
+2. Fly-side establishment-closure investigation (needs-human, above).

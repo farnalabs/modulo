@@ -3205,6 +3205,28 @@ class TestGetSystemEngine:
         finally:
             ch._SYSTEM_ENGINE = None
 
+    def test_system_engine_pool_recycle_from_settings_below_the_proxy_window(self) -> None:
+        """FAR-1524: pool_recycle comes from Settings.db_pool_recycle_seconds
+        and must stay strictly below the Fly HAProxy 30m session window
+        (1800 s) — never age-unbounded, never the old 3600 s pattern. Mirrors
+        the saq_worker system-engine pin."""
+        mock_settings = _settings(modulo_system_database_url="postgresql+asyncpg://sys:pass@db:5432/modulo")
+        mock_settings.db_pool_recycle_seconds = 1500
+        ch._SYSTEM_ENGINE = None  # reset singleton
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=mock_settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                ch._get_system_engine()
+
+            kwargs = create_engine.call_args.kwargs
+            assert kwargs["pool_recycle"] == 1500
+            assert kwargs["pool_recycle"] < 1800
+            assert kwargs["pool_pre_ping"] is True
+        finally:
+            ch._SYSTEM_ENGINE = None
+
 
 class TestFireSuiteRunTriggerPersists:
     """``fire_suite_run_trigger`` must persist a JSON-serialisable ``run.extra``.
