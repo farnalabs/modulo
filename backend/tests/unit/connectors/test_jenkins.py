@@ -521,30 +521,108 @@ async def test_write_unsupported_resource(jenkins):
 
 
 # ---------------------------------------------------------------------------
-# Missing required params
+# Missing required params — now fail CLOSED at the job-name guard (FAR-1141)
+#
+# These used to build a malformed `/job//…` URL and surface whatever the host
+# answered (404). An empty name is not a valid job path, so it is rejected
+# before any request exists. The 404 routes stay registered on purpose: a
+# regression that still issues the request raises httpx.HTTPError, not
+# ValueError, and fails the assertion.
 # ---------------------------------------------------------------------------
 
 
 @respx.mock
 async def test_trigger_run_missing_pipeline_id(jenkins):
     respx.post(f"{_JENKINS_BASE}/job//build").mock(return_value=httpx.Response(404, text="Not found"))
-    with pytest.raises(httpx.HTTPError):
+    with pytest.raises(ValueError, match="Unsafe job name"):
         await jenkins.trigger_run(pipeline_id="")
+    assert not respx.calls
 
 
 @respx.mock
 async def test_list_runs_missing_pipeline_id(jenkins):
     respx.get(f"{_JENKINS_BASE}/job//api/json").mock(return_value=httpx.Response(404, text="Not found"))
-    with pytest.raises(httpx.HTTPError):
+    with pytest.raises(ValueError, match="Unsafe job name"):
         await jenkins.list_runs(pipeline_id="")
+    assert not respx.calls
 
 
 @respx.mock
 async def test_query_builds_missing_job_name(jenkins):
     q = ConnectorQuery(resource="builds", filters={})
     respx.get(f"{_JENKINS_BASE}/job//api/json").mock(return_value=httpx.Response(404, text="Not found"))
-    with pytest.raises(httpx.HTTPError):
+    with pytest.raises(ValueError, match="Unsafe job name"):
         await jenkins.query(q)
+    assert not respx.calls
+
+
+@respx.mock
+async def test_write_missing_job_name(jenkins):
+    """A build payload with no job_name fails closed too — it is the same
+    `/job/{job_name}/build` URL shape as `trigger_run`."""
+    route = respx.post(f"{_JENKINS_BASE}/job//build").mock(return_value=httpx.Response(404, text="Not found"))
+    with pytest.raises(ValueError, match="Unsafe job name"):
+        await jenkins.write(ConnectorPayload(resource="build", data={}))
+    assert not route.called
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 (security) sweep: every `/job/{job_name}/…` builder rejects a
+# traversal value WITHOUT issuing an HTTP call
+# ---------------------------------------------------------------------------
+
+_TRAVERSAL_JOB = "../../computer/api/json"
+
+
+async def _sweep_trigger_run(connector: JenkinsConnector):
+    return await connector.trigger_run(pipeline_id=_TRAVERSAL_JOB)
+
+
+async def _sweep_list_runs(connector: JenkinsConnector):
+    return await connector.list_runs(pipeline_id=_TRAVERSAL_JOB)
+
+
+async def _sweep_query_builds(connector: JenkinsConnector):
+    return await connector.query(ConnectorQuery(resource="builds", filters={"job_name": _TRAVERSAL_JOB}))
+
+
+async def _sweep_write_build(connector: JenkinsConnector):
+    return await connector.write(ConnectorPayload(resource="build", data={"job_name": _TRAVERSAL_JOB}))
+
+
+async def _sweep_get_run_status_queue_form(connector: JenkinsConnector):
+    # The queue branch extracts its own job_name without _split_build_run_id.
+    return await connector.get_run_status(f"{_TRAVERSAL_JOB}/queue/7")
+
+
+async def _sweep_get_run_logs_queue_form(connector: JenkinsConnector):
+    return await connector.get_run_logs(f"{_TRAVERSAL_JOB}/queue/7")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(_sweep_trigger_run, id="trigger_run"),
+        pytest.param(_sweep_list_runs, id="list_runs"),
+        pytest.param(_sweep_query_builds, id="query-builds"),
+        pytest.param(_sweep_write_build, id="write-build"),
+        pytest.param(_sweep_get_run_status_queue_form, id="get_run_status-queue-form"),
+        pytest.param(_sweep_get_run_logs_queue_form, id="get_run_logs-queue-form"),
+    ],
+)
+@respx.mock
+async def test_swept_site_rejects_traversal_before_any_http_call(call):
+    """Each swept site must fail at the guard, never on the wire.
+
+    `@respx.mock` is active with NO routes registered: an attempted request
+    raises `AllMockedAssertionError`, which does not match `Unsafe job name`,
+    so this test fails if a single site skips the guard. `respx.calls` empty
+    is the second, independent witness that no request was issued.
+    """
+    connector = JenkinsConnector(username="admin", token="secret", base_url=_JENKINS_BASE)
+    with pytest.raises(ValueError, match="Unsafe job name"):
+        await call(connector)
+    assert not respx.calls
 
 
 # ---------------------------------------------------------------------------

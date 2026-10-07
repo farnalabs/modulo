@@ -14,13 +14,21 @@ export type AnalyticsMeasure =
   | "success_rate";
 export type AnalyticsTimespan = "1h" | "24h" | "3d" | "7d" | "30d" | "90d";
 export type AnalyticsGroupBy = "day" | "week" | "hour";
+// Must stay a SUPERSET of the generated `components["schemas"]["AnalyticsDimension"]`:
+// applyQueryParamsToFilters only keeps a `?dimension=…` deep link whose value is in
+// DIMENSION_VALUES, so an omitted member is dropped silently. `trigger_id` (a
+// long-standing backend dimension) was missing exactly like FAR-1141's
+// `execution_origin`; the structural spec test below fails type-check if the two
+// unions ever diverge again.
 export type AnalyticsDimension =
   | "trigger_type"
+  | "trigger_id"
   | "status"
   | "pipeline"
   | "folder"
   | "team"
-  | "error_code";
+  | "error_code"
+  | "execution_origin";
 export type TrendDirection = "up" | "down" | "flat" | null;
 
 export interface AnalyticsBucket {
@@ -250,11 +258,13 @@ function firstQueryParam(value: unknown): string | null {
 const GROUP_BY_VALUES: AnalyticsGroupBy[] = ["day", "week", "hour"];
 const DIMENSION_VALUES: AnalyticsDimension[] = [
   "trigger_type",
+  "trigger_id",
   "status",
   "pipeline",
   "folder",
   "team",
   "error_code",
+  "execution_origin",
 ];
 
 /**

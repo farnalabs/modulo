@@ -24,7 +24,7 @@ import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRender
 import Select from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
-import type { JourneyDetail } from '../types/lifecycleMap'
+import type { JourneyDetail, JourneyRunHistoryItem } from '../types/lifecycleMap'
 
 const routerPushMock = vi.fn()
 
@@ -420,10 +420,12 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     store.selectedJourneyKey = 'run:run-1'
     await flushPromises()
 
-    // lifecycle_maps.py returns execution_origin on each row; the local
-    // JourneyRunHistoryItem twin predates the column, so widen it here rather
-    // than in the shared type.
-    const runs = [
+    // The shared JourneyRunHistoryItem carries execution_origin (FAR-1141);
+    // typing the fixture against it is what keeps the view and the shared
+    // type in lockstep — an untyped local array would hide the column going
+    // missing again. Both shapes are covered: a dispatched run and one
+    // Modulo executed itself (null).
+    const runs: JourneyRunHistoryItem[] = [
       {
         run_id: 'r-1',
         status: 'complete',

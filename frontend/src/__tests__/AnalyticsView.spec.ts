@@ -30,7 +30,9 @@ import {
   previousWindowParams,
   applyQueryParamsToFilters,
   type AnalyticsBucket,
+  type AnalyticsDimension,
 } from '../stores/analytics'
+import type { components } from '../lib/api/schema'
 
 // Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
 const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-without-guard
@@ -304,6 +306,39 @@ describe('applyQueryParamsToFilters', () => {
     const params = serializeFilters(filters, FIXED_NOW)
     expect(params.dimension).toBe('error_code')
     expect(params.error_code).toBe('executor_stalled')
+  })
+
+  it('keeps a dimension=execution_origin deep link instead of silently dropping it (FAR-1141)', () => {
+    // The literal is typed against the store union: without
+    // `execution_origin` on AnalyticsDimension this line stops type-checking.
+    const origin: AnalyticsDimension = 'execution_origin'
+    const { filters, applied } = applyQueryParamsToFilters({ dimension: origin }, base)
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('execution_origin')
+    // ...and it survives back out into the outbound query params.
+    expect(serializeFilters(filters, FIXED_NOW).dimension).toBe('execution_origin')
+  })
+
+  it('keeps a dimension=trigger_id deep link (same silent-drop defect, found by the structural test)', () => {
+    const triggerId: AnalyticsDimension = 'trigger_id'
+    const { filters, applied } = applyQueryParamsToFilters({ dimension: triggerId }, base)
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('trigger_id')
+    expect(serializeFilters(filters, FIXED_NOW).dimension).toBe('trigger_id')
+  })
+
+  it('accepts every dimension the generated API schema exposes', () => {
+    // Structural guard: the store union must be a superset of the generated
+    // `AnalyticsDimension`. `true` is not assignable to `never`, so a backend
+    // dimension the store omits fails vue-tsc here instead of being dropped
+    // from deep links at runtime.
+    const exhaustive: Exclude<
+      components['schemas']['AnalyticsDimension'],
+      AnalyticsDimension
+    > extends never
+      ? true
+      : never = true
+    expect(exhaustive).toBe(true)
   })
 })
 

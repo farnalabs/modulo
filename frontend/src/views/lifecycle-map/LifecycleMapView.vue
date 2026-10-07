@@ -652,16 +652,13 @@ function statusLabel(status: string): string {
 /**
  * FAR-1141: is this journey run row a dispatched run?
  *
- * `lifecycle_maps.py` returns `execution_origin` on every
- * `JourneyRunHistoryItem`, but the local `types/lifecycleMap.ts` twin predates
- * the column, so the row type is widened here rather than in the shared type.
- * The predicate itself is the SAME `isDispatchedRun` the runs list and
- * dashboard use, so the three surfaces can never disagree on what counts as a
- * dispatched run.
+ * `lifecycle_maps.py` returns `execution_origin` on every journey run-history
+ * row, so the shared `types/lifecycleMap.ts` `JourneyRunHistoryItem` carries
+ * it (the view previously widened the type locally). The predicate itself is
+ * the SAME `isDispatchedRun` the runs list and dashboard use, so the surfaces
+ * can never disagree on what counts as a dispatched run.
  */
-type JourneyRunRow = JourneyRunHistoryItem & { execution_origin?: unknown }
-
-function isDispatchedJourneyRun(run: JourneyRunRow): boolean {
+function isDispatchedJourneyRun(run: JourneyRunHistoryItem): boolean {
   return isDispatchedRun(run.execution_origin)
 }
 

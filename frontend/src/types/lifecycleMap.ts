@@ -81,6 +81,14 @@ export interface JourneyRunHistoryItem {
   status: string | null
   completed_at: string | null
   provenance: string | null
+  /**
+   * FAR-1141: run execution-origin provenance, as returned by
+   * `lifecycle_maps.py`'s journey run history (and in the generated
+   * `components["schemas"]["JourneyRunHistoryItem"]`). Optional because older
+   * payloads / fixtures predate the column; `isDispatchedRun` accepts
+   * `unknown`, so `undefined` and `null` both read as "Modulo executed it".
+   */
+  execution_origin?: string | null
 }
 
 export interface JourneyDetail extends JourneySummary {

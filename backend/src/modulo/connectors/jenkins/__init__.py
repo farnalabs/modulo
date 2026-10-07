@@ -59,18 +59,27 @@ _QUEUE_RUN_ID_RE = re.compile(r"^(?P<job>.+)/queue/(?P<qid>\d+)$")
 _JOB_NAME_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/ ]+$")
 
 
-def _reject_unsafe_job_name(job_name: str, run_id: str) -> None:
-    """Reject a run-id ``job_name`` that could steer the request elsewhere.
+def _reject_unsafe_job_name(job_name: str, origin: str) -> None:
+    """Reject a ``job_name`` that could steer the request elsewhere.
 
-    The extracted job name is interpolated verbatim into the path of a request
-    carrying Basic credentials, so an unsafe value is a path-traversal /
-    request-redirection primitive, not a bad id. Fail CLOSED at parse time with
-    a message naming the run id — never let httpx normalise it into a different
-    endpoint on the same host.
+    The value is interpolated verbatim into the path of a request carrying
+    Basic credentials, so an unsafe value is a path-traversal /
+    request-redirection primitive, not a bad id. Fail CLOSED before the value
+    reaches a URL — never let httpx normalise it into a different endpoint on
+    the same host.
+
+    ``origin`` names where the value came from (a run id, a ``pipeline_id``, a
+    query filter, a write payload) so the failure points at the caller.
+    Applies to EVERY site that builds a ``/job/{job_name}/…`` path, not just
+    run-id parsing (FAR-1141 security sweep).
     """
+    if not isinstance(job_name, str):
+        # dict/list/None arrive through the Any-typed query filters and write
+        # payload; f-stringing them into a path would be meaningless at best.
+        raise ValueError(f"Unsafe job name in {origin}: {job_name!r} is not a string job path")
     if not _JOB_NAME_PATH_RE.fullmatch(job_name):
         raise ValueError(
-            f"Unsafe job name in run_id {run_id!r}: {job_name!r} contains characters outside the "
+            f"Unsafe job name in {origin}: {job_name!r} contains characters outside the "
             "job-path allowlist (letters, digits, '-', '_', '.', space, '/' for folders)",
         )
     for segment in job_name.split("/"):
@@ -78,7 +87,7 @@ def _reject_unsafe_job_name(job_name: str, run_id: str) -> None:
         # traversal shapes; a segment of dots in any count is never a job name.
         if not segment or set(segment) == {"."}:
             raise ValueError(
-                f"Unsafe job name in run_id {run_id!r}: segment {segment!r} is empty or a '.'/'..' "
+                f"Unsafe job name in {origin}: segment {segment!r} is empty or a '.'/'..' "
                 "traversal segment — refusing to address another path on the Jenkins host",
             )
 
@@ -102,7 +111,7 @@ def _split_build_run_id(run_id: str) -> tuple[str, str]:
         raise ValueError(
             f"Invalid run_id format: {run_id!r}. Expected 'job_name/build_number' or 'job_name/queue/queue_id'.",
         )
-    _reject_unsafe_job_name(job_name, run_id)
+    _reject_unsafe_job_name(job_name, f"run_id {run_id!r}")
     return job_name, build_number
 
 
@@ -221,6 +230,10 @@ class JenkinsConnector(ConnectorBase):
         variables: dict[str, str] | None = None,
     ) -> CIRun:
         job_name = pipeline_id
+        # Validate BEFORE any HTTP call: this URL carries the connector's
+        # Basic credentials, so a traversal `pipeline_id` must never be
+        # normalised into a different endpoint on the Jenkins host.
+        _reject_unsafe_job_name(job_name, f"pipeline_id {pipeline_id!r}")
         async with self._client() as client:
             crumb_headers = await self._fetch_crumb(client)
             client.headers.update(crumb_headers)
@@ -286,6 +299,10 @@ class JenkinsConnector(ConnectorBase):
         queue_match = _QUEUE_RUN_ID_RE.match(run_id)
         if queue_match:
             job_name = queue_match.group("job")
+            # The queue form skips _split_build_run_id, so validate here: this
+            # job_name is later interpolated into /job/{job_name}/{build}/api/json
+            # once the queue item resolves (FAR-1141 sweep).
+            _reject_unsafe_job_name(job_name, f"run_id {run_id!r}")
             build_number = ""
         else:
             # Validate BEFORE any HTTP call — a bare/garbage id is rejected,
@@ -314,6 +331,9 @@ class JenkinsConnector(ConnectorBase):
         queue_match = _QUEUE_RUN_ID_RE.match(run_id)
         if queue_match:
             job_name = queue_match.group("job")
+            # Same guard as get_run_status: the queue-form job_name reaches
+            # /job/{job_name}/{build}/consoleText after the queue resolves.
+            _reject_unsafe_job_name(job_name, f"run_id {run_id!r}")
             build_number = ""
         else:
             job_name, build_number = _split_build_run_id(run_id)
@@ -343,6 +363,10 @@ class JenkinsConnector(ConnectorBase):
         limit: int = 20,
     ) -> list[CIRun]:
         job_name = pipeline_id or ""
+        # Fail CLOSED before any HTTP call: an empty/None or traversal
+        # `pipeline_id` must raise rather than build `/job//api/json` (or a
+        # normalised-away path) with the connector's credentials attached.
+        _reject_unsafe_job_name(job_name, f"pipeline_id {pipeline_id!r}")
         async with self._client() as client:
             r = await client.get(
                 f"/job/{job_name}/api/json",
@@ -367,6 +391,11 @@ class JenkinsConnector(ConnectorBase):
                     return ConnectorResult(records=records, total=len(records))
             case "builds":
                 job_name = q.filters.get("job_name", "")
+                # Caller-controlled (Any-typed) filter interpolated into a
+                # credentialed /job/ path — validate before the request, so a
+                # missing or traversal job_name fails loud instead of being
+                # normalised into another endpoint (FAR-1141 sweep).
+                _reject_unsafe_job_name(job_name, "query filters 'job_name'")
                 async with self._client() as client:
                     tree = "builds[number,result,timestamp,duration,url]"
                     r = await client.get(f"/job/{job_name}/api/json", params={"tree": tree})
@@ -388,6 +417,10 @@ class JenkinsConnector(ConnectorBase):
         if payload.resource != "build":
             raise ValueError(f"Unsupported write resource: {payload.resource!r}")
         job_name = payload.data.get("job_name", "")
+        # Same guard as query('builds'): the payload's job_name is caller-
+        # controlled and lands in a credentialed /job/ path — reject empty or
+        # traversal values before any request is built (FAR-1141 sweep).
+        _reject_unsafe_job_name(job_name, "write payload 'job_name'")
         variables = payload.data.get("parameters")
         crumb_headers: dict[str, str] = {}
         async with self._client() as client:
