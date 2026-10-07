@@ -127,12 +127,14 @@ are **refuted for the error window by observation** (below).
   pooled engine now honours the same setting —
   `api/dependencies.py` (`_SYSTEM_ASYNC_ENGINE`, system role),
   `core/reports/scheduler.py`, `core/error_tracking/saq_hooks.py`,
-  `core/saq_worker.py` (`_get_system_async_engine`) and
-  `core/cron_helpers.py` (`_get_system_engine`) — the last two of which
-  previously passed **no** `pool_recycle` at all, i.e. age-unbounded pooling,
-  strictly worse than the 3600 s mismatch. A `pool_recycle` grep over
-  `backend/src/**` shows **every** code site reading
-  `settings.db_pool_recycle_seconds` (0 exceptions).
+  `core/saq_worker.py` (`_get_system_async_engine`),
+  `core/cron_helpers.py` (`_get_system_engine`) and
+  `cli/break_glass.py` (`get_break_glass_engine` — module-cached, so it can
+  outlive a single command) — the last three of which previously passed
+  **no** `pool_recycle` at all, i.e. age-unbounded pooling, strictly worse
+  than the 3600 s mismatch. A `pool_recycle` grep over `backend/src/**`
+  shows **every** code site reading `settings.db_pool_recycle_seconds`
+  (0 exceptions).
 - `docs/configuration-reference.md`: the new knob documented.
 - Tests: `tests/unit/db/test_session.py` gains the proxy-window contract
   (default below 1800, configurable, pre-ping on, Settings fails fast
@@ -147,9 +149,11 @@ are **refuted for the error window by observation** (below).
 - Not applicable to the sweep (no pooled connection can outlive the
   window): the `NullPool` engines (`db/crud/pipeline.py`,
   `db/crud/pipeline_snapshot.py` — connections live exactly one
-  operation), and the short-lived CLI/diagnostic engines
-  (`cli/users.py`, `cli/break_glass.py`, `launcher/doctor.py` — process
-  lifetime ≪ 1800 s).
+  operation), and the one-shot CLI/diagnostic engines that build a fresh
+  engine per process (`cli/users.py`, `launcher/doctor.py` — process
+  lifetime ≪ 1800 s). `cli/break_glass.py` was previously listed here, but
+  it caches its engine at module level (it can outlive a single command),
+  so it is now included in the sweep above rather than excused.
 
 ## Known deferred items (outside the allowlist, deliberately untouched)
 

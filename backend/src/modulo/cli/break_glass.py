@@ -143,6 +143,11 @@ def get_break_glass_engine(settings: Settings) -> AsyncEngine:
         _bg_engine = create_async_engine(
             engine_url,
             pool_pre_ping=True,
+            # FAR-1524: this engine is MODULE-CACHED (it can outlive a single
+            # command), so it honours the same settings-driven recycle window
+            # as every other long-lived pooled engine — strictly below the
+            # Fly HAProxy 30m session timeout.
+            pool_recycle=settings.db_pool_recycle_seconds,
             connect_args=connect_args,
         )
         # Cache key stays the RAW settings URL: two operator URLs differing

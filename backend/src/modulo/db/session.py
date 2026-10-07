@@ -77,7 +77,7 @@ def _build_engine(
     (``pool_pre_ping``, ``statement_cache_size=0``) and the operator's URL
     ``sslmode`` is translated into asyncpg's ``ssl`` connect arg (absent or
     ``disable`` → ``ssl=False``; ``require``/``verify-ca``/``verify-full`` →
-    a fail-closed SSL mode; ``    prefer``/``allow`` are rejected at boot
+    a fail-closed SSL mode; ``prefer``/``allow`` are rejected at boot
     because asyncpg would silently downgrade them to plaintext). Pool sizing
     defaults to 20/10 unless overridden (the SAQ worker passes its
     per-worker budget), and ``pool_recycle`` comes from
