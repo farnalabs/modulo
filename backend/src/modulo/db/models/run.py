@@ -111,7 +111,7 @@ CANCELLED_BY_SYSTEM: Final[str] = "system"
 
 # ---------------------------------------------------------------------------
 # FAR-1141 / ADR-042 — WHERE the run's work was executed. The CLOSED
-# vocabulary behind ``runs.execution_origin`` (migration 0281), single-sourced
+# vocabulary behind ``runs.execution_origin`` (migration 0287), single-sourced
 # here so the write site (``crud.run.create_run``), the readers (runs API,
 # ``run_daily_facts`` copy) and any future consumer share ONE spelling.
 #
@@ -122,7 +122,7 @@ CANCELLED_BY_SYSTEM: Final[str] = "system"
 #     Existing rows are deliberately never backfilled (ADR 042: existing runs
 #     keep their current provenance unchanged).
 #
-# No DB CHECK constraint backs this yet (see migration 0281): with exactly one
+# No DB CHECK constraint backs this yet (see migration 0287): with exactly one
 # member and every write site importing the constant, a constraint would cost
 # a full-table validation scan on ``runs`` for no additional safety. Adding a
 # value means adding it here AND widening any future constraint in the same
@@ -329,7 +329,7 @@ class Run(OrgScoped):
     # rewritten afterwards, so it survives re-claims and re-dispatches the
     # same way ``node_deadline_watchdog_fired_count`` does (neither the atomic
     # claim SQL nor the fenced pending-reset names this column).
-    # Nullable + no server default (migration 0281): additive, no table
+    # Nullable + no server default (migration 0287): additive, no table
     # rewrite, existing rows untouched. API-projected on the runs list item
     # and the run detail response — it is the claim-ready surface ADR-042
     # requires to distinguish the two origins.

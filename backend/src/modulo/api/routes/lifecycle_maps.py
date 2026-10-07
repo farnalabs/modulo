@@ -277,7 +277,7 @@ class JourneyRunHistoryItem(BaseModel):
     # FAR-1141 / ADR-042: a journey's run history is a claim-ready run surface,
     # so each entry carries the run's execution origin ('dispatched' / NULL) and
     # a dispatched run never reads like one Modulo executed itself. The column
-    # shipped in migration 0285; pre-column rows read NULL.
+    # shipped in migration 0287; pre-column rows read NULL.
     execution_origin: str | None = None
 
 

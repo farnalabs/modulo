@@ -194,7 +194,7 @@ class TestRunSummaryExecutionOrigin:
         assert summary.execution_origin is None
 
     def test_field_is_nullable_and_optional(self) -> None:
-        """The column shipped in migration 0285 — a payload without the key must
+        """The column shipped in migration 0287 — a payload without the key must
         still validate (additive/nullable, matching the REST list item)."""
         summary = RunSummary.model_validate(
             {
