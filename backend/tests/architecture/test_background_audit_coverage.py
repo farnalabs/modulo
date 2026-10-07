@@ -13,10 +13,11 @@ This gate is the background counterpart of that ratchet, built the same way
 
 * **Enumerate mechanically** — never hand-list the paths. The SAQ worker's own
   registration functions (``_system_functions`` / ``_runs_functions``), the
-  ``CronJob(...)`` list, the ``_boot_seed("<name>")`` calls in ``api/main.py``
-  and the ``reconcile_*`` / ``*_sweep`` / ``*_cleanup`` / ``seed_*`` functions
-  declared under ``src/modulo/core`` are read from the source, so a NEW
-  background path fails the gate until someone classifies it.
+  ``CronJob(...)`` list, the ``_boot_seed("<name>")`` calls in ``api/main.py``,
+  the ``reconcile_*`` / ``*_sweep`` / ``*_cleanup`` / ``seed_*`` functions
+  declared under ``src/modulo/core``, and (FAR-1574) every public function that
+  builds a ``SuiteRun`` row, are read from the source, so a NEW background path
+  fails the gate until someone classifies it.
 * **Classify explicitly** — ``audited`` (with the file + literal marker that
   proves the append is wired), ``exempt`` (from a fixed, documented reason
   vocabulary) or ``gap`` (a real gap this PR did not close, carrying a note).
@@ -45,6 +46,12 @@ Documented limitations
   by the coroutine they run, so renaming the coroutine does not break the gate
   but renaming the label does (deliberate: the label is the operator-visible
   boot summary name).
+* The SuiteRun-creation scan (FAR-1574) starts from ``build_suite_run`` — the
+  single statement that INSERTs a ``suite_runs`` row — and walks outward over
+  PUBLIC module-level callers until it stops, so an API route or CLI command
+  that wires an existing entry point is caught too. Private helpers
+  (``_build_suite_run_or_skip``) are covered by their registered public caller,
+  which the SAQ scan enumerates separately.
 """
 
 from __future__ import annotations
@@ -55,12 +62,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+SRC_DIR = BACKEND_DIR / "src" / "modulo"
 CORE_DIR = BACKEND_DIR / "src" / "modulo" / "core"
 SAQ_WORKER_PATH = BACKEND_DIR / "src" / "modulo" / "core" / "saq_worker.py"
 API_MAIN_PATH = BACKEND_DIR / "src" / "modulo" / "api" / "main.py"
 
 #: Mechanical pattern for the reconciler / seeder half of the enumeration.
 _RECONCILER_NAME = re.compile(r"^(reconcile_|seed_)|(_sweep|_reconcile|_cleanup)$")
+
+#: ``build_suite_run`` is the single statement that INSERTs a ``suite_runs``
+#: row (FAR-1574) — every caller of it is a SuiteRun-creation entry point,
+#: whichever surface it hangs off (SAQ, cron, REST route, CLI).
+_SUITE_RUN_BUILDER = "build_suite_run"
 
 #: Modules under ``core/`` that are the audit machinery itself, not a background
 #: write path — they are exempt from enumeration by construction.
@@ -105,6 +118,15 @@ EXEMPT_REASONS: dict[str, str] = {
         "(so resource_id has nothing to point at), and no org-owned entity changes "
         "hands — the run lifecycle that produced the container is audited on the run "
         "chain instead"
+    ),
+    "unwired_entry_point": (
+        "a public entry point with ZERO production callers, verified in FAR-1574: no "
+        "SAQ/cron task, no REST route and no CLI command reaches it, so it creates "
+        "and starts nothing and there is no event to record (and no post-commit seam "
+        "to record it at). Obligation, not a free pass: the moment a caller lands, "
+        "its post-commit seam must append the SuiteRun lifecycle events through "
+        "record_suite_run_audit (with the phantom-event state guard) and this entry "
+        "must be re-classified 'audited'"
     ),
 }
 
@@ -175,6 +197,11 @@ INVENTORY: dict[str, PathRecord] = {
         ("src/modulo/core/saq_worker.py", 'event_type="suite_run_created"'),
     ),
     "fire_report_trigger": _exempt("trigger_bookkeeping"),
+    # --- SuiteRun-creation entry points (public build_suite_run callers) --
+    # FAR-1574: the SAQ seam above is the only path that actually runs; the
+    # enumeration still has to name every other function that could create a
+    # SuiteRun, so a future cron/REST/CLI caller cannot land unclassified.
+    "run_scheduled_suite": _exempt("unwired_entry_point"),
     # --- system-cron tasks (saq_worker._system_functions) -----------------
     "fire_due_triggers": _exempt("trigger_bookkeeping"),
     "dispatcher_reconcile": _audited(
@@ -298,6 +325,57 @@ def _saq_cron_function_names() -> set[str]:
     raise AssertionError("_system_cron_jobs not found in saq_worker.py")
 
 
+def _public_function_calls(path: Path) -> dict[str, set[str]]:
+    """Public module-level functions in *path* -> the names their bodies call.
+
+    Nested/inner functions are ignored on purpose: the inventory classifies
+    module-level entry points, and a private helper is covered by the public
+    caller that reaches it.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls: dict[str, set[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name.startswith("_"):
+            continue
+        called: set[str] = set()
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            if isinstance(call.func, ast.Name):
+                called.add(call.func.id)
+            elif isinstance(call.func, ast.Attribute):
+                called.add(call.func.attr)
+        calls.setdefault(node.name, set()).update(called)
+    return calls
+
+
+def _suite_run_entry_point_names() -> set[str]:
+    """Public module-level functions that create a ``SuiteRun`` (FAR-1574).
+
+    ``build_suite_run`` is the single statement that INSERTs a ``suite_runs``
+    row, so it seeds the frontier; the walk then expands over PUBLIC callers
+    until the frontier stops growing. That second hop is what makes the gate
+    honest about surfaces: wiring an existing entry point into a new cron job,
+    REST route or CLI command shows up as a NEW enumerated name the inventory
+    must classify, not as an invisible side entrance to the SAQ seam.
+    """
+    callers: dict[str, set[str]] = {}
+    for path in sorted(SRC_DIR.rglob("*.py")):
+        if "migrations" in path.parts:
+            continue
+        for name, called in _public_function_calls(path).items():
+            callers.setdefault(name, set()).update(called)
+
+    frontier = {_SUITE_RUN_BUILDER}
+    reached: set[str] = set()
+    while True:
+        new = {name for name, called in callers.items() if name not in reached and called & frontier}
+        if not new:
+            return reached
+        reached |= new
+        frontier |= new
+
+
 def _boot_seed_labels() -> set[str]:
     """``_boot_seed("<label>", ...)`` labels declared in ``api/main.py``."""
     tree = ast.parse(API_MAIN_PATH.read_text(encoding="utf-8"))
@@ -349,6 +427,8 @@ def _enumerated_paths() -> dict[str, str]:
         enumerated.setdefault(name, "_system_cron_jobs()")
     for name in _reconciler_function_names():
         enumerated.setdefault(name, "core/ reconciler-sweep-seed scan")
+    for name in _suite_run_entry_point_names():
+        enumerated.setdefault(name, "build_suite_run caller scan (FAR-1574)")
     for name in _boot_seed_labels():
         enumerated.setdefault(name, "_boot_seed() in api/main.py")
     return enumerated
@@ -367,6 +447,10 @@ def test_enumeration_finds_the_expected_registration_sites() -> None:
     assert "fire_due_triggers" in _saq_cron_function_names()
     assert "reconcile_journeys" in _reconciler_function_names()
     assert "boot:modulo_users" in _boot_seed_labels()
+    # FAR-1574: the SuiteRun-creation scan must keep finding the one non-SAQ
+    # builder. An empty result here would mean the scan silently stopped
+    # matching, which would make its half of the ratchet pass vacuously.
+    assert "run_scheduled_suite" in _suite_run_entry_point_names()
 
 
 def test_every_enumerated_background_path_is_classified() -> None:
