@@ -405,8 +405,11 @@ async def test_non_ok_advisory_sub_check_with_ok_aggregate_never_emails() -> Non
     leaves the aggregate at ``ok`` (the probe result is advisory, so
     ``evaluate_readiness`` excludes it from the gate).
 
-    The alert keys on the AGGREGATE only, so this shape — visible in
-    ``conditions()``, never an unhealthy observation — must produce no email
+    The alert keys on the AGGREGATE only for this shape — ``db_hygiene`` is
+    deliberately OUTSIDE ``REAL_FAILURE_ADVISORY_CHECKS`` (FAR-1510's
+    not-measured probe is a statement about the probe, not a hygiene
+    failure), so a degraded result with an ``ok`` aggregate is visible in
+    ``conditions()``, never an unhealthy observation, and never an email
     across the hysteresis window. The production false "[Modulo] Readiness
     degraded" emails were exactly this shape once the aggregate itself was
     flipped to degraded by the timeout.
@@ -437,6 +440,243 @@ async def test_non_ok_advisory_sub_check_with_ok_aggregate_never_emails() -> Non
     assert not sender.sent
     # The finding is still NAMED (an operator reading the conditions sees it).
     assert observer.observation.conditions() == [f"db_hygiene: degraded ({_HYGIENE_NOT_MEASURED_DETAIL})"]
+    # And the observation stays healthy: the not-measured probe is NOT a
+    # real-failure advisory, so it cannot arm the state machine (FAR-1510/1571).
+    assert observer.observation.observed_state == "healthy"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1571: advisory coverage. The readiness AGGREGATE excludes the advisory
+# checks, so a dead/erroring SWEEP (real breakage) must still alert — while
+# benign advisories and single-tick blips must NOT page (no FAR-1512 noise).
+# Every observation below has aggregate status "ok": only the real-failure
+# set can flip the state.
+# ---------------------------------------------------------------------------
+
+
+def _advisory_observation(*, sweep: ha.SubCheck, benign: ha.SubCheck | None = None) -> ha.HealthObservation:
+    """An ``ok``-aggregate observation carrying one real sweep failure plus
+    (optionally) a benign advisory — the FAR-1571 alerting shape."""
+    checks = {
+        "database": ha.SubCheck(status="ok", detail="connected"),
+        "runner_marker_sweep": sweep,
+    }
+    if benign is not None:
+        checks["event_loop_lag"] = benign
+    return ha.HealthObservation(status="ok", checks=checks)
+
+
+def test_real_failure_advisory_set_matches_the_readiness_taxonomy() -> None:
+    """The classification is pinned: exactly the seven real-breakage sweeps
+    alert, and the three benign/other-channel advisories never do (the
+    readiness ``checks`` dict in ``api.routes.health`` is the taxonomy)."""
+    assert {
+        "dispatcher_reconcile",
+        "stale_run_recovery",
+        "slot_reconciliation",
+        "hitl_park_sweep",
+        "runner_workspace_reconcile",
+        "runner_marker_sweep",
+        "runner_health_probe",
+    } == ha.REAL_FAILURE_ADVISORY_CHECKS
+    benign = {"event_loop_lag", "break_glass", "db_hygiene"}
+    assert not (benign & ha.REAL_FAILURE_ADVISORY_CHECKS)
+
+
+def test_observed_state_and_reported_status_for_the_advisory_shapes() -> None:
+    """A real advisory failure with an ``ok`` aggregate is unhealthy and must
+    report ``degraded``; the benign ones stay healthy and report ``ok``; an
+    unavailable aggregate still reports ``unavailable``."""
+    real = ha.HealthObservation(
+        status="ok",
+        checks={"runner_marker_sweep": ha.SubCheck(status="degraded", detail="no sweep in 22m")},
+    )
+    assert real.observed_state == "unhealthy"
+    assert real.reported_status == "degraded"
+
+    for name in ("event_loop_lag", "break_glass", "db_hygiene"):
+        benign = ha.HealthObservation(status="ok", checks={name: ha.SubCheck(status="degraded", detail="transient")})
+        assert benign.observed_state == "healthy", name
+        assert benign.reported_status == "ok", name
+
+    down = ha.HealthObservation(
+        status="unavailable",
+        checks={"database": ha.SubCheck(status="unavailable", detail="connection refused")},
+    )
+    assert down.observed_state == "unhealthy"
+    assert down.reported_status == "unavailable"
+
+
+async def test_sustained_real_advisory_failure_alerts_once_then_recovers() -> None:
+    """FAR-1571: a SUSTAINED dead sweep (``runner_marker_sweep: degraded``,
+    aggregate ``ok``) is real breakage. Across CONFIRM_TICKS it emails
+    EXACTLY ONE alert whose subject reports ``degraded`` — never the
+    misleading aggregate ``ok`` — stays silent while sustained, and emails
+    one recovery when the sweep comes back."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _advisory_observation(sweep=ha.SubCheck(status="degraded", detail="no sweep in 22m"))
+
+    # First unhealthy tick: under confirmation — still silent.
+    first = await _tick(observer, sender, store, settings, clock)
+    assert not sender.sent
+    assert first["action"] == "none"
+    assert first["status"] == "unhealthy"
+
+    # Second consecutive tick: confirmed -> exactly one alert email.
+    second = await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+    assert second["action"] == "alert"
+
+    # Sustained: dedup keeps it at one (never one per tick).
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+
+    alert = sender.sent[0]
+    # The reported status is derived, not the raw aggregate: "degraded", and
+    # the body says the same.
+    assert alert["subject"] == "[Modulo] Readiness degraded"
+    assert "Readiness is now <strong>degraded</strong>" in alert["html"]
+    # The failing sweep is named WITH its detail.
+    assert "runner_marker_sweep: degraded (no sweep in 22m)" in alert["html"]
+    assert "runner_marker_sweep: degraded (no sweep in 22m)" in alert["text"]
+
+    # The sweep recovers: one healthy tick under confirmation, then ONE
+    # recovery email naming what cleared.
+    observer.observation = _healthy()
+    pending = await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 1
+    assert pending["action"] == "none"
+
+    result = await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+    assert result["action"] == "recovery"
+    recovery = sender.sent[1]
+    assert "recovered" in recovery["subject"].lower()
+    assert "runner_marker_sweep" in recovery["html"]
+
+    for _ in range(3):
+        await _tick(observer, sender, store, settings, clock)
+    assert len(sender.sent) == 2
+
+
+async def test_single_tick_real_advisory_blip_sends_nothing() -> None:
+    """Hysteresis applies to advisory alerts too: a real sweep failure that
+    lasts ONE tick (probe flake) never confirms, so ZERO emails."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+
+    observer.observation = _advisory_observation(sweep=ha.SubCheck(status="degraded", detail="flake"))
+    blip = await _tick(observer, sender, store, settings, clock)
+    # The blip IS observed as unhealthy (real failure class) but only one
+    # tick deep — under CONFIRM_TICKS, so no send.
+    assert blip["status"] == "unhealthy"
+    assert blip["action"] == "none"
+
+    observer.observation = _healthy()
+    await _tick(observer, sender, store, settings, clock)
+    await _tick(observer, sender, store, settings, clock)
+
+    assert not sender.sent
+
+
+async def test_benign_event_loop_lag_advisory_never_alerts() -> None:
+    """A benign advisory (``event_loop_lag: degraded``, aggregate ``ok``)
+    sustained across the hysteresis window must NOT page — it is a transient
+    stall diagnostic, visible in the readiness body only (no FAR-1512 noise)."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = ha.HealthObservation(
+        status="ok",
+        checks={
+            "database": ha.SubCheck(status="ok", detail="connected"),
+            "event_loop_lag": ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+        },
+    )
+
+    results: list[dict[str, Any]] = []
+    for _ in range(4):  # well past CONFIRM_TICKS
+        results.append(await _tick(observer, sender, store, settings, clock))
+        clock["now"] += 300.0
+
+    assert not sender.sent
+    assert {result["action"] for result in results} == {"none"}
+    assert {result["status"] for result in results} == {"healthy"}
+    # Still NAMED in the conditions for anyone reading them directly.
+    assert observer.observation.conditions() == [
+        "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)"
+    ]
+
+
+async def test_gating_check_degraded_still_alerts() -> None:
+    """Regression: a GATING check degraded flips the aggregate to ``degraded``
+    and alerts exactly as before (reported status ``degraded``)."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = ha.HealthObservation(
+        status="degraded",
+        checks={
+            "database": ha.SubCheck(status="degraded", detail="dead-tuple ratio 0.18"),
+            "redis": ha.SubCheck(status="ok", detail="connected"),
+        },
+    )
+
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    assert sender.sent[0]["subject"] == "[Modulo] Readiness degraded"
+    assert "database: degraded (dead-tuple ratio 0.18)" in sender.sent[0]["html"]
+
+
+async def test_real_failure_alongside_benign_advisory_alerts_and_names_both() -> None:
+    """A real sweep failure WITH a benign advisory alongside (both non-``ok``,
+    aggregate ``ok``): the real one drives the alert, and ``conditions()``
+    lists EVERY non-``ok`` check, so the body names both."""
+    settings = _make_settings()
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _advisory_observation(
+        sweep=ha.SubCheck(status="degraded", detail="no sweep in 22m"),
+        benign=ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+    )
+
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    alert = sender.sent[0]
+    assert alert["subject"] == "[Modulo] Readiness degraded"
+    # Both failing checks are named (informative context), the real one
+    # being the reason the alert fired.
+    assert "runner_marker_sweep: degraded (no sweep in 22m)" in alert["html"]
+    assert "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)" in alert["html"]
+    # Healthy checks are not reported as problems.
+    assert "database:" not in alert["html"]
 
 
 # ---------------------------------------------------------------------------

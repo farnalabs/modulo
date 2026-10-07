@@ -23,6 +23,22 @@ inventing a mechanism):
   — and it is deliberately NOT the database: a degraded/down database is one
   of the states being alerted about, so the dedup store must not be the thing
   that is currently broken.
+* **Advisory sweeps alert too — but only the REAL breakage ones (FAR-1571).**
+  The readiness aggregate deliberately excludes the advisory checks, so
+  keying alert-worthiness on the aggregate alone made a dead or erroring
+  system sweep (``stale_run_recovery``, ``slot_reconciliation``,
+  ``runner_marker_sweep``, ...) invisible in-app once the external uptime
+  monitor went away. ``REAL_FAILURE_ADVISORY_CHECKS`` names the advisory
+  checks whose failure IS real breakage: a non-``ok`` result on any of them
+  marks the observation unhealthy even when the aggregate stays ``ok``, and
+  the alert reports ``degraded`` (never the misleading aggregate ``ok``).
+  The benign advisories are deliberately NOT in that set and must not page:
+  ``event_loop_lag`` (a transient stall diagnostic), ``break_glass`` (an
+  expected config posture), and ``db_hygiene`` (a GRADED failure already
+  gates the aggregate — so it already alerts — while its NOT-MEASURED probe
+  is advisory per FAR-1510 and is not a hygiene failure at all). The
+  hysteresis below is unchanged, so a single transient advisory blip still
+  never emails.
 * **Edge-triggered, confirmed by hysteresis.** A new state must be observed on
   ``CONFIRM_TICKS`` consecutive ticks before any notification. A single-probe
   blip never emails, and a one-tick flap produces ZERO emails (neither the
@@ -92,6 +108,32 @@ DISABLED_LOG_INTERVAL_SECONDS = 3600
 #: must not bloat the state document).
 _MAX_PERSISTED_CONDITIONS = 50
 
+#: Advisory checks whose non-``ok`` result is REAL breakage and must alert
+#: (FAR-1571). Single source of truth for the classification — the readiness
+#: aggregate in ``api.routes.health`` excludes all advisory checks, so these
+#: dead/erroring sweeps would otherwise emit nothing in-app.
+#:
+#: These are exactly the advisory sweep/probe checks from the readiness
+#: ``checks`` dict (``api.routes.health`` is the taxonomy). Deliberately
+#: EXCLUDED as benign/other-channel:
+#:   * ``event_loop_lag`` — transient stall diagnostic (visible in the body;
+#:     must not page on its own),
+#:   * ``break_glass`` — expected config posture,
+#:   * ``db_hygiene`` — a GRADED failure already gates the aggregate (so it
+#:     already alerts); its NOT-MEASURED probe is advisory (FAR-1510) and is
+#:     not a hygiene failure.
+REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
+    {
+        "dispatcher_reconcile",
+        "stale_run_recovery",
+        "slot_reconciliation",
+        "hitl_park_sweep",
+        "runner_workspace_reconcile",
+        "runner_marker_sweep",
+        "runner_health_probe",
+    }
+)
+
 
 #: ``settings.alert_email_to`` split into recipients (mirrors the watchdog's
 #: ``_parse_alert_email_to`` — comma-separated, trimmed, empties dropped).
@@ -151,9 +193,36 @@ class HealthObservation:
 
     @property
     def observed_state(self) -> str:
-        """``healthy`` only at aggregate ``ok`` — degraded AND unavailable are
-        unhealthy (both mean an operator should know)."""
-        return "healthy" if self.status == "ok" else "unhealthy"
+        """``healthy`` only when the aggregate is ``ok`` AND no real-failure
+        advisory check is failing.
+
+        Degraded AND unavailable are unhealthy (both mean an operator should
+        know). Because the readiness aggregate EXCLUDES the advisory checks
+        (FAR-1571), a dead/erroring sweep in
+        ``REAL_FAILURE_ADVISORY_CHECKS`` is unhealthy too even while the
+        aggregate still reads ``ok`` — the FAR-1156 blind spot this closes.
+        Benign advisories (``event_loop_lag``, ``break_glass``,
+        ``db_hygiene``'s not-measured probe) are not in that set, so they
+        never flip the state and never page.
+        """
+        if self.status != "ok":
+            return "unhealthy"
+        if any(self.checks[name].status != "ok" for name in REAL_FAILURE_ADVISORY_CHECKS if name in self.checks):
+            return "unhealthy"
+        return "healthy"
+
+    @property
+    def reported_status(self) -> str:
+        """The status an alert email must report — never misleading (FAR-1571).
+
+        ``unavailable`` when the aggregate is unavailable; otherwise
+        ``degraded`` when the observation is alerting (the aggregate is ``ok``
+        but a real-failure advisory check is broken — the subject must NOT
+        read ``[Modulo] Readiness ok``); otherwise ``ok`` (no alert fires).
+        """
+        if self.status == "unavailable":
+            return "unavailable"
+        return "degraded" if self.observed_state == "unhealthy" else "ok"
 
     def conditions(self) -> list[str]:
         """Human-readable bullets for every non-``ok`` check (sorted, stable)."""
@@ -479,7 +548,10 @@ async def run_health_alert_check(
                 settings,
                 send_fn,
                 configured=configured,
-                status=observation.status,
+                # Never the raw aggregate: when a real-failure advisory check
+                # fired the alert while the aggregate is ``ok``, the subject
+                # must read ``degraded``, not ``ok`` (FAR-1571).
+                status=observation.reported_status,
                 conditions=conditions,
                 state=state,
                 now=current_time,
