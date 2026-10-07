@@ -72,7 +72,7 @@ async def test_latest_dispatched_run_finds_run():
     )
     run = await r._latest_dispatched_run(client, "acme/widgets", "ci.yml", "main")
     assert run is not None
-    assert run.id == "12345"
+    assert run.id == "acme/widgets/12345"
     params = client.get.call_args.kwargs["params"]
     assert params["workflow_id"] == "ci.yml"
     assert params["branch"] == "main"

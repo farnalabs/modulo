@@ -80,6 +80,112 @@ async def test_trigger_run_with_parameters(jenkins):
 
 
 # ---------------------------------------------------------------------------
+# trigger_run — run-id round-trip (queue form and build form)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_trigger_run_queue_location_round_trips_to_terminal_status(jenkins):
+    """A queue Location must produce an id get_run_status can consume.
+
+    Jenkins answers a build POST with ``Location: .../queue/item/<qid>`` — a
+    QUEUE id, not a build number. Feeding it straight back must resolve through
+    the queue item to the dispatched build, not die on a wrong-URL 404.
+    """
+    respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(
+        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/queue/item/7"}),
+    )
+    respx.get(f"{_JENKINS_BASE}/queue/item/7/api/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 7, "executable": {"number": 42, "url": "http://jenkins.example.com/job/my-job/42/"}},
+        ),
+    )
+    respx.get(f"{_JENKINS_BASE}/job/my-job/42/api/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "42", "number": 42, "result": "SUCCESS", "url": "http://jenkins.example.com/job/my-job/42/"},
+        ),
+    )
+    run = await jenkins.trigger_run(pipeline_id="my-job")
+    assert run.id == "my-job/queue/7"
+
+    status = await jenkins.get_run_status(run.id)
+    assert status.status == CIRunStatus.SUCCESS
+    # the queue form escalates to the durable build form, itself consumable
+    assert status.id == "my-job/42"
+    again = await jenkins.get_run_status(status.id)
+    assert again.status == CIRunStatus.SUCCESS
+
+
+@respx.mock
+async def test_trigger_run_queue_unresolved_stays_queued_and_reconsumable(jenkins):
+    """While the queue item has no executable yet the status stays QUEUED and
+    keeps the queue-form id — so the await loop can poll it again."""
+    respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(
+        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/queue/item/9"}),
+    )
+    respx.get(f"{_JENKINS_BASE}/queue/item/9/api/json").mock(
+        return_value=httpx.Response(200, json={"id": 9, "why": "Waiting for next available executor"}),
+    )
+    run = await jenkins.trigger_run(pipeline_id="my-job")
+    assert run.id == "my-job/queue/9"
+
+    status = await jenkins.get_run_status(run.id)
+    assert status.status == CIRunStatus.QUEUED
+    assert status.id == "my-job/queue/9"
+    status_again = await jenkins.get_run_status(status.id)
+    assert status_again.status == CIRunStatus.QUEUED
+
+
+@respx.mock
+async def test_get_run_logs_queue_form_resolves_to_build(jenkins):
+    respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(
+        return_value=httpx.Response(201, headers={"Location": "http://jenkins.example.com/queue/item/7"}),
+    )
+    respx.get(f"{_JENKINS_BASE}/queue/item/7/api/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": 7, "executable": {"number": 42, "url": "http://jenkins.example.com/job/my-job/42/"}},
+        ),
+    )
+    respx.get(f"{_JENKINS_BASE}/job/my-job/42/consoleText").mock(
+        return_value=httpx.Response(200, text="line1\nline2\n"),
+    )
+    run = await jenkins.trigger_run(pipeline_id="my-job")
+    logs = await jenkins.get_run_logs(run.id)
+    assert logs.lines == ["line1", "line2"]
+
+
+@respx.mock
+async def test_get_run_logs_queue_form_not_started_fails_loud(jenkins):
+    """Logs for a build that has not left the queue must fail loud, never
+    return an empty list that reads as 'no output'."""
+    respx.get(f"{_JENKINS_BASE}/queue/item/7/api/json").mock(
+        return_value=httpx.Response(200, json={"id": 7, "why": "Waiting for executor"}),
+    )
+    with pytest.raises(ValueError, match="still queued"):
+        await jenkins.get_run_logs("my-job/queue/7")
+
+
+async def test_get_run_status_invalid_id_fails_loud():
+    """A bare/non-qualifiable id is rejected before any HTTP call — never
+    reinterpreted as ``job=<bare id>``."""
+    connector = JenkinsConnector(username="admin", token="secret", base_url=_JENKINS_BASE)
+    with pytest.raises(ValueError, match="Invalid run_id format"):
+        await connector.get_run_status("bare42")
+
+
+@respx.mock
+async def test_trigger_run_unusable_location_fails_loud(jenkins):
+    """A build response whose Location resolves to no id fails loud — never an
+    empty id the next get_run_status call rejects."""
+    respx.post(f"{_JENKINS_BASE}/job/my-job/build").mock(return_value=httpx.Response(201))
+    with pytest.raises(ValueError, match="unrecognised Location"):
+        await jenkins.trigger_run(pipeline_id="my-job")
+
+
+# ---------------------------------------------------------------------------
 # get_run_status
 # ---------------------------------------------------------------------------
 
@@ -100,7 +206,7 @@ async def test_get_run_status_success(jenkins):
     )
     run = await jenkins.get_run_status("my-job/42")
     assert run.status == CIRunStatus.SUCCESS
-    assert run.id == "42"
+    assert run.id == "my-job/42"
 
 
 @respx.mock

@@ -161,7 +161,7 @@ async def test_trigger_run(connector):
     )
     run = await connector.trigger_run(_JOB)
     assert isinstance(run, CIRun)
-    assert run.id == "7"
+    assert run.id == "build-job/queue/7"
     assert run.pipeline_id == _JOB
     assert run.status == CIRunStatus.QUEUED
 
@@ -171,7 +171,7 @@ async def test_get_run_status(connector):
     body = {"id": "5", "number": 5, "result": "SUCCESS", "fullDisplayName": f"{_JOB} #5"}
     respx.get(f"{_BASE}/job/{_JOB}/5/api/json").mock(return_value=httpx.Response(200, json=body))
     run = await connector.get_run_status(f"{_JOB}/5")
-    assert run.id == "5"
+    assert run.id == "build-job/5"
     assert run.pipeline_id == f"{_JOB} #5"
     assert run.status == CIRunStatus.SUCCESS
 
@@ -223,7 +223,7 @@ async def test_list_runs_filtered_by_status(connector):
     respx.get(f"{_BASE}/job/{_JOB}/api/json").mock(return_value=httpx.Response(200, json=body))
     runs = await connector.list_runs(pipeline_id=_JOB, status=CIRunStatus.SUCCESS)
     assert len(runs) == 1
-    assert runs[0].id == "1"
+    assert runs[0].id == "build-job/1"
 
 
 @respx.mock

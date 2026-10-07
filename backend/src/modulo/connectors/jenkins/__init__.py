@@ -36,6 +36,33 @@ _STATUS_MAP: dict[str, CIRunStatus] = {
     "PENDING": CIRunStatus.PENDING,
 }
 
+#: A build POST's ``Location`` pointing at a queue item.
+_QUEUE_ITEM_PATH_RE = re.compile(r"/queue/item/(\d+)")
+
+#: A build POST's ``Location`` pointing straight at a build
+#: (``.../job/<job path>/<number>/``).
+_BUILD_PATH_RE = re.compile(r"/job/(.+)/(\d+)/?$")
+
+#: The queue form of a run id: ``job_name/queue/queue_id`` — produced by
+#: ``trigger_run`` when Jenkins answers with a queue item, consumed by
+#: ``get_run_status``/``get_run_logs`` until the queue resolves it to a build.
+_QUEUE_RUN_ID_RE = re.compile(r"^(?P<job>.+)/queue/(?P<qid>\d+)$")
+
+
+def _split_build_run_id(run_id: str) -> tuple[str, str]:
+    """Split a ``job_name/build_number`` run id into its two parts.
+
+    Raises ``ValueError`` on anything else — a bare number is never
+    reinterpreted as ``job=<number>``, which would address a nonexistent (or
+    worse, unrelated) job.
+    """
+    job_name, separator, build_number = run_id.rpartition("/")
+    if not separator or not job_name or not build_number.isdigit():
+        raise ValueError(
+            f"Invalid run_id format: {run_id!r}. Expected 'job_name/build_number' or 'job_name/queue/queue_id'.",
+        )
+    return job_name, build_number
+
 
 class JenkinsConnector(ConnectorBase):
     """Jenkins CI/CD connector using the Jenkins REST API.
@@ -85,15 +112,31 @@ class JenkinsConnector(ConnectorBase):
             _logger.debug("Failed to fetch Jenkins crumb: %s", exc)
         return {}
 
-    def _parse_build(self, raw: dict[str, Any]) -> CIRun:
+    def _parse_build(self, raw: dict[str, Any], job_name: str = "") -> CIRun:
+        """Parse a build payload into a :class:`CIRun`.
+
+        The id is the ``job_name/build_number`` form ``get_run_status``/
+        ``get_run_logs`` consume (see the run-id contract on ``CIRunnerBase``);
+        ``job_name`` comes from the caller (the build payload carries the
+        number, not the job path). Without it — corrupt-payload hardening
+        callers only — the raw number is returned.
+        """
         raw_id = raw.get("id")
+        number = raw.get("number")
+        build_number = number if number is not None else raw_id
+        if build_number is None or build_number == "":
+            run_id = ""
+        elif job_name:
+            run_id = f"{job_name}/{build_number}"
+        else:
+            run_id = str(build_number)
         timestamp = raw.get("timestamp")
         raw_result = raw.get("result") or "BUILDING"
         status = _STATUS_MAP.get(raw_result, CIRunStatus.UNKNOWN)
         full_url = raw.get("url", "")
         duration_ms = _safe_int(raw.get("duration")) if raw.get("duration") else None
         return CIRun(
-            id=str(raw_id) if raw_id is not None else "",
+            id=run_id,
             pipeline_id=raw.get("fullDisplayName", raw.get("jobName", "")),
             status=status,
             url=full_url,
@@ -146,8 +189,23 @@ class JenkinsConnector(ConnectorBase):
                 r = await client.post(f"/job/{job_name}/build")
             r.raise_for_status()
             location = r.headers.get("Location", "")
-            queue_match = re.search(r"/queue/item/(\d+)", location)
-            run_id = queue_match.group(1) if queue_match else location
+            queue_match = _QUEUE_ITEM_PATH_RE.search(location)
+            if queue_match:
+                # Jenkins answers with a QUEUE item id, not a build number.
+                # Carry it in the queue form so get_run_status/get_run_logs
+                # can resolve it (queue item -> executable -> build) instead of
+                # misreading it as a build number under a wrong job.
+                run_id = f"{job_name}/queue/{queue_match.group(1)}"
+            else:
+                build_match = _BUILD_PATH_RE.search(location)
+                if not build_match:
+                    # No recognisable Location means no resolvable id — fail
+                    # loud rather than hand back an id the next call rejects.
+                    raise ValueError(
+                        f"Jenkins accepted the build for {job_name!r} but returned an unrecognised "
+                        f"Location {location!r} — refusing to return an unusable run id",
+                    )
+                run_id = f"{build_match.group(1)}/{build_match.group(2)}"
             return CIRun(
                 id=run_id,
                 pipeline_id=job_name,
@@ -155,20 +213,76 @@ class JenkinsConnector(ConnectorBase):
                 url=location,
             )
 
+    async def _queue_executable(
+        self,
+        client: httpx.AsyncClient,
+        queue_id: str,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a queue item to its dispatched build, or None while queued.
+
+        Raises ``ValueError`` when the queue item can no longer be read
+        (Jenkins evicts it) — a loud failure beats polling a dead id forever.
+        """
+        q_r = await client.get(f"/queue/item/{queue_id}/api/json")
+        if q_r.status_code == 404:
+            raise ValueError(
+                f"Jenkins queue item {queue_id} for run {run_id!r} no longer exists — cannot resolve a build for it",
+            )
+        q_r.raise_for_status()
+        data = q_r.json()
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Jenkins queue item {queue_id} returned a non-object body — cannot resolve a build",
+            )
+        executable = data.get("executable")
+        if isinstance(executable, dict) and executable.get("number") is not None:
+            return executable
+        return None
+
     async def get_run_status(self, run_id: str) -> CIRun:
-        parts = run_id.rsplit("/", 1)
-        build_number = parts[-1] if parts[-1].isdigit() else run_id
-        job_name = run_id.replace(f"/{build_number}", "") if run_id != build_number else run_id
+        queue_match = _QUEUE_RUN_ID_RE.match(run_id)
+        if queue_match:
+            job_name = queue_match.group("job")
+            build_number = ""
+        else:
+            # Validate BEFORE any HTTP call — a bare/garbage id is rejected,
+            # never reinterpreted as job=<bare id>.
+            job_name, build_number = _split_build_run_id(run_id)
         async with self._client() as client:
+            if queue_match:
+                queue_id = queue_match.group("qid")
+                executable = await self._queue_executable(client, queue_id, run_id)
+                if executable is None:
+                    # Still waiting in the queue: a NON-terminal status under
+                    # the SAME consumable queue-form id, so the await loop
+                    # keeps polling until the build is dispatched.
+                    return CIRun(
+                        id=run_id,
+                        pipeline_id=job_name,
+                        status=CIRunStatus.QUEUED,
+                        url=f"{self._base_url}/queue/item/{queue_id}",
+                    )
+                build_number = str(executable["number"])
             r = await client.get(f"/job/{job_name}/{build_number}/api/json")
             r.raise_for_status()
-            return self._parse_build(r.json())
+            return self._parse_build(r.json(), job_name=job_name)
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
-        parts = run_id.rsplit("/", 1)
-        build_number = parts[-1] if parts[-1].isdigit() else run_id
-        job_name = run_id.replace(f"/{build_number}", "") if run_id != build_number else run_id
+        queue_match = _QUEUE_RUN_ID_RE.match(run_id)
+        if queue_match:
+            job_name = queue_match.group("job")
+            build_number = ""
+        else:
+            job_name, build_number = _split_build_run_id(run_id)
         async with self._client() as client:
+            if queue_match:
+                executable = await self._queue_executable(client, queue_match.group("qid"), run_id)
+                if executable is None:
+                    # Fail loud: an empty log list would read as "the build
+                    # produced no output" when it has not started at all.
+                    raise ValueError(f"Jenkins run {run_id!r} is still queued — no logs until the build starts")
+                build_number = str(executable["number"])
             r = await client.get(f"/job/{job_name}/{build_number}/consoleText")
             r.raise_for_status()
             text = r.text
@@ -195,7 +309,7 @@ class JenkinsConnector(ConnectorBase):
             r.raise_for_status()
             data = r.json()
             builds: list[dict[str, Any]] = _safe_records(data, "builds")
-            runs = [self._parse_build(b) for b in builds]
+            runs = [self._parse_build(b, job_name=job_name) for b in builds]
             if status:
                 runs = [r for r in runs if r.status == status]
             return runs

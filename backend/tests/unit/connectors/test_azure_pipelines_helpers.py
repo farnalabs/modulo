@@ -19,6 +19,13 @@ def test_split_run_id_valid():
     assert c._split_run_id("123/456") == ("123", "456")
 
 
+def test_split_run_id_pipeline_name_with_slash_round_trips():
+    """The split is on the LAST slash, so a pipeline name containing slashes
+    still round-trips into (pipeline, run)."""
+    c = _connector()
+    assert c._split_run_id("Team/CI/101") == ("Team/CI", "101")
+
+
 def test_split_run_id_no_slash_raises():
     c = _connector()
     with pytest.raises(ValueError, match="Invalid run_id format"):

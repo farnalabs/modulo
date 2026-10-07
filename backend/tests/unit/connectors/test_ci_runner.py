@@ -105,23 +105,35 @@ async def test_gh_trigger_run_workflow_dispatch(gh_runner):
     )
     assert run.pipeline_id == "ci.yml"
     assert run.status == CIRunStatus.QUEUED
+    # the id must be the QUALIFIED form get_run_status/get_run_logs consume
+    assert run.id == "owner/repo/12345"
 
 
 @respx.mock
-async def test_gh_trigger_run_corrupt_workflow_runs_no_crash(gh_runner):
-    """A corrupt/hostile runs response must not crash trigger_run — fall back to pending."""
+async def test_gh_trigger_run_unresolvable_run_fails_loud(gh_runner, monkeypatch):
+    """A 204 dispatch whose run id cannot be resolved must FAIL LOUD.
+
+    Returning ``CIRun(id="")`` handed the caller an id the very next
+    ``get_run_status`` call rejects. The lookup is retried a bounded number of
+    times (GitHub's runs listing is eventually consistent right after a
+    dispatch), then a clear ValueError surfaces — never an empty id.
+    """
+    from modulo.connectors.ci_runner import github_actions as gh_mod
+
+    monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
     respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
         return_value=httpx.Response(204)
     )
-    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
-        return_value=httpx.Response(200, json=["corrupt", "list"])
+    runs_route = respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
+        return_value=httpx.Response(200, json=["corrupt", "list"]),
     )
-    run = await gh_runner.trigger_run(
-        pipeline_id="owner/repo/ci.yml",
-        branch="main",
-    )
-    assert run.status == CIRunStatus.PENDING
-    assert not run.id
+    with pytest.raises(ValueError, match="no run id could be resolved"):
+        await gh_runner.trigger_run(
+            pipeline_id="owner/repo/ci.yml",
+            branch="main",
+        )
+    # bounded retry — every attempt was made before failing loud
+    assert runs_route.call_count == gh_mod._LATEST_RUN_LOOKUP_ATTEMPTS
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +162,7 @@ async def test_gh_get_run_status_success(gh_runner):
     )
     run = await gh_runner.get_run_status("owner/repo/12345")
     assert run.status == CIRunStatus.SUCCESS
-    assert run.id == "12345"
+    assert run.id == "owner/repo/12345"
 
 
 @respx.mock
@@ -354,6 +366,19 @@ async def test_gl_trigger_run(gl_runner):
     )
     assert run.status == CIRunStatus.PENDING
     assert run.pipeline_id == "12345"
+    # the id must be the QUALIFIED 'project_id/pipeline_id' form get_run_status consumes
+    assert run.id == "12345/67890"
+
+
+@respx.mock
+async def test_gl_trigger_run_missing_id_fails_loud(gl_runner):
+    """A trigger response without an id/project id must fail loud — never an
+    id the next get_run_status call rejects."""
+    respx.post("https://gitlab.com/api/v4/projects/12345/pipeline").mock(
+        return_value=httpx.Response(201, json={"status": "pending"}),
+    )
+    with pytest.raises(ValueError, match="did not yield a consumable run id"):
+        await gl_runner.trigger_run(pipeline_id="12345", branch="main")
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +424,7 @@ def test_gl_parse_run_null_id_and_project_id_map_to_empty_strings(gl_runner):
 
 def test_gl_parse_run_falsy_int_ids_preserved(gl_runner):
     run = gl_runner._parse_run({"id": 0, "project_id": 0})
-    assert run.id == "0"
+    assert run.id == "0/0"
     assert run.pipeline_id == "0"
 
 

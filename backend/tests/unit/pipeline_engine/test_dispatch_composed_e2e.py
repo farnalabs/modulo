@@ -22,10 +22,11 @@ stubbed:
 
 The CircleCI runner is used as the provider because its ``trigger_run`` result
 id round-trips into ``get_run_status`` (``pipeline id`` is the polling key), so
-the full fire→await→observe cycle runs against one provider contract. (The
-GitHub Actions runner's ``trigger_run`` returns a bare numeric id while its
-``get_run_status`` requires ``owner/repo/id`` — a provider-level round-trip gap
-reported separately, not worked around here.)
+the full fire→await→observe cycle runs against one provider contract. Every
+provider now honours that run-id contract — the GitHub Actions gap this comment
+once noted (bare numeric id from ``trigger_run`` vs ``owner/repo/id`` required
+by ``get_run_status``) was closed by the provider-parity round-trip fix, pinned
+by ``test_dispatch_parity.test_trigger_run_id_round_trips_into_get_run_status``.
 
 Layer this test stops at: the DB/executor half of the chain — ``create_run``
 persisting ``runs.execution_origin`` and the run-scoped executor plumbing

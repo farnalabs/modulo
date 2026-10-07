@@ -968,6 +968,51 @@ async def test_dispatch_op_traced_and_forwarded(
 
 
 # ---------------------------------------------------------------------------
+# Parity 4: run-id round-trip — the id trigger_run PRODUCES is the exact id
+# get_run_status CONSUMES (the dispatch await_completion contract)
+# ---------------------------------------------------------------------------
+
+_TRIGGER_CASES: dict[str, _OpCase] = {
+    spec.name: next(case for case in spec.cases if case.op == "trigger_run") for spec in _SPECS
+}
+_STATUS_CASES: dict[str, _OpCase] = {
+    spec.name: next(case for case in spec.cases if case.op == "get_run_status") for spec in _SPECS
+}
+
+
+@respx.mock
+@pytest.mark.parametrize("spec", _SPECS, ids=[s.name for s in _SPECS])
+async def test_trigger_run_id_round_trips_into_get_run_status(spec: _ConnectorSpec) -> None:
+    """``trigger_run`` → ``get_run_status(run.id)`` → terminal status, all seven providers.
+
+    A dispatch node with ``await_completion`` feeds the id from ``trigger_run``'s
+    result straight back into ``get_run_status`` (see
+    ``node_runner._await_dispatch_terminal``), so a provider that PRODUCES a
+    bare/unqualified id while its own reader REQUIRES a qualified one strands
+    the wait on ``ValueError: Invalid run_id format`` while the external job
+    runs fine. The second read proves the id ``get_run_status`` RETURNS is
+    re-consumable too — the contract holds in both directions.
+    """
+    connector = spec.factory()
+    trigger_case = _TRIGGER_CASES[spec.name]
+    status_case = _STATUS_CASES[spec.name]
+    for case in (trigger_case, status_case):
+        for route in case.routes:
+            getattr(respx, route.method)(route.url).mock(return_value=route.response)
+
+    run = await connector.trigger_run(pipeline_id=spec.pipeline_id)
+    assert run.id, "trigger_run must never hand back an empty/unusable run id"
+
+    status = await connector.get_run_status(run_id=run.id)
+    assert isinstance(status, CIRun)
+    assert status.status == status_case.expect_status
+    assert status.id == run.id, "the id get_run_status returns must equal the id it consumed"
+
+    again = await connector.get_run_status(run_id=status.id)
+    assert again.status == status.status
+
+
+# ---------------------------------------------------------------------------
 # Parity 3: ACL deny parity — the same op is denied for EVERY connector
 # ---------------------------------------------------------------------------
 
