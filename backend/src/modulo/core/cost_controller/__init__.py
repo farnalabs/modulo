@@ -478,7 +478,13 @@ def _accumulate_refused(row: OrgDailyRunCount, amount: Decimal) -> None:
 # paused (``Trigger.active = False`` — the same predicate the trigger engine /
 # cron / polling paths gate on, so no new trigger-initiated runs can start),
 # and an admin notification is dispatched (``EVENT_CIRCUIT_BREAKER_TRIPPED``).
-# An admin re-enabling the pipeline clears the flag and re-activates triggers.
+# FAR-1530: the trip ALSO folds into the unified Paused state
+# (``run_enabled=false, run_disabled_reason='circuit_breaker'``) unless the
+# pipeline is already disabled — ``circuit_breaker_tripped(_at)`` stays the
+# breaker's witness, the unified state is what the ``create_run`` gate enforces
+# (so manual/REST/MCP runs are refused too, not only triggers). An admin
+# reset clears the witness, re-activates triggers, and clears the unified state
+# ONLY when its reason is ``'circuit_breaker'`` (an operator pause survives).
 
 
 async def sum_pipeline_monthly_spend(
@@ -589,10 +595,20 @@ async def trip_pipeline_circuit_breaker(
 ) -> bool:
     """Trip the pipeline's circuit breaker: mark tripped, pause triggers, notify.
 
-    Sets ``circuit_breaker_tripped`` (idempotent), sets ``active = False`` on
-    every non-deleted trigger of the pipeline (the enforcement predicate for
+    Sets ``circuit_breaker_tripped`` (idempotent), folds the trip into the
+    unified Paused state (FAR-1530), sets ``active = False`` on every
+    non-deleted trigger of the pipeline (the enforcement predicate for
     trigger-initiated runs), and dispatches the ``circuit_breaker_tripped``
     admin notification (fail-open — a notifier failure never blocks the trip).
+
+    FAR-1530 fold — the witness is set ALWAYS, the unified state only when the
+    pipeline is not already disabled: ``circuit_breaker_tripped(_at)`` stays
+    the breaker's witness (the reset path keys on it), while
+    ``(run_enabled, run_disabled_reason, run_disabled_at)`` becomes the one
+    state the run gate enforces. FIRST CAUSE OWNS THE REASON: an
+    operator-disabled pipeline keeps ``run_disabled_reason='operator'`` so a
+    later admin reset cannot silently clear an operator pause — the trip then
+    only stamps its witness.
 
     ``pipeline`` may be passed in (already loaded by the caller) to avoid a
     re-read; when omitted the row is loaded here. Returns ``True`` when the
@@ -609,8 +625,13 @@ async def trip_pipeline_circuit_breaker(
             return False
     if pipeline.circuit_breaker_tripped:
         return False  # idempotent — a concurrent second trip is a no-op
+    tripped_at = datetime.now(UTC)
     pipeline.circuit_breaker_tripped = True
-    pipeline.circuit_breaker_tripped_at = datetime.now(UTC)
+    pipeline.circuit_breaker_tripped_at = tripped_at
+    if pipeline.run_enabled:
+        pipeline.run_enabled = False
+        pipeline.run_disabled_reason = "circuit_breaker"
+        pipeline.run_disabled_at = tripped_at
     await session.execute(
         update(Trigger)
         .where(
@@ -633,6 +654,16 @@ async def reset_pipeline_circuit_breaker(
 ) -> int | None:
     """Admin re-enable: clear the tripped flag and re-activate the pipeline's triggers.
 
+    FAR-1530: clearing the witness ALSO clears the unified Paused state, but
+    ONLY when the disable was caused by the breaker
+    (``run_disabled_reason == 'circuit_breaker'``). An operator pause
+    (``run_disabled_reason == 'operator'``) SURVIVES the reset — first cause
+    owns the reason; the operator resumes explicitly via ``POST
+    /pipelines/{id}/resume``. The trigger re-activation below is unchanged
+    (every non-deleted trigger is re-armed; a surviving operator pause is
+    still enforced by the ``create_run`` state gate, which refuses every
+    origin regardless of trigger state).
+
     Returns the number of re-activated triggers (``len(re_enabled_ids)`` — ``0``
     when the pipeline had no active triggers) when the pipeline exists and the
     breaker was reset; ``None`` when no such pipeline exists in the org.
@@ -644,6 +675,19 @@ async def reset_pipeline_circuit_breaker(
         return None
     pipeline.circuit_breaker_tripped = False
     pipeline.circuit_breaker_tripped_at = None
+    if pipeline.run_disabled_reason == "circuit_breaker":
+        pipeline.run_enabled = True
+        pipeline.run_disabled_reason = None
+        pipeline.run_disabled_at = None
+    elif pipeline.run_disabled_reason == "operator":
+        # The operator pause SURVIVES the reset - say so, or an admin who just
+        # reset the breaker sees a pipeline that stays paused with no signal
+        # explaining why (the witness cleared but the unified state did not).
+        _log.info(
+            "circuit_breaker.reset_preserves_operator_pause pipeline=%s paused_since=%s",
+            pipeline_id,
+            pipeline.run_disabled_at,
+        )
     # FAR-190: every re-activated trigger's no-delivery streak epoch is
     # re-anchored IN THE SAME atomic statement as the active=True flip (the
     # shared anchor semantics — no un-epoch'd active=True transition). Inlined
