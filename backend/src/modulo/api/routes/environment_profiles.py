@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +42,7 @@ from modulo.db.crud.environment_profile import (
     update_environment_profile,
 )
 from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.util import WorkspaceNetworkValidationError
 
@@ -325,6 +327,80 @@ async def get_profile(
     return _to_response(profile)
 
 
+async def _assert_scope_change_keeps_bindings_eligible(
+    session: AsyncSession,
+    *,
+    profile_id: uuid.UUID,
+    org_id: uuid.UUID,
+    updates: dict[str, Any],
+) -> None:
+    """FAR-1558 F2: refuse a profile scope change that would strand a binding.
+
+    The pipeline -> profile team rule has three writers, and this guards the
+    third:
+
+    1. **bind time** — ``api/routes/pipelines.py::_assert_environment_profile_bindable``
+       refuses binding a team-private profile the pipeline's owner team does
+       not own;
+    2. **pipeline scope change** — the same helper re-validates the STORED
+       binding when the pipeline's ``visibility``/``owner_team_id`` changes;
+    3. **profile scope change (here)** — without this, step 1 could be undone
+       after the fact: bind a profile while it is org-visible, then flip it
+       team-private for another team, and the mismatched pipeline would keep
+       dispatching on a profile its team cannot see.
+
+    Rule, byte-identical to bind time: a change that leaves (or makes) the
+    profile **org-visible** cannot strand anything and is not queried at all;
+    a change that leaves it **team-private** must find every bound pipeline
+    already owned by the resulting owner team — and a team-private profile
+    with NO owner team is owned by nobody, so any binding at all blocks it.
+
+    Fail closed with 422 (a validation refusal, mirroring the FAR-1161
+    stored-owner re-validation on the pipeline side), never a silent unbind.
+    Soft-deleted pipelines do not block — the global soft-delete filter
+    excludes them, and their runs are already un-runnable. The detail carries
+    no pipeline identity: this caller holds ``environment_profile.update``,
+    not necessarily membership of the bound pipeline's team.
+    """
+    if "visibility" not in updates and "owner_team_id" not in updates:
+        return
+    profile = (
+        await session.execute(
+            select(EnvironmentProfile).where(
+                EnvironmentProfile.id == profile_id,
+                EnvironmentProfile.organisation_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if profile is None:
+        # Let the update call that follows produce its own 404 (same query).
+        return
+    new_visibility = updates.get("visibility", profile.visibility)
+    new_owner_team_id = updates.get("owner_team_id", profile.owner_team_id)
+    if (new_visibility or "org") != "team":
+        return  # org-visible profiles are compatible with every pipeline.
+    bound_rows = (
+        await session.execute(
+            select(Pipeline.id, Pipeline.owner_team_id).where(
+                Pipeline.environment_profile_id == profile_id,
+                Pipeline.organisation_id == org_id,
+            )
+        )
+    ).all()
+    stranded = [row.id for row in bound_rows if new_owner_team_id is None or row.owner_team_id != new_owner_team_id]
+    if stranded:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "environment_profile_binding_team_mismatch: this profile is bound to "
+                f"{len(stranded)} pipeline(s) whose owner team would not match the "
+                "team-private scope; rebind or unbind them first (PATCH "
+                "/api/v1/pipelines/{pipeline_id} with environment_profile_id, null to "
+                "clear) before changing the profile's visibility or owner team"
+            ),
+        )
+
+
 @router.put(
     "/{profile_id}",
     dependencies=[
@@ -347,6 +423,14 @@ async def update_profile(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-1558 F2: fail closed BEFORE any write when the scope change
+            # would strand an existing pipeline binding (see the helper).
+            await _assert_scope_change_keeps_bindings_eligible(
+                session,
+                profile_id=profile_id,
+                org_id=principal.organisation_id,
+                updates=updates,
+            )
             profile = await update_environment_profile(session, profile_id, updates)
     except IntegrityError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)

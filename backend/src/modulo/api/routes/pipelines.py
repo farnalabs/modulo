@@ -3240,7 +3240,7 @@ async def _assert_environment_profile_bindable(
     Missing, soft-deleted (the global ``do_orm_execute`` filter plus the
     explicit predicate below) and cross-organisation ids ALL resolve to the
     same 422, so a foreign id is never confirmed to exist. The DB-level tenant
-     trigger ``trg_pipelines_environment_profile_id_tenant`` (migration 0289) is
+    trigger ``trg_pipelines_environment_profile_id_tenant`` (migration 0289) is
     the fail-closed backstop: a binding that somehow bypasses this check raises
     SQLSTATE 23503 rather than being stored.
 
@@ -3272,10 +3272,15 @@ async def _assert_environment_profile_bindable(
     if profile.owner_team_id is None or profile.owner_team_id != pipeline_owner_team_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # FAR-1558 F3: generic ON PURPOSE. A pipeline-PATCH caller holds
+            # ``pipeline.update`` and need NOT be a member of the profile's
+            # owner team, so the detail must not leak the profile's name, id or
+            # owner team. Clients branch on the typed code; profile-side detail
+            # stays on the environment-profile surface (which enforces the
+            # mirror-image guard when a profile's scope changes).
             detail=(
-                f"environment_profile_team_mismatch: environment profile '{profile.name}' "
-                f"(id={profile.id}) is team-private (owner team {profile.owner_team_id}) but the "
-                f"pipeline is owned by team {pipeline_owner_team_id}"
+                "environment_profile_team_mismatch: the selected environment profile is "
+                "team-private and is not owned by this pipeline's owner team"
             ),
         )
 
