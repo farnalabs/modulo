@@ -46,18 +46,26 @@ name: "K8s conformance (kind + managed)"
 # Pod Security defaults on kind).
 #
 # `run-name` distinguishes the legs in the run history: the staleness job
-# excludes its own cron's runs from the last-green computation (a
-# self-referencing measurement would keep itself fresh forever - the
-# deploy-throttle lesson), and identifies the weekly managed leg by name.
+# excludes its own runs from the last-green computation (a self-referencing
+# measurement would keep itself fresh forever - the deploy-throttle lesson),
+# and identifies the weekly managed leg by name. A workflow_dispatch run
+# carries its leg as a suffix - "K8s conformance - workflow_dispatch (kind)"
+# etc (FAR-1554) - so a manual staleness dispatch is named "(staleness)" and
+# is excluded alongside the cron-named staleness run; without that suffix a
+# repeated manual staleness dispatch counted as green and kept last-green
+# fresh, masking a dead conformance leg.
 #
 # CROSS-LINK (staleness coupling): the template below must produce exactly the
-# two names the `staleness` job matches on - its env `STALENESS_RUN_NAME` and
-# `MANAGED_RUN_NAME`. Changing this template without updating those two
+# two names the `staleness` job matches on for SCHEDULED runs - its env
+# `STALENESS_RUN_NAME` and `MANAGED_RUN_NAME` (the template must NOT alter
+# those cron names). Changing this template without updating those two
 # constants stops the managed leg being tracked; the staleness job now WARNS
 # loudly when a scheduled run matches neither name, so the drift is visible
-# rather than silent.
+# rather than silent. The manual-dispatch staleness exclusion is the separate
+# `*" (staleness)"` match in the staleness job's self-reference guard - keep
+# it in step with this template's dispatch suffix too.
 
-run-name: "K8s conformance - ${{ github.event_name == 'schedule' && format('cron {0}', github.event.schedule) || github.event_name }}"
+run-name: "K8s conformance - ${{ github.event_name == 'schedule' && format('cron {0}', github.event.schedule) || github.event_name }}${{ github.event_name == 'workflow_dispatch' && format(' ({0})', inputs.job) || '' }}"
 
 on:
   pull_request:
@@ -147,6 +155,7 @@ jobs:
         # conformance surface changed. FAIL-OPEN: any diff error runs the
         # suite rather than silently skipping it.
         working-directory: .
+        timeout-minutes: 3
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BEFORE: ${{ github.event.before }}
@@ -512,10 +521,13 @@ jobs:
           SCHEDULE_NAME_DRIFT=""
           while IFS=$'\t' read -r NAME EVENT CONCLUSION CREATED; do
             [ -z "${CREATED}" ] && continue
-            # Self-reference guard: the staleness cron's own runs never count
+            # Self-reference guard: the staleness job's own runs never count
             # (a green staleness run would otherwise refresh the last-green
-            # date forever and the check could never fire).
-            if [ "${NAME}" = "${STALENESS_RUN_NAME}" ]; then
+            # date forever and the check could never fire). BOTH staleness
+            # run names are excluded: the cron-named run (exact match) and a
+            # manual workflow_dispatch job=staleness run, which the run-name
+            # template names "<base> (staleness)" (FAR-1554).
+            if [ "${NAME}" = "${STALENESS_RUN_NAME}" ] || [[ "${NAME}" == *" (staleness)" ]]; then
               continue
             fi
             TS="$(date -u -d "${CREATED}" +%s)"
