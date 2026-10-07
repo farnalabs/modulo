@@ -4,10 +4,18 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/audit.py
+  - backend/src/modulo/api/routes/admin_system_audit.py
   - backend/src/modulo/core/audit_logger/__init__.py
   - backend/src/modulo/core/audit_logger/append_only.py
+  - backend/src/modulo/core/audit_logger/background.py
   - backend/src/modulo/core/audit_coverage.py
+  - backend/src/modulo/core/cron_helpers.py
+  - backend/src/modulo/core/run_admission.py
+  - backend/src/modulo/core/run_terminal_advance.py
+  - backend/src/modulo/core/runner_capacity.py
+  - backend/src/modulo/core/saq_worker.py
   - backend/src/modulo/db/crud/pipeline.py
+  - backend/src/modulo/db/crud/system_audit_event.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/audit_event.py
@@ -18,13 +26,18 @@ code:
 unit-tests:
   - backend/tests/unit/audit_logger/test_audit_logger.py
   - backend/tests/unit/audit_logger/test_append_only.py
+  - backend/tests/unit/audit_logger/test_background_audit.py
+  - backend/tests/architecture/test_background_audit_coverage.py
   - backend/tests/unit/api/test_audit.py
   - backend/tests/unit/api/test_audit_bdd.py
   - backend/tests/unit/api/test_audit_gating.py
   - backend/tests/unit/api/test_audit_coverage.py
   - backend/tests/unit/api/test_far1464_route_arm_coverage.py
   - backend/tests/unit/api/test_webhooks_endpoint.py
+  - backend/tests/unit/api/test_admin_system_audit.py
+  - backend/tests/unit/core/test_background_audit_wiring.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
+  - backend/tests/unit/crud/test_system_audit_event.py
   - backend/tests/unit/core/test_system_audit_logger.py
   - backend/tests/integration/test_audit_append_only.py
   - backend/tests/integration/test_audit_immutability.py
@@ -158,16 +171,68 @@ guarded against tampering at both the ORM and the database layer.
       `api/routes/admin_orgs.py`,
       `tests/integration/test_system_audit_org_deletion.py`,
       `tests/unit/core/test_system_audit_logger.py`)
+- [x] Background, cron and boot write paths are audited or explicitly
+      classified (FAR-1549). Writes that never see a request (SAQ system-cron
+      sweeps, runs-worker tasks, reconcilers, boot seeds) either append a
+      SYSTEM-actor event through the shared `append_background_audit_event` /
+      `record_run_state_change_audits` helpers — `actor_user_id` stays NULL with
+      a `SYSTEM_ACTOR` payload marker plus an `actor_source` naming the process,
+      the org RLS context is set inside the helper's own fresh transaction, the
+      batch helper re-selects each run and drops any whose live status is not an
+      expected one (the phantom-event guard), and an append failure is logged and
+      swallowed after the already-committed mutation (fail open) with
+      `CancelledError` always propagating — or carry a documented exemption from
+      a fixed reason vocabulary
+      (`EXEMPT_REASONS`: trigger bookkeeping, notification-only, ephemeral
+      log retention, derived cache/state/analytics, probe bookkeeping,
+      liveness, telemetry watermark, internal bookkeeping, boot config,
+      demo fixture, infra-container GC). `tests/architecture/test_background_audit_coverage.py`
+      mechanically enumerates every path from the SAQ registration functions,
+      the `CronJob` list, the `_boot_seed(...)` labels and the `core/`
+      reconciler/sweep/seed functions, so a new background path fails the gate
+      until classified; the remaining SuiteRun-lifecycle and `modulo_users`
+      boot-seed gaps are recorded as visible, actionable `gap` entries rather
+      than silently unaudited (`core/audit_logger/background.py`,
+      `core/cron_helpers.py`, `core/run_admission.py`,
+      `core/run_terminal_advance.py`, `core/runner_capacity.py`,
+      `core/saq_worker.py`, `test_background_audit.py`,
+      `test_background_audit_wiring.py`, `test_background_audit_coverage.py`)
+- [x] The durable org-lifecycle ledger has a system-admin read surface
+      (FAR-1538): `GET /api/v1/admin/system-audit` lists the org-independent
+      `system_audit_events` records read-only with offset pagination and
+      event-type / org-id / date-range filters, gated purely by
+      `require_system_permission` (the `is_system_admin` claim — no RLS org
+      context, because the table has no `organisation_id` column, and no
+      `audited()` dependency, because reads are not audited), and the
+      `/admin/audit` page exposes a system source tab with the same filters,
+      pagination and a detail panel that reveals the full identifiers
+      (`api/routes/admin_system_audit.py`, `db/crud/system_audit_event.py`,
+      `frontend/src/views/AdminAuditView.vue`, `test_admin_system_audit.py`,
+      `test_system_audit_event.py`)
 
 ## Known Gaps
 
 - **Chain is per-organisation**: the hash chain, verification, and export are
   scoped to one org (multi-tenant RLS); there is no system-wide cross-org
   chain. The org-independent `system_audit_events` ledger (FAR-1517) survives a
-  hard delete but is deliberately **not** chained and has no read API/UI – it
-  is durable evidence storage, not a browsable or verifiable cross-org trail.
+  hard delete and now has a system-admin read surface (FAR-1538 —
+  `GET /api/v1/admin/system-audit` plus the `/admin/audit` system tab), but it
+  is deliberately **not** hash-chained and has no chain-verify endpoint — it is
+  durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
+- 2026-10-07: **Improve Architecture product-map walk** — closed two untracked
+  audit sub-surfaces merged after the 2026-10-06 walk. (1) FAR-1549 audited the
+  background/cron/boot write paths with a new shared
+  `core/audit_logger/background.py` helper plus an architecture ratchet
+  (`test_background_audit_coverage.py`) that mechanically enumerates every SAQ
+  task, cron job, reconciler, seeder and boot seed and fails until each is
+  classified audited / exempt / gap; added the checked behaviour line and the
+  code + unit-test citations. (2) FAR-1538 added the system-admin read surface
+  for the durable `system_audit_events` ledger (`GET /api/v1/admin/system-audit`
+  + the `/admin/audit` system tab), narrowing the "no read API/UI" half of the
+  per-organisation-chain Known Gap; added the checked behaviour line and
+  citations. `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
   FAR-1516 surface: pre-auth and webhook routes (sign-in/out, token refresh,
   SAML ACS, public error ingest, inbound webhooks) ship an actor-less
