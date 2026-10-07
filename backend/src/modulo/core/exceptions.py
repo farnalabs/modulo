@@ -96,24 +96,24 @@ class PipelineNotRunnableError(RuntimeError):
 
     * ``"archived"`` — ``pipelines.archived_at IS NOT NULL``
     * ``"deleted"``  — ``pipelines.deleted_at IS NOT NULL`` (soft delete)
+    * ``"paused"``   — ``pipelines.run_enabled = FALSE`` (FAR-1530: present
+      and visible but non-executing; the cause rides in ``run_disabled_reason``
+      / ``run_disabled_at``, but the gate refuses on the STATE alone)
 
     Sibling of ``TriggersPausedError`` (the org-wide pause kill-switch) and
     ``OrgDeletedError`` (the org-level guard), but distinct from both: this is
     a PER-PIPELINE refusal. It is never mapped to the pause envelope —
     ``PAUSE_SKIP_REASON`` stays reserved for the org-wide kill-switch — but
     every origin DOES map it explicitly: REST/MCP origins answer 409 Conflict
-    (``pipeline_not_runnable_http``), and the background fire origins (SAQ
+    (``pipeline_not_runnable_http``, which embeds ``state`` in the detail so a
+    paused pipeline reads as "is paused"), and the background fire origins (SAQ
     cron, polling, ongoing; the agent_signal child-run path) translate it into
-    a quiet typed skip carrying ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` so an
-    archived pipeline's active trigger is a per-tick skip rather than a
-    repeating job failure. Read failures are NEVER converted into this
+    a quiet typed skip carrying ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` — a
+    state-AGNOSTIC reason, so ``paused`` required no new skip vocabulary and
+    no fire-job change. Read failures are NEVER converted into this
     error — a ``SQLAlchemyError`` read failure in the gate propagates
     untouched (fail closed by raising the read error itself, never fabricate
     a state and never treat an unreadable row as runnable).
-
-    FAR-1530 (per-pipeline Paused state) adds another ``state`` value at the
-    same gate; callers mapping this error respond with 409 Conflict and the
-    state in the detail for any state they do not special-case.
 
     Lives in ``modulo.core.exceptions`` alongside ``TriggersPausedError``; the
     ``db-does-not-import-core`` contract exempts the consuming CRUD module

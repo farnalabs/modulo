@@ -1,14 +1,15 @@
 """FAR-1141: run-level execution origin provenance for dispatched runs.
 
-Revision ID: 0286_runs_execution_origin
-Revises: 0285_system_audit_events
+Revision ID: 0287_runs_execution_origin
+Revises: 0286_pipeline_run_state
 Create Date: 2026-10-05
 
 Originally numbered ``0283_runs_execution_origin``; ``main`` landed
-``0283_runs_drop_unused_indexes``, ``0284_add_rejected_run_status`` and then
-``0285_system_audit_events`` in the intervening slots, so this was renumbered
-onto the next free sequential number and now chains onto that head (single
-linear head preserved for ``check-migration-heads``).
+``0283_runs_drop_unused_indexes``, ``0284_add_rejected_run_status``,
+``0285_system_audit_events`` and then ``0286_pipeline_run_state`` in the
+intervening slots, so this was renumbered onto the next free sequential number
+and now chains onto ``0286_pipeline_run_state`` (single linear head preserved
+for ``check-migration-heads``).
 
 ADR-042 requires that no claim-ready surface lets a run containing
 externally-dispatched work read indistinguishably from a run Modulo executed
@@ -46,8 +47,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0286_runs_execution_origin"
-down_revision: str | None = "0285_system_audit_events"
+revision: str = "0287_runs_execution_origin"
+down_revision: str | None = "0286_pipeline_run_state"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

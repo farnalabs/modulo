@@ -1,10 +1,10 @@
-"""Unit tests for migration 0286_runs_execution_origin (FAR-1141 / ADR-042).
+"""Unit tests for migration 0287_runs_execution_origin (FAR-1141 / ADR-042).
 
 Structural — load the migration module and pin its contract without a
 database, plus ORM parity for both new columns:
 
-1. the chain: 0286 is the single linear head and revises
-   0285_system_audit_events;
+1. the chain: 0287 is the single linear head and revises
+   0286_pipeline_run_state;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
 3. the downgrade drops exactly those two columns;
@@ -32,9 +32,9 @@ from modulo.db.models.run import EXECUTION_ORIGIN_DISPATCHED, EXECUTION_ORIGIN_V
 from modulo.db.models.run_daily_facts import RunDailyFact
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0286_runs_execution_origin"
+_MIGRATION_NAME = "0287_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0285_system_audit_events"
+_DOWN_REVISION = "0286_pipeline_run_state"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.
@@ -67,11 +67,11 @@ def _migration_calls(entry_point: str) -> list[tuple[tuple[Any, ...], dict[str, 
 
 
 class TestChain:
-    def test_single_head_is_0286_runs_execution_origin(self) -> None:
+    def test_single_head_is_0287_runs_execution_origin(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0285_system_audit_events(self) -> None:
+    def test_down_revision_is_0286_pipeline_run_state(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

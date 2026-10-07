@@ -1757,8 +1757,17 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         pipeline = MagicMock()
         pipeline.owner_team_id = None
         pipeline.graph_nodes_json = []
+        # FAR-1141 FIX 2: the MCP full-graph write now runs the instance-level
+        # CI-runner capability check, which issues a direct ``session.execute``
+        # read. The stand-in session must return a real Result-like object with
+        # an empty scalars list (the referenced instance is absent, so the
+        # capability check is skipped) rather than an unconfigured AsyncMock
+        # child whose ``.scalars()`` yields a coroutine.
+        session = _mock_session()
+        session.execute.return_value = _make_execute_result()
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_session", return_value=_make_session_context(session)),
             patch("modulo.db.crud.pipeline.get_pipeline", new=AsyncMock(return_value=pipeline)),
             patch("modulo.core.team_visibility.find_connector_team_mismatches", new=AsyncMock(return_value=[])),
             patch(

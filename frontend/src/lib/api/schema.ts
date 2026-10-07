@@ -2558,6 +2558,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pipelines/{pipeline_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Pipeline Endpoint
+         * @description Pause a pipeline: present and visible, but no runs from any origin.
+         *
+         *     Sets ``run_enabled=false, run_disabled_reason='operator',
+         *     run_disabled_at=now`` — or is an idempotent no-op when the pipeline is
+         *     already disabled (first cause owns the reason, so a circuit-breaker pause
+         *     keeps its ``'circuit_breaker'`` reason). In-flight runs finish (disabling
+         *     is prospective, mirroring the org pause); every NEW run — trigger, manual,
+         *     REST, MCP — is refused at the ``create_run`` state gate. Audited as
+         *     ``pipeline_paused``.
+         */
+        post: operations["pause_pipeline_endpoint_api_v1_pipelines__pipeline_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Pipeline Endpoint
+         * @description Resume a paused pipeline: clear the unified Paused state.
+         *
+         *     REFUSED with 409 Conflict while ``circuit_breaker_tripped`` holds (reset
+         *     the breaker first — an operator resume must never revive a tripped
+         *     pipeline). Idempotent when already running. Audited as
+         *     ``pipeline_resumed``.
+         */
+        post: operations["resume_pipeline_endpoint_api_v1_pipelines__pipeline_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pipelines/{pipeline_id}/clone": {
         parameters: {
             query?: never;
@@ -16138,6 +16191,15 @@ export interface components {
             /** Circuit Breaker Tripped At */
             circuit_breaker_tripped_at?: string | null;
             /**
+             * Run Enabled
+             * @default true
+             */
+            run_enabled: boolean;
+            /** Run Disabled Reason */
+            run_disabled_reason?: string | null;
+            /** Run Disabled At */
+            run_disabled_at?: string | null;
+            /**
              * Snapshot Count
              * @default 0
              */
@@ -25770,6 +25832,72 @@ export interface operations {
         };
     };
     unarchive_pipeline_endpoint_api_v1_pipelines__pipeline_id__unarchive_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_pipeline_endpoint_api_v1_pipelines__pipeline_id__pause_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_pipeline_endpoint_api_v1_pipelines__pipeline_id__resume_post: {
         parameters: {
             query?: {
                 _fresh?: boolean;

@@ -13,7 +13,9 @@ lookup indexes:
   ``0282_env_profiles_kubernetes`` then
   ``0283_runs_drop_unused_indexes`` then
   ``0284_add_rejected_run_status`` then
-  ``0286_runs_execution_origin`` now the single linear head)
+  ``0285_system_audit_events`` then
+  ``0286_pipeline_run_state`` then
+  ``0287_runs_execution_origin`` now the single linear head)
   so the pre-commit check-migration-heads hook and every ``test_single_head_*``
   pin cannot be ambushed by a renumber;
 * the upgrade emits exactly the two ``CREATE INDEX IF NOT EXISTS`` statements
@@ -47,7 +49,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0271_org_api_keys_revocation_sweep_indexes"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0286_runs_execution_origin"
+_HEAD_MIGRATION = "0287_runs_execution_origin"
 _TABLE = 'public."org_api_keys"'
 
 #: Index name -> (ordered key columns, partial WHERE predicate). This is the

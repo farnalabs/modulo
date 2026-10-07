@@ -653,8 +653,10 @@ async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     return result.scalar_one_or_none()
 
 
-async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
-    pipeline = await get_pipeline(session, pipeline_id)
+async def archive_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline | None:
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
     if pipeline is None:
         return None
     pipeline.archived_at = datetime.now(UTC)
@@ -662,11 +664,78 @@ async def archive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     return pipeline
 
 
-async def unarchive_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
-    pipeline = await get_pipeline(session, pipeline_id)
+async def unarchive_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline | None:
+    """Unarchive: clear ``archived_at`` AND restore to PAUSED, not Active (FAR-1530).
+
+    The ratified taxonomy (FAR-1530) says a dormant pipeline must not
+    surprise-fire, so unarchiving lands the pipeline in the Paused state —
+    the operator resumes explicitly afterwards. First cause owns the reason:
+    a pipeline that was already disabled before archiving keeps its original
+    cause (``run_disabled_reason``/``run_disabled_at`` are left untouched).
+
+    ``organisation_id`` scopes the read (defence-in-depth, matching the
+    API-facing route's own scoped existence read) — omitted by internal callers
+    that rely on RLS alone.
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
     if pipeline is None:
         return None
     pipeline.archived_at = None
+    if pipeline.run_enabled:
+        pipeline.run_enabled = False
+        pipeline.run_disabled_reason = "operator"
+        pipeline.run_disabled_at = datetime.now(UTC)
+    await session.flush()
+    return pipeline
+
+
+async def pause_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline | None:
+    """Operator pause (FAR-1530): disable runs for a live pipeline.
+
+    Idempotent — FIRST CAUSE OWNS THE REASON: a pipeline that is already
+    disabled (operator pause, circuit-breaker fold, or a pre-archive pause)
+    keeps its original ``run_disabled_reason``/``run_disabled_at``; this call
+    is a no-op that still returns the row. Returns ``None`` when the pipeline
+    is not found (caller maps that to 404). ``organisation_id`` scopes the read
+    to match the API route's own scoped existence read.
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
+    if pipeline is None:
+        return None
+    if not pipeline.run_enabled:
+        return pipeline
+    pipeline.run_enabled = False
+    pipeline.run_disabled_reason = "operator"
+    pipeline.run_disabled_at = datetime.now(UTC)
+    await session.flush()
+    return pipeline
+
+
+async def resume_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline | None:
+    """Operator resume (FAR-1530): clear the unified Paused state.
+
+    Idempotent when already enabled. The caller (the ``/resume`` route) must
+    REFUSE with 409 while the spend circuit breaker's witness
+    (``circuit_breaker_tripped``) holds — an operator must reset the breaker
+    first, so resume can never revive a tripped pipeline. Returns ``None``
+    when the pipeline is not found (caller maps that to 404).
+    ``organisation_id`` scopes the read to match the API route's own scoped
+    existence read.
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
+    if pipeline is None:
+        return None
+    if pipeline.run_enabled:
+        return pipeline
+    pipeline.run_enabled = True
+    pipeline.run_disabled_reason = None
+    pipeline.run_disabled_at = None
     await session.flush()
     return pipeline
 
