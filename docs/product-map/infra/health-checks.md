@@ -22,7 +22,7 @@ bdd:
   - backend/tests/bdd/features/infra/health.feature
   - backend/tests/bdd/features/infra/test_health_steps.py
 depends-on: []
-status: partial
+status: covered
 ---
 
 # Health Checks
@@ -33,10 +33,12 @@ alerting – now entirely the PRODUCT's own in-app alerting, the external
 removed in its favour: the `health_readiness_alert` system-cron email (FAR-1446), the
 in-process worker-liveness watchdog (ADR 021 worker-resilience, email + generic
 webhook / Teams) and the compose deployment's out-of-process Gatus sentinel (PR #1260).
-The advisory / dead-sweep class that removed workflow used to scan is tracked by
-FAR-1571. A TOTAL app outage cannot be alerted from in-app at all, and `deploy.yml`'s
-`--auto-rollback` runs only around a deploy — see Known Gaps. Every operator
-alert – the readiness cron and the watchdog, across
+The advisory / dead-sweep class that removed workflow used to scan now alerts
+in-app too (FAR-1571): the readiness-degradation cron treats a sustained failure of
+the real-failure advisory sweeps as alert-worthy even while the readiness aggregate
+still reads `ok`. A TOTAL app outage cannot be alerted from in-app at all, and
+`deploy.yml`'s `--auto-rollback` runs only around a deploy — see Known Gaps. Every
+operator alert – the readiness cron and the watchdog, across
 email, generic webhook and Teams – identifies the deployment environment and carries the
 operator's `ALERT_CONTEXT` free text through one shared renderer (`core/alert_context.py`,
 FAR-1495 / FAR-1499). Liveness (`/healthz`) is advisory – it never flips readiness.
@@ -97,8 +99,8 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       FAR-1156) has been removed in favour of dogfooding the product's own alerting:
       GitHub's scheduler was dropping its `*/10` cron (FAR-492) and it false-fired
       (FAR-1512). Its alerting role is taken by the in-app legs below; the
-      ADVISORY / dead-sweep class only the workflow covered is tracked by FAR-1571
-      (open)
+      ADVISORY / dead-sweep class only the workflow covered is now covered by the
+      FAR-1571 real-failure advisory classification (see below)
 - [x] Readiness-degradation email alert (FAR-1446): the `health_readiness_alert`
       system cron runs every 5 minutes and emails `ALERT_EMAIL_TO` when readiness
       CONFIRMEDLY transitions into `degraded`/`unavailable` (edge-triggered with a
@@ -113,6 +115,28 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       default – and the `unique=True` cron slot bounds fleet ticks to one
       execution per slot (`core/health_alerts.py`, `core/saq_worker.py`,
       `api/routes/health.py` `evaluate_readiness`, `test_health_alerts.py`)
+- [x] Advisory / dead-sweep failures alert in-app (FAR-1571): the readiness
+      aggregate deliberately EXCLUDES the advisory checks, so keying
+      alert-worthiness on the aggregate alone left a dead or erroring system sweep
+      invisible in-app once the external uptime monitor went away.
+      `REAL_FAILURE_ADVISORY_CHECKS` (`core/health_alerts.py`) names the advisory
+      checks whose non-`ok` result IS real breakage — `dispatcher_reconcile` at its
+      `degraded` tier, `stale_run_recovery`, `slot_reconciliation`,
+      `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep` and
+      `runner_health_probe` — and a non-`ok` result on any of them makes
+      `HealthObservation.observed_state` `unhealthy` even while the aggregate reads
+      `ok`, so the SAME `health_readiness_alert` cron now emits the sustained-failure
+      alert (and its matching recovery) it already emitted for a gating failure. The
+      hysteresis is unchanged, so a single transient advisory blip still never emails
+      (FAR-1512). The benign/other-channel advisories are deliberately NOT in the set
+      and never page: `event_loop_lag` (a transient stall diagnostic), `break_glass`
+      (an expected config posture) and `db_hygiene` (a GRADED failure already gates
+      the aggregate, while its not-measured probe is advisory per FAR-1510).
+      `reported_status` never renders the misleading aggregate `ok` — an advisory
+      alert reads `degraded`, `unavailable` when the aggregate is `unavailable` — and
+      `_split_cleared_conditions` / `_recovery_summary` report only the alert-time
+      conditions that actually cleared, so a still-degraded benign advisory is never
+      falsely claimed resolved (`core/health_alerts.py`, `test_health_alerts.py`)
 - [x] Out-of-process Gatus health sentinel in the compose deployment (PR #1260):
       `deploy/watchdog/` ships a non-root Gatus container wired into
       `docker-compose.yml` (on by default, quiet without email creds) that probes
@@ -154,15 +178,6 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 
 ## Known Gaps
 
-- **Advisory / dead-sweep degradation currently reaches no operator (FAR-1571).**
-  `evaluate_readiness` deliberately excludes the advisory checks from the aggregate and
-  the readiness-degradation email keys on that aggregate, so a dead sweep
-  (`stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`,
-  `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe`,
-  `dispatcher_reconcile` at its degraded tier) emits nothing in-app. Until FAR-1571
-  extends the watchdog's existing channels to that class — sustained failure alerts,
-  transient `event_loop_lag` blips do not — only the removed uptime-monitor workflow
-  used to see it.
 - **A TOTAL app outage has no operator channel and no ticket (untracked).**
   In-app alerting cannot fire from inside an app that is down, and `deploy.yml`'s
   `--auto-rollback` plus its post-deploy gate run only around a deploy — a runtime
@@ -176,6 +191,22 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 
 ## QA History
 
+- 2026-10-07: **Improve Architecture product-map walk** – reconciled this tracker
+  with the FAR-1571 fix (PR #1381), which shipped after the uptime-monitor removal
+  and was not yet reflected here. The advisory / dead-sweep degradation gap this
+  entry recorded as `status: partial` ("reaches no operator until FAR-1571 lands")
+  is now closed: `REAL_FAILURE_ADVISORY_CHECKS` (`core/health_alerts.py`)
+  classifies the real-breakage advisory sweeps and
+  `HealthObservation.observed_state` treats their sustained failure as unhealthy
+  even while the readiness aggregate reads `ok`, so the `health_readiness_alert`
+  cron pages the same incident/recovery email pair it already sent for a gating
+  failure (hysteresis unchanged; benign `event_loop_lag` / `break_glass` /
+  not-measured `db_hygiene` advisories stay quiet). Added the behaviour bullet,
+  removed the now-stale Known Gap, and restored `status: covered` (the remaining
+  total-outage residual and the no-PRD note are tracked separately and are not
+  behaviours of this surface). No `code:`/`unit-tests:` citations changed –
+  `core/health_alerts.py` and `test_health_alerts.py` already cover the module.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-07: **uptime-monitor removal**: deleted the external
   `.github/workflows/uptime-monitor.yml` (FAR-400 / FAR-1156) and re-pointed this
   entry at the product's own in-app alerting as the production channel — the

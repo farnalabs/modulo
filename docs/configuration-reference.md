@@ -399,6 +399,8 @@ The same SMTP configuration also drives the system worker's in-app readiness ale
 
 Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled – quiet, not silent.
 
+The alerting also covers the **advisory** sweeps whose failure is real breakage (FAR-1571). The readiness aggregate deliberately excludes the advisory checks, so `REAL_FAILURE_ADVISORY_CHECKS` names the ones that *are* alert-worthy — a sustained non-`ok` on `stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe` or `dispatcher_reconcile` at its `degraded` tier emails the same incident/recovery pair even while the aggregate still reads `ok` (the email reports `degraded`, never the misleading `ok`). Benign or other-channel advisories — `event_loop_lag`, `break_glass`, and a not-measured `db_hygiene` probe — stay quiet, and the 2-tick hysteresis is unchanged, so a single transient advisory blip still never emails.
+
 This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
 
 ---
