@@ -12,7 +12,11 @@ the two sweeps cannot drift:
   — skipped when the run carries no refs (nothing to advance);
 * the compensating daily fact runs UNCONDITIONALLY (a refs-less run still gets
   its fact — a no-refs early return here would silently drop the sweep's
-  analytics row, the F3 bug the pre-extraction ``run_admission`` copy had).
+  analytics row, the F3 bug the pre-extraction ``run_admission`` copy had);
+* the terminalisation is recorded on the org's audit chain with a SYSTEM actor
+  (FAR-1549) — a run failed by a background sweep is a state change no request
+  ever saw, so without this the chain shows nothing where an operator expects
+  to see why the run ended.
 
 Dependencies are deliberately minimal (``db.rls``, ``db.crud.run``,
 ``lifecycle_map.advancement``, ``core.analytics``) and langgraph-free:
@@ -35,6 +39,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import get_run
+from modulo.db.models.run import TERMINAL_STATUSES
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
@@ -194,8 +199,14 @@ async def record_terminal_failed_fact(
         _log.warning("run_terminal_advance.facts_advance_failed run=%s", run_id, exc_info=True)
 
 
-async def advance_terminalised_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Advance a terminalised sweep run's journeys and record its daily fact.
+async def advance_terminalised_run(
+    async_engine: AsyncEngine,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    *,
+    source: str,
+) -> None:
+    """Advance a terminalised sweep run's journeys, fact and audit record.
 
     The single orchestration shared by ``pipeline_execution``'s legacy
     stale-run sweep and ``run_admission``'s FAR-604 slot-reconciliation sweep
@@ -205,6 +216,14 @@ async def advance_terminalised_run(async_engine: AsyncEngine, run_id: uuid.UUID,
     UNCONDITIONALLY (:func:`record_terminal_failed_fact`) — the
     compensating-fact contract (FAR-162, P6') does not depend on the run
     carrying work-item refs (F3). Each half is fail-open per run.
+
+    Finally the terminalisation is recorded on the org's audit chain
+    (FAR-1549) with the caller's ``source`` as the ``actor_source`` — the raw
+    terminal UPDATEs above run with no request principal in scope, so the
+    event carries the SYSTEM actor instead of an invented user. The append
+    re-selects the run and only records it when the terminal status really
+    landed, so a sweep transaction that rolled back after the id was
+    collected cannot produce a phantom event.
     """
     await advance_journeys_from_stored_refs(async_engine, str(run_id), str(org_id), "failed")
     try:
@@ -213,3 +232,19 @@ async def advance_terminalised_run(async_engine: AsyncEngine, run_id: uuid.UUID,
         raise
     except Exception:
         _log.warning("run_terminal_advance.terminal_facts_failed run=%s", run_id, exc_info=True)
+    try:
+        from modulo.core.audit_logger.background import record_run_state_change_audits
+
+        await record_run_state_change_audits(
+            async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False),
+            [(run_id, org_id)],
+            event_type="run.sweep_terminalised",
+            expected_statuses=TERMINAL_STATUSES,
+            actor_source=source,
+            log_key="run_terminal_advance.audit_append_failed",
+            summary_prefix="Run terminalised by background sweep:",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("run_terminal_advance.audit_failed run=%s", run_id, exc_info=True)

@@ -1146,17 +1146,22 @@ async def _scan_org_markers(
 def _emit_sweep_outcomes(
     org_id: uuid.UUID,
     outcomes: list[_SweepOutcome],
-) -> tuple[int, int]:
+) -> tuple[int, int, list[tuple[uuid.UUID, uuid.UUID]]]:
     """Log committed outcomes post-commit (qa F14: no phantom events).
 
-    Returns ``(cleared_count, transitioned_count)`` for this org.
+    Returns ``(cleared_count, transitioned_count, transitioned_entries)`` for
+    this org — the third element is the ``(run_id, org_id)`` pairs whose status
+    this sweep actually changed (FAR-1549), so the caller can record them on
+    the org's audit chain once the whole pass has finished.
     """
     cleared = 0
     transitioned = 0
+    transitioned_entries: list[tuple[uuid.UUID, uuid.UUID]] = []
     for run_id, run_status, reason in outcomes:
         cleared += 1
         if reason == "transition_stale_running":
             transitioned += 1
+            transitioned_entries.append((run_id, org_id))
         _log.warning(
             "runner.capacity.marker_cleared",
             extra={
@@ -1167,7 +1172,40 @@ def _emit_sweep_outcomes(
                 "note": "container destroy owned by the D4 reconciler",
             },
         )
-    return cleared, transitioned
+    return cleared, transitioned, transitioned_entries
+
+
+async def _record_marker_sweep_terminalisations(
+    factory: async_sessionmaker[AsyncSession],
+    entries: list[tuple[uuid.UUID, uuid.UUID]],
+) -> None:
+    """Record the sweep's stale-RUNNING terminalisations on the audit chain (FAR-1549).
+
+    Only ``transition_stale_running`` outcomes change a status (d1/d3 merely
+    clear a marker on an already-terminal or still-runnable row), and the
+    entries are collected only from org passes whose transaction COMMITTED, so
+    the record cannot be phantom. SYSTEM actor — a cron sweep has no request
+    principal — and fail-open: the terminal write is already committed and
+    must never be turned into a sweep failure by its own record.
+    """
+    if not entries:
+        return
+    try:
+        from modulo.core.audit_logger.background import record_run_state_change_audits
+
+        await record_run_state_change_audits(
+            factory,
+            entries,
+            event_type="run.sweep_terminalised",
+            expected_statuses=TERMINAL_STATUSES,
+            actor_source="runner_marker_sweep",
+            log_key="runner_capacity.marker_sweep_audit_failed",
+            summary_prefix="Run terminalised by background sweep:",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("runner.capacity.marker_sweep_audit_failed entries=%d", len(entries))
 
 
 async def reconcile_runner_dispatch_markers(
@@ -1223,6 +1261,9 @@ async def reconcile_runner_dispatch_markers(
     scanned = 0
     cleared = 0
     transitioned = 0
+    # (run_id, org_id) pairs whose status this sweep changed — recorded on the
+    # org audit chain once the pass finishes (FAR-1549).
+    terminalised_entries: list[tuple[uuid.UUID, uuid.UUID]] = []
     violations = 0
     orgs_failed = 0
     org_failure_details: list[str] = []
@@ -1313,11 +1354,16 @@ async def reconcile_runner_dispatch_markers(
                     continue
                 # The org transaction COMMITTED — emit the outcomes + the breach
                 # verdict now (post-commit, never phantom).
-                org_cleared, org_transitioned = _emit_sweep_outcomes(org_id, committed_outcomes)
+                org_cleared, org_transitioned, org_terminalised = _emit_sweep_outcomes(org_id, committed_outcomes)
                 cleared += org_cleared
                 transitioned += org_transitioned
+                terminalised_entries.extend(org_terminalised)
                 if org_breach:
                     violations += 1
+        # FAR-1549: record the stale-RUNNING terminalisations. Runs AFTER the
+        # per-org loop so a later org's failure cannot lose the earlier orgs'
+        # records (and BEFORE the sweep-error raise, for the same reason).
+        await _record_marker_sweep_terminalisations(factory, terminalised_entries)
         _log.info(
             "runner.capacity.marker_swept scanned=%d cleared=%d transitioned=%d",
             scanned,
