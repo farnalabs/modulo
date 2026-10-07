@@ -17,6 +17,7 @@ code:
   - backend/src/modulo/db/crud/pipeline.py
   - backend/src/modulo/db/crud/system_audit_event.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
+  - backend/src/modulo/db/seed.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/audit_event.py
   - backend/src/modulo/core/system_audit_logger.py
@@ -36,7 +37,9 @@ unit-tests:
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_admin_system_audit.py
   - backend/tests/unit/core/test_background_audit_wiring.py
+  - backend/tests/unit/core/eval_engine/test_execute_suite_run.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
+  - backend/tests/unit/db/test_seed_users.py
   - backend/tests/unit/crud/test_system_audit_event.py
   - backend/tests/unit/core/test_system_audit_logger.py
   - backend/tests/integration/test_audit_append_only.py
@@ -175,7 +178,8 @@ guarded against tampering at both the ORM and the database layer.
       classified (FAR-1549). Writes that never see a request (SAQ system-cron
       sweeps, runs-worker tasks, reconcilers, boot seeds) either append a
       SYSTEM-actor event through the shared `append_background_audit_event` /
-      `record_run_state_change_audits` helpers — `actor_user_id` stays NULL with
+      `record_run_state_change_audits` / `record_suite_run_audit` helpers —
+      `actor_user_id` stays NULL with
       a `SYSTEM_ACTOR` payload marker plus an `actor_source` naming the process,
       the org RLS context is set inside the helper's own fresh transaction, the
       batch helper re-selects each run and drops any whose live status is not an
@@ -190,13 +194,19 @@ guarded against tampering at both the ORM and the database layer.
       mechanically enumerates every path from the SAQ registration functions,
       the `CronJob` list, the `_boot_seed(...)` labels and the `core/`
       reconciler/sweep/seed functions, so a new background path fails the gate
-      until classified; the remaining SuiteRun-lifecycle and `modulo_users`
-      boot-seed gaps are recorded as visible, actionable `gap` entries rather
-      than silently unaudited (`core/audit_logger/background.py`,
+      until classified. FAR-1561 closed the two gaps FAR-1549 left visible: the
+      SuiteRun lifecycle appends `suite_run_created` (fire, before enqueue) and
+      `suite_run_started` / `suite_run_completed` (execution, post-commit) with
+      the same re-select phantom guard, and the `modulo_users` boot seed appends
+      `user_seeded` / `user_rehashed` inside the seeding transaction — the
+      credential and any admin-role grant commit atomically with their record —
+      so no enumerated path is classified `gap` any more
+      (`core/audit_logger/background.py`,
       `core/cron_helpers.py`, `core/run_admission.py`,
       `core/run_terminal_advance.py`, `core/runner_capacity.py`,
-      `core/saq_worker.py`, `test_background_audit.py`,
-      `test_background_audit_wiring.py`, `test_background_audit_coverage.py`)
+      `core/saq_worker.py`, `db/seed.py`, `test_background_audit.py`,
+      `test_background_audit_wiring.py`, `test_background_audit_coverage.py`,
+      `test_seed_users.py`, `test_execute_suite_run.py`)
 - [x] The durable org-lifecycle ledger has a system-admin read surface
       (FAR-1538): `GET /api/v1/admin/system-audit` lists the org-independent
       `system_audit_events` records read-only with offset pagination and

@@ -23,6 +23,21 @@ from sqlalchemy.exc import SQLAlchemyError
 import modulo.api.main as main
 from modulo.settings import Settings
 
+
+@pytest.fixture(autouse=True)
+def _audit_append_spy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Spy the MODULO_USERS seeder's audit append (FAR-1561).
+
+    The real append would run against the mocked sessions here (and their
+    ``session.add`` accounting, which the seed tests assert on), so it is
+    replaced and asserted on through the same seam the promoted-seeder tests
+    use (``tests/unit/db/test_seed_users.py``).
+    """
+    spy = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+    return spy
+
+
 # ── _seed_modulo_users / _seed_modulo_user / _rehash_existing_user ──
 
 
