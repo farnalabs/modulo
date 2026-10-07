@@ -501,6 +501,22 @@ class TestOngoingTopup:
         assert outcome["status"] == "skipped"
         assert outcome["reason"] == PIPELINE_NOT_RUNNABLE_SKIP_REASON
 
+    @pytest.mark.asyncio
+    async def test_pipeline_not_runnable_without_outcome_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1528: the refusal is swallowed even when the caller supplied no
+        outcome envelope (outcome=None) — there is nothing to record it in, but
+        the top-up job must still return instead of escaping as an SAQ job
+        failure on every tick."""
+        _patch_env(monkeypatch)
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        now = datetime.now(UTC)
+        session = _RoutedSession(trigger=_make_trigger())
+        create_run = AsyncMock(side_effect=PipelineNotRunnableError(state="deleted", pipeline_id=uuid.uuid4()))
+        created, mock_cr, _ = await _run_topup(session, now=now, in_flight=0, outcome=None, create_run=create_run)
+        assert created == []
+        assert mock_cr.await_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _ongoing_topup — snapshot resolution

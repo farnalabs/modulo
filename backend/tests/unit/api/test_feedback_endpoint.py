@@ -198,6 +198,31 @@ class TestCreateFeedback:
         assert resp.status_code == 201
         assert resp.json()["feedback_status"] == "pending"
 
+    def test_pipeline_not_runnable_returns_409(self, client: TestClient) -> None:
+        """FAR-1528: an AI feedback handler spawns its correction run through
+        the create_run choke point — an archived/soft-deleted pipeline is
+        refused with 409 Conflict (state in the detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+        ):
+            mock_create.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={
+                    "review_id": "gate-1",
+                    "rejection_reason": "Wrong output",
+                    "rejected_output": {"result": "bad"},
+                    "producing_node_id": "node-b",
+                    "feedback_handler_type": "ai",
+                },
+            )
+
+        assert resp.status_code == 409
+        assert "archived" in resp.json()["detail"]
+
     def test_returns_404_when_run_not_found(self, client: TestClient) -> None:
         with (
             patch("modulo.api.routes.feedback.set_rls_org"),
