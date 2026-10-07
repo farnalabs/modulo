@@ -8,6 +8,7 @@ event type, actor source and entries.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -111,6 +112,24 @@ class TestAdvanceTerminalisedRunAudit:
             await rta.advance_terminalised_run(engine, _RUN, _ORG, source="stale_run_recovery")
 
         assert any("run_terminal_advance.audit_failed" in entry.message for entry in caplog.records)
+
+    async def test_cancellation_is_never_swallowed(self) -> None:
+        """CancelledError is the one exception the fail-open helper must NOT
+        swallow — a cancelled sweep must actually stop."""
+        from modulo.core import run_terminal_advance as rta
+
+        engine = MagicMock()
+        with (
+            patch.object(rta, "advance_journeys_from_stored_refs", new=AsyncMock()),
+            patch.object(rta, "record_terminal_failed_fact", new=AsyncMock()),
+            patch.object(
+                background,
+                "record_run_state_change_audits",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await rta.advance_terminalised_run(engine, _RUN, _ORG, source="stale_run_recovery")
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +259,20 @@ class TestHitlParkSweepAudit:
         assert result == {"parked": 1}
         assert any("hitl_park.audit_failed" in entry.message for entry in caplog.records)
 
+    async def test_cancellation_is_never_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ra, "get_settings", lambda: self._settings())
+        engine = _ParkEngine([_ORG], {_ORG: [_parked_row()]})
+
+        with (
+            patch.object(
+                background,
+                "record_run_state_change_audits",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # cron_helpers._record_terminalisation_audits — dispatcher_reconcile
@@ -281,6 +314,19 @@ class TestDispatcherTerminalisationAudit:
             await ch._record_terminalisation_audits([(_RUN, _ORG)])
 
         assert any("cron_helpers.terminalized_audits_failed" in entry.message for entry in caplog.records)
+
+    async def test_cancellation_is_never_swallowed(self) -> None:
+        from modulo.core import cron_helpers as ch
+
+        with (
+            patch.object(
+                background,
+                "record_run_state_change_audits",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await ch._record_terminalisation_audits([(_RUN, _ORG)])
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +389,19 @@ class TestRunnerMarkerSweepAudit:
             await rc._record_marker_sweep_terminalisations(MagicMock(), [(_RUN, _ORG)])
 
         assert any("runner.capacity.marker_sweep_audit_failed" in entry.message for entry in caplog.records)
+
+    async def test_cancellation_is_never_swallowed(self) -> None:
+        from modulo.core import runner_capacity as rc
+
+        with (
+            patch.object(
+                background,
+                "record_run_state_change_audits",
+                new=AsyncMock(side_effect=asyncio.CancelledError()),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await rc._record_marker_sweep_terminalisations(MagicMock(), [(_RUN, _ORG)])
 
 
 # ---------------------------------------------------------------------------
@@ -457,3 +516,60 @@ class TestRetentionPurgeAudit:
         # The purge still ran — retention is not held hostage by its own record.
         assert result["deleted"] == 7
         assert any(sw._RETENTION_AUDIT_LOG_KEY in entry.message for entry in caplog.records)
+
+    async def test_target_count_cancellation_is_never_swallowed(self) -> None:
+        """The fail-open count guard must re-raise CancelledError — a cancelled
+        retention tick must not be turned into a completed purge."""
+        system_factory, _session = _sessionmaker_like(MagicMock())
+
+        with (
+            patch.object(sw, "_make_system_session_factory", return_value=system_factory),
+            patch.object(sw, "_retention_purge_targets", new=AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await sw.retention_cleanup({})
+
+
+class TestRetentionPurgeTargetCount:
+    """The pre-image count itself: ``_retention_purge_targets`` reads the rows
+    the purge is about to delete, so its predicate and its zero-filter are the
+    contract the audit event's count rests on."""
+
+    async def test_returns_per_org_counts_and_drops_empty_orgs(self) -> None:
+        org_with_zero = uuid.UUID("00000000-0000-0000-0000-0000000000cc")
+        result = MagicMock()
+        result.all.return_value = [(_ORG, 5), (org_with_zero, 0)]
+        factory, session = _sessionmaker_like(MagicMock())
+        session.execute = AsyncMock(return_value=result)
+
+        targets = await sw._retention_purge_targets(factory)
+
+        assert targets == {_ORG: 5}
+        session.execute.assert_awaited_once()
+
+
+class TestRetentionPurgeRecordHelper:
+    """Direct helper tests for the branches ``retention_cleanup`` cannot reach:
+    it only calls the recorder when rows were actually deleted."""
+
+    async def test_empty_targets_with_zero_deletions_returns_silently(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            await sw._record_retention_purge_audits({}, 0)
+
+        assert not any(sw._RETENTION_AUDIT_LOG_KEY in entry.message for entry in caplog.records)
+
+    async def test_unrecorded_append_is_not_counted(self) -> None:
+        """An append that reports False (logged-and-swallowed write failure)
+        must not inflate the recorded tally."""
+        with (
+            patch.object(
+                background,
+                "append_background_audit_event",
+                new=AsyncMock(return_value=False),
+            ) as append,
+            patch.object(sw, "_make_session_factory", return_value=MagicMock()),
+        ):
+            await sw._record_retention_purge_audits({_ORG: 3}, 3)
+
+        append.assert_awaited_once()
+        assert append.await_args.kwargs["payload_json"]["purged_runs"] == 3

@@ -227,6 +227,25 @@ async def test_blank_event_type_and_statuses_are_rejected() -> None:
     factory.assert_not_called()
 
 
+async def test_blank_actor_source_is_rejected_before_any_write() -> None:
+    """Provenance must be STATED — a SYSTEM record without its source is not a
+    provenance, so a blank actor_source is rejected like a blank event_type."""
+    factory = _factory()
+
+    with pytest.raises(ValueError, match="non-empty actor_source"):
+        await background.record_run_state_change_audits(
+            factory,
+            [(_RUN_ONE, _ORG_A)],
+            event_type="run.sweep_terminalised",
+            expected_statuses={"failed"},
+            actor_source=" ",
+            log_key=_LOG_KEY,
+            summary_prefix="x",
+        )
+
+    factory.assert_not_called()
+
+
 async def test_run_without_the_expected_status_is_skipped() -> None:
     """Phantom-event guard: an id collected from a rolled-back transaction is
     not evidence the change landed, so the live status decides."""
