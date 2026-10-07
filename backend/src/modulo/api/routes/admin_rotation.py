@@ -18,8 +18,8 @@ from modulo.api.dependencies import (
     deny_break_glass_mint,
     get_db_session,
     require_system_permission,
+    resolve_audit_principal,
 )
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
@@ -101,7 +101,7 @@ def _validate_fernet_key(key: str, label: str) -> None:
     "/rotate-key",
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[
-        Depends(audited("api_access_post", "encryption", principal_dep=get_current_tenant_user)),
+        Depends(audited("api_access_post", "encryption", principal_dep=resolve_audit_principal)),
         Depends(deny_break_glass_mint),
     ],
     responses={

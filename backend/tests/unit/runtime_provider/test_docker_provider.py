@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.runtime_provider import ExecResult, WorkspaceSpec
-from modulo.core.runtime_provider.docker import _DEFAULT_MEMORY_MB, DockerRuntimeProvider
+from modulo.core.runtime_provider.docker import (
+    _DEFAULT_HARDENING_MEMORY_MB,
+    DockerRuntimeProvider,
+)
 
 
 class _FakeDockerError(Exception):
@@ -213,7 +216,7 @@ async def test_create_workspace_invalid_memory_falls_back_to_default(
     await provider.create_workspace(spec)
 
     config = mock_docker_client.containers.create.call_args[1]["config"]
-    assert config["HostConfig"]["Memory"] == _DEFAULT_MEMORY_MB * 1024 * 1024
+    assert config["HostConfig"]["Memory"] == _DEFAULT_HARDENING_MEMORY_MB * 1024 * 1024
 
 
 @pytest.mark.parametrize(

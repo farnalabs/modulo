@@ -31,15 +31,20 @@ agent runs).
 | **T1** Bundled Runner (self-hosted Docker) — this document | simplest, self-contained; **deliberately permissive networking** — bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
 | **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
 | **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* — T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
-| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | to build |
+| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) — see the evidence note below |
 | **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
 | **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
 **T3 is the bounded-egress answer for self-hosted compute.** When an
 operator on a Docker tier (T1, and T2b) needs the workspace's egress
 bounded to an allowlist, the supported self-hosted path is T3 — the
-customer's own NetworkPolicy on their Kubernetes cluster enforces the
-bound (T3 is still "to build"). There is no bounded middle tier in Docker
+provider ships on main (FAR-1051), and the customer's own NetworkPolicy on
+their Kubernetes cluster enforces the bound. Evidence note: the kind
+conformance gate is green (FAR-1053) but does NOT exercise workload
+identity or NetworkPolicy enforcement, and the scheduled managed-cluster
+leg has not executed yet (its kubeconfig secrets are pending) —
+`docs/deployment/k8s-conformance-parity.md` records exactly what each leg
+proves. There is no bounded middle tier in Docker
 (T1/T2b), by decision. The managed-sandbox tier (T2a / E2B) is a separate
 case: it already enforces egress allowlists today via the node-level
 `egress_policy: selected` + `egress_allowlist` — a real, fail-closed
@@ -76,7 +81,11 @@ as the socket proxy — a bespoke module owning a control the operator
 should own. The bounded answer for self-hosted compute is the Kubernetes
 tier (T3, in the model above): run Modulo's runner on your cluster and
 bound the workspace with YOUR NetworkPolicy, RBAC, and admission policy —
-T3 is still "to build". There will be NO bespoke egress gateway. This
+the T3 provider ships on main (FAR-1051), with a green kind conformance
+gate (FAR-1053) that does not yet exercise workload identity or
+NetworkPolicy enforcement (see `docs/deployment/k8s-conformance-parity.md`;
+the managed-cluster leg has not executed yet). There will be NO bespoke
+egress gateway. This
 decision supersedes FAR-1039 (the earlier per-profile allowlist plan is
 dropped, not deferred).
 

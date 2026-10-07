@@ -19,7 +19,7 @@
                 @click="showTypeDropdown = !showTypeDropdown"
                 data-testid="library-type-filter-button"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                <SlidersVertical class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 {{ $t('views.LibraryView.all_types') }}
                 <span v-if="selectedTypes.length > 0" class="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">{{ selectedTypes.length }}</span>
               </button>
@@ -38,6 +38,7 @@
                     :checked="selectedTypes.includes(opt.value)"
                     class="rounded border-input"
                     @change="toggleType(opt.value)"
+                    :data-testid="`library-type-filter-option-${opt.value}`"
                   />
                   {{ $t(opt.labelKey) }}
                 </label>
@@ -60,15 +61,17 @@
             type="button"
             class="ml-0.5 rounded-full p-0.5 hover:bg-primary/20 transition-colors"
             @click="removeType(type)"
-            :aria-label="`Remove ${typeLabel(type)} filter`"
+            :aria-label="$t('views.LibraryView.remove_type_filter', { type: typeLabel(type) })"
+            data-testid="library-remove-type-filter"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <X class="h-3 w-3" aria-hidden="true" />
           </button>
         </span>
         <button
           type="button"
           class="text-xs text-muted-foreground hover:text-foreground underline"
           @click="selectedTypes = []; onFilterChange()"
+          data-testid="library-clear-type-filters"
         >
           {{ $t('views.NotificationsPage.clear_filters') }}
         </button>
@@ -113,8 +116,19 @@
         {{ $t('views.LibraryView.community_disclaimer') }}
       </p>
 
-      <div v-if="loading && section !== 'collections'" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
-      <div v-if="collectionsLoading && section === 'collections'" class="text-center py-12 text-muted-foreground">{{ $t('views.LibraryView.loading') }}</div>
+      <div
+        v-if="(loading && section !== 'collections') || (collectionsLoading && section === 'collections')"
+        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+        data-testid="library-loading-skeleton"
+      >
+        <div v-for="n in pageSize" :key="`library-skeleton-${n}`" class="card p-5 flex flex-col gap-3">
+          <SkeletonBlock height-class="h-5 w-24" />
+          <SkeletonBlock height-class="h-5 w-3/4" />
+          <SkeletonBlock height-class="h-4 w-full" />
+          <SkeletonBlock height-class="h-4 w-2/3" />
+          <SkeletonBlock class="mt-2" height-class="h-8 w-full" />
+        </div>
+      </div>
 
       <div
         v-else-if="error && section !== 'collections'"
@@ -159,7 +173,7 @@
       </div>
 
       <details v-if="section === 'native' && previewPrimitives.length > 0" class="rounded-lg border bg-card" data-testid="library-preview-section">
-        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground" data-testid="library-preview-summary">
           {{ $t('views.LibraryView.preview_integrations_count', { count: previewPrimitives.length }, previewPrimitives.length) }}
         </summary>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 border-t p-4">
@@ -250,9 +264,11 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { watchDebounced } from '@vueuse/core'
 import { useRouter, useRoute } from 'vue-router'
 import Button from 'primevue/button'
+import { SlidersVertical, X } from '@lucide/vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import LibraryPrimitiveCard from '../components/library/LibraryPrimitiveCard.vue'
 import { useDataFetch } from '../composables/useDataFetch'
 import { formatApiError } from '../lib/api/formatError'

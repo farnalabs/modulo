@@ -793,53 +793,73 @@ def _pipeline_not_runnable_state(
     *,
     archived_at: datetime | None,
     deleted_at: datetime | None,
+    run_enabled: bool,
 ) -> str | None:
     """Return the lifecycle state that refuses a run, or ``None`` when runnable.
 
-    The ONE place the set of not-runnable pipeline states is defined (FAR-1528).
-    Extending it is a two-line change: add the condition here, add its column to
-    the gate's SELECT below, and every run origin's ENFORCEMENT picks the new
-    state up at once — FAR-1530's per-pipeline Paused state lands exactly here.
-    ``deleted`` outranks ``archived``: a soft-deleted pipeline that was also
-    archived reports the final state.
+    The ONE place the set of not-runnable pipeline states is defined (FAR-1528,
+    extended by FAR-1530). Extending it is a two-line change: add the condition
+    here, add its column to the gate's SELECT below, and every run origin's
+    ENFORCEMENT picks the new state up at once. ``run_enabled`` is REQUIRED
+    (no default): a caller that forgets it fails loudly instead of silently
+    reading a paused pipeline as runnable.
+
+    Precedence: ``deleted`` outranks ``archived``, and ``archived`` outranks
+    ``paused`` — a soft-deleted pipeline that was also archived reports the
+    final state, and an archived pipeline that is also paused reports
+    ``archived`` (archived already implies non-executing, so ``paused`` only
+    speaks for a live, visible pipeline).
+
+    ``run_enabled=False`` is the FAR-1530 Paused state: PRESENT, VISIBLE, but
+    NON-EXECUTING. It is a PER-PIPELINE refusal, distinct from the org-level
+    ``triggers_paused`` kill-switch (whose ``TriggersPausedError`` /
+    ``PAUSE_SKIP_REASON`` envelope it must never reuse).
 
     "Every origin picks it up" describes enforcement, not the response shape.
     Each origin maps the refusal itself: REST/MCP answer 409 Conflict
     (``pipeline_not_runnable_http``), and the background fire origins (SAQ
     cron, polling, ongoing) plus the agent_signal child-run path turn it into a
     quiet typed skip (``PIPELINE_NOT_RUNNABLE_SKIP_REASON``) instead of a
-    repeating job failure. Reachability also differs by state: a SOFT-DELETED
-    pipeline is filtered out by ``SoftDeleteMixin`` before most callers get
-    here, so REST/rerun typically 404 upstream and a webhook/replay can still
-    500 on its own missing-row path — the gate is what refuses every origin
-    that can still SEE the row (notably archived pipelines, which stay
-    visible), not a guarantee that no origin fails before it.
+    repeating job failure — state-agnostic, so ``paused`` flows through the
+    existing mapping with no new vocabulary. Reachability also differs by
+    state: a SOFT-DELETED pipeline is filtered out by ``SoftDeleteMixin`` before
+    most callers get here, so REST/rerun typically 404 upstream and a
+    webhook/replay can still 500 on its own missing-row path — the gate is what
+    refuses every origin that can still SEE the row (notably archived AND
+    paused pipelines, which both stay visible), not a guarantee that no origin
+    fails before it.
     """
     if deleted_at is not None:
         return "deleted"
     if archived_at is not None:
         return "archived"
+    if not run_enabled:
+        return "paused"
     return None
 
 
 async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Pipeline lifecycle state — the SINGLE authority gate (FAR-1528).
+    """Pipeline lifecycle state — the SINGLE authority gate (FAR-1528, FAR-1530).
 
-    Refuses a run whose pipeline is archived (``archived_at IS NOT NULL``) or
-    soft-deleted (``deleted_at IS NOT NULL``). Manual runs, MCP triggers,
-    webhooks, replay, cron, polling, agent_signal, slack, variant and
-    correction runs all converge on ``create_run``, so the check lives HERE and
-    only here — never add a per-path pipeline-state check upstream.
+    Refuses a run whose pipeline is archived (``archived_at IS NOT NULL``),
+    soft-deleted (``deleted_at IS NOT NULL``), or Paused
+    (``run_enabled = FALSE`` — FAR-1530: present and visible but
+    non-executing). Manual runs, MCP triggers, webhooks, replay, cron,
+    polling, agent_signal, slack, variant and correction runs all converge on
+    ``create_run``, so the check lives HERE and only here — never add a
+    per-path pipeline-state check upstream.
 
     Enforcement is uniform; the RESPONSE to the refusal is per-origin: REST /
-    MCP map it to 409 Conflict, while the three SAQ fire-job origins (cron,
-    polling, ongoing) and the agent_signal child-run path catch it and return a
-    quiet typed skip (``PIPELINE_NOT_RUNNABLE_SKIP_REASON``) — an archived
-    pipeline with a still-active trigger is a per-tick skip, never a job that
-    fails forever. See ``modulo.core.cron_helpers`` / ``trigger_engine.
-    agent_signal`` for those handlers.
+    MCP map it to 409 Conflict (the state rides in the detail, so a paused
+    pipeline reads as ``is paused``), while the three SAQ fire-job origins
+    (cron, polling, ongoing) and the agent_signal child-run path catch it and
+    return a quiet typed skip (``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` — a
+    state-agnostic reason, so ``paused`` needs NO new vocabulary value and no
+    fire-job change) — a paused pipeline with a still-active trigger is a
+    per-tick skip, never a job that fails forever. See ``modulo.core.
+    cron_helpers`` / ``trigger_engine.agent_signal`` for those handlers.
 
-    Reads the two columns directly (never the ORM identity map) so a freshly
+    Reads the columns directly (never the ORM identity map) so a freshly
     toggled row is observed, mirroring ``_ensure_org_not_deleted``; the raw
     ``text()`` binding uses ``pipeline_id.hex`` for the same cross-backend
     reason (SQLite's ``Uuid`` stores 32-char hex and never matches a dashed
@@ -866,20 +886,24 @@ async def _enforce_pipeline_state_gate(session: AsyncSession, pipeline_id: uuid.
       The absence is logged so it stays diagnosable.
 
     TOCTOU note (same accepted bounded race as the pause gate): a run whose
-    gate read ``not archived`` and whose INSERT commits after a concurrent
-    archive lands is an "in-flight before archive" run. Deliberately no row
+    gate read ``not paused`` and whose INSERT commits after a concurrent
+    pause lands is an "in-flight before pause" run. Deliberately no row
     locks.
     """
     pipeline_state_result = await session.execute(
-        text("SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid AND organisation_id = :org"),
+        text("SELECT archived_at, deleted_at, run_enabled FROM pipelines WHERE id = :pid AND organisation_id = :org"),
         {"pid": pipeline_id.hex, "org": org_id.hex},
     )
     row = pipeline_state_result.first()
     if row is None:
         _log.warning("create_run.pipeline_row_absent pipeline=%s", pipeline_id)
         return
-    archived_at, deleted_at = row
-    state = _pipeline_not_runnable_state(archived_at=archived_at, deleted_at=deleted_at)
+    archived_at, deleted_at, run_enabled = row
+    state = _pipeline_not_runnable_state(
+        archived_at=archived_at,
+        deleted_at=deleted_at,
+        run_enabled=bool(run_enabled),
+    )
     if state is not None:
         raise PipelineNotRunnableError(pipeline_id=pipeline_id, state=state)
 
@@ -1894,19 +1918,20 @@ async def create_run(
     await enforce_capacity_gate()
 
     # Pipeline lifecycle state gate (FAR-1528) — the SINGLE authority check
-    # for "may this pipeline start a run at all". Archived and soft-deleted
-    # pipelines must not start runs from ANY origin (REST manual + rerun, MCP
-    # trigger_pipeline, webhook, replay, cron, polling, agent_signal, slack,
-    # variant, correction) — they all converge here, so this one gate covers
-    # them; never add a per-path pipeline-state check upstream. Read failures
-    # propagate (fail closed), same discipline as the pause gate below.
-    # Raises PipelineNotRunnableError (modulo.core.exceptions); the db->core
-    # edge is exempted under the db-does-not-import-core contract. Callers map
-    # it themselves: REST/MCP answer 409, the SAQ fire jobs (cron/polling/
-    # ongoing) and agent_signal return a typed skip. Note that most origins
-    # only REACH this gate for rows they can still see — SoftDeleteMixin
-    # already filters soft-deleted pipelines from REST/rerun entry reads (404
-    # upstream), so this gate's reliable subject is an ARCHIVED pipeline.
+    # for "may this pipeline start a run at all". Archived, soft-deleted and
+    # Paused (FAR-1530: run_enabled = FALSE) pipelines must not start runs
+    # from ANY origin (REST manual + rerun, MCP trigger_pipeline, webhook,
+    # replay, cron, polling, agent_signal, slack, variant, correction) — they
+    # all converge here, so this one gate covers them; never add a per-path
+    # pipeline-state check upstream. Read failures propagate (fail closed),
+    # same discipline as the pause gate below. Raises PipelineNotRunnableError
+    # (modulo.core.exceptions); the db->core edge is exempted under the
+    # db-does-not-import-core contract. Callers map it themselves: REST/MCP
+    # answer 409, the SAQ fire jobs (cron/polling/ongoing) and agent_signal
+    # return a typed skip. Note that most origins only REACH this gate for rows
+    # they can still see — SoftDeleteMixin already filters soft-deleted
+    # pipelines from REST/rerun entry reads (404 upstream), so this gate's
+    # reliable subjects are ARCHIVED and PAUSED pipelines (both stay visible).
     await _enforce_pipeline_state_gate(session, pipeline_id, org_id)
 
     # Guardrails kill-switch (FAR-223 item 9) — pinned at run start alongside

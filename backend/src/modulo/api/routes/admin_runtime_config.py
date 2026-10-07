@@ -9,9 +9,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from modulo.api.dependencies import require_feature, require_system_permission
+from modulo.api.dependencies import require_feature, require_system_permission, resolve_audit_principal
 from modulo.api.middleware.sensitive_mask import is_sensitive_env_key, mask_sensitive_value
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import APPLY_HOOKS
@@ -114,7 +113,7 @@ def get_runtime_config(
 @router.put(
     "",
     dependencies=[
-        Depends(audited("runtime_config_overrides_updated", "runtime_config", principal_dep=get_current_tenant_user)),
+        Depends(audited("runtime_config_overrides_updated", "runtime_config", principal_dep=resolve_audit_principal)),
         require_feature("runtime_config"),
     ],
 )
@@ -194,7 +193,7 @@ def set_runtime_config_overrides(
 @router.post(
     "/reload",
     dependencies=[
-        Depends(audited("runtime_config_reloaded", "runtime_config", principal_dep=get_current_tenant_user)),
+        Depends(audited("runtime_config_reloaded", "runtime_config", principal_dep=resolve_audit_principal)),
         require_feature("runtime_config"),
     ],
 )

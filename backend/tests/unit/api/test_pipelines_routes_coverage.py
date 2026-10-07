@@ -88,6 +88,13 @@ def _make_pipeline(**overrides: object) -> MagicMock:
     p.retry_policy = {}
     p.archived_at = None
     p.snapshot_count = 0
+    # FAR-1530: real columns, not auto-Mock attributes — the pause/resume
+    # routes branch on the circuit-breaker witness and serialise the run-state
+    # columns, so the defaults must be the ordinary row (running, not tripped).
+    p.run_enabled = True
+    p.run_disabled_reason = None
+    p.run_disabled_at = None
+    p.circuit_breaker_tripped = False
     p.graph_nodes_json = overrides.get("graph_nodes_json", [])
     p.account_id = _USER_ID
     p.created_by = _USER_ID
@@ -1056,6 +1063,116 @@ def test_restore_pipeline_write_none_maps_404(client: tuple[TestClient, AsyncMoc
             _stop_all(_rls_started)
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume (FAR-1530: per-pipeline Paused execution state)
+# ---------------------------------------------------------------------------
+
+
+def _make_paused_pipeline() -> MagicMock:
+    p = _make_pipeline()
+    p.run_enabled = False
+    p.run_disabled_reason = "operator"
+    p.run_disabled_at = _NOW
+    return p
+
+
+@pytest.mark.parametrize("action", ["pause", "resume"])
+def test_run_state_actions_happy_and_missing(client: tuple[TestClient, AsyncMock], action: str) -> None:
+    """POST /pipelines/{id}/{pause,resume}: 200 with the run-state response
+    fields, 404 when the row is absent (entry filter) or the write misses."""
+    http, _session = client
+    crud = {"pause": "pause_pipeline", "resume": "resume_pipeline"}[action]
+    result = _make_paused_pipeline() if action == "pause" else _make_pipeline()
+
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=result)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The response model must carry the run-state triple (the UI badges it and
+    # modulo apply's drift hash reads run_enabled from this same payload).
+    assert body["run_enabled"] is (action != "pause")
+    assert "run_disabled_reason" in body
+    assert "run_disabled_at" in body
+
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=None)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 404
+
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}{crud}", new=AsyncMock(return_value=None)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 404
+
+
+def test_resume_refused_while_circuit_breaker_tripped(client: tuple[TestClient, AsyncMock]) -> None:
+    """REGRESSION (FAR-1530 trap): operator resume is REFUSED 409 while the
+    spend circuit breaker's witness holds.
+
+    Without the in-txn witness check this test FAILS — the resume would clear
+    ``run_enabled`` on a tripped pipeline and let spend run away again until
+    the next breaker check. The CRUD write must never be reached.
+    """
+    http, _session = client
+    tripped = _make_pipeline()
+    tripped.circuit_breaker_tripped = True
+
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=tripped)),
+        patch(f"{_PREFIX}resume_pipeline", new=AsyncMock()) as resume_mock,
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/resume")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 409, resp.text
+    assert "circuit_breaker_tripped" in resp.json()["detail"]
+    resume_mock.assert_not_awaited()
+
+
+def test_pause_does_not_consider_the_circuit_breaker(client: tuple[TestClient, AsyncMock]) -> None:
+    """Pausing a tripped pipeline is allowed (idempotent no-op server-side:
+    the first cause owns the reason, so the trip's cause is untouched)."""
+    http, _session = client
+    tripped = _make_paused_pipeline()
+    tripped.circuit_breaker_tripped = True
+
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=tripped)),
+        patch(f"{_PREFIX}pause_pipeline", new=AsyncMock(return_value=tripped)),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/pause")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
 
 
 # ---------------------------------------------------------------------------

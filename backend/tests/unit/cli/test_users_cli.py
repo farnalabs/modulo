@@ -232,7 +232,6 @@ class TestUsersAdd:
         assert result.exit_code == 0, result.output
         assert "Created user prompted@example.com (runner in organisation 'Primary')" in result.output
         assert PASSWORD not in result.output
-        assert PASSWORD not in result.output
 
     def test_add_refuses_existing_user(self, seeded_db: str) -> None:
         first = _invoke("add", "dup@example.com", "--password", PASSWORD)

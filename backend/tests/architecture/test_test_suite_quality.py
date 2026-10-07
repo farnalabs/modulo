@@ -998,6 +998,21 @@ regression that silently weakens the suite:
   (``factory().append(y)``, whose type cannot be known statically) and the
   value-returning siblings (``pop``/``get``/``setdefault``/``popitem``/
   ``count``/``index``), which legitimately carry a value
+- a pure assertion repeated on the immediately following line — ``assert x``
+  twice, ``assert 'a' in names`` twice, ``assert row['k'] is None`` twice, in
+  any statement list (function/class body, ``if``/``for``/``while`` branch,
+  ``with``, ``try``/``except``/``else``/``finally``, ``match`` case). A pure
+  expression (name, attribute path, subscript, comparison, literal, or a
+  container of those — no call/``await``/walrus/comprehension) re-evaluates to
+  the same value, so the back-to-back repeat can never change the verdict: it
+  adds no coverage and misleads a reader (and a mutation-testing run) into
+  believing two distinct facts are pinned. Repeated *calls* are deliberately
+  exempt — calling an operation twice is the legitimate "consume it twice"
+  idiom (rate-limit budgets, idempotence, generator advancement) — and the
+  repeat must be *immediately* adjacent (a repeat separated by any other
+  statement may run in a different state). This owns the repeated *statement*;
+  the redundant-boolean-operand lens owns a repeated operand *within* one
+  ``BoolOp``
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -13836,3 +13851,151 @@ def test_none_returning_mutator_lens_flags_none_result():
     split = "def test_foo():\n    assert items\n    assert items.clear()\n"
     found = _none_returning_mutator_assert_violations(ast.parse(split))
     assert [lineno for lineno, _ in found] == [3], f"live/dead split wrong: {found}"
+
+
+def _duplicate_consecutive_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
+    """Return ``(lineno, detail)`` pairs for every ``assert`` that immediately
+    repeats the identical *pure* assertion in the same statement list.
+
+    A pure expression — a name, attribute path, subscript, comparison, literal,
+    or a container of those, with no call/``await``/walrus/comprehension
+    anywhere inside — re-evaluates to the same value on a second evaluation, so
+    a back-to-back repeat of the very same ``assert`` can never change the
+    verdict: the duplicate adds no coverage and is almost always a copy-paste
+    leftover. Repeated *calls* are deliberately left alone even when they are
+    byte-for-byte identical, because calling an operation twice is the
+    deliberate "exercise it twice" idiom (consuming a rate-limit budget,
+    checking idempotence, advancing a generator) the lens cannot prove
+    redundant statically. Only *immediately adjacent* statements in the same
+    body are compared — a repeat separated by any other statement may run in a
+    different state — and the optional assertion message is ignored, because
+    the test expression is what fixes the verdict. Recurses through every
+    statement list (function/class bodies, ``if``/``for``/``while`` branches,
+    ``with`` bodies, ``try``/``except``/``else``/``finally`` and ``except*``
+    twins, and ``match`` cases), so a duplicate buried in a nested block is
+    caught too. This owns the repeated *statement*; the redundant-boolean-
+    operand lens owns a repeated operand *within* one ``BoolOp``."""
+    found: list[tuple[int, str]] = []
+    impure = (
+        ast.Call,
+        ast.Await,
+        ast.NamedExpr,
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+        ast.Yield,
+        ast.YieldFrom,
+    )
+
+    def _is_pure(node: ast.AST) -> bool:
+        return not any(isinstance(part, impure) for part in ast.walk(node))
+
+    def _scan(stmts: list[ast.stmt]) -> None:
+        previous: str | None = None
+        for stmt in stmts:
+            if isinstance(stmt, ast.Assert) and _is_pure(stmt.test):
+                fingerprint = ast.dump(stmt.test, include_attributes=False)
+                if fingerprint == previous:
+                    found.append(
+                        (
+                            stmt.lineno,
+                            (
+                                f"assert {ast.unparse(stmt.test)} repeats the immediately preceding "
+                                "identical assertion — the expression is pure, so the duplicate can "
+                                "never change the verdict; drop it"
+                            ),
+                        )
+                    )
+                previous = fingerprint
+            else:
+                previous = None
+
+    _scan(tree.body)
+    for node in _all_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _scan(node.body)
+        elif isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            _scan(node.body)
+            _scan(node.orelse)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            _scan(node.body)
+        elif isinstance(node, (ast.Try, ast.TryStar)):
+            _scan(node.body)
+            for handler in node.handlers:
+                _scan(handler.body)
+            _scan(node.orelse)
+            _scan(node.finalbody)
+        elif isinstance(node, ast.Match):
+            for case in node.cases:
+                _scan(case.body)
+    return found
+
+
+def test_no_duplicate_consecutive_assertions():
+    """A pure assertion repeated on the *very next line* — ``assert x`` twice,
+    ``assert "a" in names`` twice, ``assert row["k"] is None`` twice — can
+    never change the verdict: the expression is re-evaluated to the same value
+    and the second statement verifies exactly what the first already did. It is
+    dead weight that misleads a reader (and a mutation-testing run) into
+    believing two distinct facts are pinned, and is almost always a copy-paste
+    leftover. Repeated back-to-back *calls* are deliberately exempt because
+    calling an operation twice is the legitimate "consume it twice" idiom
+    (rate-limit budgets, idempotence, generator advancement). Drop the
+    duplicate, or fold the two checks into one assertion of the real
+    expectation."""
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS)
+        for lineno, detail in _duplicate_consecutive_assert_violations(tree):
+            violations.append(f"  {rel}:{lineno}  {detail}")
+    assert not violations, (
+        f"Found {len(violations)} duplicate consecutive assertion(s).\n"
+        "An immediately repeated pure assertion can never verify anything the first one did not;\n"
+        "drop the duplicate (repeated calls are exempt).\n" + "\n".join(violations)
+    )
+
+
+def test_duplicate_consecutive_assert_lens_flags_repeats():
+    """Synthetic positive/negative control for the duplicate-consecutive-assert
+    lens: it must flag a pure assertion repeated on the immediately following
+    line (bare, compared, membership, subscript, inside a nested block, and
+    three-or-more in a row), and ignore distinct neighbouring asserts, repeats
+    separated by any other statement, and byte-identical repeats whose
+    expression contains a call/``await``/walrus/comprehension."""
+    positive_sources = [
+        "def test_foo():\n    assert x\n    assert x\n",
+        "def test_foo():\n    assert x == y\n    assert x == y\n",
+        "def test_foo():\n    assert 'a' in names\n    assert 'a' in names\n",
+        "def test_foo():\n    assert row['k'] is None\n    assert row['k'] is None\n",
+        "def test_foo():\n    assert x\n    assert x, 'same check, new message'\n",
+        "def test_foo():\n    if flag:\n        assert x\n        assert x\n",
+        "def test_foo():\n    try:\n        assert x\n        assert x\n    except Exception:\n        pass\n",
+        "def test_foo():\n    assert x\n    assert x\n    assert x\n",
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_consecutive_assert_violations(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_foo():\n    assert x\n    assert y\n",
+        "def test_foo():\n    assert x\n    prepare()\n    assert x\n",
+        "def test_foo():\n    assert x == y\n    assert x != y\n",
+        "def test_foo():\n    assert limiter.check()\n    assert limiter.check()\n",
+        "def test_foo():\n    assert await consume() is True\n    assert await consume() is True\n",
+        "def test_foo():\n    assert (value := compute())\n    assert (value := compute())\n",
+        "def test_foo():\n    assert [i for i in items]\n    assert [i for i in items]\n",
+        "def test_foo():\n    assert [build()]\n    assert [build()]\n",
+        "def test_foo():\n    assert x\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_consecutive_assert_violations(tree), f"lens should NOT flag:\n{source}"
+
+    triple = "def test_foo():\n    assert x\n    assert x\n    assert x\n"
+    found = _duplicate_consecutive_assert_violations(ast.parse(triple))
+    assert [lineno for lineno, _ in found] == [3, 4], f"triple-run line numbers wrong: {found}"

@@ -10806,6 +10806,25 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
     if params is None:
         raise RuntimeError("_oauth_token_impl: form parse returned no error and no params")
 
+    # FAR-1544: RFC 6749 §6 — a standards-compliant client refreshes at the
+    # advertised token_endpoint, so this route must serve the refresh_token
+    # grant too. Dispatch on grant_type BEFORE the authorization-code
+    # credential extraction hard-rejects anything that isn't
+    # authorization_code; any other grant still falls through to
+    # ``unsupported_grant_type`` unchanged.
+    grant_type = params.get("grant_type", "")
+    request.state.oauth_grant_type = grant_type
+    if grant_type == "refresh_token":
+        refresh_creds, refresh_err = _extract_oauth_refresh_credentials(request, params)
+        if refresh_err:
+            return refresh_err
+        refresh_resp, refresh_resp_err = await _exchange_refresh_token(refresh_creds, get_settings())
+        if refresh_resp_err:
+            return refresh_resp_err
+        if refresh_resp is None:
+            raise RuntimeError("_oauth_token_impl: refresh exchange returned no error and no response")
+        return JSONResponse(refresh_resp)
+
     creds, cred_err = _extract_oauth_client_credentials(request, params)
     if cred_err:
         return cred_err
@@ -10827,15 +10846,19 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
 
 
 async def _oauth_token(request: Request) -> JSONResponse:
-    """POST /mcp/oauth/token — exchange code for access token.
+    """POST /mcp/oauth/token — exchange a code or refresh token for tokens.
 
     RFC 6749 wire format: form-urlencoded bodies (``request.form()``) with JSON
     bodies accepted for backwards compatibility; anything else is
-    ``invalid_request``. The PKCE ``code_verifier`` is required and verified
-    against the stored S256 challenge (RFC 7636 §4.5/§4.6). ``client_secret``
-    may arrive in the form body OR an HTTP Basic Authorization header. The
-    consenting account's LIVE org role is re-verified against the granted
-    scopes — a demoted account is denied a token (ADR 047).
+    ``invalid_request``. Serves both grants a client discovers at the
+    advertised ``token_endpoint``: ``authorization_code`` (the PKCE
+    ``code_verifier`` is required and verified against the stored S256
+    challenge, RFC 7636 §4.5/§4.6) and ``refresh_token`` (FAR-1544, RFC 6749
+    §6 — identical behaviour to the ``/mcp/oauth/refresh`` alias). Any other
+    grant is ``unsupported_grant_type``. ``client_secret`` may arrive in the
+    form body OR an HTTP Basic Authorization header. The consenting account's
+    LIVE org role is re-verified against the granted scopes — a demoted
+    account is denied a token (ADR 047).
     """
     from modulo.auth.oauth import (
         InvalidClientError,
@@ -10845,8 +10868,20 @@ async def _oauth_token(request: Request) -> JSONResponse:
     try:
         return await _oauth_token_impl(request)
     except (InvalidGrantError, InvalidClientError):
+        # Mirror ``_oauth_refresh``: the detail names the grant that failed.
+        if getattr(request.state, "oauth_grant_type", "") == "refresh_token":
+            detail = "Refresh token exchange failed"
+        else:
+            detail = "Authorization code exchange failed"
         return JSONResponse(
-            {"error": "invalid_grant", "detail": "Authorization code exchange failed"},
+            {"error": "invalid_grant", "detail": detail},
+            status_code=400,
+        )
+    except (ValueError, JWTError) as exc:
+        # A malformed/expired refresh token raises here — without this branch
+        # it would fall through to ``Exception`` and surface as a 500.
+        return JSONResponse(
+            {"error": "invalid_grant", "detail": str(exc)},
             status_code=400,
         )
     except StarletteHTTPException as e:

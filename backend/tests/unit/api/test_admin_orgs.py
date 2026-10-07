@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
@@ -14,7 +13,7 @@ from modulo.api.dependencies import get_db_session, get_plan_context, resolve_au
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.db.models.organisation import Organisation
+from modulo.db.models.organisation import SYSTEM_ORG_ID, Organisation
 from modulo.settings import get_settings
 
 ORG_ID = uuid4()
@@ -670,10 +669,20 @@ class TestResolveAuditPrincipal:
         )
         assert resolved.organisation_id == ORG_ID
 
-    async def test_no_org_anywhere_raises_403(self) -> None:
-        with pytest.raises(HTTPException) as exc_info:
-            await resolve_audit_principal(
-                self._request({}),
-                self._system_admin(organisation_id=None, org_role=None),
-            )
-        assert exc_info.value.status_code == 403
+    async def test_no_org_anywhere_attributes_the_event_to_the_instance_partition(self) -> None:
+        """No organisation in the path or the claim: SYSTEM_ORG_ID, never a refusal.
+
+        Was ``test_no_org_anywhere_raises_403`` — it pinned the 403 that made
+        ``audited()`` an ACCESS GATE: this resolver is solved BEFORE the route's
+        own ``require_*`` check, so the raise refused an org-less system admin
+        on the seven system-wide admin routes (FAR-1538 residual) and recorded
+        nothing. The wrapper only names the organisation the event is written
+        against; access stays with the route's gate.
+        """
+        resolved = await resolve_audit_principal(
+            self._request({}),
+            self._system_admin(organisation_id=None, org_role=None),
+        )
+        assert resolved.organisation_id == SYSTEM_ORG_ID
+        # No role claim: the neutral "" sentinel (falsy), never a fabricated role.
+        assert not resolved.org_role
