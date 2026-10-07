@@ -21,6 +21,24 @@ chained audit event once the handler has finished::
     )
     async def create_parameter_schema_endpoint(...) -> SchemaResponse: ...
 
+Two policy rules (FAR-1517 / FAR-1538 — structurally enforced by
+``tests/architecture/test_audit_antipatterns.py``)
+---------------------------------------------------
+* **The coarse ``audited()`` event must NOT reuse a rich event type the same
+  route emits inline.** ``audited(...)`` writes a deliberately coarse event
+  (method, path, outcome). A route that also calls its own
+  ``append_audit_event(...)`` with the SAME ``event_type`` appends two events
+  of one type per action. Give the coarse event the secondary
+  ``api_access_<verb>`` namespace (``api_access_post``, ``api_access_put``,
+  ``api_access_delete``, ...) and leave the rich domain event untouched.
+* **A route that hard-deletes its own organisation must NOT use ``audited()``.**
+  The append runs post-commit on a fresh session while
+  ``audit_events.organisation_id`` FKs ``organisations.id`` — once the org row
+  is gone the FK can never be satisfied, so the append fails open and records
+  nothing. Write the record IN-transaction instead, with
+  ``system_audit_logger.append_system_audit_event`` (the org-independent
+  ledger), BEFORE the delete, so it commits only with it.
+
 Why a dependency and not a route decorator
 ------------------------------------------
 Both shapes work with FastAPI, but only the dependency fits this codebase:

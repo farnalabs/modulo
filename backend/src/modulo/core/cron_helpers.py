@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -99,6 +99,10 @@ FIRE_JOB_TTL = 300
 # Advisory-lock SQL and paused-trigger skip log message (S1192). Pure aliases.
 _SQL_TRY_ADVISORY_LOCK = "SELECT pg_try_advisory_xact_lock(:key1, :key2)"
 _LOG_TRIGGERS_PAUSED_SKIP = "triggers.paused.skip trigger=%s org=%s"
+# FAR-1528 companion: the pipeline-state gate refusal (archived / soft-deleted
+# pipeline) seen by a per-item fire job. Same quiet, typed-skip treatment as
+# the pause race backstop above — logged, never raised out of the job.
+_LOG_PIPELINE_NOT_RUNNABLE_SKIP = "pipeline.not_runnable.skip trigger=%s org=%s state=%s"
 
 # Missed-fire catch-up (2026-08-10 incident). The fire_due_triggers tick
 # advances next_fire_at ATOMICALLY (claiming the epoch) and THEN enqueues the
@@ -1426,32 +1430,62 @@ async def fire_cron_trigger(
         if skip is not None:
             return skip
 
-        if snapshot_id is None:
-            snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
-            if snapshot_id is None:
-                return {"status": "skipped", "reason": "pipeline_not_found"}
-
-        config = trigger.config_json or {}
-        from modulo.core.trigger_engine import _warn_unrecognised_config_keys
-
-        _warn_unrecognised_config_keys(trigger_id, config)
-        input_payload = config.get("input_template", {})
-
+        # FAR-1519 item 3: an unpinned cron fire freezes the CURRENT live
+        # graph here (auto-create below), exactly like the manual/webhook/
+        # slack/test paths and like this function's own catch-up callers —
+        # never the "latest existing snapshot", which goes stale the moment
+        # the graph is edited and made every post-edit cron run execute the
+        # first snapshot forever. Only an explicit config pin bypasses this.
+        #
+        # FAR-1536: the auto-create and create_run share a SAVEPOINT. Every
+        # return out of this function (including skips) COMMITs the enclosing
+        # transaction, so the pause-race skip below would otherwise persist an
+        # unreferenced snapshot — a row no run points at, minted by a fire that
+        # did nothing. Rolling back to the savepoint restores the invariant
+        # "a fire that skips writes no snapshot" for this path. The skip itself
+        # is unchanged: only the savepoint rolls back, the outer transaction
+        # still commits, so the job still returns skipped (never a failed job
+        # that only becomes a skip after an SAQ retry).
         try:
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="cron",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
+            async with session.begin_nested():
+                if snapshot_id is None:
+                    snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
+                    if snapshot_id is None:
+                        # The no_pipeline TriggerEvent and last_fired_at stamp
+                        # inside _auto_create_snapshot are meant to persist
+                        # (skip-not-defer, review PR #982): leaving the
+                        # savepoint normally RELEASEs it into the outer txn.
+                        return {"status": "skipped", "reason": "pipeline_not_found"}
+
+                config = trigger.config_json or {}
+                from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+                _warn_unrecognised_config_keys(trigger_id, config)
+                input_payload = config.get("input_template", {})
+
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="cron",
+                    trigger_id=trigger_id,
+                    input_payload=input_payload,
+                )
         except TriggersPausedError:
             # TOCTOU race backstop: the org was paused between the early check
             # and create_run. Skip, no paused TriggerEvent (race backstop only).
+            # The savepoint above rolled back the auto-created snapshot with it.
             _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+        except PipelineNotRunnableError as exc:
+            # FAR-1528: the pipeline was archived/soft-deleted. Mirrors the
+            # pause skip exactly — quiet typed skip, NO TriggerEvent, NO
+            # last_fired_at write — so an archived pipeline's still-active
+            # trigger is a per-tick skip instead of a job that fails on every
+            # tick (next_fire_at was already advanced at enqueue time).
+            _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+            return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
         event = await _log_event(
             session,
@@ -1628,6 +1662,12 @@ async def _run_poll_fire(
     except TriggersPausedError:
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline — same quiet typed skip as
+        # the pause race above (no TriggerEvent, no last_fired_at write), so
+        # the refusal never escapes as an SAQ job failure every poll cycle.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
     event = await _log_poll_event(
         session,
@@ -2180,6 +2220,15 @@ async def _create_ongoing_runs(
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         if outcome is not None:
             outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the pipeline was archived/soft-deleted mid-loop — stop
+        # creating, exactly like the pause backstop above. Runs already created
+        # stay (dispatched below); the refusal lands in the outcome envelope as
+        # a quiet typed skip (no TriggerEvent, no last_fired_at write) so the
+        # top-up job returns instead of failing on every tick.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON})
 
     if created:
         await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now))
@@ -3411,15 +3460,17 @@ async def _process_due_cron_scan(
         _log.exception("fire_due_triggers: cron read failed (org %s)", org_id)
         cron_rows = []
 
-    pipelines_needing_snapshots = {
-        row.pipeline_id for row in cron_rows if not (row.config_json or {}).get("snapshot_id")
-    }
-    latest_snapshots = await _resolve_latest_snapshots(session, pipelines_needing_snapshots)
-
     # ``advanced_this_tick`` tracks epochs THIS tick advanced AND enqueued (or
     # SAQ-deduped as already handled). The missed-fire catch-up scan excludes
     # them so it can never double-fire a trigger the normal loop already fired
     # this tick.
+    #
+    # FAR-1519 item 3: NO latest-snapshot pre-resolution for cron rows. Only an
+    # explicit ``config_json.snapshot_id`` pin is resolved here; an unpinned
+    # fire passes None so ``fire_cron_trigger`` freezes the live graph at fire
+    # time (it used to resolve the latest EXISTING snapshot, pinning every
+    # post-edit run to the first snapshot until a manual run happened to
+    # create a newer one).
     advanced_this_tick: set[uuid.UUID] = set()
     await _process_due_cron_rows(
         session,
@@ -3429,7 +3480,6 @@ async def _process_due_cron_scan(
         org_id,
         org_paused,
         cron_rows,
-        latest_snapshots,
         advanced_this_tick,
         summary,
     )
@@ -3538,7 +3588,7 @@ async def _process_due_ongoing_scan(
         ongoing_rows = []
 
     # Pre-resolve latest snapshots per pipeline for ongoing rows WITHOUT a
-    # pinned snapshot_id (DISTINCT ON, mirroring cron).
+    # pinned snapshot_id (DISTINCT ON).
     ongoing_needing_snapshots = {
         row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
     }
@@ -3565,9 +3615,13 @@ async def _resolve_latest_snapshots(
 ) -> dict[uuid.UUID, uuid.UUID]:
     """Resolve the latest snapshot id per pipeline (DISTINCT ON, by created_at).
 
-    Shared by the cron and ongoing scans in ``fire_due_triggers`` for the rows
-    that do NOT carry a pinned ``snapshot_id``. Returns a map of
+    Used by the ONGOING scan in ``fire_due_triggers`` for rows that do NOT
+    carry a pinned ``snapshot_id``. Returns a map of
     ``{pipeline_id: latest_snapshot_id}`` (empty when no pipeline needs one).
+
+    The CRON scan deliberately does NOT pre-resolve (FAR-1519 item 3): an
+    unpinned cron fire freezes the live graph at fire time instead of reusing
+    the latest existing snapshot, which went stale after a graph edit.
     """
     if not pipeline_ids:
         return {}
@@ -3672,11 +3726,18 @@ async def _process_one_due_cron_row(
     org_id: uuid.UUID,
     org_paused: bool,
     row: Any,
-    latest_snapshots: dict[uuid.UUID, uuid.UUID],
     advanced_this_tick: set[uuid.UUID],
     summary: dict[str, Any],
 ) -> None:
-    """Advance + enqueue ONE due cron row; roll the advance back on enqueue failure."""
+    """Advance + enqueue ONE due cron row; roll the advance back on enqueue failure.
+
+    Snapshot resolution (FAR-1519 item 3): only the explicit
+    ``config_json.snapshot_id`` pin is resolved at enqueue time — the empty
+    ``latest_snapshots`` map makes an unpinned row pass ``None`` through to
+    ``fire_cron_trigger``, which then freezes the live graph at fire time.
+    Resolving the latest EXISTING snapshot here instead pinned every post-edit
+    cron run to the first snapshot (the observed stale-snapshot defect).
+    """
     summary["cron_due"] += 1
     try:
         advanced = await _advance_cron_next_fire(session, row.id, row.cron_expression, row.cron_timezone)
@@ -3693,7 +3754,7 @@ async def _process_one_due_cron_row(
         # scheduled-path audit — no per-trigger TriggerEvent.
         summary["cron_skipped_paused"] += 1
         return
-    snapshot_id = _resolve_snapshot_id(row, latest_snapshots)
+    snapshot_id = _resolve_snapshot_id(row, {})
     if not await _enqueue_cron_fire(
         q,
         redis_client,
@@ -3737,7 +3798,6 @@ async def _process_due_cron_rows(
     org_id: uuid.UUID,
     org_paused: bool,
     cron_rows: Sequence[Any],
-    latest_snapshots: dict[uuid.UUID, uuid.UUID],
     advanced_this_tick: set[uuid.UUID],
     summary: dict[str, Any],
 ) -> None:
@@ -3751,7 +3811,6 @@ async def _process_due_cron_rows(
             org_id,
             org_paused,
             row,
-            latest_snapshots,
             advanced_this_tick,
             summary,
         )

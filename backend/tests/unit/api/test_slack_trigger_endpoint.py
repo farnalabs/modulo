@@ -501,6 +501,31 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
     assert len(kwargs["payload_hash"]) == 64
 
 
+def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
+    409 at the create_run choke point - never a generic 500."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        # FAR-1287: the route snapshots the pipeline before dispatch, and the
+        # snapshot's advisory lock is resolved onto a dedicated engine.
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 409
+    assert "archived" in resp.json()["detail"]
+
+
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:
     """A non-dict config_json on the trigger must 400 at the route, not
     AttributeError -> 500 on external ingress."""

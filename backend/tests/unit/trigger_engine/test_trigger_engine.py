@@ -184,6 +184,14 @@ def _make_session(
         # a result slot or shift the call-count routing below.
         if "set_config" in str(stmt):
             return MagicMock()
+        # FAR-1528 create_run pipeline-state gate: an ACTIVE pipeline row
+        # (archived_at/deleted_at both NULL) — plumbing like set_config above,
+        # so the lifecycle read never consumes a call-count slot and never
+        # shifts the routing below.
+        if "SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid" in str(stmt):
+            state_result = MagicMock()
+            state_result.first.return_value = (None, None)
+            return state_result
         call_count += 1
         # Order: 1=advisory lock, 2=trigger lookup, 3=guardrail rows (FAR-214),
         #        4=dedup SELECT, 5=dedup DELETE, 6=count active runs,

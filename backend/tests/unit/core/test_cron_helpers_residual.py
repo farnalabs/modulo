@@ -26,7 +26,7 @@ import pytest
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core import cron_helpers as ch
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
@@ -421,6 +421,40 @@ async def test_fire_cron_trigger_paused_race_backstop_skips():
     assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}
 
 
+async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
+    """FAR-1528: an ARCHIVED pipeline with a still-active cron trigger must be
+    a quiet typed skip, NOT an escaping PipelineNotRunnableError.
+
+    Without the handler the refusal propagates out of the SAQ per-item fire job
+    on EVERY tick (the epoch was already advanced at enqueue time, so the job
+    fails forever with no typed outcome). The handler mirrors the pause race
+    above: same envelope shape, no TriggerEvent, no last_fired_at write.
+    """
+    trigger = _make_trigger()
+    session = _MockSession([_lock_result(True), _trigger_result(trigger), _mock_result(scalar_one=0), MagicMock()])
+    with (
+        patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+        patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+        patch(
+            "modulo.db.crud.run.create_run",
+            new_callable=AsyncMock,
+            side_effect=PipelineNotRunnableError(state="archived", pipeline_id=PIPELINE),
+        ),
+    ):
+        outcome = await ch.fire_cron_trigger(
+            trigger_id=TRIGGER_A,
+            org_id=ORG,
+            pipeline_id=PIPELINE,
+            cron_expression="*/30 * * * * *",
+            snapshot_id=uuid.uuid4(),
+            factory=_factory_for(session),
+        )
+    assert outcome == {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+    # Skip parity with the pause path: NO TriggerEvent row is written (there is
+    # no validation_result vocabulary value for a lifecycle refusal).
+    assert not session.added
+
+
 # ---------------------------------------------------------------------------
 # Polling fire job — backpressure gate + paused race + shared-budget outage
 # ---------------------------------------------------------------------------
@@ -459,6 +493,36 @@ async def test_run_poll_fire_paused_race_backstop_skips():
             condition_expression=None,
         )
     assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}
+
+
+async def test_run_poll_fire_archived_pipeline_is_a_typed_skip():
+    """FAR-1528: a condition-met poll whose pipeline is archived must skip
+    quietly (typed reason, no TriggerEvent) instead of failing the fire job on
+    every poll cycle."""
+    trigger = _make_trigger()
+    session = _MockSession([_mock_result(scalar_one_or_none=SimpleNamespace(records=[{"a": 1}], total=1))])
+    connector = MagicMock()
+    connector.query = AsyncMock(return_value=SimpleNamespace(records=[{"a": 1}], total=1))
+    with (
+        patch("modulo.core.trigger_engine.polling.evaluate_condition", return_value=True),
+        patch(
+            "modulo.db.crud.run.create_run",
+            new_callable=AsyncMock,
+            side_effect=PipelineNotRunnableError(state="archived", pipeline_id=PIPELINE),
+        ),
+    ):
+        outcome = await ch._run_poll_fire(
+            session,
+            trigger=trigger,
+            connector=connector,
+            org_id=ORG,
+            trigger_id=TRIGGER_A,
+            pipeline_id=PIPELINE,
+            poll_query="SELECT 1",
+            condition_expression=None,
+        )
+    assert outcome == {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
+    assert not session.added
 
 
 async def test_fire_polling_trigger_shared_budget_outage_resets_epoch():
@@ -1231,10 +1295,10 @@ async def test_process_one_due_cron_row_advance_failure_variants():
         patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     summary2: dict[str, Any] = {"cron_due": 0, "cron_enqueued": 0}
     with patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=RuntimeError("db down")):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary2)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary2)
     assert summary2["cron_due"] == 1
 
 
@@ -1261,7 +1325,7 @@ async def test_process_one_due_cron_row_enqueue_failure_rolls_back():
         patch.object(ch, "_ingest_saq_error", ingest),
         pytest.raises(asyncio.CancelledError),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     summary2: dict[str, Any] = {"cron_due": 0, "cron_enqueued": 0, "enqueue_failures": 0}
     rollback2 = AsyncMock(side_effect=RuntimeError("db down"))
     with (
@@ -1270,7 +1334,7 @@ async def test_process_one_due_cron_row_enqueue_failure_rolls_back():
         patch.object(ch, "_rollback_cron_advance", rollback2),
         patch.object(ch, "_ingest_saq_error", ingest),
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary2)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary2)
     ingest.assert_awaited()
 
 
@@ -1292,7 +1356,7 @@ async def test_process_one_due_cron_row_not_advanced_returns():
         patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=False),
         patch.object(ch, "_enqueue_cron_fire", new_callable=AsyncMock) as enqueue,
     ):
-        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, {}, set(), summary)
+        await ch._process_one_due_cron_row(_MockSession(), q, _redis(), now, ORG, False, row, set(), summary)
     enqueue.assert_not_awaited()
 
 

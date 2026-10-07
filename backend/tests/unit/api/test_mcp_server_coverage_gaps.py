@@ -129,7 +129,7 @@ from modulo.core.analytics.builder import (
 )
 from modulo.core.analytics.service import AnalyticsParams
 from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
-from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.capacity import StorageExhaustedError
 
@@ -1956,6 +1956,31 @@ class TestTriggerPipelinePaths(_AuthContext):
         with patch.object(ms, "_trigger_pipeline_impl", side_effect=OrgDeletedError(org_id=_ORG_ID, deleted=False)):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "org_not_found"
+
+    async def test_pipeline_archived_error_mapping(self) -> None:
+        """FAR-1528: a disabled pipeline returns a structured, branchable
+        envelope (never the generic internal_error)."""
+        pipeline_id = str(uuid.uuid4())
+        with patch.object(
+            ms,
+            "_trigger_pipeline_impl",
+            side_effect=PipelineNotRunnableError(pipeline_id=uuid.UUID(pipeline_id), state="archived"),
+        ):
+            result = await ms.trigger_pipeline(pipeline_id=pipeline_id)
+        assert result["error"] == "pipeline_not_runnable"
+        assert result["state"] == "archived"
+        assert result["pipeline_id"] == pipeline_id
+
+    async def test_pipeline_soft_deleted_error_mapping(self) -> None:
+        pipeline_id = str(uuid.uuid4())
+        with patch.object(
+            ms,
+            "_trigger_pipeline_impl",
+            side_effect=PipelineNotRunnableError(pipeline_id=uuid.UUID(pipeline_id), state="deleted"),
+        ):
+            result = await ms.trigger_pipeline(pipeline_id=pipeline_id)
+        assert result["error"] == "pipeline_not_runnable"
+        assert result["state"] == "deleted"
 
     async def test_snapshot_lock_busy_mapping(self) -> None:
         with patch.object(ms, "_trigger_pipeline_impl", side_effect=SnapshotLockNotAvailableError("busy")):

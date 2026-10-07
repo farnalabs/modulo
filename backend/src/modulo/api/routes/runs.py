@@ -48,7 +48,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
@@ -1128,6 +1128,22 @@ async def _enforce_trigger_rate_limit(
     return key
 
 
+def pipeline_not_runnable_http(exc: PipelineNotRunnableError) -> HTTPException:
+    """Map the ``create_run`` pipeline-state gate refusal to its HTTP response (FAR-1528).
+
+    Shared by every REST route that can reach ``create_run`` (manual trigger,
+    rerun, test trigger, webhook, replay, slack, variant runs, correction) so
+    the refusal reads identically everywhere instead of a route-local 500.
+    Always 409 Conflict: the pipeline exists but may not run (archived /
+    deleted today, Paused when FAR-1530 lands). A pipeline that does not
+    exist is refused upstream by the route's own 404 entry filter, never here.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+    )
+
+
 async def _create_manual_run(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -1263,6 +1279,16 @@ async def trigger_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline refused at the create_run
+        # choke point — 409 Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_run pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
 
     except WorkItemRefsRequiredError as exc:
         # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
@@ -1445,6 +1471,17 @@ async def trigger_rerun(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a rerun of a run whose pipeline has since been archived or
+        # soft-deleted is refused at the create_run choke point — 409
+        # Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_rerun pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
 
     except WorkItemRefsRequiredError as exc:
         # FAR-794 slice 2a: the rerun copied the source payload server-side and
