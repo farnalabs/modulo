@@ -98,7 +98,13 @@ EXEMPT_REASONS: dict[str, str] = {
     "demo_fixture": "demo/sample data, gated off by default (MODULO_SEED_DEMO_ORGS)",
     "infra_container_gc": (
         "destroys orphaned sandbox containers rather than org rows; gated by "
-        "RUNNER_RECONCILER_DESTROY_ENABLED (default off) and logged per destroy"
+        "RUNNER_RECONCILER_DESTROY_ENABLED (default off), logged per destroy "
+        "(runner.reconciler.orphan_destroyed) and surfaced by the advisory health "
+        "check. Re-affirmed exempt in FAR-1561: the sweep is cross-org (one event "
+        "would have no single owning org), an orphan's run row may no longer exist "
+        "(so resource_id has nothing to point at), and no org-owned entity changes "
+        "hands — the run lifecycle that produced the container is audited on the run "
+        "chain instead"
     ),
 }
 
@@ -154,16 +160,19 @@ INVENTORY: dict[str, PathRecord] = {
     # --- runs-worker tasks (registered by saq_worker._runs_functions) -----
     "execute_run": _audited(_EXECUTOR),
     "resume_run": _audited(_EXECUTOR),
-    "execute_suite_run": _gap(
-        "SuiteRun lifecycle (create/start/complete) has no audit event; only the pipeline "
-        "runs it drives record run_started. Remainder of the FAR-1549 sweep."
+    "execute_suite_run": _audited(
+        # FAR-1561: the SAQ job records the start + terminal outcome of the
+        # SuiteRun it just committed (post-commit, re-selected state guard).
+        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_started"'),
+        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_completed"'),
     ),
     "fire_cron_trigger": _audited(_EXECUTOR),
     "fire_polling_trigger": _audited(_EXECUTOR),
     "fire_ongoing_trigger": _audited(_EXECUTOR),
-    "fire_suite_run_trigger": _gap(
-        "creates a SuiteRun row with no audit event — same SuiteRun-lifecycle remainder as "
-        "execute_suite_run in the FAR-1549 sweep"
+    "fire_suite_run_trigger": _audited(
+        # FAR-1561: creation is recorded before enqueue (and the enqueue-failure
+        # path records the terminal `failed` too) with a `pending` re-select guard.
+        ("src/modulo/core/saq_worker.py", 'event_type="suite_run_created"'),
     ),
     "fire_report_trigger": _exempt("trigger_bookkeeping"),
     # --- system-cron tasks (saq_worker._system_functions) -----------------
@@ -231,11 +240,11 @@ INVENTORY: dict[str, PathRecord] = {
     "seed_demo_org": _exempt("demo_fixture"),
     "seed_demo_orgs": _exempt("demo_fixture"),
     # --- boot seeds enumerated from api/main.py ---------------------------
-    "boot:modulo_users": _gap(
-        "creates user accounts and admin role grants from MODULO_USERS with no audit event. "
-        "Closing it needs a db->core.audit_logger import-linter exemption plus a hook in "
-        "api/main.py — both outside the FAR-1549 allowlist, so it is the recommended "
-        "next slice."
+    "boot:modulo_users": _audited(
+        # FAR-1561: the seeder appends a SYSTEM-actor `user_seeded` (and
+        # `user_rehashed`, which can GRANT the admin role) in the seeding
+        # transaction — grant and record commit atomically.
+        ("src/modulo/db/seed.py", 'event_type="user_seeded"'),
     ),
     "boot:sso_providers": _exempt("boot_env_config"),
     "boot:system_schemas": _exempt("boot_default_config"),

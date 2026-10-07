@@ -38,6 +38,20 @@ def _scoped_bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FERNET_KEY", "a" * 32)
 
 
+@pytest.fixture(autouse=True)
+def audit_append_spy(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Spy the audit append the seeder invokes (FAR-1561).
+
+    Left in place the real append would run against the mocked session (and its
+    ``session.add`` accounting, which these tests assert on), so it is replaced
+    here and asserted on directly — the wiring assertions live in the new
+    ``test_seed_modulo_user`` / ``test_rehash_existing_user`` tests below.
+    """
+    spy = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+    return spy
+
+
 def _make_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "database_url": "postgresql+asyncpg://localhost/test",
@@ -275,3 +289,116 @@ async def test_main_users_wrapper_skips_empty_users_without_seams(
     monkeypatch.setattr(main_module, "seed_modulo_users", _fail)
     settings = _make_settings(modulo_users="")
     await main_module._seed_modulo_users(settings)
+
+
+# ---------------------------------------------------------------------------
+# Boot-seed audit append (FAR-1561)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_seed_modulo_user_records_system_actor_audit(
+    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A created account + role grant lands on the org's audit chain with the
+    SYSTEM actor and an honest ``boot_seed`` actor source."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    session = _mock_session(_result(scalar_one_or_none=None))
+    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+
+    await seed_modulo_user(session, org, "admin:secret1")
+
+    audit_append_spy.assert_awaited_once()
+    kwargs = audit_append_spy.await_args.kwargs
+    assert kwargs["org_id"] == org.id
+    assert kwargs["event_type"] == "user_seeded"
+    assert kwargs["actor_user_id"] is None
+    assert kwargs["resource_type"] == "user"
+    payload = kwargs["payload_json"]
+    assert payload["actor"] == "system"
+    assert payload["actor_source"] == "boot_seed"
+    assert payload["email"] == "admin"
+    assert payload["role"] == "admin"
+
+
+@pytest.mark.anyio
+async def test_seed_modulo_user_records_runner_grant_as_runner_role(
+    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-admin seed records the runner role it actually granted."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    session = _mock_session(_result(scalar_one_or_none=None))
+    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+
+    await seed_modulo_user(session, org, "user@example.com:secret1")
+
+    audit_append_spy.assert_awaited_once()
+    assert audit_append_spy.await_args.kwargs["payload_json"]["role"] == "runner"
+
+
+@pytest.mark.anyio
+async def test_seed_modulo_user_existing_account_records_nothing(audit_append_spy: AsyncMock) -> None:
+    """Idempotent re-runs append no event — nothing changed."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), password_hash="$2b$12$alreadyhashed")
+    session = _mock_session(_result(scalar_one_or_none=existing))
+
+    await seed_modulo_user(session, org, "user@example.com:secret1")
+
+    audit_append_spy.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_rehash_existing_user_records_credential_and_role_grant(audit_append_spy: AsyncMock) -> None:
+    """A rehash can GRANT the admin role — the credential rotation and the role
+    it landed on are recorded together."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), password_hash=None)
+    membership = SimpleNamespace(role="runner")
+    session = _mock_session(_result(scalar_one_or_none=membership))
+
+    await rehash_existing_user(session, org, existing, "admin", "$2b$12$newhash")
+
+    audit_append_spy.assert_awaited_once()
+    kwargs = audit_append_spy.await_args.kwargs
+    assert kwargs["event_type"] == "user_rehashed"
+    assert kwargs["actor_user_id"] is None
+    assert kwargs["resource_id"] == existing.id
+    payload = kwargs["payload_json"]
+    assert payload["actor_source"] == "boot_seed"
+    assert payload["role"] == "admin"
+    assert payload["role_granted"] is True
+
+
+@pytest.mark.anyio
+async def test_rehash_existing_user_noop_role_records_role_granted_false(audit_append_spy: AsyncMock) -> None:
+    """A rehash that grants nothing still records the credential change — with
+    ``role_granted`` false so the chain never implies an escalation."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), password_hash="old")
+    membership = SimpleNamespace(role="runner")
+    session = _mock_session(_result(scalar_one_or_none=membership))
+
+    await rehash_existing_user(session, org, existing, "ops@example.com", "$2b$12$newhash")
+
+    payload = audit_append_spy.await_args.kwargs["payload_json"]
+    assert payload["role"] == "runner"
+    assert payload["role_granted"] is False
+
+
+@pytest.mark.anyio
+async def test_audit_failure_never_fails_the_seed(
+    audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The grant commits even when its record cannot be written — fail-open
+    with a loud log (mirrors the admin create-user route)."""
+    audit_append_spy.side_effect = RuntimeError("audit db down")
+    org = SimpleNamespace(id=uuid.uuid4())
+    session = _mock_session(_result(scalar_one_or_none=None))
+    monkeypatch.setattr("modulo.auth.passwords.hash_password", lambda pw: "$2b$12$fakehash")
+
+    with caplog.at_level("ERROR"):
+        await seed_modulo_user(session, org, "admin:secret1")
+
+    assert session.add.call_count == 2  # account + membership, unharmed
+    assert any("db.seed.boot_user_audit_failed" in record.message for record in caplog.records)

@@ -8,8 +8,16 @@ factory — the caller (API boot wrapper, native launcher) resolves the
 engine/factory from its own layer. The single-entry and rehash seeders are
 pure DB logic (lazy model/password imports, same pattern the API version
 used).
+
+FAR-1561: seeding a user GRANTS a credential and (for the admin emails) the
+``admin`` role, so this module also appends a SYSTEM-actor audit event. That
+is the one ``db -> core`` seam this module carries, exempted in
+``backend/.importlinter`` next to the four ``db.crud.* -> core.audit_logger``
+exemptions: the seed only invokes the append; audit-chain semantics stay in
+core.
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -19,8 +27,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.schema import Schema, SchemaVersion
+from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
+
+#: ``audit_events.actor_source`` stamped on every MODULO_USERS seed append —
+#: the honest machine actor for a grant made with no HTTP principal in scope.
+_SEED_ACTOR_SOURCE = "boot_seed"
+_SEED_AUDIT_LOG_KEY = "db.seed.boot_user_audit_failed"
 
 SYSTEM_SCHEMAS = [
     {
@@ -165,6 +179,56 @@ async def seed_modulo_users(session_factory: Callable[[], Any], modulo_users: st
             await seed_modulo_user(session, org, entry)
 
 
+async def _append_boot_user_audit(
+    session: Any,
+    *,
+    org_id: uuid.UUID,
+    event_type: str,
+    account_id: uuid.UUID | None,
+    payload: dict[str, Any],
+) -> None:
+    """Record a MODULO_USERS seed grant on the organisation's audit chain (FAR-1561).
+
+    A seed entry creates a login credential and — for ``admin`` /
+    ``admin@modulo.run`` — the ``admin`` role, with no HTTP principal in scope.
+    The event therefore carries the SYSTEM actor plus an honest
+    ``actor_source`` (``boot_seed``), the same convention
+    ``core.audit_logger.background`` enforces for every other background write.
+
+    Appended IN the seeding transaction (the seam ``db.crud.*`` audit appends
+    use): the grant and its record commit atomically, and
+    ``append_audit_event`` isolates the append in a savepoint, so a failed
+    record can never discard the grant it describes. ``set_rls_org`` runs
+    first — ``audit_events`` carries the STRICT org-only RLS policy (the
+    NULL-context fallback ``org_memberships`` enjoys does not apply to it), so
+    an unbound session would fail-closed to 42501 on PostgreSQL.
+
+    Fail-open with a loud log (the grant is already made; mirrors the admin
+    create-user route): ``CancelledError`` always propagates.
+    """
+    from modulo.core.audit_logger import append_audit_event
+    from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+
+    try:
+        await set_rls_org(session, org_id)
+        await append_audit_event(
+            session,
+            org_id=org_id,
+            event_type=event_type,
+            actor_user_id=None,
+            resource_type="user",
+            resource_id=account_id,
+            payload_json={"actor": SYSTEM_ACTOR, "actor_source": _SEED_ACTOR_SOURCE, **payload},
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            _SEED_AUDIT_LOG_KEY,
+            extra={"event_type": event_type, "org_id": str(org_id), "account_id": str(account_id)},
+        )
+
+
 async def seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     """Seed a single MODULO_USERS entry (``email:password``) into the account + membership tables.
 
@@ -214,6 +278,17 @@ async def seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     )
     session.add(membership)
     _log.info("startup.user_seeded", extra={"email": email})
+    await _append_boot_user_audit(
+        session,
+        org_id=org.id,
+        event_type="user_seeded",
+        account_id=account.id,
+        payload={
+            "summary": f"User {email} seeded with role {membership.role}",
+            "email": email,
+            "role": membership.role,
+        },
+    )
 
 
 async def rehash_existing_user(session: Any, org: Any, existing_account: Any, email: str, pw_hash: str) -> None:
@@ -238,6 +313,7 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
             _log.info("startup.user_role_set_admin", extra={"email": email})
         else:
             _log.info("startup.user_exists", extra={"email": email})
+        final_role = membership.role
     else:
         new_membership = OrgMembership(
             account_id=existing_account.id,
@@ -246,3 +322,20 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
         )
         session.add(new_membership)
         _log.info("startup.user_membership_created", extra={"email": email})
+        final_role = new_membership.role
+
+    # A rehash is also a privilege decision: the seeded password can ESCALATE
+    # the account to ``admin`` (see ``admin_role`` above), so the credential
+    # rotation and the role it landed on are recorded together (FAR-1561).
+    await _append_boot_user_audit(
+        session,
+        org_id=org.id,
+        event_type="user_rehashed",
+        account_id=existing_account.id,
+        payload={
+            "summary": f"User {email} credential rehashed with role {final_role}",
+            "email": email,
+            "role": final_role,
+            "role_granted": bool(admin_role),
+        },
+    )

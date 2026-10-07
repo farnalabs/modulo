@@ -573,3 +573,225 @@ class TestRetentionPurgeRecordHelper:
 
         append.assert_awaited_once()
         assert append.await_args.kwargs["payload_json"]["purged_runs"] == 3
+
+
+# ---------------------------------------------------------------------------
+# audit_logger.background.record_suite_run_audit — SuiteRun lifecycle (FAR-1561)
+# ---------------------------------------------------------------------------
+
+
+def _suite_run(*, state: str = "pending", run_id: uuid.UUID = _RUN, org_id: uuid.UUID = _ORG) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=run_id,
+        organisation_id=org_id,
+        suite_id=uuid.uuid4(),
+        dataset_id=uuid.uuid4(),
+        state=state,
+        total_cases=3,
+        passed_cases=2,
+        failed_cases=1,
+        excluded_case_count=0,
+        error_detail=None,
+    )
+
+
+def _suite_factory(run: SimpleNamespace | None) -> tuple[MagicMock, MagicMock]:
+    """Sessionmaker whose re-select returns *run* (``None`` = row missing)."""
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=run)
+    session.execute = AsyncMock(return_value=result)
+    factory, session = _sessionmaker_like(session)
+    return factory, session
+
+
+class TestSuiteRunAudit:
+    async def test_appends_when_the_reselected_state_matches(self) -> None:
+        factory, _ = _suite_factory(_suite_run(state="pending"))
+        with patch.object(background, "append_audit_event", new=AsyncMock()) as append:
+            recorded = await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_created",
+                expected_states=background.SUITE_RUN_PENDING_STATES,
+                actor_source="fire_suite_run_trigger",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun created by",
+            )
+
+        assert recorded is True
+        kwargs = append.await_args.kwargs
+        assert kwargs["org_id"] == _ORG
+        assert kwargs["event_type"] == "suite_run_created"
+        assert kwargs["actor_user_id"] is None
+        assert kwargs["resource_type"] == "suite_run"
+        assert kwargs["resource_id"] == _RUN
+        payload = kwargs["payload_json"]
+        assert payload["actor"] == "system"
+        assert payload["actor_source"] == "fire_suite_run_trigger"
+        assert payload["summary"] == "SuiteRun created by fire_suite_run_trigger"
+        assert payload["state"] == "pending"
+        assert payload["passed_cases"] == 2
+
+    async def test_missing_row_is_skipped_not_invented(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A row that is gone (or cross-org) proves the change never landed —
+        the phantom-event guard must skip, never fabricate the event."""
+        factory, _ = _suite_factory(None)
+        with (
+            patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+            caplog.at_level("WARNING"),
+        ):
+            recorded = await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_completed",
+                expected_states=background.SUITE_RUN_TERMINAL_STATES,
+                actor_source="execute_suite_run",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun terminalised by",
+            )
+
+        assert recorded is False
+        append.assert_not_awaited()
+        reasons = [getattr(entry, "reason", None) for entry in caplog.records]
+        assert "missing_or_cross_org" in reasons
+
+    async def test_unexpected_state_is_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``suite_run_started`` must not record a run still ``pending`` — the
+        start did not land (its transaction rolled back)."""
+        factory, _ = _suite_factory(_suite_run(state="pending"))
+        with (
+            patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+            caplog.at_level("WARNING"),
+        ):
+            recorded = await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_started",
+                expected_states=background.SUITE_RUN_NON_PENDING_STATES,
+                actor_source="execute_suite_run",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun started by",
+            )
+
+        assert recorded is False
+        append.assert_not_awaited()
+        reasons = [getattr(entry, "reason", None) for entry in caplog.records]
+        assert "unexpected_state" in reasons
+
+    async def test_append_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        factory, _ = _suite_factory(_suite_run(state="failed"))
+        with (
+            patch.object(background, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("audit db down"))),
+            caplog.at_level("WARNING"),
+        ):
+            recorded = await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_completed",
+                expected_states=background.SUITE_RUN_TERMINAL_STATES,
+                actor_source="execute_suite_run",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun terminalised by",
+            )
+
+        assert recorded is False
+        assert any("test.suite_run_audit_failed" in entry.message for entry in caplog.records)
+
+    async def test_cancellation_is_never_swallowed(self) -> None:
+        factory, _ = _suite_factory(_suite_run())
+        with (
+            patch.object(background, "append_audit_event", new=AsyncMock(side_effect=asyncio.CancelledError())),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type="suite_run_created",
+                expected_states=background.SUITE_RUN_PENDING_STATES,
+                actor_source="fire_suite_run_trigger",
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun created by",
+            )
+
+    @pytest.mark.parametrize(
+        ("event_type", "actor_source", "expected_states"),
+        [
+            ("", "execute_suite_run", {"pending"}),
+            ("suite_run_created", "", {"pending"}),
+            ("suite_run_created", "x", set()),
+        ],
+    )
+    async def test_missing_arguments_fail_closed(
+        self, event_type: str, actor_source: str, expected_states: set[str]
+    ) -> None:
+        factory, _ = _suite_factory(_suite_run())
+        with pytest.raises(ValueError, match="record_suite_run_audit requires"):
+            await background.record_suite_run_audit(
+                factory,
+                suite_run_id=_RUN,
+                org_id=_ORG,
+                event_type=event_type,
+                expected_states=expected_states,
+                actor_source=actor_source,
+                log_key="test.suite_run_audit_failed",
+                summary_prefix="SuiteRun created by",
+            )
+
+
+class TestSuiteRunAuditCallSites:
+    """The SAQ job wrappers actually reach the shared helper with the right
+    event vocabulary (FAR-1561)."""
+
+    async def test_fire_path_records_created(self) -> None:
+        with (
+            patch.object(sw, "_make_session_factory", return_value=MagicMock()),
+            patch.object(background, "record_suite_run_audit", new=AsyncMock(return_value=True)) as record,
+        ):
+            await sw._record_suite_run_created_audit(
+                str(_RUN),
+                org_id=str(_ORG),
+                trigger_id=str(_PIPELINE),
+                pipeline_id=str(_PIPELINE),
+            )
+
+        record.assert_awaited_once()
+        kwargs = record.await_args.kwargs
+        assert kwargs["event_type"] == "suite_run_created"
+        assert kwargs["suite_run_id"] == _RUN
+        assert kwargs["org_id"] == _ORG
+        assert kwargs["expected_states"] == background.SUITE_RUN_PENDING_STATES
+        assert kwargs["actor_source"] == "fire_suite_run_trigger"
+        assert kwargs["payload_json"]["trigger_id"] == str(_PIPELINE)
+
+    async def test_execute_path_records_start_then_terminal(self) -> None:
+        with patch.object(background, "record_suite_run_audit", new=AsyncMock(return_value=True)) as record:
+            await sw._record_suite_run_execution_audits(MagicMock(), _RUN, _ORG)
+
+        assert record.await_count == 2
+        first, second = (call.kwargs for call in record.await_args_list)
+        assert first["event_type"] == "suite_run_started"
+        assert first["expected_states"] == background.SUITE_RUN_NON_PENDING_STATES
+        assert second["event_type"] == "suite_run_completed"
+        assert second["expected_states"] == background.SUITE_RUN_TERMINAL_STATES
+        for kwargs in (first, second):
+            assert kwargs["suite_run_id"] == _RUN
+            assert kwargs["org_id"] == _ORG
+            assert kwargs["actor_source"] == "execute_suite_run"
+
+    def test_state_constant_partitions_the_lifecycle(self) -> None:
+        """The three guards are disjoint and together cover every SuiteRun
+        state — a new state cannot fall through all three un-audited."""
+        from modulo.db.models.eval_suite_run import SuiteRunState
+
+        all_states = {state.value for state in SuiteRunState}
+        assert all_states == (background.SUITE_RUN_PENDING_STATES | background.SUITE_RUN_NON_PENDING_STATES)
+        assert not background.SUITE_RUN_PENDING_STATES & background.SUITE_RUN_NON_PENDING_STATES
+        assert background.SUITE_RUN_TERMINAL_STATES <= background.SUITE_RUN_NON_PENDING_STATES
+        assert "pending" not in background.SUITE_RUN_TERMINAL_STATES
+        assert "running" not in background.SUITE_RUN_TERMINAL_STATES
