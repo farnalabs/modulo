@@ -88,11 +88,17 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       MCP `create_pipeline` + `set_pipeline_circuit_breaker` tools, in `modulo
       apply` (managed only when declared), and in the pipeline editor toolbar
       ("Monthly spend circuit breaker (USD)" + a tripped badge with an admin-only
-      Reset). Neither setting nor resetting it has a plan gate; the reset keeps the
-      org-admin `cost.manage` permission. Every threshold change is audited as
-      `pipeline.circuit_breaker_threshold_changed` (previous / new / actor) and every
-      reset as `pipeline.circuit_breaker_reset`. Enforcement reads the live
-      pipeline row (not the run snapshot), so a change applies to the next run.
+      Reset). Neither setting nor resetting it has a plan gate; the reset stays
+      behind the org-admin `cost.manage` permission. Threshold changes follow the
+      FAR-1184 rule: lowering the threshold or setting one where none existed
+      needs only `pipeline.update`, while raising it or clearing an existing one
+      requires `cost.manage` — a refused change returns 403 (REST; the MCP tools
+      return a `permission_denied` result instead) and writes a
+      `pipeline.circuit_breaker_threshold_change_denied` audit event. Every
+      accepted change is audited as `pipeline.circuit_breaker_threshold_changed`
+      (previous / new / actor) and every reset as `pipeline.circuit_breaker_reset`.
+      Enforcement reads the live pipeline row (not the run snapshot), so a change
+      applies to the next run.
       The org-level "Auto-stop on budget exceeded" (`circuit_breaker_enabled`)
       cost-control toggle is a separate, org-scope control (FAR-1183): when it is
       on and a run crosses the org DAILY spend limit (org-scope refusal) or the

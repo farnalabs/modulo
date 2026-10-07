@@ -12,9 +12,33 @@ RLS policy exactly:
 Team-scoped resource set (Phase-1 floor): ``pipelines``,
 ``connector_instances``, ``model_backends``, ``environment_profiles``,
 ``library_primitives``, ``lifecycle_maps``, ``eval_datasets``,
-``eval_suites``. ``lifecycle_maps`` carries the
-visibility CHECK constraint but only strict org RLS at the DB layer — the
-membership gate here is its only team enforcement.
+``eval_suites``. Since migration ``0287_team_rls_lifecycle_evals`` all eight
+tables carry a DB ``rls_team_isolation`` policy (org check + visibility matrix
++ execution-context clause), so the DB layer enforces team isolation for every
+table in this registry.
+
+DECISION (FAR-1514) — the four core-table resolvers are INTENTIONALLY UNWIRED
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``resolve_connector_team_scope``, ``resolve_model_backend_team_scope``,
+``resolve_environment_profile_team_scope`` and
+``resolve_library_primitive_team_scope`` are registered in
+``TEAM_SCOPED_RESOLVERS`` (the registry is complete and the architecture test
+pins that) but are deliberately NOT attached to any route dependency. Their
+tables are enforced by DB RLS alone: ``rls_team_isolation`` has been the sole
+policy on ``connector_instances`` / ``model_backends`` /
+``environment_profiles`` since 0110/0124 and on ``library_primitives`` since
+0109/0124, and the request-time session (``set_rls_org`` + ``set_rls_user_context``
+run inside the route's own transaction) already executes under that policy, so a
+non-member's row read 404s before any handler code runs.
+
+Do NOT "finish the sweep" by wiring these four: the extra dependency would be
+redundant defence-in-depth, not a gap-fill, and every wired route adds a second
+transaction + membership query per request. The routes that DO carry the
+request-time gate are the ones whose DB policy was missing it — ``pipelines``
+(since the ADR 038 sweep) and, since FAR-1514, ``lifecycle_maps`` — plus the
+eval routes (FAR-947). ``lifecycle_maps`` needed BOTH layers: before 0287 it
+had only strict org RLS, so the membership gate here was its only team
+enforcement.
 
 ``runs`` has ``owner_team_id`` but no ``visibility`` column and strict org RLS.
 Run access is derived from pipeline access (ADR 038): a run executes with the

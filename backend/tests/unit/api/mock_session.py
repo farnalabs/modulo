@@ -44,6 +44,23 @@ _RUNS_LEGACY_BLOBS_SNIPPET = "runs.outputs_json, runs.node_telemetry_json, runs.
 # short-circuits; tests exercising the gate itself stub the result explicitly.
 _PIPELINE_ROW_SNIPPET = "FROM pipelines"
 
+# FAR-1514: the request-time team gate on the ``{lifecycle_map_id}`` routes
+# (``team_scope.resolve_lifecycle_map_team_scope``) issues
+# ``SELECT lifecycle_maps.owner_team_id, lifecycle_maps.visibility FROM
+# lifecycle_maps WHERE lifecycle_maps.id = ...`` before the handler runs. The
+# strict mock raises on un-stubbed queries, so serve an ORG-visible row by
+# default (owner_team_id None) — the gate then short-circuits to "allowed",
+# exactly like the pipeline row stub above. Tests exercising the team gate
+# itself stub the result explicitly.
+_LIFECYCLE_MAP_ROW_SNIPPET = "FROM lifecycle_maps"
+
+
+def _is_lifecycle_map_row_query(stmt: Any) -> bool:
+    """Matches the lifecycle-map team-gate SELECT (and any ORM row-read FROM lifecycle_maps)."""
+    if not isinstance(stmt, Select):
+        return False
+    return _LIFECYCLE_MAP_ROW_SNIPPET.lower() in str(stmt).lower()
+
 
 def _is_run_node_outputs_query(stmt: Any) -> bool:
     if not isinstance(stmt, Select):
@@ -172,6 +189,13 @@ def configure_mock_session(session: AsyncMock, *, allow_empty_execute: bool = Fa
                 pipeline_result = MagicMock()
                 pipeline_result.scalar_one_or_none.return_value = pipeline_row
                 return pipeline_result
+            if _is_lifecycle_map_row_query(args[0] if args else None):
+                # team_scope_resolver reads a (owner_team_id, visibility) row
+                # via ``result.first()`` — an org-visible row keeps the gate
+                # open for route-shape tests.
+                lifecycle_map_result = MagicMock()
+                lifecycle_map_result.first.return_value = (None, "org")
+                return lifecycle_map_result
             raise AssertionError(
                 "Unexpected session.execute(); stub the expected result or opt in with allow_empty_execute=True"
             )

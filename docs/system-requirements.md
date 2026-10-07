@@ -82,9 +82,26 @@ grows with run history.
 | Database | Version | Status | Production Ready | Notes |
 |----------|---------|--------|-----------------|-------|
 | **PostgreSQL** | 16+ | **Supported** | **Yes** | Primary production database |
-| **MySQL** | 8+ | Supported | Conformance | Via `MODULO_DB=mysql` (`aiomysql` driver) |
-| **MariaDB** | 11+ | Supported | Conformance | Via `MODULO_DB=mariadb` |
 | **SQLite** | 3.x | Compatible | **No** | Dev-only: no RLS, no advisory locks |
+| **MySQL** | 8+ | Partial | **No** | `MODULO_DB=mysql` is accepted (`aiomysql` driver) but the per-node output store is postgres/sqlite-only - see below |
+| **MariaDB** | 11+ | Deprecated | **No** | `MODULO_DB=mariadb` accepted; deprecated since 2026-07-11, and blocked on the same write path as MySQL |
+
+MySQL and MariaDB are configured through `MODULO_DB` (`settings.py` accepts
+`postgres`, `sqlite`, `mariadb`, `mysql`) and `aiomysql` is a declared
+dependency, but they are **not** production-conformant:
+
+* `db/crud/run_node_outputs.py::dialect_insert` raises
+  `NotImplementedError` for any dialect other than `postgres` / `sqlite`. That
+  module is the chokepoint for every `run_node_outputs` read and write (FAR-583),
+  so a run cannot store its node outputs, telemetry, markers, or artifacts on
+  either backend.
+* The repository hub dispatches only `postgres` to `PostgresRepository`; any
+  other backend falls back to `GenericRepository` with a warning, so tenant
+  isolation relies on injected ORM filters instead of database RLS.
+* MariaDB is additionally called out as deprecated and untested in the code
+  itself, and has no `ON CONFLICT` support.
+
+Treat the two MySQL-family rows as configuration surface only.
 
 ### PostgreSQL Requirements
 
@@ -93,7 +110,7 @@ grows with run history.
 - **Connection**: Async via `asyncpg` driver
 - **TLS**: `sslmode=require` (or stronger) recommended for production; the
   `sslmode` in the database URL is honoured. Accepted values: `disable`,
-  `require`, `verify-ca`, `verify-full` — `prefer`/`allow` are rejected at
+  `require`, `verify-ca`, `verify-full`; `prefer`/`allow` are rejected at
   startup (they silently downgrade to plaintext). No `sslmode` = plaintext.
 - **Schema**: Alembic-managed migrations run on startup
 
@@ -119,8 +136,8 @@ See [`docs/troubleshooting.md`](./troubleshooting.md) §8 for known limitations.
 | PostgreSQL | 16+ | **Yes** (production) | Primary data store |
 | Redis | 8+ | **Yes** (production) | SAQ task queue, rate limiting, event broker |
 | Python | 3.12+ | Yes | Application runtime |
-| `uv` | 0.11.x | Yes | Python package manager (pinned in Docker images) |
-| Node.js | 20+ | For frontend dev | Frontend build toolchain |
+| `uv` | 0.11.13 | Yes | Python package manager (exact pin in `backend/Dockerfile` and `deploy/docker/Dockerfile.all-in-one`) |
+| Node.js | 20+ | For frontend dev | Frontend build toolchain; CI pins Node 22. Use `pnpm` (the repo pins `pnpm@11.28.4` via `packageManager`), not npm |
 | Docker | 24+ | For Docker Compose | Container runtime |
 
 ### Redis Requirement Table
@@ -161,10 +178,12 @@ With default settings and no connectors configured, Modulo makes **zero external
 
 | Browser | Supported | Notes |
 |---------|-----------|-------|
-| Chrome 120+ | Yes | Primary development target |
-| Firefox 120+ | Yes | Tested |
-| Safari 17+ | Yes | Tested |
-| Edge 120+ | Yes | Chromium-based |
+| Chromium 120+ | Yes | The only browser the E2E suite installs (`playwright install chromium` in CI and in the deploy workflow) |
+
+Firefox, Safari, and Edge are **not** covered by the automated E2E matrix; the
+Playwright config (`frontend/playwright.config.ts`) declares no `projects` block,
+so a single default Chromium browser runs. Treat the other three as untested
+here.
 
 ---
 
