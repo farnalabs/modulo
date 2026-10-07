@@ -513,7 +513,7 @@
                     </div>
                     <div v-if="expandedSystemEvent?.request_id">
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.request_id') }}</h4>
-                      <code class="rounded bg-background px-2 py-1 text-xs font-mono">{{ shortId(expandedSystemEvent.request_id) }}</code>
+                      <code class="block break-all rounded bg-background px-2 py-1 text-xs font-mono">{{ expandedSystemEvent.request_id }}</code>
                     </div>
                     <div>
                       <h4 class="mb-1 text-xs font-semibold uppercase text-muted-foreground">{{ $t('views.AdminAuditView.event_id') }}</h4>
