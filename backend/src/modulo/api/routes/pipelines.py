@@ -119,8 +119,10 @@ from modulo.db.crud.pipeline import (
     get_pipeline_graph,
     list_pipelines,
     normalize_circuit_breaker_threshold,
+    pause_pipeline,
     replace_pipeline_graph,
     restore_pipeline,
+    resume_pipeline,
     soft_delete_pipeline,
     unarchive_pipeline,
     update_pipeline,
@@ -947,6 +949,15 @@ class PipelineResponse(BaseModel):
     circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
     circuit_breaker_tripped: bool = False
     circuit_breaker_tripped_at: datetime | None = None
+    # FAR-1530: unified per-pipeline Paused execution state. ``run_enabled``
+    # is the state the ``create_run`` gate enforces (false = present, visible,
+    # non-executing); the reason/timestamp name the first cause ('operator' |
+    # 'circuit_breaker'). Carried on every response so the UI can badge it and
+    # ``modulo apply``'s drift hash can read the live value. Additive with
+    # safe defaults (pre-migration / partial stand-ins serialise as running).
+    run_enabled: bool = True
+    run_disabled_reason: str | None = None
+    run_disabled_at: datetime | None = None
     snapshot_count: int = 0
     # Additive, backward-compatible: every response builder derives node_count
     # from the row's stored graph via _pipeline_response, so detail/create/
@@ -1008,6 +1019,25 @@ class PipelineResponse(BaseModel):
     @field_validator("circuit_breaker_tripped_at", mode="before")
     @classmethod
     def _coerce_circuit_breaker_tripped_at(cls, value: Any) -> datetime | None:
+        return value if isinstance(value, datetime) else None
+
+    # FAR-1530: the run-state columns are read defensively like the breaker
+    # columns above — partial ORM stand-ins (tests, MagicMock rows) expose
+    # non-column attributes, which must serialise as "running" (enabled, no
+    # cause), never 500.
+    @field_validator("run_enabled", mode="before")
+    @classmethod
+    def _coerce_run_enabled(cls, value: Any) -> bool:
+        return value if isinstance(value, bool) else True
+
+    @field_validator("run_disabled_reason", mode="before")
+    @classmethod
+    def _coerce_run_disabled_reason(cls, value: Any) -> str | None:
+        return value if isinstance(value, str) else None
+
+    @field_validator("run_disabled_at", mode="before")
+    @classmethod
+    def _coerce_run_disabled_at(cls, value: Any) -> datetime | None:
         return value if isinstance(value, datetime) else None
 
     # FAR-1161: owner ids read defensively like the breaker columns above —
@@ -3432,6 +3462,117 @@ async def unarchive_pipeline_endpoint(
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=unarchive_pipeline)
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume (FAR-1530: the per-pipeline Paused execution state)
+# ---------------------------------------------------------------------------
+
+
+async def _set_pipeline_run_state(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    resume: bool,
+) -> PipelineResponse:
+    """Pause or resume a pipeline inside the shared team-gated transaction.
+
+    Mirrors ``_toggle_pipeline_archive_state`` (in-txn team re-check, 404 on
+    missing row, post-flush ``session.refresh``) with FAR-1530's two
+    state-machine traps:
+
+    * RESUME is REFUSED 409 while the spend circuit breaker's witness holds —
+      an operator must reset the breaker first, so a resume can never revive a
+      tripped pipeline. The check runs AFTER the in-txn locked row-read, so it
+      observes the committed witness (same transaction as the write).
+    * Both directions are idempotent no-ops when the pipeline is already in
+      the requested state — FIRST CAUSE OWNS THE REASON: pausing an
+      already-disabled pipeline never overwrites the original
+      ``run_disabled_reason`` (that is enforced in the CRUD functions).
+
+    The refusal is deliberately PER-PIPELINE (``PipelineNotRunnableError``'s
+    sibling semantics): it must never be confused with the org-level
+    ``triggers_paused`` kill-switch or its ``TriggersPausedError`` envelope.
+    """
+    pipeline: Pipeline | None = None
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            if resume and existing.circuit_breaker_tripped:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; "
+                        "reset it first (POST /api/v1/admin/costs/circuit-breaker/"
+                        f"{pipeline_id}/reset) before resuming"
+                    ),
+                )
+            toggle = resume_pipeline if resume else pause_pipeline
+            pipeline = await toggle(session, pipeline_id)
+            # Refresh inside the transaction (same rationale as the archive
+            # toggle): the UPDATE flush expires the DB-computed `updated_at`,
+            # and reading it after commit raises outside the async greenlet ->
+            # 422 silent-success.
+            if pipeline is not None:
+                await session.refresh(pipeline)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+@router.post(
+    "/{pipeline_id}/pause",
+    dependencies=[Depends(audited("pipeline_paused", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.pause")
+async def pause_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # FAR-1530: any-credential pair (parity with PATCH /pipelines/{id}) so
+    # declarative apply's mk_ API key can pause the pipeline a config declares
+    # as ``run_enabled: false``; UI operators pass the same permission gate.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Pause a pipeline: present and visible, but no runs from any origin.
+
+    Sets ``run_enabled=false, run_disabled_reason='operator',
+    run_disabled_at=now`` — or is an idempotent no-op when the pipeline is
+    already disabled (first cause owns the reason, so a circuit-breaker pause
+    keeps its ``'circuit_breaker'`` reason). In-flight runs finish (disabling
+    is prospective, mirroring the org pause); every NEW run — trigger, manual,
+    REST, MCP — is refused at the ``create_run`` state gate. Audited as
+    ``pipeline_paused``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=False)
+
+
+@router.post(
+    "/{pipeline_id}/resume",
+    dependencies=[Depends(audited("pipeline_resumed", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.resume")
+async def resume_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Resume a paused pipeline: clear the unified Paused state.
+
+    REFUSED with 409 Conflict while ``circuit_breaker_tripped`` holds (reset
+    the breaker first — an operator resume must never revive a tripped
+    pipeline). Idempotent when already running. Audited as
+    ``pipeline_resumed``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=True)
 
 
 # ---------------------------------------------------------------------------

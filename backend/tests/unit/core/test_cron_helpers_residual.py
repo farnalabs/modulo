@@ -421,14 +421,21 @@ async def test_fire_cron_trigger_paused_race_backstop_skips():
     assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}
 
 
-async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
-    """FAR-1528: an ARCHIVED pipeline with a still-active cron trigger must be
-    a quiet typed skip, NOT an escaping PipelineNotRunnableError.
+@pytest.mark.parametrize("state", ["archived", "paused"])
+async def test_fire_cron_trigger_non_runnable_pipeline_is_a_typed_skip(state: str):
+    """FAR-1528/FAR-1530: an ARCHIVED or PAUSED pipeline with a still-active
+    cron trigger must be a quiet typed skip, NOT an escaping
+    PipelineNotRunnableError.
 
     Without the handler the refusal propagates out of the SAQ per-item fire job
     on EVERY tick (the epoch was already advanced at enqueue time, so the job
     fails forever with no typed outcome). The handler mirrors the pause race
     above: same envelope shape, no TriggerEvent, no last_fired_at write.
+
+    The ``paused`` case (FAR-1530) is the state-agnostic proof: the SAME
+    ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` covers every refusing state, so the
+    Paused state needed NO new vocabulary value and NO fire-job change —
+    without that invariant this case would fail with an unhandled state.
     """
     trigger = _make_trigger()
     session = _MockSession([_lock_result(True), _trigger_result(trigger), _mock_result(scalar_one=0), MagicMock()])
@@ -438,7 +445,7 @@ async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
         patch(
             "modulo.db.crud.run.create_run",
             new_callable=AsyncMock,
-            side_effect=PipelineNotRunnableError(state="archived", pipeline_id=PIPELINE),
+            side_effect=PipelineNotRunnableError(state=state, pipeline_id=PIPELINE),
         ),
     ):
         outcome = await ch.fire_cron_trigger(

@@ -436,6 +436,16 @@ class PipelineEntity(BaseModel):
     coercion would otherwise turn a typo into a one-second kill switch that
     applies cleanly and then converges (1 == 1), so no later run re-flags it.
 
+    ``run_enabled`` (FAR-1530, per-pipeline Paused state) follows the opt-in
+    rule with a HARDER restriction than any sibling: it is managed only when
+    declared, and the ONLY value a config may express is ``false`` (pause).
+    ``run_enabled: true`` and an explicit ``null`` are both rejected at config
+    load — resume is authority-bearing (it would silently fight a UI pause or
+    revive a tripped spend circuit breaker), and the disable REASON is
+    system-owned (``'operator'`` when a config-driven pause lands,
+    ``'circuit_breaker'`` only from the breaker itself), never
+    config-expressible.
+
     Accountability owners (FAR-1161): ``business_owner_email`` /
     ``reliability_owner_email`` reference a member of the target org by
     EMAIL (users are not apply-managed entities, so the human-writable email
@@ -524,6 +534,19 @@ class PipelineEntity(BaseModel):
             "managed only when declared: omit the key to leave the live value untouched."
         ),
     )
+    run_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Per-pipeline Paused execution state (FAR-1530). Managed ONLY when "
+            "declared: omit the key to leave the live pause untouched. The ONLY "
+            "value a config may express is false (pause) — resume is "
+            "authority-bearing (it would silently fight a UI pause or revive a "
+            "tripped spend circuit breaker), so run_enabled: true is rejected at "
+            "config load. The disable REASON is system-owned: the server stamps "
+            "'operator' when a config-driven pause lands, and 'circuit_breaker' "
+            "is written only by the breaker itself."
+        ),
+    )
     max_duration_seconds: int | None = Field(
         default=None,
         ge=1,
@@ -543,6 +566,41 @@ class PipelineEntity(BaseModel):
             msg = "circuit_breaker_threshold must be greater than 0 (USD) at 6 decimal places; use null to disable"
             raise ValueError(msg)
         return value
+
+    @field_validator("run_enabled", mode="before")
+    @classmethod
+    def _run_enabled_may_only_pause(cls, value: Any) -> bool:
+        """The ONLY value a config may express is ``false`` (FAR-1530).
+
+        Resume is authority-bearing: a declarative ``true`` would silently
+        fight a UI pause or revive a tripped spend circuit breaker, so it is
+        rejected at config load instead of mid-apply. An explicit ``null`` is
+        rejected too — it would be "declared but meaningless" (the managed-view
+        guard keys on declaration, so null would hash drift with nothing to
+        write). Omitting the key entirely is the way to leave the live pause
+        untouched (a field default is never validated, so the None default
+        passes through unmanaged).
+        """
+        if value is False:
+            return False
+        msg = (
+            "run_enabled may only be declared as `false` (pause this pipeline); "
+            "a config can never resume one (`true` would silently fight a UI pause "
+            "or revive a tripped spend circuit breaker). Omit the key to leave the "
+            "live pause state untouched."
+        )
+        raise ValueError(msg)
+
+    @property
+    def manages_run_enabled(self) -> bool:
+        """True when the config declares run_enabled (only ever ``False``).
+
+        ``model_fields_set`` test, same mechanism as ``manages_circuit_breaker``
+        / ``manages_max_autonomy``: an omitted key leaves the live pause state
+        untouched (an operator- or breaker-caused pause survives an apply that
+        does not declare the key).
+        """
+        return "run_enabled" in self.model_fields_set
 
     @property
     def manages_circuit_breaker(self) -> bool:
@@ -689,6 +747,14 @@ class PipelineEntity(BaseModel):
             view["node_timeout_seconds"] = self.node_timeout_seconds
         if self.manages_max_duration:
             view["max_duration_seconds"] = self.max_duration_seconds
+        # FAR-1530: the Paused state is managed ONLY when declared — an omitted
+        # run_enabled is neither hashed nor written, so an operator- or
+        # breaker-caused pause never shows as drift against a config that does
+        # not mention it. A declared (always ``false``) value IS hashed, so
+        # ``--diff`` reports drift while the live pipeline still runs, and the
+        # executor converges by POSTing /pause.
+        if self.manages_run_enabled:
+            view["run_enabled"] = self.run_enabled
         if self.graph is not None:
             # FAR-1232: the DRIFT hash must compare the declared graph as the
             # server will DISPLAY it — the API read path masks credential-

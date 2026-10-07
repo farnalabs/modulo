@@ -62,6 +62,20 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "WHEN 'fully_autonomous' THEN 2 END)",
             name="ck_pipelines_max_autonomy_ge_default",
         ),
+        # FAR-1530: per-pipeline Paused execution state. A disabled row must
+        # carry BOTH its cause and when it was set (mirrors
+        # ck_organisations_triggers_paused_at); the reason vocabulary is the
+        # closed set ``('operator', 'circuit_breaker')`` — the pipeline-level
+        # state is deliberately distinct from the org-level
+        # ``triggers_paused`` kill-switch. Migration 0286.
+        CheckConstraint(
+            "run_enabled OR (run_disabled_reason IS NOT NULL AND run_disabled_at IS NOT NULL)",
+            name="ck_pipelines_run_enabled",
+        ),
+        CheckConstraint(
+            "run_disabled_reason IS NULL OR run_disabled_reason IN ('operator', 'circuit_breaker')",
+            name="ck_pipelines_run_disabled_reason",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -105,6 +119,20 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     circuit_breaker_threshold: Mapped[Decimal | None] = mapped_column(Numeric(14, 6), nullable=True)
     circuit_breaker_tripped: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     circuit_breaker_tripped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # FAR-1530: per-pipeline Paused execution state — PRESENT and VISIBLE but
+    # NON-EXECUTING (triggers skipped AND manual/REST/MCP refused at the
+    # ``create_run`` state gate). Distinct from ``archived_at`` (hidden) and
+    # from the ORG-level ``triggers_paused`` kill-switch. ``run_enabled`` is
+    # the unified state; ``circuit_breaker_tripped(_at)`` above STAYS as the
+    # breaker's witness — a trip folds into the unified state only when the
+    # pipeline is not already disabled, and an admin reset clears the unified
+    # state only when its reason is ``'circuit_breaker'`` (an operator pause
+    # survives a reset). CHECKs: ck_pipelines_run_enabled (a disabled row
+    # carries cause + timestamp) and ck_pipelines_run_disabled_reason (closed
+    # reason vocabulary). Migration 0286.
+    run_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    run_disabled_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    run_disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     run_context_defaults: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict, server_default=text("'{}'")
