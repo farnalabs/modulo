@@ -462,8 +462,10 @@ async def _check_db_hygiene() -> CheckResult:
     ``degraded``, never ``unavailable``. ``degraded`` leaves the endpoint at
     HTTP 200 (the aggregation 503s solely on ``unavailable``), which is what
     the Fly service check and every deploy gate key on; the finding reaches
-    operators through the readiness body and the uptime monitor's sub-check
-    scan instead of by taking the deployment out of rotation.
+    operators through the readiness body and the product's own in-app
+    readiness alerting (``core/health_alerts.py``) instead of by taking the
+    deployment out of rotation. The advisory/dead-sweep class the removed
+    external uptime monitor used to scan is tracked by FAR-1571.
 
     FAR-1510 — an outcome that produced NO READING (the probe timed out, or
     raised) reports ``degraded`` together with ``advisory=True``. That result
@@ -1170,10 +1172,10 @@ async def _check_runner_workspace_reconcile() -> CheckResult:
     sweep errors still surface, so an asymmetric raw-socket config cannot
     hide a real worker failure). Status stays ``ok`` because a fourth
     status value would require regenerating ``frontend/src/lib/api/schema.ts``
-    (schema-freshness CI gate) and updating ``uptime-monitor.yml`` (which
-    alerts on ANY non-ok sub-check) — both outside this change's footprint;
-    a non-ok status here would keep engine-less deployments permanently
-    alerting, the exact problem this skip fixes. Configured deployments
+    (schema-freshness CI gate) and reworking every status consumer — the
+    aggregate plus the in-app readiness alerting — both outside this change's
+    footprint; a non-ok status here would flag engine-less deployments
+    permanently, the exact problem this skip fixes. Configured deployments
     take the unchanged stats path, so configured-but-unreachable engines
     keep reporting degraded.
     """
@@ -1445,7 +1447,9 @@ async def evaluate_readiness() -> ReadinessResponse:
         # "unavailable" (see _check_db_hygiene), so a bloat / high-age report
         # degrades the overall status while the endpoint stays HTTP 200 — the
         # Fly service check and every deploy gate key on the status CODE and
-        # tolerate degraded, and the uptime monitor alerts on the sub-check.
+        # tolerate degraded, and the product's own in-app readiness alerting
+        # (core/health_alerts.py) reports it through the aggregate it keys on;
+        # the ADVISORY sub-checks never reach that aggregate (FAR-1571).
         # FAR-1510: a probe that did NOT complete (timeout/crash) comes back
         # advisory=True, is still listed here so the body shows it, and is
         # excluded from the aggregate below.
