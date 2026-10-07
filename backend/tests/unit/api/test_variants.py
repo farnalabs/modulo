@@ -454,6 +454,27 @@ class TestRunVariantBatch:
                 await run_batch(uuid.uuid4(), body, mock_session, principal)
             assert exc.value.status_code == 503
 
+    async def test_raises_409_on_pipeline_not_runnable(self) -> None:
+        """FAR-1528: a batch is all-or-nothing through the create_run choke
+        point — an archived/soft-deleted pipeline refuses the whole batch with
+        409 Conflict (state in the detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        body = MagicMock()
+        body.input_payload = {}
+
+        with patch(
+            "modulo.api.routes.variants.get_variant_group",
+            new_callable=AsyncMock,
+            side_effect=PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await run_batch(uuid.uuid4(), body, mock_session, principal)
+            assert exc.value.status_code == 409
+            assert "archived" in str(exc.value.detail)
+
     async def test_raises_500_on_unexpected_error(self) -> None:
         principal = make_mock_principal()
         mock_session = make_session_mock()
@@ -924,6 +945,47 @@ class TestRunVariantSQLAlchemyError:
             with pytest.raises(HTTPException) as exc:
                 await run_variant(group_id, body, mock_session, principal)
             assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+class TestRunVariantPipelineNotRunnable:
+    async def test_archived_pipeline_raises_409(self) -> None:
+        """FAR-1528: variant runs go through the create_run choke point - an
+        archived/soft-deleted pipeline is refused with 409 (state in the
+        detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        principal = make_mock_principal()
+        mock_session = make_session_mock()
+        group_id = uuid.uuid4()
+        body = MagicMock()
+        body.input_payload = {}
+        group = MagicMock()
+        group.variants = [{"id": "v1", "snapshot_id": str(uuid.uuid4()), "run_context_overrides": {}}]
+
+        with (
+            patch("modulo.api.routes.variants.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch(
+                "modulo.api.routes.variants.validate_batch_ownership",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.check_pipeline_run_quota",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.variants.run_variant_weighted",
+                new_callable=AsyncMock,
+                side_effect=PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived"),
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await run_variant(group_id, body, mock_session, principal)
+
+        assert exc.value.status_code == 409
+        assert "archived" in str(exc.value.detail)
 
 
 @pytest.mark.asyncio

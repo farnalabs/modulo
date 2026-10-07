@@ -72,7 +72,7 @@ class TestCreateConnectorErrors(AuthContext):
         with patch("modulo.api.mcp_server.get_settings", return_value=settings):
             result = await create_connector(name="gh", connector_type_id="github", credentials="sk-secret")
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 class TestCreateConnectorSuccess(AuthContext):

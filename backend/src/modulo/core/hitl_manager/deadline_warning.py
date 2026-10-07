@@ -87,6 +87,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.core.cron_helpers import _bound_org
 from modulo.core.hitl_email_alerts import resolve_hitl_email_recipients, send_hitl_deadline_alerts
 from modulo.core.notifier import EVENT_HITL_DEADLINE_WARNING
 from modulo.db.models.hitl_claim import HitlClaim
@@ -234,9 +235,18 @@ async def dispatch_deadline_notifications(
     resolved_now = now if now is not None else datetime.now(UTC)
     all_notified: list[dict[str, Any]] = []
     for org_id in await _fetch_org_ids(factory):
-        all_notified.extend(
-            await _process_org_deadline(org_id, factory, grace_seconds, redis_client, notifier, resolved_now)
-        )
+        # FAR-1501: bind THIS org for the whole per-org tick so every ERROR
+        # inside it — recipient resolution, email send, webhook dispatch,
+        # subscriber check, any selection-txn failure — is attributed by
+        # ErrorTrackingLogHandler instead of dropped as no_org_context.
+        # ``_bound_org`` resets in finally, so the pre-loop phases (org
+        # collection) and the next org's tick never inherit the binding; a
+        # ``return`` out of ``_process_org_deadline`` exits this ``async
+        # with`` normally.
+        async with _bound_org(org_id):
+            all_notified.extend(
+                await _process_org_deadline(org_id, factory, grace_seconds, redis_client, notifier, resolved_now)
+            )
     return all_notified
 
 

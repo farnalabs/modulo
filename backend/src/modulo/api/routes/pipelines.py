@@ -54,6 +54,7 @@ from modulo.api.team_scope import (
     team_membership_exists,
     validate_owner_team_for_create,
 )
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.permissions import (
     PermissionDenied,
@@ -63,6 +64,7 @@ from modulo.auth.permissions import (
     resolve_required,
 )
 from modulo.auth.team_rbac import org_role_level
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
     ScopeViolationError,
@@ -2389,7 +2391,11 @@ async def list_pipelines_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_created", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("pipelines.create")
 async def create_pipeline_endpoint(
     req: PipelineCreate,
@@ -2674,7 +2680,10 @@ async def _sync_agent_row_commands(
     return changed
 
 
-@router.patch("/{pipeline_id}/graph")
+@router.patch(
+    "/{pipeline_id}/graph",
+    dependencies=[Depends(audited("pipeline_graph_replaced", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.replace_graph")
 async def replace_pipeline_graph_endpoint(
     pipeline_id: uuid.UUID,
@@ -3121,7 +3130,10 @@ def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
     ) from None
 
 
-@router.patch("/{pipeline_id}")
+@router.patch(
+    "/{pipeline_id}",
+    dependencies=[Depends(audited("pipeline_updated", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("pipelines.update")
 async def update_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3279,7 +3291,13 @@ async def update_pipeline_endpoint(
     return response
 
 
-@router.delete("/{pipeline_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{pipeline_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(audited("pipeline_deleted", "pipeline", principal_dep=get_current_tenant_user, fail_closed=True))
+    ],
+)
 @handle_db_errors("pipelines.delete")
 async def delete_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3348,7 +3366,10 @@ async def _resolve_pipeline_team_scope_including_deleted(
     return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
 
 
-@router.post("/{pipeline_id}/restore")
+@router.post(
+    "/{pipeline_id}/restore",
+    dependencies=[Depends(audited("pipeline_restored", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.restore")
 async def restore_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3418,7 +3439,10 @@ async def _toggle_pipeline_archive_state(
     return _pipeline_response(pipeline)
 
 
-@router.post("/{pipeline_id}/archive")
+@router.post(
+    "/{pipeline_id}/archive",
+    dependencies=[Depends(audited("pipeline_archived", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.archive")
 async def archive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3431,7 +3455,10 @@ async def archive_pipeline_endpoint(
     return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=archive_pipeline)
 
 
-@router.post("/{pipeline_id}/unarchive")
+@router.post(
+    "/{pipeline_id}/unarchive",
+    dependencies=[Depends(audited("pipeline_unarchived", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.unarchive")
 async def unarchive_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3562,7 +3589,11 @@ async def _clone_pipeline_into_org(
     return cloned, target_name
 
 
-@router.post("/{pipeline_id}/clone", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{pipeline_id}/clone",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("pipeline_cloned", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.clone")
 async def clone_pipeline_endpoint(
     pipeline_id: uuid.UUID,
@@ -3684,7 +3715,13 @@ async def _detect_parameter_ports(
     return detected_ports
 
 
-@router.post("/{pipeline_id}/save-as-composite", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{pipeline_id}/save-as-composite",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipelines.save_as_composite")
 async def save_as_composite_endpoint(
     pipeline_id: uuid.UUID,
@@ -3822,6 +3859,9 @@ async def _quality_report_recipient_urls(
 
 @router.post(
     "/{pipeline_id}/quality-report",
+    dependencies=[
+        Depends(audited("pipeline_quality_report_triggered", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.trigger_quality_report")
 async def trigger_quality_report(
@@ -4024,7 +4064,10 @@ async def list_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots",
-    dependencies=[require_feature("pipeline_diff_rollback")],
+    dependencies=[
+        require_feature("pipeline_diff_rollback"),
+        Depends(audited("pipeline_snapshot_saved", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("pipelines.save_edit_snapshot")
 async def save_edit_snapshot_endpoint(
@@ -4104,7 +4147,12 @@ async def get_snapshot_detail_endpoint(
     return _snapshot_to_detail_response(snapshot)
 
 
-@router.patch("/{pipeline_id}/snapshots/{snapshot_id}")
+@router.patch(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    dependencies=[
+        Depends(audited("pipeline_snapshot_tagged", "pipeline_snapshot", principal_dep=get_current_tenant_user))
+    ],
+)
 @handle_db_errors("pipelines.tag_snapshot")
 async def tag_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -4150,7 +4198,10 @@ async def tag_snapshot_endpoint(
 
 @router.post(
     "/{pipeline_id}/snapshots/{snapshot_id}/rollback",
-    dependencies=[require_feature("pipeline_diff_rollback")],
+    dependencies=[
+        require_feature("pipeline_diff_rollback"),
+        Depends(audited("pipeline_snapshot_rolled_back", "pipeline_snapshot", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("pipelines.rollback_snapshot")
 async def rollback_snapshot_endpoint(
@@ -4228,7 +4279,20 @@ async def rollback_snapshot_endpoint(
     return _snapshot_to_response(new_snapshot)
 
 
-@router.delete("/{pipeline_id}/snapshots/{snapshot_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{pipeline_id}/snapshots/{snapshot_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "pipeline_snapshot_deleted",
+                "pipeline_snapshot",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            )
+        )
+    ],
+)
 @handle_db_errors("pipelines.delete_snapshot")
 async def delete_snapshot_endpoint(
     pipeline_id: uuid.UUID,
@@ -4327,7 +4391,10 @@ class PipelineFolderMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = None
 
 
-@router.patch("/{pipeline_id}/folder")
+@router.patch(
+    "/{pipeline_id}/folder",
+    dependencies=[Depends(audited("pipeline_moved_to_folder", "pipeline", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("pipelines.move_to_folder")
 async def move_pipeline_to_folder_endpoint(
     pipeline_id: uuid.UUID,
@@ -4621,6 +4688,9 @@ async def _finalize_locked_graph_save(
 # the gate body itself is single-sourced).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/convert-to-agent",
+    dependencies=[
+        Depends(audited("pipeline_node_converted_to_agent", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.convert_node_to_agent")
 async def convert_node_to_agent_endpoint(
@@ -4728,6 +4798,9 @@ async def convert_node_to_agent_endpoint(
 # above convert_node_to_agent_endpoint (request-time dependency + in-txn re-check).
 @router.post(
     "/{pipeline_id}/nodes/{node_id}/revert-to-manual",
+    dependencies=[
+        Depends(audited("pipeline_node_reverted_to_manual", "pipeline", principal_dep=get_current_tenant_user))
+    ],
 )
 @handle_db_errors("pipelines.revert_node_to_manual")
 async def revert_node_to_manual_endpoint(

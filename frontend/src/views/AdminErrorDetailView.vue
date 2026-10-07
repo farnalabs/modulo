@@ -1,7 +1,7 @@
 <template>
   <FeatureGate feature-name="error_tracking" required-tier="team" show-disabled>
   <div class="page-wide">
-    <BackLink to="/admin/errors" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
+    <BackLink :to="isInstanceScope ? '/admin/errors?scope=instance' : '/admin/errors'" :label="$t('views.AdminErrorDetailView.back_to_error_dashboard')" />
     <header class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <button
@@ -42,6 +42,14 @@
     </div>
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDetail" />
     <template v-else-if="group">
+      <div
+        v-if="isInstanceScope"
+        class="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground"
+        aria-live="polite"
+        data-testid="admin-error-detail-instance-readonly"
+      >
+        {{ $t('views.AdminErrorDetailView.instance_scope_readonly') }}
+      </div>
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div class="card p-4">
           <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminErrorDetailView.level') }}</span>
@@ -72,7 +80,7 @@
         </div>
       </div>
 
-      <div class="card p-4">
+      <div v-if="!isInstanceScope" class="card p-4">
         <h2 class="mb-3 text-base font-semibold">{{ $t('views.AdminErrorDetailView.actions') }}</h2>
         <div class="flex flex-wrap items-center gap-3">
           <button
@@ -253,13 +261,14 @@ import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowLeft, ChevronRight } from '@lucide/vue'
-import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail } from '../lib/api/errors'
+import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail, type ErrorEventListResponse } from '../lib/api/errors'
 import { api } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
 
@@ -267,6 +276,15 @@ const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const errorId = route.params.id as string
+
+// FAR-1547: ?scope=instance renders this group from the SYSTEM_ORG_ID sentinel
+// partition (read-only — the instance surface has no PATCH). The scope travels
+// in the query so the back link returns to the same tab it came from. Mirrors
+// the list view: without the is_system_admin claim the param resolves to the
+// tenant scope, and the backend independently refuses any instance read with
+// 403, so a forged param can never surface sentinel rows.
+const { isSystemAdmin } = useCurrentUser()
+const isInstanceScope = isSystemAdmin.value && route.query?.scope === 'instance'
 
 const showStacktrace = ref(false)
 const showContext = ref(false)
@@ -280,8 +298,17 @@ const eventsLoading = ref(false)
 const eventsOffset = ref(0)
 const eventsLimit = 20
 
+async function fetchDetail(): Promise<ErrorGroupDetail> {
+  if (!isInstanceScope) return fetchErrorGroup(errorId)
+  return throwOnError(
+    await api.GET('/api/v1/errors/instance/{error_id}', {
+      params: { path: { error_id: errorId } },
+    }),
+  ) as ErrorGroupDetail
+}
+
 const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
-  () => fetchErrorGroup(errorId).then(
+  () => fetchDetail().then(
     d => ({ data: d }),
     e => ({ error: { detail: `${t('views.AdminErrorDetailView.failed_to_load_error_group')} ${formatApiError(e)}` } }),
   ),
@@ -296,7 +323,7 @@ watch(() => groupData.value, (g) => {
 })
 
 function goBack() {
-  router.push('/admin/errors')
+  router.push(isInstanceScope ? { path: '/admin/errors', query: { scope: 'instance' } } : '/admin/errors')
 }
 
 function levelBadgeClass(level: string): string {
@@ -345,7 +372,13 @@ async function loadEvents(offset?: number) {
   eventsLoading.value = true
   if (offset !== undefined) eventsOffset.value = offset
   try {
-    const data = await fetchErrorGroupEvents(errorId, { limit: eventsLimit, offset: eventsOffset.value })
+    const data: ErrorEventListResponse = isInstanceScope
+      ? (throwOnError(
+          await api.GET('/api/v1/errors/instance/{error_id}/events', {
+            params: { path: { error_id: errorId }, query: { limit: eventsLimit, offset: eventsOffset.value } },
+          }),
+        ) as ErrorEventListResponse)
+      : await fetchErrorGroupEvents(errorId, { limit: eventsLimit, offset: eventsOffset.value })
     events.value = data.items
     eventsTotal.value = data.total
   } catch (e: unknown) {
@@ -367,5 +400,7 @@ async function loadUsers() {
 }
 
 loadEvents(0)
-loadUsers()
+// The assignee picker lives in the tenant-only actions card; the instance
+// view is read-only, so skip the admin user lookup there entirely.
+if (!isInstanceScope) loadUsers()
 </script>

@@ -141,7 +141,7 @@ class TestSearchDocumentationTool:
             patch("modulo.api.mcp_server._get_doc_index", side_effect=RuntimeError("boom")),
         ):
             result = await search_documentation("pipeline")
-        assert result == {"error": "internal_error", "detail": "Failed to search documentation"}
+        assert result == {"error": "server_error", "detail": "Failed to search documentation"}
 
 
 class TestGetIntegrationStatus:

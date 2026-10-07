@@ -24,7 +24,9 @@ from modulo.api.dependencies import (
     require_permission,
     require_permission_any_credential,
 )
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.model_backend_hub import ModelBackendHub
@@ -284,7 +286,11 @@ def _validate_definition_json(definition: dict[str, Any]) -> None:
         ) from exc
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("schema_created", "schema", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("schemas.create_schema_endpoint")
 async def create_schema_endpoint(
     req: SchemaCreate,
@@ -398,7 +404,10 @@ async def get_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.patch(_SCHEMA_ID_PATH)
+@router.patch(
+    _SCHEMA_ID_PATH,
+    dependencies=[Depends(audited("schema_updated", "schema", principal_dep=get_current_tenant_user_or_api_key))],
+)
 @handle_db_errors("schemas.update_schema_endpoint")
 async def update_schema_endpoint(
     schema_id: uuid.UUID,
@@ -447,7 +456,10 @@ async def update_schema_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.patch("/{schema_id}/deprecate")
+@router.patch(
+    "/{schema_id}/deprecate",
+    dependencies=[Depends(audited("schema_deprecated", "schema", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("schemas.deprecate_schema_endpoint")
 async def deprecate_schema_endpoint(
     schema_id: uuid.UUID,
@@ -503,7 +515,10 @@ class SchemaFolderMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = None
 
 
-@router.patch("/{schema_id}/folder")
+@router.patch(
+    "/{schema_id}/folder",
+    dependencies=[Depends(audited("schema_moved_to_folder", "schema", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("schemas.move_to_folder")
 async def move_schema_to_folder_endpoint(
     schema_id: uuid.UUID,
@@ -532,7 +547,13 @@ async def move_schema_to_folder_endpoint(
     return SchemaResponse.model_validate(schema)
 
 
-@router.delete(_SCHEMA_ID_PATH, status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    _SCHEMA_ID_PATH,
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(audited("schema_deleted", "schema", principal_dep=get_current_tenant_user, fail_closed=True))
+    ],
+)
 @handle_db_errors("schemas.delete_schema_endpoint")
 async def delete_schema_endpoint(
     schema_id: uuid.UUID,
@@ -648,7 +669,10 @@ async def list_schema_versions_endpoint(
 @router.post(
     "/{schema_id}/versions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[require_feature("schema_version_history")],
+    dependencies=[
+        require_feature("schema_version_history"),
+        Depends(audited("schema_version_created", "schema_version", principal_dep=get_current_tenant_user_or_api_key)),
+    ],
 )
 async def create_schema_version_endpoint(
     schema_id: uuid.UUID,

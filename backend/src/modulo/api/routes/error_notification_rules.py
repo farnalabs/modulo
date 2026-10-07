@@ -28,6 +28,7 @@ from modulo.api.models.error_notification_rule import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import PlanContext
 from modulo.core.ssrf import validate_outbound_url_async
 from modulo.db.models.error_notification_rule import ErrorNotificationRule
@@ -124,6 +125,11 @@ async def list_notification_rules(
     "",
     response_model=ErrorNotificationRuleResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited("error_notification_rule_created", "error_notification_rule", principal_dep=get_current_tenant_user)
+        )
+    ],
 )
 @handle_db_errors("error_notification_rules.create_notification_rule")
 async def create_notification_rule(
@@ -276,6 +282,11 @@ def _translate_update_db_error(exc: Exception) -> HTTPException:
 @router.put(
     "/{rule_id}",
     response_model=ErrorNotificationRuleResponse,
+    dependencies=[
+        Depends(
+            audited("error_notification_rule_updated", "error_notification_rule", principal_dep=get_current_tenant_user)
+        )
+    ],
 )
 @handle_db_errors("error_notification_rules.update_notification_rule")
 async def update_notification_rule(
@@ -321,7 +332,21 @@ async def update_notification_rule(
     return _serialize_rule(rule)
 
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited(
+                "error_notification_rule_deleted",
+                "error_notification_rule",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("error_notification_rules.delete_notification_rule")
 async def delete_notification_rule(
     rule_id: uuid.UUID,

@@ -7,7 +7,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base
-from modulo.db.models.organisation import ORPHAN_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 
 
 class TokenFamily(Base):
@@ -33,7 +33,7 @@ class TokenFamily(Base):
         # Plain-string server_default is quoted by SQLAlchemy's DDL compiler
         # (renders DEFAULT '00000000-0000-0000-0000-000000000000'), so the
         # value never enters DDL as free-form SQL.
-        server_default=str(ORPHAN_ORG_ID),
+        server_default=str(SYSTEM_ORG_ID),
     )
     max_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_blacklisted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

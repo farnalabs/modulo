@@ -141,6 +141,28 @@ async def test_ceiling_refusal_preserves_explicit_cancelled_status() -> None:
     assert org.org_cumulative_spend_cents == 100
 
 
+async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
+    """FAR-1025: an org row that vanished is treated as no ceiling — the gate
+    returns False so the ledger write proceeds without an accrual."""
+    from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
+
+    run = _make_run()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    outcome = await _apply_spend_ceiling_gate(
+        session,
+        run,
+        org_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        total=Decimal("1.00"),
+        run_id=run.id,
+    )
+
+    assert outcome is False
+
+
 async def test_within_ceilings_increments_org_cumulative() -> None:
     run = _make_run()
     org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)  # $100 ceiling, $5 consumed

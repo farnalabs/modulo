@@ -30,6 +30,7 @@ from modulo.auth.sso import (
     sign_saml_relay_state,
     verify_saml_relay_state,
 )
+from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.core.sanitize_log import sanitise_log_value
 from modulo.db.crud.sso_provider import (
@@ -37,6 +38,7 @@ from modulo.db.crud.sso_provider import (
     get_provider_by_provider_id,
     list_enabled_oidc_providers,
 )
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.models.sso_provider import SsoProvider
 from modulo.settings import Settings, get_settings
 
@@ -438,12 +440,20 @@ async def _saml_login_redirect(
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": auth_url})
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — the
-# browser posts the IdP's SAML response with no session, and the identity is
-# established inside the handler, so audited(principal_dep=...) has nothing to
-# resolve. An SSO login is a security event worth auditing; covering it needs an
-# actor-less/system variant of audited() in modulo.core (out of scope here).
-@router.post("/saml/acs/{provider_id}")
+# FAR-1516: PRE-AUTH route — the browser posts the IdP's SAML response with no
+# session, and the identity is established inside the handler, so
+# audited(principal_dep=...) has nothing to resolve. The actor-less variant
+# records the ACS attempt with a SYSTEM actor: sentinel org until the provider
+# resolves, then rebound to the provider's org. An SSO sign-in -> fail closed.
+@router.post(
+    "/saml/acs/{provider_id}",
+    dependencies=[
+        Depends(
+            audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("sso.saml_acs_provider")
 async def saml_acs_provider(
     provider_id: str,
@@ -469,7 +479,11 @@ async def saml_acs_provider(
     (FAR-1010), NOT from RelayState. RelayState is an additional integrity
     signal, not the control.
     """
-    await _resolve_saml_for_route(provider_id, system_session, session)
+    bind_audit_org(request, SYSTEM_ORG_ID)
+    provider = await _resolve_saml_for_route(provider_id, system_session, session)
+    # FAR-1516: the provider names its org — record the ACS attempt there (an
+    # unknown slug 404s above and keeps the sentinel).
+    bind_audit_org(request, provider.organisation_id)
 
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
@@ -659,10 +673,18 @@ async def saml_login(
     )
 
 
-# FAR-1472 exemption (kept in audit_coverage_baseline.txt): PRE-AUTH route — same
-# gap as /saml/acs/{provider_id}: the assertion establishes the identity inside
-# the handler, so no principal exists for audited(principal_dep=...) to resolve.
-@router.post("/saml/acs")
+# FAR-1516: PRE-AUTH route — same gap as /saml/acs/{provider_id}: the assertion
+# establishes the identity inside the handler, so no principal exists for
+# audited(principal_dep=...) to resolve. Actor-less variant, SYSTEM actor.
+@router.post(
+    "/saml/acs",
+    dependencies=[
+        Depends(
+            audited_system("saml_acs_attempted", "session", actor_source="pre_auth", fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("sso.saml_acs")
 async def saml_acs(
     request: Request,
@@ -676,6 +698,17 @@ async def saml_acs(
     On success, redirects the browser to the frontend callback URL with
     access and refresh tokens as query parameters.
     """
+    bind_audit_org(request, SYSTEM_ORG_ID)
+    # This legacy route has no provider slug in its path (saml_process_response
+    # resolves the first enabled provider internally), so read it once here on
+    # the SYSTEM session — the same instance-global leg that helper uses — to
+    # attribute the attempt to the provider's org. Env-only config has no row,
+    # so the sentinel published above stays.
+    if system_session is not None and not system_session.in_transaction():
+        async with system_session.begin():
+            legacy_provider = await get_enabled_saml_provider(system_session)
+        if legacy_provider is not None:
+            bind_audit_org(request, legacy_provider.organisation_id)
     form = await request.form()
     raw_saml: object = form.get("SAMLResponse", "")
     if not isinstance(raw_saml, str) or not raw_saml:

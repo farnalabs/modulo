@@ -541,6 +541,13 @@ async def consume_authorization_code(
     against the stored S256 challenge, then marks the code used. Uses authlib's
     AuthlibClientWrapper for credential validation and the authlib exception
     hierarchy for RFC-compliant error codes.
+
+    The CALLER owns the transaction boundary: this function runs on the
+    ambient session/transaction it is handed and never calls ``session.begin()``
+    itself (a nested ``begin()`` on an already-active transaction raises
+    ``sqlalchemy.exc.InvalidRequestError``). Siblings in this module
+    (``validate_client_secret``, ``create_oauth_token_family``,
+    ``verify_live_role_covers_scopes``) compose the same way.
     """
     client = await validate_client_secret(session, client_id, client_secret)
 
@@ -549,32 +556,31 @@ async def consume_authorization_code(
         raise InvalidGrantError("redirect_uri mismatch")
 
     try:
-        async with session.begin():
-            result = await session.execute(
-                select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
-            )
-            auth_code = result.scalar_one_or_none()
-            if auth_code is None:
-                raise InvalidGrantError("Authorization code not found")
+        result = await session.execute(
+            select(OAuthAuthorizationCode).where(OAuthAuthorizationCode.code == code).with_for_update()
+        )
+        auth_code = result.scalar_one_or_none()
+        if auth_code is None:
+            raise InvalidGrantError("Authorization code not found")
 
-            if auth_code.client_id != client_id:
-                raise InvalidGrantError("Authorization code was issued to a different client")
+        if auth_code.client_id != client_id:
+            raise InvalidGrantError("Authorization code was issued to a different client")
 
-            if auth_code.redirect_uri != redirect_uri:
-                raise InvalidGrantError("redirect_uri mismatch")
+        if auth_code.redirect_uri != redirect_uri:
+            raise InvalidGrantError("redirect_uri mismatch")
 
-            if auth_code.used:
-                raise InvalidGrantError("Authorization code has already been used")
+        if auth_code.used:
+            raise InvalidGrantError("Authorization code has already been used")
 
-            if auth_code.expires_at < datetime.now(UTC):
-                raise InvalidGrantError("Authorization code has expired")
+        if auth_code.expires_at < datetime.now(UTC):
+            raise InvalidGrantError("Authorization code has expired")
 
-            # PKCE must be verified BEFORE the code is consumed — a failing
-            # verifier leaves the code intact for a legitimate retry.
-            verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method)
+        # PKCE must be verified BEFORE the code is consumed — a failing
+        # verifier leaves the code intact for a legitimate retry.
+        verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method)
 
-            auth_code.used = True
-            await session.flush()
+        auth_code.used = True
+        await session.flush()
     except ProgrammingError:
         _log.exception("auth.oauth")
 

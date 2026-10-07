@@ -7,13 +7,15 @@ from typing import Annotated, Any
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.mcp_setup_handoff import consume_handoff
 from modulo.db.crud.model_backend import get_model_backend, update_model_backend
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -29,7 +31,13 @@ class CompleteSetupRequest(BaseModel):
     api_key: str = Field(..., min_length=1, description="The API key to configure")
 
 
-@router.post("/model-backends/{backend_id}/complete-setup", dependencies=[Depends(deny_break_glass_mint)])
+@router.post(
+    "/model-backends/{backend_id}/complete-setup",
+    dependencies=[
+        Depends(audited("model_backend_setup_completed", "model_backend", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors("mcp_setup.complete_model_backend_setup")
 async def complete_model_backend_setup(
     backend_id: uuid.UUID,
@@ -121,6 +129,35 @@ async def complete_model_backend_setup(
         }
     except HTTPException:
         raise
+    # FAR-1540: two failure modes inside this ``except SQLAlchemyError`` block
+    # are KNOWABLE from the exception class, and both were being reported as
+    # ``503 database_error`` — a "retry, the database is down" answer that
+    # invites a retry storm against a failure that cannot succeed on retry:
+    #
+    # * ``ProgrammingError`` (42P01 undefined_table, missing column) means the
+    #   migrations have not been applied. 501 + ``migration_required`` is the
+    #   contract every other surface already uses (``handle_db_errors``, the
+    #   MCP tools, the WebSocket route).
+    # * ``IntegrityError`` (CHECK/FK/UNIQUE violation) is a conflict, not an
+    #   outage: 409 + ``conflict`` matches ``handle_db_errors``.
+    #
+    # This route-local arm runs BEFORE the ``@handle_db_errors`` wrapper (the
+    # wrapper sits outside the endpoint body), so before these arms were added
+    # it shadowed the shared classifier entirely — the FAR-1464 pattern. Both
+    # new arms use EXISTING problem types, so no shared problem-union change is
+    # needed.
+    except IntegrityError as exc:
+        _log.exception("mcp_setup.complete_model_backend_setup: integrity error for backend %s", backend_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "conflict", "detail": "Resource conflict. The operation could not be completed."},
+        ) from exc
+    except ProgrammingError:
+        _log.exception("mcp_setup.complete_model_backend_setup: migrations not applied for backend %s", backend_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={"error": "migration_required", "detail": MSG_FEATURE_NOT_AVAILABLE},
+        ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "mcp_setup.complete_model_backend_setup")
         _log.exception("mcp_setup.complete_model_backend_setup: database error for backend %s", backend_id)

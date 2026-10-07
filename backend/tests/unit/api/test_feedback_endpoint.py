@@ -158,9 +158,12 @@ class TestCreateFeedback:
             )
 
         assert resp.status_code == 201
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.created"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.created"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["org_id"] == _ORG_ID
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "feedback_record"
@@ -194,6 +197,31 @@ class TestCreateFeedback:
 
         assert resp.status_code == 201
         assert resp.json()["feedback_status"] == "pending"
+
+    def test_pipeline_not_runnable_returns_409(self, client: TestClient) -> None:
+        """FAR-1528: an AI feedback handler spawns its correction run through
+        the create_run choke point — an archived/soft-deleted pipeline is
+        refused with 409 Conflict (state in the detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.create_feedback_record") as mock_create,
+        ):
+            mock_create.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+            resp = client.post(
+                f"/api/v1/runs/{_RUN_ID}/feedback",
+                json={
+                    "review_id": "gate-1",
+                    "rejection_reason": "Wrong output",
+                    "rejected_output": {"result": "bad"},
+                    "producing_node_id": "node-b",
+                    "feedback_handler_type": "ai",
+                },
+            )
+
+        assert resp.status_code == 409
+        assert "archived" in resp.json()["detail"]
 
     def test_returns_404_when_run_not_found(self, client: TestClient) -> None:
         with (
@@ -332,9 +360,12 @@ class TestUpdateStatus:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["org_id"] == _ORG_ID
         assert kwargs["actor_user_id"] == _USER_ID
         assert kwargs["resource_type"] == "feedback_record"
@@ -387,7 +418,10 @@ class TestUpdateStatus:
             )
 
         assert resp.status_code == 404
-        audit.assert_not_awaited()
+        # FAR-1472: no rich status_changed event for a 404 - only the audited(...)
+        # dependency's coarse failed-attempt event fires.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert not rich
 
     def test_accepts_dismissed_status(self, client: TestClient) -> None:
         """'dismissed' is a valid terminal status per PRD 8.20 — PATCH must accept it."""
@@ -640,9 +674,12 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["resource_id"] == _RECORD_ID
         assert kwargs["payload_json"]["old_status"] == "pending"
         assert kwargs["payload_json"]["new_status"] == "resolved"
@@ -668,9 +705,12 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 200
-        audit.assert_awaited_once()
-        kwargs = audit.await_args.kwargs
-        assert kwargs["event_type"] == "feedback.status_changed"
+        # FAR-1472: the annotated route appends its own coarse audited(...)
+        # event after the handler, so assert on this route's rich event rather
+        # than a total call count.
+        rich = [c for c in audit.await_args_list if c.kwargs["event_type"] == "feedback.status_changed"]
+        assert len(rich) == 1
+        kwargs = rich[0].kwargs
         assert kwargs["payload_json"]["old_status"] == "pending"
         assert kwargs["payload_json"]["new_status"] == "correcting"
         assert kwargs["payload_json"]["action"] == "create_correction_run"
@@ -799,6 +839,28 @@ class TestReviewFeedback:
             )
 
         assert resp.status_code == 500
+
+    def test_create_correction_run_archived_pipeline_returns_409(self, client: TestClient) -> None:
+        """FAR-1528: the correction run goes through the create_run choke
+        point - an archived/soft-deleted pipeline is refused with 409 (state
+        in the detail), not a generic 500."""
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch("modulo.api.routes.feedback.FeedbackManager.spawn_correction_run") as mock_spawn,
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+            mock_spawn.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+
+            resp = client.post(
+                f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
+                json={"action": "create_correction_run"},
+            )
+
+        assert resp.status_code == 409
+        assert "archived" in resp.json()["detail"]
 
 
 class TestListEvalProposals:

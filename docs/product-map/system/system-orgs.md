@@ -4,9 +4,12 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/admin_orgs.py
+  - backend/src/modulo/core/system_audit_logger.py
 unit-tests:
   - backend/tests/unit/api/test_admin_orgs.py
   - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
+  - backend/tests/unit/core/test_system_audit_logger.py
+  - backend/tests/integration/test_system_audit_org_deletion.py
 bdd:
   - backend/tests/bdd/features/system_admin/system_admin_orgs.feature
   - backend/tests/bdd/features/system_admin/system_admin_users.feature
@@ -37,6 +40,14 @@ manage org-level licenses.
 - [x] DELETE `/api/v1/admin/orgs/{org_id}` deletes an organisation; returns 404
       if not found and 403 for a regular admin
       (`backend/tests/bdd/features/system_admin/system_admin_orgs.feature`)
+- [x] Hard-deleting an organisation records a durable `org_deletion_completed`
+      entry in the org-independent `system_audit_events` ledger before the org
+      row is removed (FAR-1517) — the org-scoped `audit_events` chain cascades
+      away with the org, so the ledger is the surviving evidence of who deleted
+      it; the append is in the same transaction (a failed append aborts the
+      delete) and the row is immutable via append-only triggers
+      (`core/system_audit_logger.py`,
+      `tests/integration/test_system_audit_org_deletion.py`)
 - [x] Org-level license management: GET/PUT/DELETE on
       `/api/v1/admin/orgs/{org_id}/license` with validation via
       `parse_and_verify` (`admin_orgs.py`)
@@ -61,6 +72,12 @@ manage org-level licenses.
       (`system_admin_orgs.feature`, `system_admin_users.feature`)
 
 ## QA History
+- 2026-10-06: **Improve Architecture product-map walk** — tracked the FAR-1517
+  durable org-deletion audit record: `DELETE /api/v1/admin/orgs/{org_id}` now
+  writes `org_deletion_completed` to the org-independent `system_audit_events`
+  ledger in the deleting transaction, so the evidence survives the cascade that
+  destroys the org-scoped chain. Added the checked behaviour line and the
+  `core/system_audit_logger.py` / integration-test citations.
 - 2026-09-21: **product-map walk** — closed the remaining
   org-CRUD BDD gaps. `system_admin_orgs.feature` gained 3 org-listing scenarios
   (system-admin list success with the two seeded orgs, the reserved

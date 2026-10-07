@@ -819,12 +819,19 @@ def _patch_migration_env(monkeypatch: pytest.MonkeyPatch, engine: MagicMock) -> 
 
 
 @pytest.mark.anyio
-async def test_run_migrations_skips_when_already_at_head(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_migrations_bootstraps_even_when_already_at_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1519: a warm boot must still run the role bootstrap.
+
+    The head fast-path skips the alembic run and the migration lock — but the
+    bootstrap sits BEFORE it so a warm boot that later adds
+    MODULO_SYSTEM_DATABASE_URL reconciles the modulo_system password without a
+    manual ``python -m modulo.db.bootstrap_role`` step.
+    """
     monkeypatch.setattr(main, "_db_is_at_migration_head", AsyncMock(return_value=True))
     bootstrap = AsyncMock()
     monkeypatch.setattr(main, "_run_bootstrap", bootstrap)
     await main._run_migrations(_make_settings())
-    assert bootstrap.await_count == 0
+    assert bootstrap.await_count == 1
 
 
 @pytest.mark.anyio
@@ -996,7 +1003,7 @@ async def test_ensure_default_org_seed_failure_is_non_fatal(monkeypatch: pytest.
 
 
 @pytest.mark.anyio
-async def test_boot_seed_ok(capsys: pytest.CaptureFixture) -> None:
+async def test_boot_seed_ok(capsys: pytest.CaptureFixture[str]) -> None:
     async def _coro() -> str:
         return "3 rows"
 
@@ -1006,7 +1013,7 @@ async def test_boot_seed_ok(capsys: pytest.CaptureFixture) -> None:
 
 
 @pytest.mark.anyio
-async def test_boot_seed_failed(capsys: pytest.CaptureFixture) -> None:
+async def test_boot_seed_failed(capsys: pytest.CaptureFixture[str]) -> None:
     async def _coro() -> None:
         raise RuntimeError("boom")
 

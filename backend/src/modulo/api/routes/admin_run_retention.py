@@ -275,7 +275,7 @@ async def export(
     dependencies=[
         Depends(
             audited(
-                "run_retention_purge",
+                "api_access_post",
                 "run",
                 principal_dep=get_current_tenant_user,
                 fail_closed=True,

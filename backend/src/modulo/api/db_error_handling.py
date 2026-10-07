@@ -234,6 +234,38 @@ def raise_session_contract_error(exc: Exception, log_key: str) -> None:
     return
 
 
+def session_contract_error_payload(exc: Exception, log_key: str) -> dict[str, str] | None:
+    """Payload rendering of :func:`raise_session_contract_error` (FAR-1482/FAR-1502).
+
+    Code-bearing surfaces that carry no status code — MCP tool results and the
+    run WebSocket control frames — express the classifier's verdict as a
+    payload rather than a 500 response. This adapter reads that verdict off the
+    raise and re-emits the classifier's OWN message as the surface's specific
+    ``session_contract_error`` payload (FAR-1502: a branchable code, never the
+    generic ``internal_error``)::
+
+        {"error": "session_contract_error", "detail": MSG_SESSION_CONTRACT}
+
+    One classifier, two renderings: REST answers 500, a payload surface answers
+    ``session_contract_error`` carrying the same ``MSG_SESSION_CONTRACT`` text,
+    so a caller reading either surface gets the same verdict. The detail is
+    taken from the exception the classifier raised rather than restated here,
+    so the two renderings cannot drift apart. It lives next to the classifier
+    (not on any one surface) so MCP and WebSocket share ONE implementation and
+    neither has to import the other's module.
+
+    Returns ``None`` for any exception the classifier does not flag, so the
+    caller's own database-unavailable handling runs unchanged — a genuine
+    transient ``OperationalError`` / ``PendingRollbackError`` still reports
+    ``database_unavailable``.
+    """
+    try:
+        raise_session_contract_error(exc, log_key)
+    except HTTPException as http_exc:
+        return {"error": "session_contract_error", "detail": str(http_exc.detail)}
+    return None
+
+
 def handle_db_errors(
     log_prefix: str = "api",
 ) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:

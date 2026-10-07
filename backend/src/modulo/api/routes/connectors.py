@@ -27,12 +27,14 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import validate_owner_team_for_create, validate_team_transition_for_update
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
 from modulo.connectors.rest import RestConnector
+from modulo.core.audit_coverage import audited
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.team_visibility import (
@@ -583,7 +585,10 @@ async def _create_connector(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(audited("connector_created", "connector", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
 )
 @handle_db_errors(_CODE_CONNECTORS_CREATE_CONNECTOR_ENDPOINT)
 async def create_connector_endpoint(
@@ -752,7 +757,13 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
         )
 
 
-@router.patch("/{connector_id}", dependencies=[Depends(deny_break_glass_mint)])
+@router.patch(
+    "/{connector_id}",
+    dependencies=[
+        Depends(audited("connector_updated", "connector", principal_dep=get_current_tenant_user)),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors(_CODE_CONNECTORS_UPDATE_CONNECTOR_ENDPOINT)
 async def update_connector_endpoint(
     connector_id: uuid.UUID,
@@ -896,7 +907,17 @@ async def update_connector_endpoint(
     return _to_response(ci)
 
 
-@router.delete("/{connector_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(deny_break_glass_mint)])
+@router.delete(
+    "/{connector_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("connector_deleted", "connector", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        ),
+        Depends(deny_break_glass_mint),
+    ],
+)
 @handle_db_errors(_CODE_CONNECTORS_DELETE_CONNECTOR_ENDPOINT)
 async def delete_connector_endpoint(
     connector_id: uuid.UUID,

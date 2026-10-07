@@ -41,14 +41,17 @@ from modulo.api.middleware.sensitive_mask import (
     mask_config_json,
     merge_masked_config_json,
 )
+from modulo.api.routes.runs import pipeline_not_runnable_http
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
+from modulo.core.audit_coverage import audited
 from modulo.core.cron_helpers import (
     _count_ongoing_runs,
     compute_next_fire,
     validate_cron_expression,
 )
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -578,7 +581,10 @@ async def _apply_cron_update(session: AsyncSession, trigger: Trigger, req: "Cron
 @router.patch(
     "/triggers/{trigger_id}/cron",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_cron_config_updated", "trigger", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("triggers.update_cron_config")
 async def update_cron_config(
@@ -725,7 +731,12 @@ class PollingConfigUpdate(BaseModel):
 
 
 @router.patch(
-    "/triggers/{trigger_id}/polling", status_code=status.HTTP_200_OK, dependencies=[Depends(deny_break_glass_mint)]
+    "/triggers/{trigger_id}/polling",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_polling_config_updated", "trigger", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("triggers.update_polling_config")
 async def update_polling_config(
@@ -825,7 +836,10 @@ class OngoingConfigUpdate(BaseModel):
 @router.patch(
     "/triggers/{trigger_id}/ongoing",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_ongoing_config_updated", "trigger", principal_dep=get_current_tenant_user)),
+    ],
 )
 async def update_ongoing_config(
     trigger_id: uuid.UUID,
@@ -1004,7 +1018,10 @@ class TriggerCreate(BaseModel):
     status_code=status.HTTP_201_CREATED,
     # any_credential deny: declarative apply (FAR-681) creates triggers with
     # mk_ org API keys; break-glass accounts can never mint (config secrets).
-    dependencies=[Depends(deny_break_glass_mint_any_credential)],
+    dependencies=[
+        Depends(deny_break_glass_mint_any_credential),
+        Depends(audited("trigger_created", "trigger", principal_dep=get_current_tenant_user_or_api_key)),
+    ],
 )
 @handle_db_errors("triggers.create_trigger")
 async def create_trigger(
@@ -1174,7 +1191,10 @@ async def _apply_trigger_update(
     status_code=status.HTTP_200_OK,
     # any_credential deny: declarative apply (FAR-681) updates triggers with
     # mk_ org API keys; break-glass accounts can never modify config secrets.
-    dependencies=[Depends(deny_break_glass_mint_any_credential)],
+    dependencies=[
+        Depends(deny_break_glass_mint_any_credential),
+        Depends(audited("trigger_updated", "trigger", principal_dep=get_current_tenant_user_or_api_key)),
+    ],
 )
 @handle_db_errors("triggers.update_trigger")
 async def update_trigger(
@@ -1231,7 +1251,10 @@ async def update_trigger(
 @router.delete(
     "/triggers/{trigger_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_deleted", "trigger", principal_dep=get_current_tenant_user, fail_closed=True)),
+    ],
 )
 @handle_db_errors("triggers.delete_trigger")
 async def delete_trigger(
@@ -1274,7 +1297,10 @@ async def delete_trigger(
 @router.post(
     "/triggers/{trigger_id}/restore",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_restored", "trigger", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("triggers.restore_trigger")
 async def restore_trigger(
@@ -1333,7 +1359,10 @@ async def restore_trigger(
 @router.post(
     "/triggers/{trigger_id}/toggle",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(deny_break_glass_mint)],
+    dependencies=[
+        Depends(deny_break_glass_mint),
+        Depends(audited("trigger_toggled", "trigger", principal_dep=get_current_tenant_user)),
+    ],
 )
 @handle_db_errors("triggers.toggle_trigger")
 async def toggle_trigger(
@@ -1437,7 +1466,11 @@ async def _record_manual_test_run(
     return str(run.id)
 
 
-@router.post("/triggers/{trigger_id}/test", status_code=status.HTTP_200_OK)
+@router.post(
+    "/triggers/{trigger_id}/test",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("trigger_tested", "trigger", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_TRIGGERS_TEST_TRIGGER)
 async def test_trigger(
     trigger_id: uuid.UUID,
@@ -1507,6 +1540,17 @@ async def test_trigger(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the test run is refused at the create_run choke point when
+        # the target pipeline is archived/soft-deleted — 409 Conflict, never a
+        # generic 500. Raised inside the transaction, so
+        # the snapshot + test TriggerEvent roll back with the refusal.
+        _log.warning(
+            "triggers.test_trigger pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except StorageExhaustedError:
         raise
     except HTTPException:

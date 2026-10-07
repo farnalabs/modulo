@@ -77,6 +77,12 @@ class _MockSession:
         # RLS set_config is plumbing — do not consume a result slot.
         if "set_config" in str(stmt):
             return MagicMock()
+        # FAR-1528 create_run pipeline-state gate: answer the lifecycle read
+        # (archived_at, deleted_at) with an ACTIVE pipeline row — plumbing like
+        # set_config above, so it never consumes a canned result slot and the
+        # pause-classification tests keep exercising the pause gate itself.
+        if "SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid" in str(stmt):
+            return _pipeline_state_result()
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
@@ -98,6 +104,22 @@ def _pause_result(org_id: uuid.UUID, paused: bool = False, status: str = "active
     """Result for the org-wide pause batched read: (id, triggers_paused, status)."""
     r = MagicMock()
     r.all.return_value = [(org_id, paused, status)]
+    return r
+
+
+def _pipeline_state_result(
+    *,
+    archived_at: datetime | None = None,
+    deleted_at: datetime | None = None,
+) -> MagicMock:
+    """Result for the create_run pipeline-state gate read (FAR-1528).
+
+    Defaults to an ACTIVE pipeline (both lifecycle timestamps NULL) so a test
+    concerned with pause classification or run creation is not refused by the
+    gate; pass a timestamp to exercise the archived/deleted refusal.
+    """
+    r = MagicMock()
+    r.first.return_value = (archived_at, deleted_at)
     return r
 
 
@@ -2181,6 +2203,52 @@ class TestFireCronTrigger:
         make_snapshot.assert_awaited_once()
         log_event.assert_awaited_once()
         assert log_event.await_args.kwargs["result"] == "no_pipeline"
+
+    @pytest.mark.asyncio
+    async def test_unpinned_fire_runs_the_snapshot_frozen_at_fire_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1519 item 3: an UNPINNED fire auto-creates the snapshot from the
+        live graph and runs that fresh snapshot.
+
+        This is the inner ``snapshot_id is None`` success arm — distinct from the
+        pinned case (no auto-create) and the pipeline-missing case (auto-create
+        returns None). It is the behaviour the stale-snapshot defect violated:
+        the run must be pinned to the snapshot minted at fire time, not to a
+        pre-resolved "latest existing" snapshot.
+        """
+        _patch_env(monkeypatch)
+        trigger = _make_trigger()
+        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
+        factory = MagicMock(return_value=session)
+        auto_snapshot = SimpleNamespace(id=uuid.uuid4())
+        run = SimpleNamespace(id=uuid.uuid4())
+        event = SimpleNamespace(id=uuid.uuid4())
+
+        with (
+            patch.object(ch, "_open_factory", return_value=factory),
+            patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
+            patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
+            patch.object(ch, "_log_event", new_callable=AsyncMock, return_value=event),
+            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
+            patch(
+                "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=auto_snapshot,
+            ) as make_snapshot,
+            patch("modulo.db.crud.run.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+        ):
+            result = await ch.fire_cron_trigger(
+                trigger_id=trigger.id,
+                org_id=ORG,
+                pipeline_id=trigger.pipeline_id,
+                cron_expression="* * * * *",
+                snapshot_id=None,
+            )
+
+        assert result["status"] == "fired"
+        assert result["run_id"] == str(run.id)
+        make_snapshot.assert_awaited_once()
+        # The run is pinned to the snapshot frozen at fire time, not a reused one.
+        assert create_run.await_args.kwargs["snapshot_id"] == auto_snapshot.id
 
     @pytest.mark.asyncio
     async def test_advance_next_fire_at_writes_next_fire_at(self, monkeypatch: pytest.MonkeyPatch) -> None:

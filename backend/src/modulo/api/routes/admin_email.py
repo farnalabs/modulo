@@ -16,8 +16,8 @@ from modulo.api.dependencies import (
     get_db_session,
     require_feature,
     require_target_org_role,
+    resolve_audit_principal,
 )
-from modulo.api.routes.admin_orgs import resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.secret_storage import decode_stored_secret_scoped, encrypt_stored_secret
 from modulo.core.audit_coverage import audited

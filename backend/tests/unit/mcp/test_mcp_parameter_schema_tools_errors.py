@@ -43,8 +43,8 @@ def _session():
 
 
 def _assert_session_contract(result: dict) -> None:
-    """FAR-1482: an InvalidRequestError surfaces as the shared 500 payload, not an outage."""
-    assert result["error"] == "internal_error", result
+    """FAR-1482 + FAR-1502: specific ``session_contract_error`` payload, not an outage."""
+    assert result["error"] == "session_contract_error", result
     assert result["detail"] == MSG_SESSION_CONTRACT, result
 
 
@@ -108,7 +108,7 @@ class TestGetParameterSchemaErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ class TestUpdateParameterSchemaErrors(AuthContext):
         mock_update.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await update_parameter_schema(schema_id=str(uuid.uuid4()), version=1)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -207,7 +207,7 @@ class TestDeleteParameterSchemaErrors(AuthContext):
         mock_delete.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await delete_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -264,7 +264,7 @@ class TestRestoreParameterSchemaErrors(AuthContext):
         mock_restore.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -303,6 +303,56 @@ class TestRestoreParameterSchemaErrors(AuthContext):
         result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.restore_schema")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found_detail_pins_or_not_deleted_when_restore_returns_none(
+        self, mock_get, mock_restore, mock_session, mock_validate
+    ):
+        """FAR-1522: the restore not-found payload must keep the LONG detail string.
+
+        The three restore call sites were briefly shadowed at runtime by the
+        pre-existing short ``_MSG_PARAM_SCHEMA_NOT_FOUND`` constant (same
+        module-level name, last definition binds), silently emitting
+        "Parameter schema not found" instead of the pre-refactor literal.
+        This pins the exact wire string.
+        """
+        mock_get.return_value = _make_mock_schema()
+        mock_restore.return_value = None
+        mock_session.return_value = _session()
+        result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+        assert result["detail"] == "Parameter schema not found or not deleted"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.restore_schema")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(
+        self, mock_get, mock_restore, mock_session, mock_validate
+    ):
+        """FAR-1522: the schema-missing branch of the restore payload (the other repointed literal)."""
+        mock_get.return_value = None
+        mock_session.return_value = _session()
+        result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+        assert result["detail"] == "Parameter schema not found or not deleted"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_schema.restore_schema")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_cross_org(
+        self, mock_get, mock_restore, mock_session, mock_validate
+    ):
+        """FAR-1522: the cross-org branch of the restore payload (the third repointed literal is on the set tool)."""
+        mock_get.return_value = _cross_org_schema()
+        mock_session.return_value = _session()
+        result = await restore_parameter_schema(schema_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+        assert result["detail"] == "Parameter schema not found or not deleted"
+
 
 # ---------------------------------------------------------------------------
 # get_parameter_schema_references
@@ -330,7 +380,7 @@ class TestGetParameterSchemaReferencesErrors(AuthContext):
         mock_refs.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_schema_references(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +405,7 @@ class TestValidateParameterSchemaErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await validate_parameter_schema(schema_id=str(uuid.uuid4()), values={"region": "x"})
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +434,7 @@ class TestListParameterSetsErrors(AuthContext):
         mock_list.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await list_parameter_sets(schema_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +465,7 @@ class TestCreateParameterSetErrors(AuthContext):
         mock_create.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await create_parameter_set(schema_id=str(uuid.uuid4()), name="prod")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -466,7 +516,7 @@ class TestGetParameterSetErrors(AuthContext):
         mock_get.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await get_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +555,7 @@ class TestUpdateParameterSetErrors(AuthContext):
         mock_update.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await update_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()), version=1)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -592,7 +642,7 @@ class TestDeleteParameterSetErrors(AuthContext):
         mock_delete.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await delete_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -679,7 +729,7 @@ class TestRestoreParameterSetErrors(AuthContext):
         mock_restore.side_effect = RuntimeError("boom")
         mock_session.return_value = _session()
         result = await restore_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -728,3 +778,38 @@ class TestRestoreParameterSetErrors(AuthContext):
         mock_session.return_value = _session()
         result = await restore_parameter_set(schema_id=str(sid), set_id=str(uuid.uuid4()))
         assert result["error"] == "not_found"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.parameter_set.restore_set")
+    @patch("modulo.db.crud.parameter_set.get_set")
+    @patch("modulo.db.crud.parameter_schema.get_schema")
+    async def test_not_found_detail_pins_or_not_deleted_when_schema_missing(
+        self, mock_get_schema, mock_get_set, mock_restore, mock_session, mock_validate
+    ):
+        """FAR-1522: the restore_parameter_set schema-not-found payload must keep the LONG detail string.
+
+        Same shadowing hazard as the schema tool: a same-named module-level
+        constant (the pre-existing short ``_MSG_PARAM_SCHEMA_NOT_FOUND``)
+        binds LAST and would silently replace the payload text.
+        """
+        mock_get_schema.return_value = None
+        mock_session.return_value = _session()
+        result = await restore_parameter_set(schema_id=str(uuid.uuid4()), set_id=str(uuid.uuid4()))
+        assert result["error"] == "not_found"
+        assert result["detail"] == "Parameter schema not found or not deleted"
+
+
+def test_not_found_message_constants_bind_distinct_values() -> None:
+    """FAR-1522 shadowing guard: both module constants must bind their OWN value.
+
+    Python binds the LAST module-level definition of a name, so re-adding a
+    second ``_MSG_PARAM_SCHEMA_NOT_FOUND`` (or defining the OR_DELETED name
+    twice with different values) would silently change restore/lookup
+    payloads without failing any tool-level test that only asserts
+    ``error == "not_found"``.
+    """
+    import modulo.api.mcp_server as mcp_server
+
+    assert mcp_server._MSG_PARAM_SCHEMA_NOT_FOUND == "Parameter schema not found"
+    assert mcp_server._MSG_PARAM_SCHEMA_NOT_FOUND_OR_DELETED == "Parameter schema not found or not deleted"

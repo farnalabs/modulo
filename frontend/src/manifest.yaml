@@ -1026,6 +1026,42 @@ elements:
       - testid: admin-audit-next
         type: button
         dynamic_testid: false
+      - testid: admin-audit-source-tabs
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-tab-org
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-tab-system
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-section
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-event-type
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-org-id
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-from
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-date-to
+        type: input
+        dynamic_testid: false
+      - testid: admin-audit-system-reset
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-status
+        type: element
+        dynamic_testid: false
+      - testid: admin-audit-system-previous
+        type: button
+        dynamic_testid: false
+      - testid: admin-audit-system-next
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -1414,6 +1450,18 @@ elements:
       - testid: admin-errors-reset
         type: button
         dynamic_testid: false
+      - testid: admin-errors-scope
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-scope-hint
+        type: element
+        dynamic_testid: false
+      - testid: admin-errors-scope-instance
+        type: button
+        dynamic_testid: false
+      - testid: admin-errors-scope-organisation
+        type: button
+        dynamic_testid: false
       - testid: filter-bar-search
         type: input
         dynamic_testid: false
@@ -1441,6 +1489,9 @@ elements:
         dynamic_testid: false
       - testid: admin-error-detail-events-prev
         type: button
+        dynamic_testid: false
+      - testid: admin-error-detail-instance-readonly
+        type: element
         dynamic_testid: false
       - testid: admin-error-detail-loading
         type: element
@@ -3478,6 +3529,24 @@ elements:
       - testid: snapshot-timeline-rollback
         type: button
         dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-status
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-error
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-holders
+        type: element
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-refresh
+        type: button
+        dynamic_testid: false
+      - testid: pipeline-editor-snapshot-lock-release
+        type: button
+        dynamic_testid: false
     /pipelines/copy:
       - testid: copy-wizard-visibility-filter
         type: button
@@ -5096,6 +5165,19 @@ elements:
       - testid: settings-triggers-outcomes-toggle
         type: element
         dynamic_testid: false
+    /setup/model-backend/:id:
+      - testid: model-backend-setup-form
+        type: element
+        dynamic_testid: false
+      - testid: model-backend-setup-api-key
+        type: input
+        dynamic_testid: false
+      - testid: model-backend-setup-submit
+        type: button
+        dynamic_testid: false
+      - testid: model-backend-setup-view-backends
+        type: button
+        dynamic_testid: false
     /variants/compare:
       - testid: variant-compare-group-select
         type: select
@@ -5323,6 +5405,11 @@ features:
 
             # Pipeline graph mutation audit (FAR-1471)
             - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
+
+            # Pre-auth / webhook route auditing — actor-less audited_system (FAR-1516)
+            - "[x] Pre-auth and webhook routes are audited through the actor-less audited_system variant (FAR-1516): sign-in/out, token refresh, the SAML ACS POST, the public error ingest and inbound webhooks record the same isolated-append event WITHOUT fabricating an actor — actor_user_id stays NULL, the payload carries the SYSTEM_ACTOR marker plus an actor_source string (pre_auth / unauthenticated / signature_verified / authenticated) stating HOW the request was admitted, never WHO; the route publishes its tenant via bind_audit_org at the point it becomes known (with no tenant yet, the unattributed SYSTEM_ORG_ID sentinel is used so the attempt is still recorded and the real org rebinds the moment it resolves), an event with no published org is logged and skipped rather than written into a fabricated tenant, and bind_audit_actor_source lets the route STRENGTHEN its declared actor_source once a verified signature or an authenticated principal lands, so recorded provenance is always the strongest TRUE admission statement (core/audit_coverage.py audited_system/bind_audit_org/bind_audit_actor_source, routes auth/sso/slack/stripe_webhook/webhooks/errors; test_audit_coverage.py, test_webhooks_endpoint.py, test_far1464_route_arm_coverage.py)"
+            # Org-independent durable ledger for org-lifecycle events (FAR-1517)
+            - "[x] Org-lifecycle audit records survive a hard delete (FAR-1517): `audit_events.organisation_id` FKs `organisations.id` with ON DELETE CASCADE, so the org-scoped chain - including the `org_deletion_requested` row written moments earlier - dies with the org, and a post-commit append can never satisfy the FK afterwards. The org-lifecycle writers (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`, `POST /api/v1/admin/org/deletion-confirm`, `PATCH /api/v1/admin/org/deletion-cancel`, and system-admin `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence into the org-independent `system_audit_events` ledger IN the deleting transaction BEFORE the org row is removed: the table carries `org_id`/`actor_user_id` as PLAIN values with NO FK and no `organisation_id` tenant column, so nothing cascades into it and no RLS scope excludes it; the record commits only with the delete and a failed append aborts the delete (fail-closed, deliberately no try/except), while UPDATE/DELETE are rejected by database append-only triggers (migration 0285). The ledger is deliberately NOT hash-chained - the tamper-evident chain is per-org and its head cascades away - so immutability here comes from the triggers. Those routes sit in the audit-coverage baseline because `audited()`'s post-commit org-scoped append can never satisfy the audit_events FK after the delete (core/system_audit_logger.py, db/models/system_audit_event.py, db/migrations/versions/0285_system_audit_events.py, tests/integration/test_system_audit_org_deletion.py, tests/unit/core/test_system_audit_logger.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
@@ -5598,6 +5685,7 @@ features:
             - "[x] MCP OAuth client registration UI (2026-09-28): Settings > MCP lists the org's registered OAuth clients (name, client id, scopes, redirect URIs, created) and wires register + revoke to POST/DELETE /api/v1/mcp/oauth/clients - the register form validates a required name, at least one redirect URI tokenised on ANY whitespace (so two URIs pasted on one line separate correctly and match the backend's space-joined storage round-trip) where every entry must be an absolute http:// or https:// URI (localhost / 127.0.0.1 stay valid for local development) with duplicates de-duplicated and invalid entries named in an inline error, plus at least one of the three valid scopes (trigger:run, hitl:review, library:browse); the confirm button is never validity-disabled, so a submit always reaches the guard and surfaces every touched-field error; success opens a one-time-reveal dialog showing client_id and client_secret with copy buttons and a 10s auto-mask, both values are wiped from component state when the dialog closes (the footer Done handler and the Dialog hide event), and a rejected clipboard write (insecure plain-HTTP context, no navigator.clipboard) renders a visible copy-failed message telling the user to select the value and copy manually instead of console-only; the section is gated to org role admin/operator with a restricted state driven by the list call's 403, a fetch rejection or a non-array list body renders the inline section error rather than the 'no clients registered yet' empty state, and the API keys card degrades the same way - a 403 from GET /api/v1/api-keys (the identical admin|operator gate) renders a restricted API-keys card instead of failing the whole page, while non-403 API key failures stay fatal (SettingsMcpView.spec.ts)"
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
             - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
+            - "[x] MCP tool errors carry specific, branchable codes (FAR-1502): `_tool_error(msg, *, code)` demands a keyword-only code with no default so a call site can never fall back to a generic code, and the shared `_tool_exception_error` classifier maps an escaped exception type to the code the consuming agent can branch on — `insufficient_scope` (MCPAuthorizationError), `validation_failed` for a 4xx StarletteHTTPException / `server_error` for a 5xx, `session_contract_error` for a session-contract violation (InvalidRequestError / MissingGreenlet) via the shared db_error_handling classifier, `conflict` for IntegrityError, `migration_required` for ProgrammingError, `database_unavailable` for any other SQLAlchemyError, and `server_error` as the ONLY reserved catch-all; the run WebSocket control-frame surface aligns to the same vocabulary (db_unavailable -> database_unavailable, internal_error -> server_error, and its SQLAlchemyError arm shares the session-contract payload), enforced structurally by test_mcp_error_codes.py (backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/db_error_handling.py, backend/src/modulo/api/routes/run_ws.py; test_mcp_tool_exception_error.py, test_run_ws.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered
@@ -5657,6 +5745,7 @@ features:
         behaviours:
             # OTel trace span capture (FAR-198 instrumentation)
             - "[x] OTel *trace* span capture is BDD-exercised against the REAL LangGraphOtelBridge seams (otel_traces.feature, network-free and DB-free): chain spans stamp the set_run_context organisation_id / pipeline_id attributes per node execution, a tool callback becomes a child span under its parent node span (child parent.span_id == parent context.span_id), connector callbacks carry no credential fields in span attributes, and a telemetry-disabled provider (no span processor) exports no spans"
+            - "[x] The error dashboard reads BOTH partitions with a hard tenancy boundary (FAR-1547): /admin/errors defaults to the caller's organisation (GET /api/v1/errors pinned to principal.organisation_id), while a system admin can switch to the instance scope and read the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed errors from the public frontend ingest and org-less backend errors) through GET /api/v1/errors/instance, /instance/{error_id} and /instance/{error_id}/events, gated by the system permission errors.resolve_instance; a tenant principal is refused 403 before any query runs (the scope toggle is not even rendered without the is_system_admin claim), each instance read RLS-pins the transaction to the sentinel org so the org-only policies pass, and the instance detail is read-only (no instance-scope PATCH) — AdminErrorsView.vue / AdminErrorDetailView.vue scope switch, backend/src/modulo/api/routes/errors.py, backend/tests/unit/error_tracking/test_error_instance_scope.py"
     feat-onboarding:
         description: First-run onboarding wizard for new users and organizations
         status: covered
@@ -5689,6 +5778,7 @@ features:
             - "[x] The node editor exposes the explicit single_pr_per_run flag (FAR-1273) on sandbox_agent nodes: a labelled, help-texted toggle in the node panel whose value is saved with the graph (default false) and arms the run-scoped one-PR-per-run gh shim at dispatch - a bounded, best-effort, E2B-only defence-in-depth layer, not an absolute guarantee on its own (gh api PR creation, a gh copy outside the PATH, shell aliases/functions, a gh installed after the fact and non-E2B runners are not covered; the one-PR-per-run guarantee is that shim together with the post-run detection, FAR-1274); the field is sandbox-only (rejected by the API node model and by the graph validator on any other node type, and by the graph validator when the value is not a boolean on a sandbox node), it rides the typed IsolationPolicy to the provider, and a delivery_sentinel alone never arms the guard"
             - "[x] save-as-composite stores the selected nodes' credential env values in the composite template AS-IS (plaintext at rest, no write-side masking - parity with top-level pipeline graphs, which have never masked on write), while every composite-template read surface (list/get/create-response/patch/restore/editor GET+PUT) keeps masking them with the shipped FAR-1181 node masker (api/routes/pipelines.py save-as-composite, api/routes/composite_templates.py; tests routes/test_composite_authoring.py TestSaveAsCompositeCredentialStorage, api/test_composite_templates_api.py TestCompositeTemplateMasking; control statement docs/deployment-security.md 2.6)"
             - "[x] The read-mask sentinel never reaches storage or a run (FAR-1374): every composite-template write entry (POST /api/v1/composite-templates, PATCH, the editor PUT, and save-as-composite) resolves masked echoes against the stored graph FIRST, then refuses any surviving or unresolvable sentinel with 422 (COMPOSITE_SUBGRAPH_MASKED_CREDENTIAL) naming the sub-node, field, and key; composite expansion fails closed with the same code for pre-fix or direct-DB-written sentinel rows so a mask literal can never land in a run snapshot or clobber a host-injected credential (core/composite_engine/expander.py MaskedCredentialExpansionError); graph-save validation surfaces the same condition, and the admin housekeeping sweep reports pre-existing degraded templates detection-only - repair is manual credential re-entry in the composite editor, never an automatic rewrite (core/housekeeping.py)"
+            - "[x] A system-admin-only Snapshot lock card renders on the pipeline editor route (/pipelines/:id/editor): it reads GET /api/v1/admin/pipelines/{pipeline_id}/snapshot-lock into a polite live region (loading / not-held / held-by-N plus each holder's pid, application_name, state, backend_start and query_start) and clears a wedged lock through a keyboard-usable FormDialog confirmation onto POST .../snapshot-lock/release, surfacing a typed 403 in an assertive region (SnapshotLockCard.vue, PipelineEditorView.spec.ts describe 'system-admin snapshot lock'; non-system-admins render nothing and the admin-only GET is never issued)"
         deferrals:
             - "There is no pipeline-level batch recovery endpoint — recovery/retry is per-run (rerun) and per-node (recover), tracked under feat-runs"
     feat-plugins:

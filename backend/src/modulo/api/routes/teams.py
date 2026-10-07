@@ -26,6 +26,7 @@ from modulo.auth.team_rbac import (
     org_role_level,
     team_role_level,
 )
+from modulo.core.audit_coverage import audited
 from modulo.db.crud import account as _account_crud
 from modulo.db.crud.org_membership import get_membership_by_account_and_org
 from modulo.db.crud.team import (
@@ -475,7 +476,11 @@ async def list_teams_endpoint(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("api_access_post", "team", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors("teams.create_team_endpoint")
 async def create_team_endpoint(
     req: CreateTeamRequest,
@@ -616,7 +621,9 @@ async def get_team_endpoint(
     )
 
 
-@router.patch("/{team_id}")
+@router.patch(
+    "/{team_id}", dependencies=[Depends(audited("api_access_patch", "team", principal_dep=get_current_tenant_user))]
+)
 @handle_db_errors("teams.update_team_endpoint")
 async def update_team_endpoint(
     team_id: uuid.UUID,
@@ -706,7 +713,16 @@ async def update_team_endpoint(
     )
 
 
-@router.delete("/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("api_access_delete", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("teams.delete_team_endpoint")
 async def delete_team_endpoint(
     team_id: uuid.UUID,
@@ -809,7 +825,15 @@ async def delete_team_endpoint(
         )
 
 
-@router.post("/{team_id}/reassign-org")
+@router.post(
+    "/{team_id}/reassign-org",
+    dependencies=[
+        Depends(
+            audited("team_resources_reassigned", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("teams.reassign_team_resources_endpoint")
 async def reassign_team_resources_endpoint(
     team_id: uuid.UUID,
@@ -947,6 +971,12 @@ async def list_members_endpoint(
 @router.post(
     "/{team_id}/members",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited("api_access_post", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("teams.add_member_endpoint")
 async def add_member_endpoint(
@@ -1038,6 +1068,12 @@ async def add_member_endpoint(
 @router.delete(
     "/{team_id}/members/{membership_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            audited("api_access_delete", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("teams.remove_member_endpoint")
 async def remove_member_endpoint(
@@ -1123,6 +1159,12 @@ async def remove_member_endpoint(
 
 @router.patch(
     "/{team_id}/members/{membership_id}",
+    dependencies=[
+        Depends(
+            audited("api_access_patch", "team", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("teams.change_member_role_endpoint")
 async def change_member_role_endpoint(

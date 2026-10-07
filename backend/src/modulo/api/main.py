@@ -59,6 +59,7 @@ from modulo.api.routes.admin_rotation import router as admin_rotation_router
 from modulo.api.routes.admin_run_retention import router as admin_run_retention_router
 from modulo.api.routes.admin_runtime_config import router as admin_runtime_config_router
 from modulo.api.routes.admin_sso import router as admin_sso_router
+from modulo.api.routes.admin_system_audit import router as admin_system_audit_router
 from modulo.api.routes.admin_system_config import router as admin_system_config_router
 from modulo.api.routes.admin_tiers import router as admin_tiers_router
 from modulo.api.routes.admin_triggers import router as admin_triggers_router
@@ -330,6 +331,17 @@ async def _run_migrations(settings: Settings) -> None:
     Fast-path: when the DB is already at the head revision the migration run is
     skipped entirely (no advisory lock, no alembic run) so boot is instant and
     machines never contend for the lock.
+
+    The role bootstrap below runs on EVERY boot — warm boots included (it sits
+    BEFORE the fast-path return, FAR-1519): it is the reconcile point for role
+    credentials, so an upgrade-in-place that later adds
+    ``MODULO_SYSTEM_DATABASE_URL`` repairs the ``modulo_system`` password on
+    the next restart instead of leaving readiness red until an operator runs
+    ``python -m modulo.db.bootstrap_role`` by hand. The fast-path still skips
+    exactly what it exists to skip — the alembic run and the migration
+    advisory lock: the bootstrap is idempotent (create-or-update + re-grant +
+    re-assert), takes its OWN bounded, fail-open lock (FAR-1200), and does not
+    touch the migration lock the fast-path avoids.
     """
     from alembic import command
     from alembic.config import Config
@@ -339,12 +351,13 @@ async def _run_migrations(settings: Settings) -> None:
     alembic_ini = _resolve_alembic_ini()
     last_error: Exception | None = None
 
+    # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on
+    # exist — and before the head fast-path so warm boots reconcile too.
+    await _run_bootstrap(settings)
+
     if await _db_is_at_migration_head(settings):
         logger.info("startup.migrations_already_at_head -- skipping migration run")
         return
-
-    # Bootstrap BEFORE migrations so the roles 0036 re-owns to / grants on exist.
-    await _run_bootstrap(settings)
 
     for attempt in range(1, _MIGRATION_MAX_ATTEMPTS + 1):
         try:
@@ -630,12 +643,30 @@ async def _seed_sso_providers(settings: Settings) -> None:
 
 
 async def _seed_system_schemas(settings: Settings) -> None:
-    """Seed system schemas for all existing organisations."""
+    """Seed system schemas for all existing organisations.
+
+    The org enumeration and the system-account resolution are ORG-LESS phases
+    (one read-only transaction, unbound): a failure there has no organisation
+    to attribute and keeps the announced ``no_org_context`` drop. Each org then
+    seeds in its OWN transaction inside a per-org ``try/except`` (FAR-1546), so
+    one org's failure is logged and skipped instead of aborting the remaining
+    orgs — previously the whole loop shared a single transaction, so the first
+    failure poisoned it for every org after it and bubbled to ``_boot_seed``'s
+    org-less ``startup.seed_failed``. The per-org tick binds the org context
+    (FAR-1539) so ``system_schemas.seed_org_failed`` is ATTRIBUTED by
+    ``ErrorTrackingLogHandler`` instead of dropped as ``no_org_context``.
+    """
     import uuid as _uuid
 
     from sqlalchemy import select
 
     from modulo.api.dependencies import get_or_create_engine, get_or_create_session_factory
+
+    # FAR-1539: lazy import — ``cron_helpers`` is a heavyweight module and this
+    # seeder runs at API boot; the same seam the FAR-1501 call sites outside
+    # the cron family use (``cost_controller.probe``, ``auth.api_key``). The
+    # import is function-local so it never runs at api.main import time.
+    from modulo.core.cron_helpers import _bound_org
     from modulo.db.models.account import Account
     from modulo.db.models.organisation import Organisation
     from modulo.db.seed import seed_system_schemas
@@ -645,6 +676,7 @@ async def _seed_system_schemas(settings: Settings) -> None:
 
     async with factory() as session, session.begin():
         orgs = (await session.execute(select(Organisation).order_by(Organisation.created_at))).scalars().all()
+        org_ids = [org.id for org in orgs]
 
         admin = (
             await session.execute(select(Account).where(Account.email == "admin").order_by(Account.created_at).limit(1))
@@ -662,8 +694,23 @@ async def _seed_system_schemas(settings: Settings) -> None:
             logger.warning("startup.no_account_for_system_schemas")
             return
 
-        for org in orgs:
-            await seed_system_schemas(session, org.id, system_account_id)
+        account_id: _uuid.UUID = system_account_id
+
+    for org_id in org_ids:
+        # FAR-1546: bind THIS org for the whole per-org tick so
+        # ``system_schemas.seed_org_failed`` is attributed by
+        # ErrorTrackingLogHandler instead of dropped as no_org_context.
+        # ``_bound_org`` resets in finally, so the org-less phases above and
+        # the next org's tick never inherit the binding.
+        async with _bound_org(org_id):
+            try:
+                async with factory() as session, session.begin():
+                    await seed_system_schemas(session, org_id, account_id)
+            except Exception:
+                logger.exception(
+                    "system_schemas.seed_org_failed",
+                    extra={"org_id": str(org_id)},
+                )
 
 
 async def _seed_environment_profiles(settings: Settings) -> None:
@@ -1165,6 +1212,7 @@ app.include_router(admin_license_router)
 app.include_router(admin_rate_limits_router)
 app.include_router(admin_runtime_config_router)
 app.include_router(admin_sso_router)
+app.include_router(admin_system_audit_router)
 app.include_router(admin_system_config_router)
 app.include_router(admin_tiers_router)
 app.include_router(admin_triggers_router)

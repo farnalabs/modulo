@@ -71,3 +71,56 @@ class RateLimitConflictError(RuntimeError):
         self.pipeline_id = pipeline_id
         self.rate_limit_key = rate_limit_key
         super().__init__(f"rate limit conflict for pipeline {pipeline_id}, key {rate_limit_key!r}")
+
+
+# Skip ``reason`` every BACKGROUND fire origin returns when the pipeline-state
+# gate refuses a run (FAR-1528 follow-up): the SAQ cron/polling/ongoing fire
+# jobs and the agent_signal child-run path translate the refusal into a quiet
+# typed skip instead of letting it escape as a job error. Deliberately a
+# DIFFERENT value from ``PAUSE_SKIP_REASON`` (``"triggers_paused"``, in
+# ``modulo.db.settings_resolver``) so a per-pipeline lifecycle refusal can
+# never be read as the org-wide pause kill-switch. This is an outcome-envelope
+# reason, NOT a ``TriggerEvent.validation_result`` value — no trigger-event
+# vocabulary change is implied by it.
+PIPELINE_NOT_RUNNABLE_SKIP_REASON = "pipeline_not_runnable"
+
+
+class PipelineNotRunnableError(RuntimeError):
+    """Raised by ``create_run`` when the pipeline's lifecycle state refuses a run (FAR-1528).
+
+    The pipeline-state gate sits in ``create_run`` — the SINGLE choke point
+    every run origin converges on (REST manual trigger + rerun, MCP
+    ``trigger_pipeline``, webhook, replay, cron, polling, agent_signal, slack
+    app-mention, variant runs, feedback correction) — so one gate covers them
+    all. ``state`` is the refusing lifecycle condition:
+
+    * ``"archived"`` — ``pipelines.archived_at IS NOT NULL``
+    * ``"deleted"``  — ``pipelines.deleted_at IS NOT NULL`` (soft delete)
+
+    Sibling of ``TriggersPausedError`` (the org-wide pause kill-switch) and
+    ``OrgDeletedError`` (the org-level guard), but distinct from both: this is
+    a PER-PIPELINE refusal. It is never mapped to the pause envelope —
+    ``PAUSE_SKIP_REASON`` stays reserved for the org-wide kill-switch — but
+    every origin DOES map it explicitly: REST/MCP origins answer 409 Conflict
+    (``pipeline_not_runnable_http``), and the background fire origins (SAQ
+    cron, polling, ongoing; the agent_signal child-run path) translate it into
+    a quiet typed skip carrying ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` so an
+    archived pipeline's active trigger is a per-tick skip rather than a
+    repeating job failure. Read failures are NEVER converted into this
+    error — a ``SQLAlchemyError`` read failure in the gate propagates
+    untouched (fail closed by raising the read error itself, never fabricate
+    a state and never treat an unreadable row as runnable).
+
+    FAR-1530 (per-pipeline Paused state) adds another ``state`` value at the
+    same gate; callers mapping this error respond with 409 Conflict and the
+    state in the detail for any state they do not special-case.
+
+    Lives in ``modulo.core.exceptions`` alongside ``TriggersPausedError``; the
+    ``db-does-not-import-core`` contract exempts the consuming CRUD module
+    (see ``.importlinter``).
+    """
+
+    def __init__(self, *, state: str, pipeline_id: uuid.UUID | None = None) -> None:
+        self.state = state
+        self.pipeline_id = pipeline_id
+        super().__init__(f"cannot create run: pipeline {pipeline_id} is {state}")

@@ -62,13 +62,24 @@ _NON_SETTINGS_ENV: dict[str, tuple[str, ...]] = {
 
 #: The values an operator supplies in ``deploy/compose/.env`` for the compose's
 #: ``${VAR:?...}`` references - i.e. the generated secrets, shaped exactly the
-#: way ``.env.prod.example`` tells an operator to generate them.
+#: way ``.env.prod.example`` tells an operator to generate them. Five names
+#: since FAR-1509: the DB password and the two fail-closed SAQ web-auth values
+#: joined SECRET_KEY / FERNET_KEY as no-default variables.
 _OPERATOR_VALUES: dict[str, str] = {
     "SECRET_KEY": "compose-contract-test-secret-key-0123456789abcdef0123456789abcdef",
     # URL-safe base64 of 32 bytes = what Fernet.generate_key() emits and what a
     # valid Fernet key must decode to (cryptography rejects anything else, e.g.
     # hex or a short key, on first credential use).
     "FERNET_KEY": base64.urlsafe_b64encode(b"compose-contract-fernet-key-32b!").decode(),
+    # The prod compose embeds this in DATABASE_URL / DATABASE_ADMIN_URL and
+    # passes it to the postgres service, so the same value must satisfy all
+    # three references - which is exactly what makes a silent `changeme`
+    # default dangerous: it reached every one of them (FAR-1509).
+    "MODULO_DB_PASSWORD": "compose-contract-test-db-password-0123456789abcdef",
+    # The SAQ system worker's fail-closed web auth; the username is not a
+    # secret, but compose requires both to be non-empty all the same.
+    "SAQ_AUTH_USERNAME": "admin",
+    "SAQ_AUTH_PASSWORD": "compose-contract-test-saq-auth-0123456789abcdef",
 }
 
 #: `${VAR}` / `${VAR:-default}` / `${VAR:?message}` - the only forms compose
@@ -81,6 +92,30 @@ def _load_compose() -> dict:
         pytest.skip(f"Compose file not present: {_PROD_COMPOSE.relative_to(_REPO_ROOT)}")
     with _PROD_COMPOSE.open(encoding="utf-8") as fh:
         return yaml.safe_load(fh)
+
+
+def _compose_interpolation_text() -> str:
+    """Every scalar VALUE in the compose, concatenated - comments excluded.
+
+    The ``${VAR:?...}`` / ``${VAR:-...}`` scans below look for actual
+    interpolations, and a raw-text scan also matches prose: the file's own
+    explanatory comments legitimately write ``${VAR:?...}`` when telling an
+    operator what the syntax means, which a comment-blind regex reads as a
+    required variable named ``VAR``. Parsing the YAML first drops the comments
+    (they are not part of the document) and leaves exactly the values compose
+    interpolates.
+    """
+
+    def walk(node: object) -> str:
+        if isinstance(node, dict):
+            return "".join(walk(value) for value in node.values())
+        if isinstance(node, list):
+            return "".join(walk(value) for value in node)
+        if isinstance(node, str):
+            return node
+        return ""
+
+    return walk(_load_compose())
 
 
 def _app_environment(compose: dict) -> dict[str, str]:
@@ -118,10 +153,10 @@ def _interpolate(value: str) -> str:
     """Resolve compose's ``${...}`` references against ``_OPERATOR_VALUES``.
 
     Compose reads ``deploy/compose/.env`` (the project directory) for the
-    operator's own values; the test supplies exactly the two generated secrets
-    the example file tells an operator to put there, so a required reference to
-    a name the example never documents fails loudly here instead of resolving
-    to an empty string.
+    operator's own values; the test supplies exactly the generated secrets
+    ``.env.prod.example`` tells an operator to put there, so a required
+    reference to a name the example never documents fails loudly here instead
+    of resolving to an empty string.
     """
 
     def _replace(match: re.Match[str]) -> str:
@@ -241,3 +276,57 @@ def test_env_example_documents_the_required_secrets():
             f".env.prod.example still documents {stale}, which Settings does not read - an operator "
             "setting it gets a crash-looping backend (FAR-1506)"
         )
+
+
+def test_no_compose_variable_has_a_silent_default():
+    """FAR-1509: a production secret may never fall back to a known string.
+
+    ``MODULO_DB_PASSWORD:-changeme`` used to interpolate the public string
+    `changeme` into ``POSTGRES_PASSWORD`` AND into both database URLs, so a
+    production stack whose operator never set the variable came up fully
+    working with a publicly-known password. Required variables must use
+    ``${VAR:?...}``, never ``${VAR:-...}``.
+    """
+    compose = _compose_interpolation_text()
+    defaulted = re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*):-", compose)
+    secrets = sorted(name for name in defaulted if name in _OPERATOR_VALUES)
+
+    assert not secrets, (
+        f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} interpolates required variable(s) {secrets} with a "
+        "`:-` default - compose would start a production stack without them, silently. Use "
+        "`${VAR:?...}` naming the variable and how to set it (see SECRET_KEY / FERNET_KEY)."
+    )
+    assert compose.count("${MODULO_DB_PASSWORD:?") >= 3, (
+        "MODULO_DB_PASSWORD must be required at every reference (POSTGRES_PASSWORD, DATABASE_URL, "
+        "DATABASE_ADMIN_URL) - one defaulting reference is enough to reintroduce the silent "
+        "`changeme` password"
+    )
+
+
+def test_required_compose_variables_are_documented_in_the_env_example():
+    """Every ``${VAR:?...}`` in the compose must be settable via the example.
+
+    Failing fast is only half the job: the file the quickstart tells an
+    operator to copy must name every variable compose refuses to start
+    without, or the first ``docker compose up`` errors over a name the
+    operator has never seen (FAR-1509, deployment.md quickstart).
+    """
+    compose = _compose_interpolation_text()
+    required = sorted(set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?", compose)))
+    assert required, "no `${VAR:?}` reference found - the fail-fast contract is gone"
+
+    if not _ENV_EXAMPLE.exists():
+        pytest.skip(".env.prod.example not present (running outside repo checkout)")
+    example = _ENV_EXAMPLE.read_text(encoding="utf-8")
+    active = {
+        line.split("=", 1)[0].strip()
+        for line in example.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+
+    undocumented = [name for name in required if name not in active]
+    assert not undocumented, (
+        f"the compose requires {undocumented}, but .env.prod.example does not set them - an operator "
+        "following the quickstart (cp .env.prod.example deploy/compose/.env) would hit a fail-fast "
+        "error naming a variable the example never mentions"
+    )

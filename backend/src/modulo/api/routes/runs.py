@@ -43,11 +43,12 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.routes.pipelines import _masked_snapshot_graph
 from modulo.api.team_scope import resolve_trigger_run_team_scope
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited
 from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
@@ -1111,6 +1112,22 @@ async def _enforce_trigger_rate_limit(
     return key
 
 
+def pipeline_not_runnable_http(exc: PipelineNotRunnableError) -> HTTPException:
+    """Map the ``create_run`` pipeline-state gate refusal to its HTTP response (FAR-1528).
+
+    Shared by every REST route that can reach ``create_run`` (manual trigger,
+    rerun, test trigger, webhook, replay, slack, variant runs, correction) so
+    the refusal reads identically everywhere instead of a route-local 500.
+    Always 409 Conflict: the pipeline exists but may not run (archived /
+    deleted today, Paused when FAR-1530 lands). A pipeline that does not
+    exist is refused upstream by the route's own 404 entry filter, never here.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+    )
+
+
 async def _create_manual_run(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -1175,6 +1192,7 @@ async def _create_manual_run(
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[Depends(audited("run_triggered", "run", principal_dep=get_current_tenant_user_or_api_key))],
 )
 async def trigger_run(
     req: TriggerRunRequest,
@@ -1245,6 +1263,16 @@ async def trigger_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline refused at the create_run
+        # choke point — 409 Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_run pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
 
     except WorkItemRefsRequiredError as exc:
         # FAR-794 slice 2a: the pipeline declares work_item_refs_required and
@@ -1363,6 +1391,7 @@ async def _create_rerun_run(session: AsyncSession, principal: TenantPrincipal, s
         501: {"description": "Not Implemented"},
         503: {"description": "Service Unavailable"},
     },
+    dependencies=[Depends(audited("run_rerun_triggered", "run", principal_dep=get_current_tenant_user_or_api_key))],
 )
 async def trigger_rerun(
     run_id: uuid.UUID,
@@ -1426,6 +1455,17 @@ async def trigger_rerun(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
+
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a rerun of a run whose pipeline has since been archived or
+        # soft-deleted is refused at the create_run choke point — 409
+        # Conflict, never a generic 500.
+        _log.warning(
+            "runs.trigger_rerun pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
 
     except WorkItemRefsRequiredError as exc:
         # FAR-794 slice 2a: the rerun copied the source payload server-side and
@@ -1641,7 +1681,11 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
         await finalize_cancelled_run(session, run_id=run_id, org_id=principal.organisation_id)
 
 
-@router.post("/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/{run_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(audited("run_cancelled", "run", principal_dep=get_current_tenant_user))],
+)
 async def cancel_run(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2461,7 +2505,10 @@ class ObserveNodeResponse(BaseModel):
     human_observed_by: str | None = None
 
 
-@router.post("/{run_id}/nodes/{node_id}/observe")
+@router.post(
+    "/{run_id}/nodes/{node_id}/observe",
+    dependencies=[Depends(audited("run_node_observed", "run_node", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_RUNS_OBSERVE_RUN_NODE)
 async def observe_run_node(
     run_id: uuid.UUID,
@@ -2582,6 +2629,7 @@ class NodeRecoverResponse(BaseModel):
 @router.post(
     "/{run_id}/nodes/{node_id}/recover",
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(audited("run_node_recovered", "run_node", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("runs.recover_run_node")
 async def recover_run_node(
@@ -2799,6 +2847,12 @@ class GuardrailOverrideResponse(BaseModel):
 @router.post(
     "/{run_id}/guardrail-override",
     status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("run_guardrail_overridden", "run", principal_dep=get_current_tenant_user, fail_closed=True),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
 )
 @handle_db_errors("runs.guardrail_override")
 async def guardrail_override_run(
@@ -3296,6 +3350,10 @@ def _render_prompt_response(
     )
 
 
+# FAR-1472 exemption (read-only POST): reconstructs a node's frozen prompt from
+# the run snapshot and returns it - no state is written, so chaining an audit
+# event per reveal would only add noise. Deliberately left in
+# audit_coverage_baseline.txt.
 @router.post("/{run_id}/nodes/{node_id}/prompt/reveal")
 @handle_db_errors(_CODE_RUNS_REVEAL_NODE_PROMPT)
 async def reveal_node_prompt(
@@ -3439,6 +3497,9 @@ class NodeOutputDiffResponse(BaseModel):
     has_diff: bool
 
 
+# FAR-1472 exemption (read-only POST): fetches two nodes' outputs, applies
+# masking and returns a line-level diff - it writes nothing. Deliberately left
+# in audit_coverage_baseline.txt.
 @router.post("/diff")
 @handle_db_errors("runs.diff_node_output")
 async def diff_node_output(

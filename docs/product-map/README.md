@@ -1043,6 +1043,40 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > shipped control from the element guard or Playwright's `getByTestId` again.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
+> **Closed this walk (2026-10-06):** closed two untracked sub-surfaces under
+> `feat-infra-health` (`infra/health-checks.md`). (1) The in-process
+> worker-liveness watchdog (ADR 021 worker-resilience,
+> `core/watchdog/worker_liveness.py`) had no product-map home at all — it
+> carries no `feat-*` reference and the tracker cited neither it nor its
+> `test_worker_liveness.py` suite; tracked with its sustained-edge alerting,
+> boot grace, multi-machine atomic claim (`SET NX` / `GETDEL`) and isolated
+> multi-channel fan-out (webhook / Teams / email), all default-off and
+> fail-open on Redis errors. (2) The FAR-1495 / FAR-1499 shared operator-alert
+> context (`core/alert_context.py`) — every readiness-cron and watchdog alert
+> now names the deployment environment and carries the operator's
+> `ALERT_CONTEXT` across email, webhook and Teams through one bounded, escaped
+> renderer — tracked and cited with `test_alert_context.py`. Also corrected the
+> stale `docs/configuration-reference.md` claim that readiness / worker-liveness
+> emails carry no environment line (they do since FAR-1495), documented the
+> previously-undocumented `ALERT_CONTEXT` setting there and in
+> `.env.prod.example`. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-06):** tracked two untracked, recently-shipped
+> sub-surfaces. `feat-mcp` (`configure/mcp.md`): the FAR-1502 MCP/run_ws error
+> vocabulary — `_tool_error(msg, *, code)` requiring a keyword-only branchable
+> code, the shared `_tool_exception_error` classifier (insufficient_scope /
+> validation_failed / session_contract_error / conflict / migration_required /
+> database_unavailable with server_error as the only reserved catch-all), and
+> the run WebSocket control-frame alignment to the same codes via the shared
+> `db_error_handling` session-contract payload — with code/unit-test citations
+> and the manifest `feat-mcp` registry line. `feat-audit`
+> (`audit/audit-trail.md`): the FAR-1516 actor-less `audited_system` variant
+> for pre-auth and webhook routes (no fabricated actor; `SYSTEM_ACTOR` marker +
+> `actor_source` admission basis; `bind_audit_org` tenant publication with the
+> `SYSTEM_ORG_ID` sentinel fallback; `bind_audit_actor_source` promotion) with
+> code/unit-test citations and the manifest `feat-audit` registry line.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

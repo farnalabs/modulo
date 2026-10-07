@@ -36,11 +36,13 @@ from modulo.api.dependencies import (
     get_system_db_session,
     system_engine_is_fallback,
 )
+from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PipelineNotRunnableError, TriggersPausedError
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
@@ -129,9 +131,27 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
         await _ingest_slack_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
+# FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
+# is OPTIONAL - the event authenticates with Slack's X-Slack-Signature, not a
+# Modulo credential, so there is no guaranteed actor for
+# audited(principal_dep=...) to resolve. Actor-less core variant needed to
+# cover Slack event ingestion.
 @router.post(
     "/{trigger_id}/slack",
     status_code=status.HTTP_202_ACCEPTED,
+    # FAR-1516: Slack ingress has no tenant principal — the actor-less variant
+    # records a SYSTEM actor; the handler publishes the trigger's org only
+    # AFTER the Slack signature verifies, so a forged delivery is never
+    # recorded as signature_verified.
+    dependencies=[
+        Depends(
+            audited_system(
+                "slack_event_received",
+                "trigger",
+                actor_source="signature_verified",
+            )
+        )
+    ],
     responses={
         400: {"description": "Bad request"},
         401: {"description": "Unauthorized"},
@@ -216,6 +236,9 @@ async def receive_slack_event(
             verify_slack_timestamp(slack_timestamp)
             if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
                 raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
+            # FAR-1516: signature verified — publish the trigger's org so the
+            # audit event records signature_verified provenance for a real tenant.
+            bind_audit_org(request, org_id)
 
             # URL verification handshake — echo the challenge back.
             if raw_payload.get("type") == "url_verification":
@@ -321,6 +344,18 @@ async def receive_slack_event(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
         ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the app-mention delivery is refused at the create_run
+        # choke point when the target pipeline is archived/soft-deleted — 409
+        # Conflict, never a generic 500. Caught outside the
+        # begin-block so the snapshot rolls back with the refusal.
+        _log.info(
+            "slack.receive_event.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
         # advisory lock. The loser is NOT executed and NOT auto-queued: the

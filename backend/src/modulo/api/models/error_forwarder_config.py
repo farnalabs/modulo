@@ -19,6 +19,7 @@ _SENSITIVE_KEYS = frozenset(
 
 
 def _mask_sensitive(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Return a copy of *config* with known secret values replaced by a mask."""
     if not config:
         return {}
     return {k: ("••••••" if k in _SENSITIVE_KEYS else v) for k, v in config.items()}
@@ -38,6 +39,7 @@ class ForwarderConfigResponse(BaseModel):
 
     @classmethod
     def from_orm_model(cls, obj: ErrorForwarderConfig) -> ForwarderConfigResponse:
+        """Build a response from a DB row, masking secret config values."""
         return cls(
             forwarder_type=obj.forwarder_type,
             enabled=obj.enabled,

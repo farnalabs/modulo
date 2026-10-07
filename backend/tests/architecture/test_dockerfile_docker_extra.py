@@ -4,8 +4,10 @@ The backend image is not just the API: docker-compose's ``saq-system``
 service and the Helm chart's ``saqSystem`` deployment both run
 ``python -m modulo.core.saq_worker`` from the SAME image built by
 ``backend/Dockerfile`` (Fly runs the system worker in-process from
-``backend/Dockerfile.fly``). Always-registered system crons import
-``aiodocker`` lazily — notably:
+``backend/Dockerfile.fly``), and - since FAR-1509 - the all-in-one image
+(``deploy/docker/Dockerfile.all-in-one``) runs it too, under supervisord
+in ``deploy/compose/docker-compose.prod.yml``. Always-registered system
+crons import ``aiodocker`` lazily — notably:
 
 - ``runner_workspace_reconcile`` (``core/bundled_runner/runner_reconciler.py``)
 - ``runner_health_probe`` (``core/bundled_runner/health_probe.py``)
@@ -26,11 +28,14 @@ PRODUCT = Path(__file__).resolve().parent.parent.parent.parent
 PYPROJECT = PRODUCT / "backend" / "pyproject.toml"
 
 # Images whose process tree runs the SAQ system worker (owner of the
-# runner_workspace_reconcile cron). The all-in-one image is excluded: its
-# supervisord runs only uvicorn + nginx, never the system worker.
+# runner_workspace_reconcile cron). The all-in-one image joined this list in
+# FAR-1509: before that change its supervisord ran only uvicorn + nginx, so it
+# was correctly excluded - and correctly a non-worker image. It now runs
+# `python -m modulo.core.saq_worker` alongside the API.
 SAQ_SYSTEM_WORKER_DOCKERFILES = (
     PRODUCT / "backend" / "Dockerfile",
     PRODUCT / "backend" / "Dockerfile.fly",
+    PRODUCT / "deploy" / "docker" / "Dockerfile.all-in-one",
 )
 
 _UV_SYNC = re.compile(r"uv sync\b[^\n]*")

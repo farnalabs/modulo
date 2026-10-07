@@ -21,7 +21,7 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_permission, require_system_permission
 from modulo.api.models.error import (
     ErrorEventInput,
     ErrorEventListResponse,
@@ -34,7 +34,9 @@ from modulo.api.models.error import (
     SchedulerStarvationResponse,
     SessionKeyResponse,
 )
+from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.core.audit_coverage import audited, audited_system, bind_audit_org
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 from modulo.db.crud.error_tracking import (
     count_error_events_by_group,
@@ -47,11 +49,12 @@ from modulo.db.crud.error_tracking import (
 )
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_group import ErrorGroup
-from modulo.db.models.organisation import ORPHAN_ORG_ID as _ORPHAN_ORG_ID
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_ERRORS_RESOLVE = "errors.resolve"
+_CODE_ERRORS_RESOLVE_INSTANCE = "errors.resolve_instance"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 
@@ -75,11 +78,10 @@ _key_store: SessionKeyStore | None = None
 _public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
 _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
 
-# Orphan org ID for unauthenticated public ingest events — the shared
-# sentinel constant lives on the Organisation model so the ingest path, the
-# admin listing filter and migration tooling cannot drift apart. Re-exported
-# here under the same name for backward compatibility.
-ORPHAN_ORG_ID = _ORPHAN_ORG_ID
+# System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
+# modulo.db.models.organisation at module top — the single canonical
+# definition shared with the admin listing filter and migration tooling
+# (FAR-1505). Do NOT re-type the nil-UUID literal or re-alias it here.
 
 # Breadcrumbs are persisted inside ``context_json`` under this key (PRD §8.25
 # lists breadcrumbs as part of the event context payload).
@@ -137,7 +139,22 @@ def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
 # only the read/dashboard/management routes are team-gated.
 
 
-@router.post("/session-key", response_model=SessionKeyResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/session-key",
+    response_model=SessionKeyResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited(
+                "error_session_key_created",
+                "error_session_key",
+                principal_dep=get_current_tenant_user,
+                fail_closed=True,
+            ),
+            scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
+        )
+    ],
+)
 @handle_db_errors("errors.create_session_key")
 async def create_session_key(
     principal: TenantPrincipal = require_permission(_CODE_ERRORS_RESOLVE),
@@ -153,7 +170,16 @@ async def create_session_key(
     return {"key": key, "expires_in_seconds": 3600}
 
 
-@router.post("/ingest", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+# FAR-1538 ingest-volume decision: ACCEPT the audit event, do not baseline-exempt.
+# One event per REQUEST: the browser batches on a 5s flush timer AND is
+# rate-limited to 10 requests/minute per authenticated session, so a quiet client
+# writes nothing. Exempting would drop coverage and need a baseline edit.
+@router.post(
+    "/ingest",
+    response_model=ErrorIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited("error_events_ingested", "error_event", principal_dep=get_current_tenant_user))],
+)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS)
 async def ingest_errors(
     request: Request,
@@ -237,7 +263,15 @@ async def ingest_errors(
     return {"results": [ErrorGroupResult(**r) for r in results]}
 
 
-@router.post("/ingest/public", response_model=ErrorIngestResponse, status_code=status.HTTP_201_CREATED)
+# FAR-1516: unauthenticated public ingress — no principal exists, so the
+# actor-less variant records a SYSTEM actor under the system sentinel org (the
+# same sentinel this route RLS-pins its event writes to: there is no tenant).
+@router.post(
+    "/ingest/public",
+    response_model=ErrorIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(audited_system("error_ingest_public", "error_event", actor_source="unauthenticated"))],
+)
 @handle_db_errors(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
 async def ingest_errors_public(
     request: Request,
@@ -252,10 +286,14 @@ async def ingest_errors_public(
     * Max request body size 10,000 bytes.
     * Events are stored in a dedicated orphan-org partition: the ingest
       transaction is RLS-pinned to a nil-UUID organisation row (seeded by
-      migration 0171) that tenant sessions can never see (org-only RLS
+      migration 0172) that tenant sessions can never see (org-only RLS
       policies), so unattributed frontend errors never leak across tenancy.
     * A future cleanup job will prune events older than 48 hours (TTL).
     """
+    # FAR-1516: this endpoint has no tenant by design — attribute the audit
+    # event to the system sentinel org so the attempt (413, rate-limit, cap
+    # and all) is still recorded.
+    bind_audit_org(request, SYSTEM_ORG_ID)
     client_ip = request.client.host if request.client else "unknown"
 
     # Body size check
@@ -322,12 +360,13 @@ async def ingest_errors_public(
             # ``ingest_batch`` swallows per-event errors (logged server-side),
             # which previously yielded a false-success 201 with an empty
             # results list and nothing persisted. Pin the transaction to the
-            # orphan org (a real organisations row seeded by migration 0171,
-            # satisfying the error_events FK) so the writes pass WITH CHECK
-            # and the dedup/group lookups partition to the orphan rows
-            # exactly as their explicit ``organisation_id`` predicates intend.
-            await set_rls_org(session, ORPHAN_ORG_ID)
-            results = await _service.ingest_batch(session, ORPHAN_ORG_ID, events_data)
+            # system sentinel org (SYSTEM_ORG_ID — a real organisations row
+            # seeded by migration 0172, satisfying the error_events FK) so the
+            # writes pass WITH CHECK and the dedup/group lookups partition to
+            # the sentinel rows exactly as their explicit ``organisation_id``
+            # predicates intend.
+            await set_rls_org(session, SYSTEM_ORG_ID)
+            results = await _service.ingest_batch(session, SYSTEM_ORG_ID, events_data)
     except ProgrammingError as exc:
         _log.exception(_CODE_ERRORS_INGEST_ERRORS_PUBLIC)
         raise HTTPException(
@@ -417,6 +456,122 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
     return result.scalar_one_or_none()
 
 
+# ---------------------------------------------------------------------------
+# Shared read bodies (FAR-1547).
+#
+# Each helper owns ONE transaction: it pins the RLS org context and runs every
+# read inside ``session.begin()`` (an error-tracking read outside the pin would
+# run with no org context and silently see zero rows). The caller decides WHICH
+# org the transaction is pinned to — the tenant route passes
+# ``principal.organisation_id``, the instance-scope route passes the
+# SYSTEM_ORG_ID sentinel — so the sentinel-partition read cannot drift from the
+# tenant read, and RLS policies pass on both. The DB-error mapping stays with
+# the route (``handle_db_errors`` / the route-local arms).
+# ---------------------------------------------------------------------------
+
+
+async def _list_error_groups_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    status_filter: str | None,
+    level: str | None,
+    source: str | None,
+    environment: str | None,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        groups = await get_error_groups(
+            session=session,
+            org_id=org_id,
+            status=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        total = await count_error_groups(
+            session=session,
+            org_id=org_id,
+            status=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+        )
+
+        sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
+        if sample_ids:
+            result = await session.execute(
+                select(ErrorEvent).where(
+                    ErrorEvent.organisation_id == org_id,
+                    ErrorEvent.id.in_(sample_ids),
+                )
+            )
+            sample_events = {event.id: event for event in result.scalars().all()}
+        else:
+            sample_events = {}
+
+        items = []
+        for g in groups:
+            sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
+            items.append(_serialize_error_group_summary(g, sample))
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+async def _error_group_detail_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    error_id: uuid.UUID,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+        sample = await _fetch_sample_event(session, org_id, group)
+    return {
+        "id": str(group.id),
+        "fingerprint": group.fingerprint,
+        "status": group.status,
+        "level_peak": group.level_peak,
+        "count": group.count,
+        "first_seen": group.first_seen.isoformat() if group.first_seen else "",
+        "last_seen": group.last_seen.isoformat() if group.last_seen else "",
+        "sample_event": _serialize_error_event_detail(sample) if sample else None,
+        "assigned_to": str(group.assigned_to) if group.assigned_to else None,
+    }
+
+
+async def _error_group_events_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    error_id: uuid.UUID,
+    *,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+
+        events = await get_error_events_by_group(
+            session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
+        )
+        total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+
+    items = [_serialize_error_event_detail(e) for e in events]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("", response_model=ErrorListResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.list_error_groups")
 async def list_error_groups(
@@ -435,45 +590,17 @@ async def list_error_groups(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            groups = await get_error_groups(
-                session=session,
-                org_id=org_id,
-                status=status_filter,
-                level=level,
-                source=source,
-                environment=environment,
-                search=search,
-                limit=limit,
-                offset=offset,
-            )
-            total = await count_error_groups(
-                session=session,
-                org_id=org_id,
-                status=status_filter,
-                level=level,
-                source=source,
-                environment=environment,
-                search=search,
-            )
-
-            sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-            if sample_ids:
-                result = await session.execute(
-                    select(ErrorEvent).where(
-                        ErrorEvent.organisation_id == org_id,
-                        ErrorEvent.id.in_(sample_ids),
-                    )
-                )
-                sample_events = {event.id: event for event in result.scalars().all()}
-            else:
-                sample_events = {}
-
-            items = []
-            for g in groups:
-                sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
-                items.append(_serialize_error_group_summary(g, sample))
+        return await _list_error_groups_body(
+            session,
+            org_id,
+            status_filter=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
     except ProgrammingError as exc:
         _log.exception("errors.list_error_groups")
         raise HTTPException(
@@ -494,8 +621,6 @@ async def list_error_groups(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
-
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get(
@@ -557,6 +682,99 @@ async def get_scheduler_starvation(
     return {"items": items, "total": len(items), "threshold_minutes": _STARVATION_THRESHOLD_MINUTES}
 
 
+# ---------------------------------------------------------------------------
+# Instance-scope read — the SYSTEM_ORG_ID sentinel partition (FAR-1547)
+#
+# The public error-ingest path and (per FAR-1484) org-less backend ERRORs
+# write instance-level / unattributed rows into the SYSTEM_ORG_ID partition,
+# which every tenant-scoped route is structurally unable to see (they all
+# pin ``principal.organisation_id``). These read routes expose that partition
+# to a SYSTEM ADMIN ONLY: the gate is the route-level
+# ``require_system_permission("errors.resolve_instance")`` dependency, which
+# is evaluated BEFORE the handler, so a tenant principal — with or without a
+# forged parameter — is refused 403 rather than silently served its own
+# rows. Each handler pins the transaction to the sentinel org (the helper
+# owns ``set_rls_org`` inside ``session.begin()``) so the org-only RLS
+# policies pass on the read.
+#
+# Deliberately READ-ONLY: no instance-scope PATCH. Mutating another tenant's
+# (or the instance's) error groups is out of scope for this view.
+#
+# The ``/instance`` list route is declared BEFORE the ``/{error_id}`` routes:
+# it is a single path segment and would otherwise be swallowed by the UUID
+# path converter (422), exactly like ``/scheduler-starvation`` above.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/instance",
+    response_model=ErrorListResponse,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.list_instance_error_groups")
+async def list_instance_error_groups(
+    status_filter: str | None = Query(None, alias="status"),
+    level: str | None = Query(None),
+    source: str | None = Query(None),
+    environment: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """List the instance-scope (unattributed) error groups — system admin only."""
+    return await _list_error_groups_body(
+        session,
+        SYSTEM_ORG_ID,
+        status_filter=status_filter,
+        level=level,
+        source=source,
+        environment=environment,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/instance/{error_id}",
+    response_model=ErrorGroupDetail,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.get_instance_error_group_detail")
+async def get_instance_error_group_detail(
+    error_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Read one instance-scope error group — system admin only."""
+    return await _error_group_detail_body(session, SYSTEM_ORG_ID, error_id)
+
+
+@router.get(
+    "/instance/{error_id}/events",
+    response_model=ErrorEventListResponse,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.list_instance_error_events")
+async def list_instance_error_events(
+    error_id: uuid.UUID,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """List the raw events of one instance-scope error group — system admin only."""
+    return await _error_group_events_body(session, SYSTEM_ORG_ID, error_id, limit=limit, offset=offset)
+
+
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.get_error_group_detail")
 async def get_error_group_detail(
@@ -569,12 +787,7 @@ async def get_error_group_detail(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-            sample = await _fetch_sample_event(session, org_id, group)
+        return await _error_group_detail_body(session, org_id, error_id)
     except HTTPException:
         raise
     except ProgrammingError as exc:
@@ -598,20 +811,15 @@ async def get_error_group_detail(
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
 
-    return {
-        "id": str(group.id),
-        "fingerprint": group.fingerprint,
-        "status": group.status,
-        "level_peak": group.level_peak,
-        "count": group.count,
-        "first_seen": group.first_seen.isoformat() if group.first_seen else "",
-        "last_seen": group.last_seen.isoformat() if group.last_seen else "",
-        "sample_event": _serialize_error_event_detail(sample) if sample else None,
-        "assigned_to": str(group.assigned_to) if group.assigned_to else None,
-    }
 
-
-@router.patch("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
+@router.patch(
+    "/{error_id}",
+    response_model=ErrorGroupDetail,
+    dependencies=[
+        Depends(audited("error_group_updated", "error_group", principal_dep=get_current_tenant_user)),
+        require_feature("error_tracking"),
+    ],
+)
 @handle_db_errors("errors.patch_error_group")
 async def patch_error_group(
     error_id: uuid.UUID,
@@ -692,16 +900,7 @@ async def list_error_events(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-
-            events = await get_error_events_by_group(
-                session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
-            )
-            total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+        return await _error_group_events_body(session, org_id, error_id, limit=limit, offset=offset)
     except HTTPException:
         raise
     except ProgrammingError as exc:
@@ -724,6 +923,3 @@ async def list_error_events(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
-
-    items = [_serialize_error_event_detail(e) for e in events]
-    return {"items": items, "total": total, "limit": limit, "offset": offset}

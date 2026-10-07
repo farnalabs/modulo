@@ -382,6 +382,14 @@ _CITATION_FIELDS = ("code", "unit-tests", "bdd")
 
 _BDD_ROOT = REPO_ROOT / "backend" / "tests" / "bdd"
 
+#: Root under which any module may register ``scenarios(...)``. Step modules are
+#: not confined to ``tests/bdd/``: a module that needs real-Postgres fixtures
+#: lives in ``tests/integration/`` and loads a feature from ``tests/bdd/features/``
+#: by relative path (e.g. ``tests/integration/test_hitl_reject_bdd.py``). Scanning
+#: only ``_BDD_ROOT`` would miss those registrations and falsely report the
+#: feature as orphaned.
+_TESTS_ROOT = REPO_ROOT / "backend" / "tests"
+
 
 def _resolve_dir_arg(text: str, module: Path, name: str) -> Path | None:
     """Resolve a variable that a step module passes to ``scenarios()`` as a directory.
@@ -425,14 +433,17 @@ def _registered_bdd_features() -> set[Path]:
 
     Both forms are detected: string-literal paths resolve relative to the module
     that declares them, and directory arguments register every ``.feature`` file
-    found beneath the resolved directory. This keeps the coverage assertion in
+    found beneath the resolved directory. Every test module under ``backend/tests/``
+    is scanned - not just ``tests/bdd/`` - because a step module may live under
+    ``tests/integration/`` when its scenarios need the real-Postgres fixtures
+    there. This keeps the coverage assertion in
     ``test_bdd_citations_are_registered_coverage`` free of false positives for
-    directory-loaded features.
+    directory-loaded features and for step modules hosted outside ``tests/bdd/``.
     """
     registered: set[Path] = set()
-    if not _BDD_ROOT.is_dir():
+    if not _TESTS_ROOT.is_dir():
         return registered
-    for module in _BDD_ROOT.rglob("*.py"):
+    for module in _TESTS_ROOT.rglob("*.py"):
         try:
             text = module.read_text(encoding="utf-8")
         except OSError:

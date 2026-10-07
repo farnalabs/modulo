@@ -3,10 +3,12 @@
 Targets error paths and uncovered branches of the MCP tool surface that the
 existing mcp test files do not reach: per-tool exception envelopes (repo
 convention: ProgrammingError -> migration_required, SQLAlchemyError ->
-db-unavailable, IntegrityError -> conflict, Exception -> internal_error),
-validation branches, live re-validation helpers, run-scoped key scope
-resolution, trigger update helpers, and the MCP resources. Unit tier: no DB,
-no Docker, no live model backends — all persistence is mocked.
+db-unavailable, IntegrityError -> conflict, Exception -> classified by
+``_tool_exception_error`` with ``server_error`` reserved for the
+truly-unexpected — FAR-1502), validation branches, live re-validation helpers,
+run-scoped key scope resolution, trigger update helpers, and the MCP
+resources. Unit tier: no DB, no Docker, no live model backends — all
+persistence is mocked.
 """
 
 import asyncio
@@ -126,7 +128,7 @@ from modulo.core.analytics.builder import (
 )
 from modulo.core.analytics.service import AnalyticsParams
 from modulo.core.eval_engine.policy_gate import PolicyGateBindingViolationError
-from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
 from modulo.db.capacity import StorageExhaustedError
 
@@ -1132,7 +1134,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.pipeline.list_pipelines", side_effect=RuntimeError("boom")),
         ):
             result = await list_pipelines_tool()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_pipeline_internal_error(self) -> None:
         with (
@@ -1140,7 +1142,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.pipeline.create_pipeline", side_effect=RuntimeError("boom")),
         ):
             result = await create_pipeline(name="p")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_runs_error_envelopes(self) -> None:
         with patch.object(ms, "_list_runs_impl", side_effect=MCPAuthorizationError("no")):
@@ -1148,7 +1150,17 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         with patch.object(ms, "_list_runs_impl", side_effect=ProgrammingError("s", {}, Exception())):
             assert (await list_runs())["error"] == "migration_required"
         with patch.object(ms, "_list_runs_impl", side_effect=RuntimeError("boom")):
-            assert (await list_runs())["error"] == "internal_error"
+            assert (await list_runs())["error"] == "server_error"
+
+    async def test_list_runs_malformed_pipeline_filter_returns_invalid_id(self) -> None:
+        """FAR-1540: a malformed ``pipeline_id`` filter is a client error the
+        caller can branch on — pre-fix it raised ``ValueError`` out of
+        ``uuid.UUID(...)``, reached the wrapper's generic ``except Exception``
+        arm and came back as ``internal_error``."""
+        with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)):
+            result = await list_runs(pipeline_id="not-a-uuid")
+        assert result["error"] == "invalid_id"
+        assert result["field"] == "pipeline_id"
 
     async def test_get_pipeline_graph_defensive_invalid_id(self) -> None:
         with (
@@ -1164,7 +1176,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.pipeline.get_pipeline_graph", side_effect=RuntimeError("boom")),
         ):
             result = await get_pipeline_graph_tool(pipeline_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_copy_library_primitive_internal_error(self) -> None:
         with (
@@ -1172,7 +1184,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "library_copy_to_adapt", side_effect=RuntimeError("boom")),
         ):
             result = await copy_library_primitive(primitive_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_search_library_migration_required(self) -> None:
         with (
@@ -1196,7 +1208,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
         ):
             result = await get_integration_status()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_get_org_config_internal_error(self) -> None:
         with (
@@ -1204,7 +1216,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.system_config.list_config", side_effect=RuntimeError("boom")),
         ):
             result = await get_org_config()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_get_org_config_success_with_sections(self) -> None:
         long_value = {"blob": "v" * 300}
@@ -1227,7 +1239,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.core.feature_flags.resolve_plan_context", side_effect=RuntimeError("boom")),
         ):
             result = await get_available_features()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_schema_database_unavailable_and_internal(self) -> None:
         with (
@@ -1241,7 +1253,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "db_create_schema", side_effect=RuntimeError("boom")),
         ):
             result = await create_schema(name="s")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_schemas_internal_error(self) -> None:
         with (
@@ -1249,7 +1261,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "db_list_schemas", side_effect=RuntimeError("boom")),
         ):
             result = await list_schemas()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_infer_schema_error_envelopes(self) -> None:
         settings = MagicMock(modulo_dev_mode=True)
@@ -1268,7 +1280,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.model_backend.list_model_backends", side_effect=RuntimeError("boom")),
         ):
             result = await infer_schema(input_sample={"a": 1})
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_validate_payload_error_envelopes(self) -> None:
         with (
@@ -1282,7 +1294,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "get_schema", side_effect=RuntimeError("boom")),
         ):
             result = await validate_payload(schema_id=str(uuid.uuid4()), payload={})
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_housekeeping_internal_error(self) -> None:
         with (
@@ -1290,7 +1302,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.core.housekeeping.scan_all", side_effect=RuntimeError("boom")),
         ):
             result = await list_housekeeping()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_perform_housekeeping_deletes_and_reports_unknown(self) -> None:
         from modulo.db.models.secret import Secret
@@ -1322,7 +1334,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "_session", side_effect=RuntimeError("boom")),
         ):
             result = await perform_housekeeping(items=[{"entity_type": "secret", "id": "a"}])
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     def test_get_doc_index_builds_and_caches(self) -> None:
         ms._doc_index = None
@@ -1367,22 +1379,22 @@ class TestSimpleToolErrorHandlers(_AuthContext):
         assert result["error"] == "migration_required"
         with patch.object(ms, "_get_run_output_impl", side_effect=RuntimeError("boom")):
             result = await get_run_output(run_id=str(uuid.uuid4()), node_id="n")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_get_run_evals_internal_error(self) -> None:
         with patch.object(ms, "_get_run_evals_impl", side_effect=RuntimeError("boom")):
             result = await get_run_evals(run_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_cancel_run_internal_error(self) -> None:
         with patch.object(ms, "_cancel_run_impl", side_effect=RuntimeError("boom")):
             result = await cancel_run(run_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_pending_hitl_internal_error(self) -> None:
         with patch.object(ms, "_list_pending_hitl_impl", side_effect=RuntimeError("boom")):
             result = await ms.list_pending_hitl()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_eval_definitions_internal_error(self) -> None:
         with (
@@ -1393,7 +1405,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             ),
         ):
             result = await list_eval_definitions()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_model_backend_error_envelopes(self) -> None:
         with (
@@ -1407,7 +1419,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "db_create_model_backend", side_effect=RuntimeError("boom")),
         ):
             result = await create_model_backend(name="n", display_name="d", provider="openai", model_id="m")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_model_backend_stub_provider_rejected_with_validation_error(self) -> None:
         """The stub provider is a test double: 500 DB-constraint errors replaced by a 4xx-style envelope."""
@@ -1460,7 +1472,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.pipeline.soft_delete_pipeline", side_effect=RuntimeError("boom")),
         ):
             result = await delete_pipeline(pipeline_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_delete_connector_internal_error(self) -> None:
         with (
@@ -1468,7 +1480,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.db.crud.connector_instance.delete_connector_instance", side_effect=RuntimeError("boom")),
         ):
             result = await delete_connector(connector_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_secret_error_envelopes(self) -> None:
         with (
@@ -1486,7 +1498,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
         ):
             result = await create_secret(key="k", value="v")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_secrets_internal_error(self) -> None:
         session = _mock_session()
@@ -1496,7 +1508,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "_session", return_value=_make_session_context(session)),
         ):
             result = await list_secrets()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_delete_secret_error_envelopes(self) -> None:
         with (
@@ -1514,7 +1526,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch("modulo.core.secrets_backend.create_secrets_backend", side_effect=RuntimeError("boom")),
         ):
             result = await delete_secret(key="k")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_create_connector_internal_error(self) -> None:
         with (
@@ -1522,7 +1534,7 @@ class TestSimpleToolErrorHandlers(_AuthContext):
             patch.object(ms, "get_settings", side_effect=RuntimeError("boom")),
         ):
             result = await create_connector(name="c", connector_type_id="t", credentials="x")
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -1552,8 +1564,8 @@ class TestApiKeyToolGaps(_AuthContext):
         [
             (IntegrityError("s", {}, Exception()), "conflict"),
             (ProgrammingError("s", {}, Exception()), "migration_required"),
-            (SQLAlchemyError("down"), "internal_error"),
-            (RuntimeError("boom"), "internal_error"),
+            (SQLAlchemyError("down"), "database_unavailable"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_create_api_key_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -1571,8 +1583,8 @@ class TestApiKeyToolGaps(_AuthContext):
         ("exc", "expected"),
         [
             (ProgrammingError("s", {}, Exception()), "migration_required"),
-            (SQLAlchemyError("down"), "internal_error"),
-            (RuntimeError("boom"), "internal_error"),
+            (SQLAlchemyError("down"), "database_unavailable"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_list_api_keys_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -1588,8 +1600,8 @@ class TestApiKeyToolGaps(_AuthContext):
         [
             (IntegrityError("s", {}, Exception()), "conflict"),
             (ProgrammingError("s", {}, Exception()), "migration_required"),
-            (SQLAlchemyError("down"), "internal_error"),
-            (RuntimeError("boom"), "internal_error"),
+            (SQLAlchemyError("down"), "database_unavailable"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_revoke_api_key_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -1672,7 +1684,7 @@ class TestUpdatePipelineGraphImpl(_AuthContext):
         assert result["error"] == "migration_required"
         with patch.object(ms, "_update_pipeline_graph_impl", side_effect=RuntimeError("boom")):
             result = await update_pipeline_graph(pipeline_id="p", nodes=[], edges=[])
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_hitl_denial_audit_without_user_context(self) -> None:
         ms._ctx_user_id.set(None)
@@ -1790,7 +1802,7 @@ class TestBindConnectorToNode(_AuthContext):
                 connector_type="t",
                 connector_instance_id=str(uuid.uuid4()),
             )
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -1870,6 +1882,31 @@ class TestTriggerPipelinePaths(_AuthContext):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
         assert result["error"] == "org_not_found"
 
+    async def test_pipeline_archived_error_mapping(self) -> None:
+        """FAR-1528: a disabled pipeline returns a structured, branchable
+        envelope (never the generic internal_error)."""
+        pipeline_id = str(uuid.uuid4())
+        with patch.object(
+            ms,
+            "_trigger_pipeline_impl",
+            side_effect=PipelineNotRunnableError(pipeline_id=uuid.UUID(pipeline_id), state="archived"),
+        ):
+            result = await ms.trigger_pipeline(pipeline_id=pipeline_id)
+        assert result["error"] == "pipeline_not_runnable"
+        assert result["state"] == "archived"
+        assert result["pipeline_id"] == pipeline_id
+
+    async def test_pipeline_soft_deleted_error_mapping(self) -> None:
+        pipeline_id = str(uuid.uuid4())
+        with patch.object(
+            ms,
+            "_trigger_pipeline_impl",
+            side_effect=PipelineNotRunnableError(pipeline_id=uuid.UUID(pipeline_id), state="deleted"),
+        ):
+            result = await ms.trigger_pipeline(pipeline_id=pipeline_id)
+        assert result["error"] == "pipeline_not_runnable"
+        assert result["state"] == "deleted"
+
     async def test_snapshot_lock_busy_mapping(self) -> None:
         with patch.object(ms, "_trigger_pipeline_impl", side_effect=SnapshotLockNotAvailableError("busy")):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
@@ -1888,7 +1925,7 @@ class TestTriggerPipelinePaths(_AuthContext):
     async def test_internal_error_mapping(self) -> None:
         with patch.object(ms, "_trigger_pipeline_impl", side_effect=RuntimeError("boom")):
             result = await ms.trigger_pipeline(pipeline_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
 
 # ---------------------------------------------------------------------------
@@ -1974,7 +2011,7 @@ class TestEvalDefinitionTools(_AdminContext):
             (IntegrityError("s", {}, Exception()), "conflict"),
             (ProgrammingError("s", {}, Exception()), "migration_required"),
             (SQLAlchemyError("down"), "database_unavailable"),
-            (RuntimeError("boom"), "internal_error"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_create_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -2167,7 +2204,7 @@ class TestEvalDefinitionTools(_AdminContext):
             (IntegrityError("s", {}, Exception()), "conflict"),
             (ProgrammingError("s", {}, Exception()), "migration_required"),
             (SQLAlchemyError("down"), "database_unavailable"),
-            (RuntimeError("boom"), "internal_error"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_update_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -2215,7 +2252,7 @@ class TestEvalDefinitionTools(_AdminContext):
             (IntegrityError("s", {}, Exception()), "conflict"),
             (ProgrammingError("s", {}, Exception()), "migration_required"),
             (SQLAlchemyError("down"), "database_unavailable"),
-            (RuntimeError("boom"), "internal_error"),
+            (RuntimeError("boom"), "server_error"),
         ],
     )
     async def test_delete_error_envelopes(self, exc: Exception, expected: str) -> None:
@@ -2320,7 +2357,7 @@ class TestTriggerToolGaps(_AuthContext):
         assert result["error"] == "migration_required"
         with patch.object(ms, "_create_trigger_impl", side_effect=RuntimeError("boom")):
             result = await create_trigger(pipeline_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_get_trigger_defensive_invalid_id(self) -> None:
         with (
@@ -2355,7 +2392,7 @@ class TestTriggerToolGaps(_AuthContext):
             patch.object(ms, "_load_trigger_row", side_effect=RuntimeError("boom")),
         ):
             result = await get_trigger(trigger_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_update_trigger_degenerate_validation(self) -> None:
         with (
@@ -2363,7 +2400,7 @@ class TestTriggerToolGaps(_AuthContext):
             patch.object(ms, "_validate_trigger_update_inputs", return_value=(None, None)),
         ):
             result = await update_trigger(trigger_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_update_trigger_error_envelopes(self) -> None:
         with (
@@ -2377,7 +2414,7 @@ class TestTriggerToolGaps(_AuthContext):
             patch.object(ms, "_load_trigger_for_update", side_effect=RuntimeError("boom")),
         ):
             result = await update_trigger(trigger_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_update_trigger_reenable_full_flow(self) -> None:
         trigger = MagicMock()
@@ -2468,7 +2505,7 @@ class TestTriggerToolGaps(_AuthContext):
             patch.object(ms, "_session", return_value=_make_session_context(session2)),
         ):
             result = await delete_trigger(trigger_id=str(uuid.uuid4()))
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_set_org_triggers_paused_audit_failure_swallowed(self) -> None:
         org = MagicMock()
@@ -2507,7 +2544,7 @@ class TestTriggerToolGaps(_AuthContext):
             patch("modulo.db.crud.organisation.get_organisation", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await set_org_triggers_paused(paused=True)
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_list_trigger_events_error_envelopes(self) -> None:
         with patch.object(ms, "_list_trigger_events_impl", side_effect=ProgrammingError("s", {}, Exception())):
@@ -2515,7 +2552,7 @@ class TestTriggerToolGaps(_AuthContext):
         assert result["error"] == "migration_required"
         with patch.object(ms, "_list_trigger_events_impl", side_effect=RuntimeError("boom")):
             result = await list_trigger_events()
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
 
     async def test_paginate_trigger_events_with_cursor(self) -> None:
         paginator_cls = MagicMock()

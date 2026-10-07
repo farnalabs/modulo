@@ -303,33 +303,47 @@ async def revoke_run_api_key_sweep(
             async with session_factory() as session, session.begin():
                 result = await session.execute(select(Organisation.id))
                 org_ids = list(result.scalars())
+        # FAR-1501: lazy import — this sweep is reached from
+        # ``_run_reconcile_sweeps`` (the org-less post-loop phase of
+        # ``dispatcher_reconcile``), so the per-org loop must bind its own org
+        # for the duration of the tick.
+        from modulo.core.cron_helpers import _bound_org
+
         for org_id in org_ids:
             if time.monotonic() > deadline:
                 break
-            try:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    key_rows = (
-                        await session.execute(
-                            select(OrgApiKey.id, OrgApiKey.run_id)
-                            .join(Run, Run.id == OrgApiKey.run_id)
-                            .where(
-                                OrgApiKey.organisation_id == org_id,
-                                OrgApiKey.run_id.is_not(None),
-                                OrgApiKey.revoked_at.is_(None),
-                                Run.status.in_(sorted(TERMINAL_STATUSES)),
+            # FAR-1501: bind THIS org for the whole per-org tick so
+            # ``api_key.revoke_run_sweep_org_failed`` is attributed by
+            # ErrorTrackingLogHandler instead of dropped as no_org_context.
+            # ``_bound_org`` resets in finally, so the org self-selection
+            # (org-less) and the next org's tick never inherit the binding;
+            # the job-level ``api_key.revoke_run_sweep_failed`` below runs
+            # OUTSIDE this loop and keeps the announced drop.
+            async with _bound_org(org_id):
+                try:
+                    async with session_factory() as session, session.begin():
+                        await set_rls_org(session, org_id)
+                        key_rows = (
+                            await session.execute(
+                                select(OrgApiKey.id, OrgApiKey.run_id)
+                                .join(Run, Run.id == OrgApiKey.run_id)
+                                .where(
+                                    OrgApiKey.organisation_id == org_id,
+                                    OrgApiKey.run_id.is_not(None),
+                                    OrgApiKey.revoked_at.is_(None),
+                                    Run.status.in_(sorted(TERMINAL_STATUSES)),
+                                )
+                                .limit(batch_size)
                             )
-                            .limit(batch_size)
-                        )
-                    ).all()
-                    for _key_id, key_run_id in key_rows:
-                        scanned += 1
-                        revoked += await revoke_run_api_key(session, run_id=key_run_id, org_id=org_id)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                errors += 1
-                _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
+                        ).all()
+                        for _key_id, key_run_id in key_rows:
+                            scanned += 1
+                            revoked += await revoke_run_api_key(session, run_id=key_run_id, org_id=org_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    errors += 1
+                    _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
     except asyncio.CancelledError:
         raise
     except Exception:
