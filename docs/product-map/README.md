@@ -1094,6 +1094,23 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > soft-deleted pipeline at `create_run` with a typed `PipelineNotRunnableError`
 > mapped to 409 Conflict across every REST entry point through the shared
 > `pipeline_not_runnable_http` helper. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-07, follow-up):** reconciled `feat-infra-health`
+> (`infra/health-checks.md`) with the FAR-1571 fix (PR #1381), which shipped after
+> the uptime-monitor removal and left the tracker claiming the advisory /
+> dead-sweep class reached no operator. `REAL_FAILURE_ADVISORY_CHECKS`
+> (`core/health_alerts.py`) now classifies the real-breakage advisory sweeps
+> (`dispatcher_reconcile` at its `degraded` tier, `stale_run_recovery`,
+> `slot_reconciliation`, `hitl_park_sweep`, `runner_workspace_reconcile`,
+> `runner_marker_sweep`, `runner_health_probe`) and
+> `HealthObservation.observed_state` treats their sustained failure as unhealthy
+> even while the readiness aggregate stays `ok`, so the existing
+> `health_readiness_alert` cron pages the incident/recovery pair it already sent
+> for a gating failure (hysteresis unchanged; benign `event_loop_lag` /
+> `break_glass` / not-measured `db_hygiene` advisories stay quiet, and
+> `reported_status` never renders the misleading aggregate `ok`). Removed the
+> stale Known Gap and restored `status: covered`. `_ORPHANED_BDD_FEATURES` stays
+> empty.
 
 > **Closed this walk (2026-10-07, follow-up):** closed the `feat-pipelines`
 > untracked sub-surface for FAR-1530 — the **per-pipeline Paused execution

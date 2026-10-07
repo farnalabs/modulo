@@ -31,6 +31,9 @@ unit-tests:
   - backend/tests/unit/error_tracking/test_alert_dispatcher.py
   - backend/tests/unit/error_tracking/test_forwarders.py
   - backend/tests/unit/error_tracking/test_saq_hooks.py
+  - backend/tests/unit/error_tracking/test_error_instance_scope.py
+  - frontend/src/__tests__/AdminErrorsView.spec.ts
+  - frontend/src/__tests__/AdminErrorDetailView.spec.ts
 bdd:
   - backend/tests/bdd/features/observability/metrics.feature
   - backend/tests/bdd/features/observability/error_forwarders.feature
@@ -68,6 +71,26 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
 - [x] Error dashboard: list groups, filter by status, view group detail, resolve a
       group, and 404 on a missing group (`error_dashboard.feature`,
       `routes/errors.py` + `db/crud/error_tracking.py`)
+- [x] Two-partition read boundary (FAR-1547): error rows live in two partitions
+      that never leak into each other. Every tenant read route is pinned to
+      `principal.organisation_id`, so instance-level / unattributed rows (the
+      public frontend ingest path and org-less backend ERRORs) written into the
+      `SYSTEM_ORG_ID` sentinel partition were write-only. Three system-admin
+      read routes now expose that partition — `GET /api/v1/errors/instance`,
+      `/instance/{error_id}` and `/instance/{error_id}/events` — each gated by
+      the system permission `errors.resolve_instance` as a route-level
+      dependency (a tenant principal is refused 403 before any query runs, with
+      or without a forged scope parameter) and each RLS-pinning its transaction
+      to the sentinel org so the org-only policies pass. The instance read is
+      deliberately read-only: there is no instance-scope PATCH. On the frontend,
+      `/admin/errors` switches scope through a toggle rendered only for a
+      system admin (`is_system_admin` claim) and a scope-aware detail view that
+      renders the sentinel group read-only; a forged `?scope=instance` falls
+      back to the tenant scope client-side (`routes/errors.py`,
+      `AdminErrorsView.vue` / `AdminErrorDetailView.vue`,
+      `unit/error_tracking/test_error_instance_scope.py`,
+      `__tests__/AdminErrorsView.spec.ts` / `AdminErrorDetailView.spec.ts`;
+      also recorded in the manifest `feat-observability` registry)
 - [x] Alerting + notification rules: a critical error fires an alert, a cooldown
       prevents alert storms, a condition window counts only recent events (with a
       lifetime-count fallback at window 0), and notification rules are
@@ -106,6 +129,19 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
+- 2026-10-07: **FAR-1556 follow-up to FAR-1547 (PR #1353)** — registered the
+  instance-errors surface the feature PR's allowlist excluded: the three
+  system-admin sentinel-partition read routes (`GET /api/v1/errors/instance`,
+  `/instance/{error_id}`, `/instance/{error_id}/events` in
+  `backend/src/modulo/api/routes/errors.py`, already cited above), the
+  `backend/tests/unit/error_tracking/test_error_instance_scope.py` suite and the
+  two frontend scope-toggle spec files, plus a ticked behaviour bullet for the
+  two-partition boundary. Behaviour and `status: covered` re-verified against
+  `routes/errors.py`, the test suite and the manifest `feat-observability`
+  registry (which already carries the matching FAR-1547 behaviour line and the
+  `admin-errors-scope*` / `admin-error-detail-instance-readonly` testids) — no
+  drift found, so the manifest needed no change.
+
 - 2026-09-22: **product-map walk** — closed the "No BDD for OTel *trace* span
   capture" gap. Re-anchored `otel_traces.feature` so its four scenarios drive
   the REAL `LangGraphOtelBridge` seams network-free and DB-free (the

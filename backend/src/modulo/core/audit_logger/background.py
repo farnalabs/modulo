@@ -30,6 +30,11 @@ expects. Background sweeps collect their ids inside a transaction that may
 later roll back, so an id alone is not evidence the change happened — the
 status check is the phantom-event guard (the same rule
 ``cron_helpers._record_fact_for_terminalized_run`` applies to facts).
+:func:`record_suite_run_audit` applies the same guard to a single SuiteRun
+(FAR-1561): it re-selects the row and only appends when its live ``state`` is
+one the caller's event claims (a created event expects ``pending``, the start
+event expects the ``pending -> running`` edge to have landed, the terminal
+event expects a terminal state).
 """
 
 from __future__ import annotations
@@ -45,19 +50,43 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
 from modulo.db.models.run import Run
 from modulo.db.rls import set_rls_org
 
 _log = logging.getLogger(__name__)
 
 __all__ = [
+    "SUITE_RUN_NON_PENDING_STATES",
+    "SUITE_RUN_PENDING_STATES",
+    "SUITE_RUN_TERMINAL_STATES",
     "append_background_audit_event",
     "record_run_state_change_audits",
+    "record_suite_run_audit",
 ]
 
 #: ``error_detail`` is a free-text column; cap it so one sweep's detail cannot
 #: bloat a chained audit row.
 _MAX_DETAIL_CHARS = 500
+
+#: The freshly-created SuiteRun state the ``suite_run_created`` event must
+#: re-select (the create event is written after the creation transaction
+#: committed, and before the execution job is enqueued).
+SUITE_RUN_PENDING_STATES: frozenset[str] = frozenset({SuiteRunState.PENDING.value})
+
+#: SuiteRun states in which the ``pending -> running`` transition has landed —
+#: every state except ``pending``. A run still ``pending`` when the execution
+#: job's audit runs means that job's transaction rolled back, so the start did
+#: NOT land: the phantom-event guard for ``suite_run_started``.
+SUITE_RUN_NON_PENDING_STATES: frozenset[str] = frozenset(
+    state.value for state in SuiteRunState if state is not SuiteRunState.PENDING
+)
+
+#: Terminal SuiteRun states (``completed``/``partial``/``failed``/``cancelled``)
+#: — the guard for the terminal event.
+SUITE_RUN_TERMINAL_STATES: frozenset[str] = frozenset(
+    state.value for state in SuiteRunState if state not in (SuiteRunState.PENDING, SuiteRunState.RUNNING)
+)
 
 
 def _system_payload(
@@ -272,3 +301,128 @@ async def _record_one_org(
                 continue
             recorded += 1
     return recorded
+
+
+async def record_suite_run_audit(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    suite_run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    event_type: str,
+    expected_states: Collection[str],
+    actor_source: str,
+    log_key: str,
+    summary_prefix: str,
+    payload_json: Mapping[str, Any] | None = None,
+) -> bool:
+    """Record one SYSTEM-actor event for a SuiteRun lifecycle change (FAR-1561).
+
+    A SuiteRun is an org-owned row created, started and terminalised by
+    background jobs (``fire_suite_run_trigger`` / ``execute_suite_run``) with no
+    HTTP principal in scope, so each change lands on the org's audit chain with
+    a SYSTEM actor. The caller writes post-commit, so the row is RE-SELECTED
+    here and the event is only appended when the live ``state`` is one the
+    caller's event claims — the phantom-event guard: an id collected inside a
+    transaction that later rolled back is not evidence the change happened.
+
+    Args:
+        factory: Session factory for the fresh audit session (never a caller's
+            session — the append must outlive the transaction it records).
+        suite_run_id: The SuiteRun to re-select.
+        org_id: Owning organisation (bound as the RLS org context).
+        event_type: Chained-audit event type (``suite_run_created`` /
+            ``suite_run_started`` / ``suite_run_completed``).
+        expected_states: Live states the change must have actually landed on;
+            a run re-selected in any other state is skipped with a log.
+        actor_source: Which background process caused the change
+            (``fire_suite_run_trigger``, ``execute_suite_run``).
+        log_key: Log key for skip/append failures.
+        summary_prefix: Human-readable prefix for the event's ``summary``
+            payload, e.g. ``"SuiteRun created by"`` — composed as
+            ``f"{summary_prefix} {actor_source}"``.
+        payload_json: Extra payload keys merged over the row-derived fields.
+
+    Returns:
+        ``True`` when the event was recorded, ``False`` when it was skipped
+        (missing/cross-org row or unexpected state) or the append failed. Both
+        skips and failures are logged; only ``CancelledError`` propagates.
+    """
+    if not event_type.strip():
+        raise ValueError("record_suite_run_audit requires a non-empty event_type")
+    if not actor_source.strip():
+        raise ValueError("record_suite_run_audit requires a non-empty actor_source")
+    if not expected_states:
+        raise ValueError("record_suite_run_audit requires at least one expected state")
+
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            run = (
+                await session.execute(
+                    select(SuiteRun).where(
+                        SuiteRun.id == suite_run_id,
+                        SuiteRun.organisation_id == org_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                _log.warning(
+                    "audit.background.suite_run_skipped",
+                    extra={
+                        "org_id": str(org_id),
+                        "suite_run_id": str(suite_run_id),
+                        "event_type": event_type,
+                        "reason": "missing_or_cross_org",
+                    },
+                )
+                return False
+            if run.state not in expected_states:
+                _log.warning(
+                    "audit.background.suite_run_skipped",
+                    extra={
+                        "org_id": str(org_id),
+                        "suite_run_id": str(suite_run_id),
+                        "event_type": event_type,
+                        "reason": "unexpected_state",
+                        "suite_run_state": run.state,
+                        "expected_states": sorted(expected_states),
+                    },
+                )
+                return False
+            payload: dict[str, Any] = {
+                "summary": f"{summary_prefix} {actor_source}",
+                "suite_run_id": str(run.id),
+                "suite_id": str(run.suite_id),
+                "dataset_id": str(run.dataset_id),
+                "state": run.state,
+                "total_cases": run.total_cases,
+                "passed_cases": run.passed_cases,
+                "failed_cases": run.failed_cases,
+                "excluded_case_count": run.excluded_case_count,
+                "error_detail": (run.error_detail or "")[:_MAX_DETAIL_CHARS] or None,
+            }
+            if payload_json:
+                payload.update(payload_json)
+            await append_audit_event(
+                session,
+                org_id=org_id,
+                event_type=event_type,
+                actor_user_id=None,
+                resource_type="suite_run",
+                resource_id=run.id,
+                payload_json=_system_payload(payload, actor_source=actor_source),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            log_key,
+            extra={
+                "org_id": str(org_id),
+                "suite_run_id": str(suite_run_id),
+                "event_type": event_type,
+            },
+            exc_info=True,
+        )
+        return False
+    return True

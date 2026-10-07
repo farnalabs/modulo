@@ -38,6 +38,7 @@ from modulo.core.eval_engine.execute_suite_run import (
     suite_run_daily_spend_used_for_trigger,
 )
 from modulo.db.models import Base
+from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 from modulo.db.models.eval_dataset import EvalCase, EvalDataset
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
@@ -59,6 +60,10 @@ def _tables() -> list[Any]:
         ModelBackend.__table__,
         Run.__table__,
         TriggerEvent.__table__,
+        # FAR-1561: the SAQ job appends lifecycle events, so the audit chain the
+        # SuiteRun lifecycle writes into must exist in these fixtures too.
+        AuditEvent.__table__,
+        AuditChainHead.__table__,
     ]
 
 
@@ -601,6 +606,19 @@ async def test_saq_job_persists_orchestration_failure_across_rollback(monkeypatc
         assert fresh.state == SuiteRunState.FAILED.value
         assert "no active eval definitions" in (fresh.error_detail or "")
 
+    # FAR-1561: the re-persisted ``failed`` state is recorded post-commit too —
+    # start (the pending -> running promotion landed) + terminal, both with the
+    # honest SYSTEM actor.
+    from sqlalchemy import select
+
+    async with factory() as s:
+        events = list((await s.execute(select(AuditEvent))).scalars())
+    by_type = {event.event_type: event.payload_json for event in events}
+    assert set(by_type) == {"suite_run_started", "suite_run_completed"}
+    assert by_type["suite_run_completed"]["state"] == SuiteRunState.FAILED.value
+    assert by_type["suite_run_started"]["actor_source"] == "execute_suite_run"
+    assert all(event.account_id is None for event in events)
+
     await engine.dispose()
 
 
@@ -675,5 +693,65 @@ async def test_saq_job_persists_raw_db_error_as_failed(monkeypatch) -> None:
         assert fresh is not None
         assert fresh.state == SuiteRunState.FAILED.value
         assert "501" in (fresh.error_detail or "")
+
+    await engine.dispose()
+
+
+async def test_saq_job_records_lifecycle_audit_events(monkeypatch) -> None:
+    """FAR-1561: a successful execution writes real ``suite_run_started`` +
+    ``suite_run_completed`` events onto the org's audit chain.
+
+    Composed-system proof: the SAQ wrapper's post-commit append, the shared
+    background helper's re-select guard and ``append_audit_event``'s chained
+    write all have to work together for these rows to exist — the wiring unit
+    tests patch each layer in isolation.
+    """
+    from sqlalchemy import select
+
+    import modulo.core.saq_worker as sw
+
+    org = await _org()
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all, tables=_tables())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as s, s.begin():
+        suite, dataset, _, backend = await seed_suite(s, org)
+        await seed_cases(s, org, dataset, [{"category": "billing"}])
+        run = await build_suite_run(
+            s,
+            org_id=org,
+            suite_id=suite.id,
+            dataset_id=dataset.id,
+            model_backend_id=backend.id,
+        )
+        rid, oid = str(run.id), str(org)
+
+    monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
+
+    stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+
+    async with factory() as s:
+        events = list((await s.execute(select(AuditEvent).where(AuditEvent.organisation_id == org))).scalars())
+    by_type = {event.event_type: event.payload_json for event in events}
+    assert set(by_type) == {"suite_run_started", "suite_run_completed"}
+
+    started = by_type["suite_run_started"]
+    assert started["actor"] == "system"
+    assert started["actor_source"] == "execute_suite_run"
+    assert started["summary"] == "SuiteRun started by execute_suite_run"
+    assert started["suite_run_id"] == rid
+
+    completed = by_type["suite_run_completed"]
+    assert completed["actor"] == "system"
+    assert completed["state"] == SuiteRunState.COMPLETED.value
+    assert completed["suite_run_id"] == rid
+    assert completed["passed_cases"] == 1
+
+    # No fabricated actor: SYSTEM events carry actor_user_id=NULL.
+    assert all(event.account_id is None for event in events)
 
     await engine.dispose()

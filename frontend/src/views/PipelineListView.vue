@@ -198,7 +198,22 @@
                     @drop="onPipelineDrop(row.data as PipelineItem, $event)"
                   >
                     <td class="px-4 py-3" :style="{ paddingLeft: `${12 + (row.depth || 0) * 16}px` }">
-                      <span class="font-medium text-foreground block truncate">{{ (row.data as PipelineItem).name }}</span>
+                      <span class="flex min-w-0 items-center gap-1.5">
+                        <span class="font-medium text-foreground truncate">{{ (row.data as PipelineItem).name }}</span>
+                        <!-- FAR-1530: Paused is a first-class visible state (unlike archived,
+                             which hides the row) — badge it so a paused pipeline is never
+                             mistaken for a running one. Mirrors the editor's Archived badge.
+                             Help is reason-aware (a tripped breaker names the breaker) and is
+                             mirrored into an sr-only node: `title` alone is hover-only, so it
+                             reaches neither screen readers nor touch. Text colour is
+                             --warning-text (WCAG AA), never text-warning. -->
+                        <span
+                          v-if="isPaused(row.data as PipelineItem)"
+                          class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
+                          data-testid="pipeline-list-paused-badge"
+                          :title="pausedBadgeHelp(row.data as PipelineItem)"
+                        >{{ $t('views.PipelineListView.paused') }}<span class="sr-only"> {{ pausedBadgeHelp(row.data as PipelineItem) }}</span></span>
+                      </span>
                     </td>
                     <td class="px-4 py-3">
                       <span v-if="(row.data as PipelineItem).description" class="text-muted-foreground truncate block max-w-xs">{{ (row.data as PipelineItem).description }}</span>
@@ -378,7 +393,17 @@
            `this.hide()` against an already-hidden overlay, so nothing was ever
            archived/renamed in previous staging runs. The key forces a fresh Menu
            (and handler) per open. See `frontend/tests/e2e/setup/row-menu.ts`. -->
-      <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup />
+      <!-- Custom item template: PrimeVue's default menuitem renders no `title`,
+           so a DISABLED item (Resume while the spend circuit breaker is tripped)
+           would give the user no reason for the block. Binding `item.tooltip` to
+           the native title keeps the hover explanation on the disabled row. -->
+      <Menu ref="actionMenuRef" :key="actionMenuKey" :model="actionMenuItems" popup>
+        <template #item="{ item, label, props }">
+          <a v-bind="props.action" :title="item.tooltip">
+            <span v-bind="props.label">{{ label }}</span>
+          </a>
+        </template>
+      </Menu>
   </div>
 </template>
 
@@ -412,6 +437,12 @@ interface PipelineItem {
   created_at: string
   updated_at: string
   archived_at: string | null
+  // FAR-1530: unified per-pipeline Paused execution state. `run_enabled=false`
+  // means present + visible but non-executing; the reason names the first
+  // cause ('operator' | 'circuit_breaker').
+  run_enabled?: boolean
+  run_disabled_reason?: string | null
+  run_disabled_at?: string | null
   folder_id?: string | null
   trigger_type?: string
   node_count?: number
@@ -804,9 +835,20 @@ const actionMenuPipeline = ref<PipelineItem | null>(null)
 // routes is fine — this is only about not reusing a Menu instance whose overlay
 // state machine has already been through a close.
 const actionMenuKey = ref(0)
-const actionMenuItems = computed(() => {
+// `tooltip` is a PrimeVue MenuItem passthrough field consumed by the Menu's
+// `#item` template below (MenuItem allows arbitrary keys); it renders as the
+// native `title` so a disabled item still explains WHY it cannot be clicked.
+interface ActionMenuItem {
+  label: string
+  command?: () => void
+  disabled?: boolean
+  tooltip?: string
+  class?: string
+}
+const actionMenuItems = computed<ActionMenuItem[]>(() => {
   const p = actionMenuPipeline.value
   if (!p) return []
+  const circuitBreakerBlocked = p.run_enabled === false && p.run_disabled_reason === 'circuit_breaker'
   return [
     { label: t('views.PipelineListView.runs'), command: () => router.push({ name: 'runs-list', query: { pipeline_id: p.id } }) },
     {
@@ -817,6 +859,16 @@ const actionMenuItems = computed(() => {
     ...(!p.archived_at
       ? [{ label: t('views.PipelineListView.archive'), command: () => handleArchive(p) }]
       : [{ label: t('views.PipelineListView.unarchive'), command: () => handleUnarchive(p) }]),
+    ...(p.run_enabled === false
+      ? [{
+          label: t('views.PipelineListView.resume'),
+          command: () => handleResume(p),
+          // A tripped spend circuit breaker can only be reset by an org admin,
+          // so a resume would be refused 409 — block it and say why.
+          disabled: circuitBreakerBlocked,
+          ...(circuitBreakerBlocked ? { tooltip: t('views.PipelineListView.resume_blocked_circuit_breaker') } : {}),
+        }]
+      : [{ label: t('views.PipelineListView.pause'), command: () => handlePause(p) }]),
     { label: t('views.PipelineListView.move_to_folder'), command: () => openMoveToFolder(p) },
     ...(planStore.featureEnabled('pipeline_delete')
       ? [{ label: t('common.delete'), class: 'text-destructive', command: () => openDelete(p) }]
@@ -905,6 +957,39 @@ async function handleArchive(p: PipelineItem) {
 async function handleUnarchive(p: PipelineItem) {
   try {
     await postUntyped(`/api/v1/pipelines/${p.id}/unarchive`)
+    await loadPipelines()
+  } catch (e) {
+    error.value = formatApiError(e)
+  }
+}
+
+// FAR-1530: Paused = present and visible, but no runs (manual + triggers
+// blocked) — distinct from `archived_at`, which hides the row entirely.
+function isPaused(p: PipelineItem): boolean {
+  return p.run_enabled === false
+}
+
+// FAR-1530: the badge help must be reason-aware. A generic "paused until
+// resumed" is wrong for a breaker trip - that pause cannot be cleared by the
+// reader, only by an org admin resetting the breaker - so name it.
+function pausedBadgeHelp(p: PipelineItem): string {
+  return p.run_disabled_reason === 'circuit_breaker'
+    ? t('views.PipelineListView.paused_badge_help_circuit_breaker')
+    : t('views.PipelineListView.paused_badge_help')
+}
+
+async function handlePause(p: PipelineItem) {
+  try {
+    await postUntyped(`/api/v1/pipelines/${p.id}/pause`)
+    await loadPipelines()
+  } catch (e) {
+    error.value = formatApiError(e)
+  }
+}
+
+async function handleResume(p: PipelineItem) {
+  try {
+    await postUntyped(`/api/v1/pipelines/${p.id}/resume`)
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
