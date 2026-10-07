@@ -94,7 +94,7 @@ Common issues, their causes, and resolutions.
 - **Claim tokens**: Single-use with a 15-minute TTL. Expired tokens cannot be refreshed – re-claim the gate.
 - **WebSocket ring buffer**: Limited to 100 events per run. Older events are not available for reconnect replay.
 - **Postgres required for production**: SQLite is development-only. Postgres is the only supported production database. See [`docs/system-requirements.md`](./system-requirements.md).
-- **File upload limits**: Library `.zip` imports cap at 50 MB; guardrail payloads at 1 MB. Webhook deliveries are not capped at 10 MB.
+- **Upload limits**: Library `.zip` imports cap at 50 MB (`library._MAX_UPLOAD_SIZE`), and `_UploadLimitMiddleware` rejects any request body over 50 MiB with a 413 across the whole API. The 10 MiB figure in this repo is the REST connector's default *response* read cap (`connectors/rest/__init__.py`), not a request or webhook limit.
 - **Concurrent runs**: Capacity blocks (`max_concurrent_runs` and org caps) demote excess runs to `pending` and retry them in the background; they are not rejected with a 429 at POST time.
 - **API key scoping**: Keys are scoped to `operator` and `runner` roles only. Admin operations require JWT auth. Each key also carries a caller scope (`org` or `user`, immutable post-mint): a `user`-scoped key acts as its creator and is denied org-only MCP tools, while org-wide/run-scoped keys are denied caller-scoped (`.self`) tools that write the caller's own user-level state. A caller-scoped tool denial surfaces on the MCP surface as the in-band tool result `{"error": "insufficient_scope", "detail": ...}` (HTTP 200, not an HTTP 403): the credential is the wrong scope, not that the tool is broken (ADR 030).
 
@@ -254,7 +254,7 @@ observation that proved it, and what changed.
 ### 1. `connector_health_checks` failed every connector with an RLS-context error
 
 **Cause.** The sweep runs on the cross-org system session factory
-(`modulo_system`, BYPASSRLS), which deliberately never calls `set_rls_org` — so
+(`modulo_system`, BYPASSRLS), which deliberately never calls `set_rls_org` – so
 the session carries no `app.organisation_id`. `FernetSecretsBackend.get_secret`
 refuses to read the `secrets` table without one and raised
 `RuntimeError: FernetSecretsBackend: RLS organisation context not set` for
@@ -270,7 +270,7 @@ and a regression test run without the fix reproduced the exact
 
 **Fix.** `_check_instance` now binds the instance's own org on the check's
 transaction (`set_rls_org(session, ci.organisation_id)`) before building the
-secrets backend — the secret read is per-org scoped, never unscoped — and a
+secrets backend – the secret read is per-org scoped, never unscoped – and a
 skipped instance records the hub's own skip reason instead of a bare
 `ConnectorNotFoundError`. Tenancy is tightened, not weakened: the GUC is
 transaction-local and the BYPASSRLS role's row visibility is unchanged.
@@ -280,7 +280,7 @@ transaction-local and the BYPASSRLS role's row visibility is unchanged.
 **Cause.** A model backend with **no stored credentials at all** (no `secrets`
 row **and** no `credentials_ciphertext`). `ModelBackendHub.initialise` re-raised
 the secrets backend's bare `KeyError('<backend-uuid>')`, which was logged with a
-full traceback on every run's hub init — the cadence of prod runs. In production
+full traceback on every run's hub init – the cadence of prod runs. In production
 this was backend `4a170ce2-4598-4c38-b927-f9b491275ad6`
 (`openrouter-free-models-router`), which the integration status reports as
 `Has Credentials: no`.
@@ -294,7 +294,7 @@ its credentials are absent. Without the fix a unit test reproduces the exact
 existing credential-failure handler still catches it) whose message names the
 backend, the provider and the remedy; the initialisation-failure log carries
 full detail once per backend per process and a compact repeat line after that.
-Still loud on every occurrence — never a traceback flood, never silent.
+Still loud on every occurrence – never a traceback flood, never silent.
 
 ### 3. `SandboxNodeFailedError: agent produced no output for 600s`
 
@@ -304,7 +304,7 @@ stream, and the observed node's own `agent_command` (the dogfood *Improve
 Security* pipeline) pipes each `opencode run` attempt through
 `... | tee /tmp/oc.log | tail -80`. Non-`-f` `tail` emits nothing until its
 stdin reaches EOF, so a single attempt is silent on the stream for its whole
-duration — and the command allows `timeout 700` per attempt against a 600s
+duration – and the command allows `timeout 700` per attempt against a 600s
 no-output stall window. An attempt longer than 600s therefore trips the stall
 by construction; retries burn, then the run terminal-fails. E2B provisioning is
 not implicated.
@@ -316,8 +316,8 @@ output for 600s`; the pipeline graph shows the `timeout 700 ... | tail -80`
 command and the 600s default stall window.
 
 **Fix (code).** The retries-exhausted `SandboxNodeFailedError` now writes its
-own canonical code — `sandbox.no_output_json`, the code `LEGACY_ALIASES`
-already maps the exception class name to — instead of the generic
+own canonical code – `sandbox.no_output_json`, the code `LEGACY_ALIASES`
+already maps the exception class name to – instead of the generic
 `node_cancelled` whose guidance reads "Node was cancelled."; the two surfaces
 no longer disagree about the same failure. Hang deaths keep `node_cancelled`:
 the `"likely hung"` marker is what excludes them from `failure` retries
@@ -326,5 +326,5 @@ the `"likely hung"` marker is what excludes them from `failure` retries
 **Fix (external, not in this repo).** The *Improve Security* agent command
 needs either live-streaming output (drop the `| tail -80` / add `stdbuf -oL`),
 a per-attempt budget below the stall window, or a raised
-`stall_timeout_override` on the node — that pipeline config lives on the
+`stall_timeout_override` on the node – that pipeline config lives on the
 deployment, not in product code.
