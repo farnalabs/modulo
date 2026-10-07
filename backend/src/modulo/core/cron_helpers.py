@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -99,6 +99,10 @@ FIRE_JOB_TTL = 300
 # Advisory-lock SQL and paused-trigger skip log message (S1192). Pure aliases.
 _SQL_TRY_ADVISORY_LOCK = "SELECT pg_try_advisory_xact_lock(:key1, :key2)"
 _LOG_TRIGGERS_PAUSED_SKIP = "triggers.paused.skip trigger=%s org=%s"
+# FAR-1528 companion: the pipeline-state gate refusal (archived / soft-deleted
+# pipeline) seen by a per-item fire job. Same quiet, typed-skip treatment as
+# the pause race backstop above — logged, never raised out of the job.
+_LOG_PIPELINE_NOT_RUNNABLE_SKIP = "pipeline.not_runnable.skip trigger=%s org=%s state=%s"
 
 # Missed-fire catch-up (2026-08-10 incident). The fire_due_triggers tick
 # advances next_fire_at ATOMICALLY (claiming the epoch) and THEN enqueues the
@@ -1474,6 +1478,14 @@ async def fire_cron_trigger(
             # The savepoint above rolled back the auto-created snapshot with it.
             _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+        except PipelineNotRunnableError as exc:
+            # FAR-1528: the pipeline was archived/soft-deleted. Mirrors the
+            # pause skip exactly — quiet typed skip, NO TriggerEvent, NO
+            # last_fired_at write — so an archived pipeline's still-active
+            # trigger is a per-tick skip instead of a job that fails on every
+            # tick (next_fire_at was already advanced at enqueue time).
+            _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+            return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
         event = await _log_event(
             session,
@@ -1650,6 +1662,12 @@ async def _run_poll_fire(
     except TriggersPausedError:
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline — same quiet typed skip as
+        # the pause race above (no TriggerEvent, no last_fired_at write), so
+        # the refusal never escapes as an SAQ job failure every poll cycle.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
     event = await _log_poll_event(
         session,
@@ -2202,6 +2220,15 @@ async def _create_ongoing_runs(
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         if outcome is not None:
             outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the pipeline was archived/soft-deleted mid-loop — stop
+        # creating, exactly like the pause backstop above. Runs already created
+        # stay (dispatched below); the refusal lands in the outcome envelope as
+        # a quiet typed skip (no TriggerEvent, no last_fired_at write) so the
+        # top-up job returns instead of failing on every tick.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON})
 
     if created:
         await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now))

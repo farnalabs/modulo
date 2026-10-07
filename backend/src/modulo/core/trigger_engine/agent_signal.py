@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.trigger_engine import is_guardrail_blocked_run, record_dependent_suppressed
 from modulo.db.crud.run import create_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -229,6 +229,27 @@ async def _process_trigger(
             }
         ]
 
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the child run's target pipeline is archived/soft-deleted.
+        # Quiet typed skip — exactly how the SAQ cron/polling/ongoing fire jobs
+        # treat the refusal — with NO TriggerEvent (there is no
+        # validation_result value for a lifecycle refusal and adding one would
+        # widen the vocabulary + migration), so it is neither a
+        # ``validation_failed`` event nor an unhandled job failure.
+        _log.info(
+            "agent_signal.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            str_trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        return [
+            {
+                "trigger_id": str_trigger_id,
+                "status": "skipped",
+                "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON,
+            }
+        ]
+
     if create_skip is not None:
         return [create_skip]
     if child_run is None:
@@ -345,9 +366,10 @@ async def _create_child_run_in_savepoint(
     Returns ``(child_run, None)`` on success, or ``(child_run_placeholder, skip_result)``
     when the insert fails (constraint violation, deadlock, etc.). The failure is
     reported as a ``validation_failed`` event and the skip result is a
-    ready-to-append entry for the caller's ``results`` list. ``TriggersPausedError``
-    and ``asyncio.CancelledError`` propagate so the caller's pause gate can handle
-    them.
+    ready-to-append entry for the caller's ``results`` list. ``TriggersPausedError``,
+    ``PipelineNotRunnableError`` (FAR-1528 — a lifecycle REFUSAL, never a
+    validation failure) and ``asyncio.CancelledError`` propagate so the
+    caller's pause / pipeline-state gates can handle them.
     """
     str_trigger_id = str(trigger.id)
     try:
@@ -362,7 +384,7 @@ async def _create_child_run_in_savepoint(
                 input_payload=input_payload,
                 parent_run_id=source_run_id,
             )
-    except (TriggersPausedError, asyncio.CancelledError):
+    except (TriggersPausedError, PipelineNotRunnableError, asyncio.CancelledError):
         raise
     except Exception as exc:
         _log.exception("Failed to create child run for agent signal trigger %s", str_trigger_id)

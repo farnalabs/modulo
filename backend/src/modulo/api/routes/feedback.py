@@ -27,11 +27,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.api.constants import MSG_DATABASE_ERROR_OCCURRED_PLEASE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.eval_engine import EvalDefinition as EvalDefinitionDTO
+from modulo.core.exceptions import PipelineNotRunnableError
 from modulo.core.feedback_manager import (
     ConcurrentModificationError,
     FeedbackManager,
@@ -194,6 +196,16 @@ async def create_feedback(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the auto-spawned correction run goes through the create_run
+        # choke point — an archived/soft-deleted pipeline is refused with 409
+        # Conflict, not a generic 500.
+        logger.warning(
+            "feedback.create_feedback pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except HTTPException:
         raise
     except Exception as exc:
@@ -991,6 +1003,16 @@ async def _spawn_correction_run(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the correction run goes through the create_run choke point
+        # — an archived/soft-deleted pipeline is refused with 409 Conflict,
+        # not a generic 500.
+        logger.warning(
+            "feedback.spawn_correction_run pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     return str(new_run_id), "correcting"
 
 

@@ -77,6 +77,12 @@ class _MockSession:
         # RLS set_config is plumbing — do not consume a result slot.
         if "set_config" in str(stmt):
             return MagicMock()
+        # FAR-1528 create_run pipeline-state gate: answer the lifecycle read
+        # (archived_at, deleted_at) with an ACTIVE pipeline row — plumbing like
+        # set_config above, so it never consumes a canned result slot and the
+        # pause-classification tests keep exercising the pause gate itself.
+        if "SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid" in str(stmt):
+            return _pipeline_state_result()
         if not self._results:
             return MagicMock()
         return self._results.pop(0)
@@ -98,6 +104,22 @@ def _pause_result(org_id: uuid.UUID, paused: bool = False, status: str = "active
     """Result for the org-wide pause batched read: (id, triggers_paused, status)."""
     r = MagicMock()
     r.all.return_value = [(org_id, paused, status)]
+    return r
+
+
+def _pipeline_state_result(
+    *,
+    archived_at: datetime | None = None,
+    deleted_at: datetime | None = None,
+) -> MagicMock:
+    """Result for the create_run pipeline-state gate read (FAR-1528).
+
+    Defaults to an ACTIVE pipeline (both lifecycle timestamps NULL) so a test
+    concerned with pause classification or run creation is not refused by the
+    gate; pass a timestamp to exercise the archived/deleted refusal.
+    """
+    r = MagicMock()
+    r.first.return_value = (archived_at, deleted_at)
     return r
 
 

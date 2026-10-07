@@ -132,7 +132,7 @@ from modulo.core.documentation_indexer import DocumentationIndex
 # CLOSED (auth error) — there must never be a process-global fallback, because
 # under concurrent multi-tenant load a global would resolve to whichever org
 # authenticated last, leaking cross-tenant data.
-from modulo.core.exceptions import OrgDeletedError, SnapshotLockNotAvailableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, SnapshotLockNotAvailableError
 from modulo.core.feature_flags import get_registry, resolve_plan_context
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
 from modulo.core.hitl_manager import (
@@ -3744,6 +3744,24 @@ async def trigger_pipeline(
         if exc.deleted:
             return {"error": "org_deleted", "detail": f"Organisation {exc.org_id} is deleted"}
         return {"error": "org_not_found", "detail": f"Organisation {exc.org_id} not found"}
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a disabled pipeline must never return the generic tool
+        # error — surface the refusing lifecycle state as a structured,
+        # branchable envelope (caught at the tool level, exactly like
+        # OrgDeletedError, so the transaction unwinds and the snapshot created
+        # above rolls back with the refusal). FAR-1530's Paused state arrives
+        # on the same envelope with state="paused".
+        _log.warning(
+            "trigger_pipeline pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        return {
+            "error": "pipeline_not_runnable",
+            "state": exc.state,
+            "pipeline_id": pipeline_id,
+            "detail": f"Pipeline {pipeline_id} is {exc.state} and cannot start a run",
+        }
     except StorageExhaustedError as exc:
         _log.warning("trigger_pipeline refused — storage exhausted (FAR-426)")
         return {"error": "storage_exhausted", "detail": str(exc)}

@@ -22,7 +22,7 @@ from modulo.api.routes import runs as runs_module
 from modulo.api.routes.runs import RunNotFoundError, _validate_run_input_basics
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.core.exceptions import OrgDeletedError, RateLimitConflictError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
 from modulo.core.pipeline_engine.recovery import (
     GuardrailOverrideError,
     GuardrailOverrideRejectedError,
@@ -427,6 +427,49 @@ def test_trigger_run_missing_org_returns_404(client: TestClient) -> None:
         )
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/runs - archived / soft-deleted pipeline (FAR-1528)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", ["archived", "deleted"], ids=["archived-pipeline", "soft-deleted-pipeline"])
+def test_trigger_run_non_runnable_pipeline_returns_409(client: TestClient, state: str) -> None:
+    """FAR-1528: create_run's pipeline-state gate refuses a non-runnable
+    pipeline with 409 (and the state in the detail) - never a generic 500."""
+    pipeline = _make_pipeline()
+
+    with (
+        patch("modulo.api.routes.runs.get_pipeline", return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            return_value=_make_snapshot(),
+        ),
+        patch(
+            "modulo.api.routes.runs.create_run",
+            side_effect=PipelineNotRunnableError(pipeline_id=_PIPELINE_ID, state=state),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.post(
+            "/api/v1/runs",
+            json={"pipeline_id": str(_PIPELINE_ID), "input_payload": {"k": "v"}},
+        )
+
+    assert resp.status_code == 409
+    assert state in resp.json()["detail"]
+
+
+def test_pipeline_not_runnable_http_maps_to_409_with_state() -> None:
+    """The shared route mapping every run-creating route reuses (FAR-1528):
+    409 Conflict carrying the refusing lifecycle state + the pipeline id."""
+    exc = PipelineNotRunnableError(pipeline_id=_PIPELINE_ID, state="archived")
+    http_exc = runs_module.pipeline_not_runnable_http(exc)
+
+    assert http_exc.status_code == 409
+    assert "archived" in str(http_exc.detail)
+    assert str(_PIPELINE_ID) in str(http_exc.detail)
 
 
 # ---------------------------------------------------------------------------
