@@ -841,7 +841,18 @@ export default {
       "opt_settings_updated": "Updated",
       "opt_api_key_created": "Created",
       "opt_api_key_deleted": "Deleted",
-      "opt_export_csv": "CSV Export"
+      "opt_export_csv": "CSV Export",
+      "audit_source_group": "Audit source",
+      "tab_org_events": "Organisation trail",
+      "tab_system_events": "Organisation lifecycle",
+      "system_subtitle": "Durable organisation-lifecycle records that survive an organisation deletion",
+      "system_organisation": "Organisation",
+      "system_records_count": "{count} record | {count} records",
+      "system_loading": "Loading organisation lifecycle records...",
+      "system_failed_to_load": "Failed to load organisation lifecycle records:",
+      "system_none_found": "No organisation lifecycle records found",
+      "system_try_adjusting": "Try adjusting your filters or wait for lifecycle activity to be recorded.",
+      "system_page_of_total": "Page {page} \u00b7 {count} of {total} records"
     },
     "SettingsHitlReviewView": {
       "title": "HITL Review",
