@@ -468,6 +468,42 @@ class TestDashboardSummary:
         assert "config_warnings" in body
         assert isinstance(body["config_warnings"], list)
 
+    def test_recent_runs_carry_execution_origin_over_http(self) -> None:
+        """FAR-1141 / ADR-042: the recent-runs panel is a claim-ready run surface.
+
+        Pins the whole route -> HTTP hop, not just ``_load_recent_runs``' own
+        mapping (which ``test_execution_origin_surfaces`` covers): a dispatched
+        run must read ``dispatched`` in the wire payload, and the key must never
+        be omitted for a Modulo-executed one."""
+        row = _MockRow(
+            id=uuid.uuid4(),
+            run_number=7,
+            pipeline_name="PR Reviewer Agent",
+            status="complete",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            trigger_type="cron",
+            execution_origin="dispatched",
+        )
+        session = _make_mock_session()
+
+        async def _execute(stmt: Any, *_args: Any, **_kwargs: Any) -> _MockResult:
+            # ``pipeline_name`` + ``run_number`` together appear in exactly one
+            # statement: the recent-runs projection.
+            return _MockResult(rows=[row]) if "pipeline_name" in str(stmt) else _MockResult()
+
+        session.execute = AsyncMock(side_effect=_execute)
+        try:
+            client = _client_for_session(session)
+            response = client.get("/api/v1/dashboard/summary")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        recent = response.json()["recent_runs"]
+        assert recent, "the mocked row must surface on the recent-runs panel"
+        assert recent[0]["execution_origin"] == "dispatched"
+        assert recent[0]["run_number"] == 7
+
     def test_requires_auth(self, unauth_client: TestClient) -> None:
         response = unauth_client.get("/api/v1/dashboard/summary")
         assert response.status_code in (401, 403)

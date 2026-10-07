@@ -197,6 +197,11 @@ def test_viewmodel_current_returns_200(client: TestClient) -> None:
     assert not body["pending_hitl_reviews"]
     assert len(body["pipelines"]) == 1
     assert len(body["recent_runs"]) == 1
+    # FAR-1141 / ADR-042: ``recent_runs`` is a claim-ready run surface, so the
+    # execution origin rides the real HTTP response. This stand-in never set
+    # the attribute, so it must serialise as NULL — present as a key, never a
+    # repr of the mock that would fail response validation.
+    assert body["recent_runs"][0]["execution_origin"] is None
     assert body["org"]["org_name"] == "Test Org"
     assert body["org_role"] == "admin"
     assert not body["team_memberships"]
