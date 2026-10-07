@@ -332,6 +332,10 @@ class TestApplyApiKeyAuth:
         target_pipeline_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
         pipeline_row = MagicMock()
         pipeline_row.max_concurrent_runs = 5
+        # FAR-1513: the pipeline team gate resolves an org-visible, ownerless
+        # pipeline row (both the dependency resolver and the in-txn re-read).
+        pipeline_row.owner_team_id = None
+        pipeline_row.visibility = "org"
         trigger_row = MagicMock()
         trigger_row.id = uuid.uuid4()
         trigger_row.organisation_id = _ORG_ID
@@ -355,7 +359,22 @@ class TestApplyApiKeyAuth:
         # and would falsely 409 the create.
         duplicate_miss = MagicMock()
         duplicate_miss.first = MagicMock(return_value=None)
-        route_session.execute = AsyncMock(return_value=duplicate_miss)
+        # FAR-1513: the team gate reads the pipeline twice — the dependency
+        # resolver uses ``.first()`` for (owner_team_id, visibility); the
+        # in-txn re-read uses ``.scalar_one_or_none()`` for the pipeline row.
+        scope_result = MagicMock()
+        scope_result.first = MagicMock(return_value=(None, "org"))
+        scope_result.scalar_one_or_none = MagicMock(return_value=pipeline_row)
+
+        def _execute(stmt: object, *args: object, **kwargs: object) -> MagicMock:
+            sql = str(stmt).lower()
+            if "triggers" in sql:
+                return duplicate_miss
+            if "pipelines" in sql:
+                return scope_result
+            return MagicMock()
+
+        route_session.execute = AsyncMock(side_effect=_execute)
         auth_session = _make_auth_session()
 
         def override_session():

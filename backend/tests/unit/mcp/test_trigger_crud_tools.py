@@ -115,10 +115,21 @@ class _AuthContext:
         _ctx_role.set("runner")
         _ctx_auth_token.set(_API_KEY)
         _ctx_auth_type.set("api_key")
+        # FAR-1513: the trigger team gate reads the pipeline through the
+        # team-blind resolver, which the mocked sessions here do not model.
+        # Its allow/deny matrix is exercised end-to-end by
+        # tests/unit/mcp/test_team_scope_enforcement.py; these CRUD tests stub
+        # it to "allowed" so they stay focused on the tool's field handling.
+        self._team_gate_patch = patch(
+            "modulo.api.mcp_server._pipeline_team_gate",
+            new=AsyncMock(return_value=(None, None)),
+        )
+        self._team_gate_patch.start()
 
     def teardown_method(self) -> None:
         from modulo.api.mcp_server import _ctx_auth_token, _ctx_auth_type, _ctx_org_id, _ctx_role
 
+        self._team_gate_patch.stop()
         _ctx_org_id.set(None)
         _ctx_role.set(None)
         _ctx_auth_token.set(None)

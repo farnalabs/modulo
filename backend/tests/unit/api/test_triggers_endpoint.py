@@ -93,6 +93,16 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _stub_team_gate_in_txn() -> Generator[None, None, None]:
+    """FAR-1513: the in-txn team gate re-reads the pipeline FOR UPDATE, which
+    the mocked sessions here do not model. The gate's allow/deny matrix is
+    exercised by test_team_scope_dependencies.py and the integration team-gate
+    suite, so stub it for this file's endpoint-behaviour tests."""
+    with patch("modulo.api.routes.triggers._require_team_gate_in_txn", new_callable=AsyncMock):
+        yield
+
+
 def test_list_triggers_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
@@ -365,6 +375,8 @@ def test_delete_trigger_returns_204(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
+        # FAR-1513: deletion pre-reads the trigger for its pipeline team gate.
+        patch("modulo.api.routes.triggers._load_trigger_for_update", new=AsyncMock(return_value=trigger)),
         patch("modulo.db.crud.trigger.soft_delete_trigger", return_value=trigger),
     ):
         resp = client.delete(f"/api/v1/triggers/{_TRIGGER_ID}")
@@ -384,10 +396,19 @@ def test_delete_trigger_not_found_returns_404(client: TestClient) -> None:
 
 def test_restore_trigger_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
+    session = _make_mock_session()
+    # FAR-1513: restore reads the soft-deleted trigger first to resolve its
+    # pipeline's team gate; model that read returning the row.
+    session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
         patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
     ):
+        client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
     assert resp.status_code == 200
     assert resp.json()["trigger_type"] == "cron"
@@ -1693,6 +1714,13 @@ def test_restore_trigger_returns_streak_status(client: TestClient) -> None:
     triggers — the operator sees the reset streak immediately."""
     trigger = _make_mock_trigger(trigger_type="ongoing", active=True, daily_spend_limit=Decimal(25))
     streak_status = _full_streak_status(streak=0, state="ok")
+    session = _make_mock_session()
+    # FAR-1513: restore reads the soft-deleted trigger first (team gate).
+    session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
         patch("modulo.db.crud.trigger.restore_trigger", return_value=trigger),
@@ -1702,6 +1730,7 @@ def test_restore_trigger_returns_streak_status(client: TestClient) -> None:
             return_value=streak_status,
         ),
     ):
+        client.app.dependency_overrides[get_db_session] = override_session
         resp = client.post(f"/api/v1/triggers/{_TRIGGER_ID}/restore")
 
     assert resp.status_code == 200

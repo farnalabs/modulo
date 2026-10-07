@@ -100,6 +100,12 @@ def _happy_patches() -> list:
         patch(f"{_PREFIX}clear_trigger_streak_after_reenable", new_callable=AsyncMock),
         patch(f"{_PREFIX}get_trigger_streak_status", new=AsyncMock(return_value=dict(_STREAK))),
         patch(f"{_PREFIX}_count_ongoing_runs", new_callable=AsyncMock, return_value=0),
+        # FAR-1513: the in-txn team gate re-reads the pipeline FOR UPDATE; the
+        # mocked sessions here do not model that read. The gate's allow/deny
+        # matrix is exercised by test_team_scope_dependencies.py and the
+        # integration team-gate suite, so stub it here to keep these route
+        # coverage tests focused on the DB error conventions.
+        patch(f"{_PREFIX}_require_team_gate_in_txn", new_callable=AsyncMock),
     ]
 
 
@@ -689,6 +695,9 @@ def test_delete_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]
     http, _session = client
     for exc, expected in [(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)]:
         ctxs = list(_happy_patches())
+        # FAR-1513: deletion now pre-reads the trigger (for its pipeline's team
+        # gate) before soft-deleting, so the happy load must succeed.
+        ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger())))
         ctxs.append(patch(f"{_CRUD_TRIGGER}.soft_delete_trigger", new=AsyncMock(side_effect=exc)))
         for c in ctxs:
             c.__enter__()
@@ -703,6 +712,7 @@ def test_delete_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]
 def test_delete_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     ctxs = list(_happy_patches())
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger())))
     ctxs.append(patch(f"{_CRUD_TRIGGER}.soft_delete_trigger", new=AsyncMock(return_value=None)))
     for c in ctxs:
         c.__enter__()
@@ -716,7 +726,10 @@ def test_delete_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock]
 
 
 def test_restore_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
-    http, _session = client
+    http, session = client
+    # FAR-1513: restore now reads the soft-deleted trigger first (to resolve
+    # its pipeline's team gate); model that read returning the row.
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
     for exc, expected in [(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)]:
         ctxs = list(_happy_patches())
         ctxs.append(patch(f"{_CRUD_TRIGGER}.restore_trigger", new=AsyncMock(side_effect=exc)))
@@ -746,13 +759,15 @@ def test_restore_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock
 
 
 def test_restore_trigger_ongoing_happy_path_reanchors(client: tuple[TestClient, AsyncMock]) -> None:
-    http, _session = client
+    http, session = client
     anchor_mock = AsyncMock()
     clear_mock = AsyncMock()
+    restore = _make_trigger(trigger_type="ongoing")
+    # FAR-1513: the pre-delete trigger read (for the pipeline team gate).
+    session.execute = AsyncMock(return_value=_trigger_result([restore]))
     ctxs = list(_happy_patches())
     ctxs.append(patch(f"{_PREFIX}anchor_trigger_streak_epoch", new=anchor_mock))
     ctxs.append(patch(f"{_PREFIX}clear_trigger_streak_after_reenable", new=clear_mock))
-    restore = _make_trigger(trigger_type="ongoing")
     ctxs.append(patch(f"{_CRUD_TRIGGER}.restore_trigger", new=AsyncMock(return_value=restore)))
     for c in ctxs:
         c.__enter__()
