@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.trigger_engine.agent_signal import _log_signal_event, fire_agent_signal
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON
 
@@ -506,6 +506,44 @@ class TestFireAgentSignal:
         assert results[0]["status"] == "skipped"
         assert results[0]["reason"] == PAUSE_SKIP_REASON
         assert any(getattr(c[0][0], "validation_result", None) == "paused" for c in mock_session.add.call_args_list)
+
+    async def test_create_run_pipeline_not_runnable_is_typed_skip_not_validation_failed(
+        self,
+        mock_session: MagicMock,
+        mock_create_run: AsyncMock,
+    ) -> None:
+        """FAR-1528: a PipelineNotRunnableError (archived/soft-deleted target
+        pipeline) must be a typed skip — NOT swallowed by the catch-all into a
+        ``validation_failed`` event and NOT raised out of the signal handler."""
+        org_id = uuid.uuid4()
+        source_pipeline_id = uuid.uuid4()
+        trigger = _make_trigger(
+            org_id=org_id,
+            source_pipeline_id=source_pipeline_id,
+            source_node_id="my-node",
+        )
+        _setup_session(mock_session, [trigger], snapshot_id=uuid.uuid4())
+        mock_create_run.side_effect = PipelineNotRunnableError(
+            state="archived",
+            pipeline_id=trigger.pipeline_id,
+        )
+
+        results = await fire_agent_signal(
+            mock_session,
+            org_id=org_id,
+            source_run_id=uuid.uuid4(),
+            source_pipeline_id=source_pipeline_id,
+            completed_node_id="my-node",
+        )
+
+        assert len(results) == 1
+        assert results[0]["trigger_id"] == str(trigger.id)
+        assert results[0]["status"] == "skipped"
+        assert results[0]["reason"] == PIPELINE_NOT_RUNNABLE_SKIP_REASON
+        # No TriggerEvent at all — so it can never masquerade as the
+        # catch-all's ``validation_failed`` event (there is no
+        # validation_result vocabulary value for a lifecycle refusal).
+        assert not mock_session.add.call_args_list
 
 
 # ---------------------------------------------------------------------------

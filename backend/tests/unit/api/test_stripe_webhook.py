@@ -9,19 +9,39 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Generator
-from unittest.mock import AsyncMock, patch
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from modulo.api.main import app
 from modulo.settings import Settings, get_settings
+from tests.unit.api.mock_session import configure_mock_session
 
 _VALID_32 = "a" * 32
 _TEST_SECRET = "whsec_test_123"
 
 _FULFIL_MODULE = "modulo.api.routes.stripe_webhook.fulfil_team_purchase"
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: stub the fresh ``audit_session`` the ``audited_system(...)``
+    dependency writes on (a real engine — no database in the unit tier); the
+    dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_stripe_settings(secret_key: str = "sk_test_123", webhook_secret: str = _TEST_SECRET) -> Settings:

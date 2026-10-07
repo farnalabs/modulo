@@ -122,6 +122,82 @@ async def test_initialise_skips_when_secret_missing_without_ciphertext(
 
 
 # ---------------------------------------------------------------------------
+# initialise() — no stored credentials at all (FAR-1526)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_initialise_missing_credentials_is_typed_and_actionable(
+    hub: ModelBackendHub,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1526: no secrets row + no ciphertext must NOT surface as a bare
+    ``KeyError('<backend-uuid>')``.
+
+    The prod worker logged that KeyError (with a full traceback) on every run's
+    hub init for backend ``4a170ce2-4598-4c38-b927-f9b491275ad6``, which reads
+    exactly like a cache/registry lookup bug. The failure must instead name the
+    backend, the provider and the remedy.
+    """
+    row = _row(provider="openrouter", credentials_ciphertext=b"")
+    await hub.initialise(
+        [row],
+        secrets_backend=_secrets(error=KeyError(str(row.id))),
+    )
+
+    assert row.id not in hub.backend_ids
+    assert "has no stored credentials" in caplog.text
+    assert "set its API key" in caplog.text
+    assert f"KeyError: '{row.id}'" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_initialise_missing_credentials_without_provider_omits_provider_detail(
+    hub: ModelBackendHub,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1526: a row with no provider still gets the typed, actionable error —
+    the provider clause is simply omitted when there is nothing to name."""
+    row = _row(provider="", credentials_ciphertext=b"")
+    await hub.initialise(
+        [row],
+        secrets_backend=_secrets(error=KeyError(str(row.id))),
+    )
+
+    assert row.id not in hub.backend_ids
+    assert "has no stored credentials" in caplog.text
+    assert "set its API key" in caplog.text
+    assert "(provider" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_initialise_logs_repeated_failure_without_traceback_flood(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1526: the failure recurs on EVERY run's hub init — the full detail is
+    logged once per process, then a compact repeat line that still names the
+    backend (never silent, never a traceback per run)."""
+    row = _row(provider="openrouter", credentials_ciphertext=b"")
+    secrets = _secrets(error=KeyError(str(row.id)))
+
+    async with ModelBackendHub() as first:
+        await first.initialise([row], secrets_backend=secrets)
+    first_text = caplog.text
+    assert "Failed to initialise backend" in first_text
+    assert "has no stored credentials" in first_text
+
+    caplog.clear()
+
+    async with ModelBackendHub() as second:
+        await second.initialise([row], secrets_backend=secrets)
+
+    assert "repeat; full detail logged earlier" in caplog.text
+    assert str(row.id) in caplog.text
+    # No second traceback flood for the same backend id.
+    assert "Traceback (most recent call last)" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # initialise() — credentials_ciphertext decrypt path
 # ---------------------------------------------------------------------------
 

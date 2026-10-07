@@ -289,6 +289,13 @@ def apply_pipelines(
     failing the entity with a 422 (or, on create, fall through to the server
     default of 300 / 3600).
 
+    ``run_enabled`` (FAR-1530) is never sent on POST/PATCH at all: a declared
+    value (only ever ``false``) is converged by POSTing the dedicated
+    ``/pipelines/{id}/pause`` route — immediately after create (so a later
+    failure leaves the row paused) and after the update PATCH. The PATCH never
+    carries the key, keeping the pause/resume routes the single transition
+    surface (they own the audit events and the resume-while-tripped 409 trap).
+
     Returns the pipeline name -> id map (current + created), consumed by the
     trigger phase to resolve (pipeline, name) identities. When a JUST-CREATED
     pipeline's apply fails (POST or the graph PATCH), the name is dropped
@@ -339,6 +346,14 @@ def apply_pipelines(
                         create_payload["max_duration_seconds"] = entity.max_duration_seconds
                     response = executor._post("/pipelines", create_payload)
                     pipeline_id = str(response["id"])
+                    # FAR-1530: a declared run_enabled (only ever false) pauses
+                    # the pipeline IMMEDIATELY after create — before the graph
+                    # PATCH below, so a later failure leaves the row paused
+                    # (fail closed), never silently running. The pause rides
+                    # the dedicated /pause route (the single transition surface
+                    # with its audit + 409 traps), not PATCH.
+                    if entity.manages_run_enabled:
+                        executor._post(f"/pipelines/{pipeline_id}/pause")
                     graph_differs = entity.graph is not None
                 else:
                     current = current_pipelines[entity.name]
@@ -401,6 +416,16 @@ def apply_pipelines(
                     patch_payload["graph_json"] = graph
                 if status == "updated" or entity.graph is not None:
                     executor._patch(f"/pipelines/{pipeline_id}", patch_payload)
+                # FAR-1530: converge a declared run_enabled (only ever false)
+                # by POSTing the dedicated /pause route AFTER the field PATCH —
+                # pause is idempotent server-side (first cause owns the
+                # reason), so this is safe when the entry was marked updated
+                # for an unrelated key while the pipeline is already paused.
+                # The PATCH never carries run_enabled: the pause/resume routes
+                # are the single transition surface (audit + 409 traps live
+                # there), and config can never express a resume.
+                if status == "updated" and entity.manages_run_enabled:
+                    executor._post(f"/pipelines/{pipeline_id}/pause")
             except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
                 message = _failure_message(exc)
                 displayed_name = entity.name if entity else entry["name"]

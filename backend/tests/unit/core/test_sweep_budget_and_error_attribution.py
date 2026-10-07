@@ -17,10 +17,22 @@ FAR-905: The runner_marker_sweep and runner_workspace_reconcile SAQ wrappers
 persist ``"error": "sweep_failed"`` as a static string without the actual
 exception details.  The fix embeds the exception type and message in the
 error string so /healthz/ready is diagnostic.
+
+FAR-1525: The row budget (FAR-904/FAR-1425) bounds ROWS, not TIME, so a
+single org whose pass hangs (a wedged await) consumed the ENTIRE 95s inner
+budget at stage ``reconcile_org:<org-id>`` — 7 consecutive prod ticks showed
+identical counters and never reached ``record_facts`` / the compensating
+sweeps.  Each org's pass is now bounded by TIME as well: on the bound firing
+the org's transaction is rolled back, its in-memory counts are unwound to
+match, the tick records a truthful ``status='timeout'`` marker naming the
+org, and the loop CONTINUES to the remaining orgs, ``record_facts`` and the
+compensating sweeps.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import uuid
 from datetime import UTC, datetime
@@ -817,3 +829,211 @@ class TestSingleOrgRowBudget:
             )
 
         assert captured == [500]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1525: per-organisation TIME bound
+# ---------------------------------------------------------------------------
+
+
+async def _drive_body(
+    org_ids: list[uuid.UUID],
+    fake_reconcile_org: Any,
+    *,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    sweeps: Any,
+    record_facts: Any | None = None,
+    settings_overrides: dict[str, Any] | None = None,
+    stage: dict[str, str] | None = None,
+    time_monotonic: list[float] | None = None,
+) -> dict[str, Any]:
+    """Drive the REAL ``_dispatcher_reconcile_body`` over *org_ids* with a
+    controlled ``_reconcile_org`` double (FAR-1525 harness).
+
+    Defaults to a 95s tick budget with a 1s per-org bound so a hanging org is
+    cut quickly; ``time_monotonic`` optionally stubs ``time.monotonic`` with a
+    fixed sequence (body start, then one call per org-loop iteration).
+    """
+    overrides: dict[str, Any] = {
+        "dispatcher_reconcile_budget_seconds": 95,
+        "dispatcher_reconcile_org_budget_seconds": 1,
+    }
+    overrides.update(settings_overrides or {})
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids))
+        stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org))
+        stack.enter_context(patch.object(ch, "reconciler_recovery_predicate"))
+        stack.enter_context(patch.object(ch, "_open_system_factory"))
+        stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", sweeps))
+        fact_writer = record_facts if record_facts is not None else AsyncMock()
+        stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", fact_writer))
+        stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+        if time_monotonic is not None:
+            time_mod = stack.enter_context(patch.object(ch, "time"))
+            time_mod.monotonic.side_effect = list(time_monotonic)
+        return await ch._dispatcher_reconcile_body(
+            _settings=_make_settings(**overrides),
+            factory=MagicMock(),
+            queue_name="runs",
+            reenqueue_window=5,
+            tuning=_budget_tuning(),
+            terminalize_max=25,
+            facts_max=25,
+            max_rows=500,
+            redis_client=MagicMock(),
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+            stage=stage,
+        )
+
+
+class TestPerOrgTimeBound:
+    """FAR-1525: one org's pass is bounded by TIME as well as rows, so a hung
+    org cannot consume the whole tick budget — the tick still reaches the
+    other orgs, ``record_facts`` and the compensating sweeps, and persists a
+    truthful bounded/failed marker (never a false success, never a silent
+    no-op)."""
+
+    @pytest.mark.asyncio
+    async def test_hanging_org_does_not_starve_the_rest_of_the_tick(self) -> None:
+        """A first org that hangs is cut at the per-org bound; the SECOND org
+        still runs, the compensating sweeps are reached, and the outcome is a
+        truthful ``status='timeout'`` naming the org."""
+        hang_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        stage: dict[str, str] = {}
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            if org_id == hang_org:
+                # Wedged await — only the per-org time bound can stop it.
+                await asyncio.sleep(10)
+                return 0  # pragma: no cover - reached only pre-fix
+            summary["scanned"] += 1
+            return 0
+
+        sweeps = AsyncMock()
+        await _drive_body(
+            [hang_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=[],
+            sweeps=sweeps,
+            stage=stage,
+        )
+
+        # The tick COMPLETED: the second org ran and the sweeps were reached.
+        assert summary["scanned"] == 1
+        assert sweeps.await_count == 1
+        assert stage.get("op") == "compensating_sweeps"
+        # ... and it failed VISIBLY: a truthful bounded marker, not "ok".
+        assert summary["org_timeouts"] == 1
+        assert summary["status"] == "timeout"
+        assert summary["last_error"] is not None
+        assert "per-org bound" in summary["last_error"]
+        assert str(hang_org) in summary["last_error"]
+        assert "stage=reconcile_org" in summary["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_timed_out_org_rolls_back_its_counts_and_facts(self) -> None:
+        """The per-org bound cancels mid-transaction, so the org's DB work
+        ROLLED BACK: its partial counters must not survive into the persisted
+        outcome, and no compensating fact may be written for a terminalizer
+        id collected by the rolled-back org."""
+        hang_org, good_org = uuid.uuid4(), uuid.uuid4()
+        rolled_back_run = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+        async def fake_reconcile_org(
+            *, org_id: uuid.UUID, terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]], **_kwargs: Any
+        ) -> int:
+            if org_id == hang_org:
+                # Work the org did before the bound fired — all of it rolls back.
+                summary["scanned"] += 5
+                summary["repaired"] += 3
+                terminalized_run_ids.append((rolled_back_run, org_id))
+                await asyncio.sleep(10)
+                return 0  # pragma: no cover - reached only pre-fix
+            summary["scanned"] += 1
+            terminalized_run_ids.append((uuid.uuid4(), org_id))
+            return 0
+
+        record_facts = AsyncMock()
+        await _drive_body(
+            [hang_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+            sweeps=AsyncMock(),
+            record_facts=record_facts,
+        )
+
+        # Rolled-back counts are unwound; only the COMMITTED org's work counts.
+        assert summary["scanned"] == 1
+        assert summary["repaired"] == 0
+        assert summary["org_timeouts"] == 1
+        assert summary["status"] == "timeout"
+        # Facts are written only for committed terminalizations: the hung org's
+        # id was collected but its transaction rolled back, so it must be gone.
+        assert rolled_back_run not in [call.args[0] for call in record_facts.await_args_list]
+        assert len(record_facts.await_args_list) == 1
+
+    @pytest.mark.asyncio
+    async def test_fast_orgs_never_hit_the_bound(self) -> None:
+        """The bound is not a tripwire: orgs that finish in time produce no
+        timeout marker and leave status='ok'."""
+        org_ids = [uuid.uuid4() for _ in range(3)]
+        summary = ch._dispatcher_summary()
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            summary["scanned"] += 1
+            return 0
+
+        sweeps = AsyncMock()
+        await _drive_body(
+            org_ids,
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=[],
+            sweeps=sweeps,
+            settings_overrides={"dispatcher_reconcile_org_budget_seconds": 30},
+        )
+
+        assert summary["scanned"] == 3
+        assert summary["org_timeouts"] == 0
+        assert summary["status"] == "ok"
+        assert summary["last_error"] is None
+        assert sweeps.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_insufficient_tail_budget_defers_orgs_and_still_reaches_the_sweeps(self) -> None:
+        """When less than the per-org minimum + tail reserve remains, no new
+        org pass is started (counted ``orgs_deferred``), and the tick still
+        runs ``record_facts`` + the compensating sweeps instead of racing the
+        outer deadline."""
+        org_ids = [uuid.uuid4(), uuid.uuid4()]
+        summary = ch._dispatcher_summary()
+        stage: dict[str, str] = {}
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            raise AssertionError("no org pass may start when the tail budget is exhausted")
+
+        sweeps = AsyncMock()
+        # monotonic: body start, then one call per org-loop iteration.
+        await _drive_body(
+            org_ids,
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=[],
+            sweeps=sweeps,
+            stage=stage,
+            time_monotonic=[1000.0, 1094.0, 1094.1, 1094.2],
+        )
+
+        assert summary["orgs_deferred"] == 2
+        assert summary["org_timeouts"] == 0
+        assert summary["scanned"] == 0
+        assert summary["status"] == "ok"
+        assert sweeps.await_count == 1
+        assert stage.get("op") == "compensating_sweeps"

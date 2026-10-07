@@ -12,7 +12,7 @@ RLS policy exactly:
 Team-scoped resource set (Phase-1 floor): ``pipelines``,
 ``connector_instances``, ``model_backends``, ``environment_profiles``,
 ``library_primitives``, ``lifecycle_maps``, ``eval_datasets``,
-``eval_suites``. Since migration ``0286_team_rls_lifecycle_evals`` all eight
+``eval_suites``. Since migration ``0287_team_rls_lifecycle_evals`` all eight
 tables carry a DB ``rls_team_isolation`` policy (org check + visibility matrix
 + execution-context clause), so the DB layer enforces team isolation for every
 table in this registry.
@@ -36,7 +36,7 @@ redundant defence-in-depth, not a gap-fill, and every wired route adds a second
 transaction + membership query per request. The routes that DO carry the
 request-time gate are the ones whose DB policy was missing it — ``pipelines``
 (since the ADR 038 sweep) and, since FAR-1514, ``lifecycle_maps`` — plus the
-eval routes (FAR-947). ``lifecycle_maps`` needed BOTH layers: before 0286 it
+eval routes (FAR-947). ``lifecycle_maps`` needed BOTH layers: before 0287 it
 had only strict org RLS, so the membership gate here was its only team
 enforcement.
 

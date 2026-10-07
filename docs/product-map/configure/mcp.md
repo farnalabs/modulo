@@ -5,6 +5,8 @@ adr: [ADR 047 (centralized-authorization)]
 code:
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/mcp_tool_registry.py
+  - backend/src/modulo/api/db_error_handling.py
+  - backend/src/modulo/api/routes/run_ws.py
   - backend/src/modulo/core/mcp/scope_validator.py
   - backend/src/modulo/api/routes/mcp_oauth.py
   - backend/src/modulo/api/routes/mcp_setup.py
@@ -17,6 +19,9 @@ unit-tests:
   - backend/tests/unit/mcp/test_get_run_output.py
   - backend/tests/unit/mcp/test_mcp_connector_tools.py
   - backend/tests/unit/mcp/test_team_binding_enforcement.py
+  - backend/tests/unit/mcp/test_mcp_tool_exception_error.py
+  - backend/tests/unit/mcp/test_mcp_session_contract_errors.py
+  - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/test_mcp_security.py
   - backend/tests/unit/test_mcp_structural_coverage.py
   - frontend/src/__tests__/SettingsMcpView.spec.ts
@@ -198,6 +203,32 @@ applications. Built on the auth + model-backend core.
       (visible-but-failing in tools/list); all of its writes go through the
       single row-locked preferences writer
       (`db/crud/account.set_hitl_email_preference`)
+- [x] MCP tool errors carry specific, branchable codes (FAR-1502): `_tool_error`
+      REQUIRES a keyword-only `code` (no default), so no call site can fall back
+      to the disallowed generic `internal_error`; the shared `_tool_exception_error`
+      classifier maps every escaped exception type to a code the consuming agent
+      can branch on — `insufficient_scope` (`MCPAuthorizationError`),
+      `validation_failed` (4xx `StarletteHTTPException`) / `server_error` (5xx),
+      `session_contract_error` (`InvalidRequestError` / `MissingGreenlet`) via the
+      shared `db_error_handling` classifier, `conflict` (`IntegrityError`),
+      `migration_required` (`ProgrammingError`), `database_unavailable` (any other
+      `SQLAlchemyError`, incl. a transient `OperationalError` /
+      `PendingRollbackError`), and `server_error` as the ONLY reserved catch-all
+      (`backend/src/modulo/api/mcp_server.py` `_tool_error` /
+      `_tool_exception_error`, `backend/src/modulo/api/db_error_handling.py`
+      `session_contract_error_payload`; `test_mcp_tool_exception_error.py`,
+      `test_mcp_session_contract_errors.py`)
+- [x] The run WebSocket control-frame vocabulary aligns to the MCP codes
+      (FAR-1502): the frames answer `database_unavailable` (the old
+      `db_unavailable` key no other surface used) and `server_error` (the old
+      generic `internal_error`), and the `SQLAlchemyError` arm runs through the
+      SAME shared session-contract classifier so a programming bug gets the
+      specific `session_contract_error` frame instead of a retry-inviting outage
+      frame — no consumer of the old keys exists outside the backend
+      (`backend/src/modulo/api/routes/run_ws.py`; `test_run_ws.py`);
+      `backend/tests/architecture/test_mcp_error_codes.py` structurally forbids
+      the `internal_error` payload in both sources and keeps `_tool_error`'s
+      `code` keyword-only with no default
 
 ## Known Gaps
 
@@ -208,6 +239,17 @@ applications. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
+  FAR-1502 surface: the MCP tool-error vocabulary that the consuming agent
+  branches on shipped (specific, branchable codes via the required-keyword
+  `_tool_error` + the shared `_tool_exception_error` classifier) and the run
+  WebSocket control frames were aligned to the same codes, but neither
+  product-map layer described it. Added the two checked behaviour lines and the
+  `code:` / `unit-tests:` citations (`mcp_server.py`, `db_error_handling.py`,
+  `run_ws.py`; `test_mcp_tool_exception_error.py`,
+  `test_mcp_session_contract_errors.py`, `test_run_ws.py`) plus the
+  `frontend/src/manifest.yaml` `feat-mcp` registry line.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-30: **Improve Architecture product-map walk** – closed the
   `feat-mcp` API-key sub-surface gap for FAR-1291 / FAR-1296 / FAR-1299: the
   key card's revoked-vs-expired status distinction (why `is_active: false`

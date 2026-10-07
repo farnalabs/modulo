@@ -54,6 +54,7 @@ from modulo.auth.permissions import (
 )
 from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.core.feature_flags import PlanContext
+from modulo.db.models.organisation import SYSTEM_ORG_ID
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.settings_resolver import resolve_authz_enforce
 from modulo.settings import Settings, get_settings
@@ -428,6 +429,66 @@ def require_target_org_role(
         permission=permission,
         permission_kind="scoped_hybrid",
         min_role=min_role,
+    )
+
+
+async def resolve_audit_principal(
+    request: Request,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+) -> TenantPrincipal:
+    """Audit-event principal for cross-org admin routes.
+
+    ``audited()`` records an ORG-scoped event, so it needs a ``TenantPrincipal``.
+    These routes deliberately authenticate through ``get_current_user``
+    (``require_system_permission`` / ``require_target_org_role``) so a system
+    admin whose JWT carries NO organisation claim can still act on the org in
+    the path - the contract ``TestSystemAdminExplicitOrgParam`` pins as "the
+    JWT org_id is ignored; the path org_id is used". Resolving the audit
+    principal with ``get_current_tenant_user`` instead would 403 that
+    capability (and re-read identity), so this derives the acting organisation
+    from the ``{org_id}`` path parameter first and falls back to the JWT claim.
+
+    **This never refuses a request.** It solved BEFORE the route's own
+    ``require_*`` check (route-level dependencies are solved first), so any
+    ``raise`` here turns the audit wrapper into an ACCESS GATE ahead of the
+    real one - the FAR-1538 residual on the seven ``require_system_permission``
+    system-wide admin routes, where an org-less system-admin JWT was 403'd by
+    the audit dependency rather than admitted by the route. When neither the
+    path nor the claim yields an organisation, the event is attributed to the
+    instance partition (``SYSTEM_ORG_ID``); an absent ``org_role`` claim maps
+    to the established neutral ``""`` sentinel (the same fallback ``auth.jwt``
+    uses when minting tokens) - a role is never fabricated.
+
+    Access control is unchanged: the route's own ``require_*`` dependency still
+    decides who may act. This only names the organisation the audit event is
+    written against.
+
+    Lives here (the shared dependency module) because both ``admin_orgs`` and
+    ``admin_email`` need it, and a route module importing a sibling route
+    module for a dependency is a cycle waiting to happen.
+    """
+    org_id: uuid.UUID | None = None
+    raw_org = request.path_params.get("org_id")
+    if raw_org is not None:
+        try:
+            org_id = uuid.UUID(str(raw_org))
+        except ValueError:
+            org_id = None
+    if org_id is None:
+        org_id = current_user.organisation_id
+    if org_id is None:
+        # System-wide route, no tenant anywhere: attribute the event to the
+        # instance partition rather than refusing - a refusal would be the
+        # audit wrapper gating access (and would record nothing at all).
+        org_id = SYSTEM_ORG_ID
+    return TenantPrincipal(
+        username=current_user.username,
+        organisation_id=org_id,
+        account_id=current_user.account_id,
+        org_role=current_user.org_role or "",
+        is_system_admin=current_user.is_system_admin,
+        via_api_key=current_user.via_api_key,
+        client_kind=current_user.client_kind,
     )
 
 

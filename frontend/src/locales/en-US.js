@@ -74,6 +74,7 @@ export default {
       "auto_update": "Auto-update",
       "pipeline_templates": "Pipeline Templates",
       "search_primitives": "Search modules...",
+      "remove_type_filter": "Remove {type} filter",
       "no_primitives_found": "No modules found",
       "preview_integrations_count": "{count} preview integration | {count} preview integrations",
       "preview_badge": "Preview",
@@ -482,7 +483,8 @@ export default {
       "no_raw_events_description": "Events for this group will appear here once they are ingested.",
       "events_of": "{count} of {total} events",
       "previous": "Previous",
-      "next": "Next"
+      "next": "Next",
+      "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only."
     },
     "AdminProductAnalyticsView": {
       "title": "Product Analytics",
@@ -840,7 +842,18 @@ export default {
       "opt_settings_updated": "Updated",
       "opt_api_key_created": "Created",
       "opt_api_key_deleted": "Deleted",
-      "opt_export_csv": "CSV Export"
+      "opt_export_csv": "CSV Export",
+      "audit_source_group": "Audit source",
+      "tab_org_events": "Organisation trail",
+      "tab_system_events": "Organisation lifecycle",
+      "system_subtitle": "Durable organisation-lifecycle records that survive an organisation deletion",
+      "system_organisation": "Organisation",
+      "system_records_count": "{count} record | {count} records",
+      "system_loading": "Loading organisation lifecycle records...",
+      "system_failed_to_load": "Failed to load organisation lifecycle records:",
+      "system_none_found": "No organisation lifecycle records found",
+      "system_try_adjusting": "Try adjusting your filters or wait for lifecycle activity to be recorded.",
+      "system_page_of_total": "Page {page} \u00b7 {count} of {total} records"
     },
     "SettingsHitlReviewView": {
       "title": "HITL Review",
@@ -1004,7 +1017,15 @@ export default {
       "scheduler_starvation_age_minutes": "{minutes}m",
       "scheduler_starvation_age_hours": "{hours}h",
       "expand_message": "Expand error message",
-      "collapse_message": "Collapse error message"
+      "collapse_message": "Collapse error message",
+      "no_error_groups_description": "Try adjusting your filters or wait for errors to be ingested.",
+      "no_instance_error_groups_found": "No instance-scope error groups found",
+      "no_instance_error_groups_description": "Instance-level errors appear here once they are ingested by the public frontend endpoint or an org-less backend error.",
+      "scope_group_label": "Error scope",
+      "scope_label": "Scope",
+      "scope_organisation": "Organisation",
+      "scope_instance": "Instance",
+      "scope_instance_hint": "Instance-level errors are not attributed to any organisation (public frontend ingest and org-less backend errors). This view is read-only and for system admins."
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
@@ -2638,6 +2659,20 @@ export default {
       "schema_saved_new_version": "Schema saved as new version.",
       "delete_referenced_error": "Cannot delete: schema is referenced by agents or parameter sets.",
       "cloned_set_name": "{name} (clone)"
+    },
+    "ModelBackendSetupView": {
+      "complete_model_backend_setup": "Complete Model Backend Setup",
+      "page_subtitle": "A model backend was created via MCP. Paste the API key below to complete setup.",
+      "backend_now_active": "Backend \"{name}\" is now active.",
+      "view_model_backends": "View Model Backends",
+      "missing_token_hint": "This setup link is missing its one-time token. Re-run the MCP command to generate a fresh setup URL.",
+      "api_key": "API Key",
+      "api_key_placeholder": "sk-...",
+      "saving": "Saving...",
+      "complete_setup": "Complete Setup",
+      "error_link_expired": "Setup link expired or already used. Re-run the MCP command to generate a new setup URL.",
+      "error_backend_not_found": "Model backend not found. It may have been deleted.",
+      "error_setup_failed": "Setup failed. Please try again."
     },
   "pipeline": {
     "hide_ports": "Hide Ports"

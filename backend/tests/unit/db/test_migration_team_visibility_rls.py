@@ -98,17 +98,17 @@ class TestTeamPolicyDowngrade:
 
 
 # ---------------------------------------------------------------------------
-# 0286_team_rls_lifecycle_evals — the three neither-layer tables (FAR-1514)
+# 0287_team_rls_lifecycle_evals — the three neither-layer tables (FAR-1514)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
 def lifecycle_evals_team_rls_migration() -> ModuleType:
-    return _load_migration("0286_team_rls_lifecycle_evals.py", "migration_0286_lifecycle_evals_team_rls")
+    return _load_migration("0287_team_rls_lifecycle_evals.py", "migration_0287_lifecycle_evals_team_rls")
 
 
 def _executed_sql(mock_op: MagicMock) -> list[str]:
-    """Plain-string statements executed by a migration (0286 uses f-strings)."""
+    """Plain-string statements executed by a migration (0287 uses f-strings)."""
     return [str(call.args[0]) for call in mock_op.execute.call_args_list]
 
 
@@ -117,7 +117,7 @@ class TestLifecycleEvalsTeamPolicy:
 
     @staticmethod
     def _pg_op() -> MagicMock:
-        """A mock ``op`` whose dialect reports postgresql (0286 guards on it).
+        """A mock ``op`` whose dialect reports postgresql (0287 guards on it).
 
         ``dialect`` is a SimpleNamespace, not a MagicMock: ``name`` is a
         reserved Mock attribute, so assigning ``mock.name = "postgresql"``
@@ -203,5 +203,5 @@ class TestLifecycleEvalsTeamPolicy:
         for table in migration._TEAM_SCOPED_TABLES:
             assert f"DROP POLICY IF EXISTS rls_team_isolation ON public.{table}" in statements
             assert any(s.startswith(f"CREATE POLICY rls_org_isolation ON public.{table}") for s in statements), (
-                f"{table}: downgrade must restore the pre-0286 org-only policy"
+                f"{table}: downgrade must restore the pre-0287 org-only policy"
             )

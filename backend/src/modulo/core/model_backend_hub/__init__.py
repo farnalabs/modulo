@@ -27,6 +27,12 @@ from modulo.model_backends.base import HealthResult, ModelBackendBase
 
 logger = logging.getLogger(__name__)
 
+# FAR-1526: backend ids whose initialisation failure has already been logged
+# with full detail in this process. Bounded by the number of model backends;
+# cleared only by a process restart (same pattern as the connector hub's
+# `_SKIP_WARN_SEEN`).
+_INIT_FAILURE_WARNED: set[uuid.UUID] = set()
+
 _HEALTH_CHECK_TIMEOUT: float = 10.0
 _SECRET_FETCH_TIMEOUT: float = 10.0
 _ERROR_DETAIL_MAX_LENGTH: int = 500
@@ -63,6 +69,33 @@ class BackendDecryptError(ValueError):
     def __init__(self, backend_id: uuid.UUID) -> None:
         super().__init__(f"Failed to decrypt credentials for model backend {backend_id}")
         self.backend_id = backend_id
+
+
+class BackendCredentialsMissingError(BackendDecryptError):
+    """Raised when a model backend has NO stored credentials at all (FAR-1526).
+
+    Distinct from :class:`BackendDecryptError`: a row exists but will not
+    decrypt. Here the secrets row is absent AND ``credentials_ciphertext`` is
+    empty, so there is nothing to decrypt.
+
+    Subclasses ``BackendDecryptError`` so every existing ``except
+    BackendDecryptError`` / ``except ValueError`` handler keeps catching it —
+    the new case is a specialisation, not a sibling (adding a sibling would
+    silently escape the credential-failure handlers).
+    """
+
+    def __init__(self, backend_id: uuid.UUID, provider: str = "") -> None:
+        detail = f"model backend {backend_id}"
+        if provider:
+            detail += f" (provider {provider!r})"
+        detail += (
+            " has no stored credentials (no secrets row and no credentials_ciphertext)"
+            " — set its API key in Admin -> Model Backends"
+        )
+        super().__init__(backend_id)
+        # Re-point the message: the parent's "failed to decrypt" wording would
+        # be misleading here (nothing exists to decrypt).
+        self.args = (detail,)
 
 
 class ModelBackendHub:
@@ -165,7 +198,20 @@ class ModelBackendHub:
                             )
                             raise BackendDecryptError(mb.id) from None
                     else:
-                        raise
+                        # FAR-1526: no secrets row AND no credentials_ciphertext —
+                        # there are no stored credentials for this backend. The old
+                        # bare ``raise`` re-threw the secrets backend's
+                        # ``KeyError('<backend-uuid>')``, which the generic handler
+                        # below logged WITH A FULL TRACEBACK on every run's hub
+                        # init (prod: backend 4a170ce2-4598-4c38-b927-f9b491275ad6,
+                        # a KeyError every ~40-70s) — unactionable and easily
+                        # mistaken for a cache/registry lookup bug. Raise the typed
+                        # error instead: the message names the backend, the provider
+                        # and the remedy, and the handler below logs it once per
+                        # process rather than once per run.
+                        raise BackendCredentialsMissingError(
+                            mb.id, provider=getattr(mb, "provider", "") or ""
+                        ) from None
                 try:
                     raw_creds: Any = json.loads(raw_str)
                 except json.JSONDecodeError as exc:
@@ -213,7 +259,20 @@ class ModelBackendHub:
                     if parsed:
                         fallback_map[mb.id] = parsed
             except (AttributeError, TypeError, ValueError, KeyError):
-                logger.exception("Failed to initialise backend %s", mb.id)
+                # FAR-1526: hub.initialise() runs at the start of EVERY run, so
+                # a permanently-broken backend row used to log a full traceback
+                # on every run (observed as a KeyError hot-loop every ~40-70s).
+                # Log the full detail once per backend id per process, then a
+                # compact repeat line that still names the backend — never
+                # silent, never a traceback flood.
+                if mb.id in _INIT_FAILURE_WARNED:
+                    logger.warning(
+                        "Failed to initialise backend %s (repeat; full detail logged earlier)",
+                        mb.id,
+                    )
+                else:
+                    _INIT_FAILURE_WARNED.add(mb.id)
+                    logger.exception("Failed to initialise backend %s", mb.id)
                 continue
 
         if not backends_to_register:

@@ -308,7 +308,7 @@ class TestRouteWiring:
         ``team_scope_resolver`` returns ``None`` when the path param is absent
         and ``require_team_membership_or_admin`` turns a ``None`` row into a
         404, so wiring these three would make them permanently unreachable.
-        They stay on the org-role floor; the DB policy (0286) filters their
+        They stay on the org-role floor; the DB policy (0287) filters their
         result sets by visibility.
         """
         import modulo.api.routes.lifecycle_maps as lifecycle_routes

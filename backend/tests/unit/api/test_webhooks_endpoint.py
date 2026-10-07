@@ -4,9 +4,12 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 Verifies that the background task is properly enqueued but no real webhook fires.
 """
 
+import hashlib
+import hmac
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,11 +23,30 @@ from modulo.core.trigger_engine import TriggerNotFoundError
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _TRIGGER_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: stub the fresh ``audit_session`` the ``audited_system(...)``
+    dependency writes on (a real engine — no database in the unit tier); the
+    dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:
@@ -275,6 +297,56 @@ def test_receive_webhook_hmac_failure_returns_401(client: TestClient) -> None:
         app.dependency_overrides.pop(get_system_db_session, None)
 
     assert resp.status_code == 401
+
+
+def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClient) -> None:
+    """FAR-1516: a delivery that passes the route-level HMAC check records
+    ``signature_verified`` provenance instead of the default ``unauthenticated``."""
+    hmac_secret = "test-hmac-secret"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": hmac_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    captured = AsyncMock()
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(hmac_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch(
+                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
+                new=AsyncMock(return_value=hmac_secret),
+            ),
+            patch("modulo.core.audit_coverage.append_audit_event", new=captured),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Modulo-Timestamp": str(ts),
+                    "X-Modulo-Webhook-Secret": signature,
+                },
+            )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202, resp.text
+    assert captured.call_count == 1, f"expected exactly one audit event, got {captured.call_count}"
+    assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
@@ -538,6 +610,47 @@ def test_receive_webhook_concurrent_limit_returns_429(client: TestClient) -> Non
         )
 
     assert resp.status_code == 429
+
+
+def test_receive_webhook_archived_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
+    409 at the create_run choke point - never a generic 500, never a fake
+    2xx ack (the sender must see the refusal)."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": "1700000000"},
+        )
+
+    assert resp.status_code == 409
+    assert "archived" in resp.json()["detail"]
+
+
+def test_replay_webhook_soft_deleted_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: a replay of a run whose pipeline has since been soft-deleted
+    (or archived) is refused with 409 at the create_run choke point."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    event_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="deleted")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+            headers=_auth_headers("admin"),
+        )
+
+    assert resp.status_code == 409
+    assert "deleted" in resp.json()["detail"]
 
 
 def test_receive_webhook_snapshot_lock_busy_returns_503_error(client: TestClient) -> None:

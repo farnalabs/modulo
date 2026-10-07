@@ -1003,7 +1003,7 @@ async def test_ensure_default_org_seed_failure_is_non_fatal(monkeypatch: pytest.
 
 
 @pytest.mark.anyio
-async def test_boot_seed_ok(capsys: pytest.CaptureFixture) -> None:
+async def test_boot_seed_ok(capsys: pytest.CaptureFixture[str]) -> None:
     async def _coro() -> str:
         return "3 rows"
 
@@ -1013,7 +1013,7 @@ async def test_boot_seed_ok(capsys: pytest.CaptureFixture) -> None:
 
 
 @pytest.mark.anyio
-async def test_boot_seed_failed(capsys: pytest.CaptureFixture) -> None:
+async def test_boot_seed_failed(capsys: pytest.CaptureFixture[str]) -> None:
     async def _coro() -> None:
         raise RuntimeError("boom")
 

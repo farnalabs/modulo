@@ -245,3 +245,86 @@ its data across a port change; but any external references to the old port
 | Production | Backend (JSON structured) | `journalctl` or log file per deployment config |
 | Production | Postgres slow query log | `postgresql-<date>.log` (configurable via `log_min_duration_statement`) |
 | Production | Nginx/Ingress | Access and error logs per ingress controller |
+
+## FAR-1526 worker-log defect sweep (2026-10-06)
+
+Three defects observed in the production worker log. Each: the root cause, the
+observation that proved it, and what changed.
+
+### 1. `connector_health_checks` failed every connector with an RLS-context error
+
+**Cause.** The sweep runs on the cross-org system session factory
+(`modulo_system`, BYPASSRLS), which deliberately never calls `set_rls_org` — so
+the session carries no `app.organisation_id`. `FernetSecretsBackend.get_secret`
+refuses to read the `secrets` table without one and raised
+`RuntimeError: FernetSecretsBackend: RLS organisation context not set` for
+**every** instance; the hub then skipped each connector and the sweep persisted
+the unhelpful `ConnectorNotFoundError: 'Connector not found: <uuid>'` as the
+health error.
+
+**Observation.** All five active prod connectors showed
+`ConnectorNotFoundError` on the 2026-10-06 16:00 tick (`get_integration_status`),
+and a regression test run without the fix reproduced the exact
+`RuntimeError ... RLS organisation context not set` traceback from
+`fernet.py:_read_org_id_from_session`.
+
+**Fix.** `_check_instance` now binds the instance's own org on the check's
+transaction (`set_rls_org(session, ci.organisation_id)`) before building the
+secrets backend — the secret read is per-org scoped, never unscoped — and a
+skipped instance records the hub's own skip reason instead of a bare
+`ConnectorNotFoundError`. Tenancy is tightened, not weakened: the GUC is
+transaction-local and the BYPASSRLS role's row visibility is unchanged.
+
+### 2. `model_backend_hub` `KeyError: '<backend-uuid>'` every ~40-70s
+
+**Cause.** A model backend with **no stored credentials at all** (no `secrets`
+row **and** no `credentials_ciphertext`). `ModelBackendHub.initialise` re-raised
+the secrets backend's bare `KeyError('<backend-uuid>')`, which was logged with a
+full traceback on every run's hub init — the cadence of prod runs. In production
+this was backend `4a170ce2-4598-4c38-b927-f9b491275ad6`
+(`openrouter-free-models-router`), which the integration status reports as
+`Has Credentials: no`.
+
+**Observation.** Prod API: that UUID maps to `openrouter-free-models-router`;
+its credentials are absent. Without the fix a unit test reproduces the exact
+`KeyError: '<uuid>'` + traceback shape.
+
+**Fix.** The branch now raises the typed
+`BackendCredentialsMissingError` (a `BackendDecryptError` subclass, so every
+existing credential-failure handler still catches it) whose message names the
+backend, the provider and the remedy; the initialisation-failure log carries
+full detail once per backend per process and a compact repeat line after that.
+Still loud on every occurrence — never a traceback flood, never silent.
+
+### 3. `SandboxNodeFailedError: agent produced no output for 600s`
+
+**Cause.** The stall watchdog did its job: `_consume_stream` in
+`bundled_runner/runner_dispatch.py` measures silence on the command's exec
+stream, and the observed node's own `agent_command` (the dogfood *Improve
+Security* pipeline) pipes each `opencode run` attempt through
+`... | tee /tmp/oc.log | tail -80`. Non-`-f` `tail` emits nothing until its
+stdin reaches EOF, so a single attempt is silent on the stream for its whole
+duration — and the command allows `timeout 700` per attempt against a 600s
+no-output stall window. An attempt longer than 600s therefore trips the stall
+by construction; retries burn, then the run terminal-fails. E2B provisioning is
+not implicated.
+
+**Observation.** Prod run `7d6d53c9-e621-4d16-b904-57ad81f4bb3e` (Improve
+Security, cron): `error_code=node.cancelled`, detail
+`Sandbox node failed (transient) after retries exhausted: agent produced no
+output for 600s`; the pipeline graph shows the `timeout 700 ... | tail -80`
+command and the 600s default stall window.
+
+**Fix (code).** The retries-exhausted `SandboxNodeFailedError` now writes its
+own canonical code — `sandbox.no_output_json`, the code `LEGACY_ALIASES`
+already maps the exception class name to — instead of the generic
+`node_cancelled` whose guidance reads "Node was cancelled."; the two surfaces
+no longer disagree about the same failure. Hang deaths keep `node_cancelled`:
+the `"likely hung"` marker is what excludes them from `failure` retries
+(FAR-136) and what the daily-watcher hang-death detector keys on.
+
+**Fix (external, not in this repo).** The *Improve Security* agent command
+needs either live-streaming output (drop the `| tail -80` / add `stdbuf -oL`),
+a per-attempt budget below the stall window, or a raised
+`stall_timeout_override` on the node — that pipeline config lives on the
+deployment, not in product code.

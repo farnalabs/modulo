@@ -733,7 +733,7 @@ async def export_lifecycle_map_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_LIFECYCLE_MAP_LIST),
     # FAR-1514: request-time team gate, RLS-parity with the DB policy added by
-    # migration 0286 (the resolver 404s a missing row, same as the route).
+    # migration 0287 (the resolver 404s a missing row, same as the route).
     _: TenantPrincipal = require_team_membership_or_admin(resolve_lifecycle_map_team_scope),
 ) -> LifecycleMapTransfer:
     """Export a lifecycle map's active-version content as a portable envelope."""

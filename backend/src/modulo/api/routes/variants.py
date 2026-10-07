@@ -17,10 +17,11 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission
-from modulo.api.routes.runs import _mask_output_value, _serialize_node_token_usage
+from modulo.api.routes.runs import _mask_output_value, _serialize_node_token_usage, pipeline_not_runnable_http
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
+from modulo.core.exceptions import PipelineNotRunnableError
 from modulo.db.crud.run import get_run
 from modulo.db.crud.variant_group import (
     check_pipeline_run_quota,
@@ -617,6 +618,16 @@ async def run_variant(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: variant runs go through the same create_run choke point —
+        # an archived/soft-deleted pipeline is refused with 409 Conflict, not
+        # a generic 500.
+        _log.warning(
+            "variants.run_variant pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except HTTPException:
         raise
     except Exception:
@@ -709,6 +720,16 @@ async def run_batch(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
         ) from None
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: a batch is all-or-nothing through the create_run choke
+        # point — an archived/soft-deleted pipeline refuses the whole batch
+        # with 409 Conflict, not a generic 500.
+        _log.warning(
+            "variants.run_batch pipeline_not_runnable pipeline=%s state=%s",
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
     except HTTPException:
         raise
     except Exception:

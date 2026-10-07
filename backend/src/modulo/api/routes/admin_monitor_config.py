@@ -8,8 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_feature, require_system_permission
-from modulo.auth.dependencies import get_current_tenant_user
+from modulo.api.dependencies import get_db_session, require_feature, require_system_permission, resolve_audit_principal
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.db.crud.system_config import get_config, update_config
@@ -124,7 +123,7 @@ async def get_monitor_config(
     "",
     response_model=MonitorConfigResponse,
     dependencies=[
-        Depends(audited("monitor_config_updated", "monitor_config", principal_dep=get_current_tenant_user)),
+        Depends(audited("monitor_config_updated", "monitor_config", principal_dep=resolve_audit_principal)),
         require_feature("error_tracking"),
     ],
 )

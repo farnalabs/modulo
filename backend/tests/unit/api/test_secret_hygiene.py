@@ -71,7 +71,7 @@ class TestCreateAgentNoLeak(AuthContext):
             prompt_template="You are a test agent.",
         )
 
-        assert result["error"] == "internal_error"
+        assert result["error"] == "server_error"
         assert result["detail"] == "Failed to create agent"
         # The raw exception text must NOT appear in the response
         assert "10.0.0.54" not in result["detail"]

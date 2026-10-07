@@ -114,7 +114,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
 
     Expected tables are derived from information_schema (tables with an
     organisation_id column) so this test stays accurate as new tables are added.
-    The eight team-scoped tables (0124 + 0286) intentionally carry
+    The eight team-scoped tables (0124 + 0287) intentionally carry
     ``rls_team_isolation`` (which includes the org check) instead of the
     org-only policy — they are asserted by
     ``test_team_scoped_tables_have_no_org_only_policy``.
@@ -125,7 +125,7 @@ async def test_rls_policies_exist_on_all_org_scoped_tables(
         "model_backends",
         "environment_profiles",
         "library_primitives",
-        # FAR-1514 (0286): the last neither-layer tables moved from the
+        # FAR-1514 (0287): the last neither-layer tables moved from the
         # org-only policy to the team policy.
         "lifecycle_maps",
         "eval_datasets",
@@ -352,12 +352,12 @@ async def test_register_rls_reset_hook_clears_gucs_on_checkout(db_engine: AsyncE
 
 
 async def test_rls_team_isolation_policies_exist(db_engine: AsyncEngine) -> None:
-    """Team-scoped tables carry rls_team_isolation (0025 + 0124 + 0286).
+    """Team-scoped tables carry rls_team_isolation (0025 + 0124 + 0287).
 
     Checks every table in the Phase-1 team-scoped set: pipelines,
     connector_instances, model_backends, library_primitives (original set),
     environment_profiles (0124), and lifecycle_maps / eval_datasets /
-    eval_suites (FAR-1514, migration 0286).
+    eval_suites (FAR-1514, migration 0287).
     """
     async with db_engine.connect() as conn:
         tables_with_policy = {
@@ -792,7 +792,7 @@ async def test_run_node_outputs_repo_module_org_gates(
 
 
 async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine) -> None:
-    """The OR'd org-only RLS policy was dropped on team-scoped tables (0124, 0286).
+    """The OR'd org-only RLS policy was dropped on team-scoped tables (0124, 0287).
 
     Regression guard for the cross-team leak: a team-scoped table must carry
     ONLY the team-visibility policy (which includes the org check), never the
@@ -800,7 +800,7 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
     (``lifecycle_map_stages`` and the other derived projections) must keep
     their org policy and must NOT gain a team/account policy.
 
-    Scope history: 0124 closed the original five tables; 0286 (FAR-1514)
+    Scope history: 0124 closed the original five tables; 0287 (FAR-1514)
     closed the last three — ``lifecycle_maps``, ``eval_datasets`` and
     ``eval_suites`` — which previously had NEITHER a team policy NOR, in
     ``lifecycle_maps``' case, a request-time route gate. ``lifecycle_maps`` was
@@ -826,7 +826,7 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
         "model_backends",
         "environment_profiles",
         "library_primitives",
-        # FAR-1514 (0286):
+        # FAR-1514 (0287):
         "lifecycle_maps",
         "eval_datasets",
         "eval_suites",
@@ -840,7 +840,7 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
     # from every other member of the organisation, and adding a policy that
     # ORs with rls_org_isolation would be dead weight (Postgres ORs
     # permissive policies). See the PR #2125 discussion. The map itself is
-    # now team-gated by 0286, so a non-member's stages are unreachable anyway
+    # now team-gated by 0287, so a non-member's stages are unreachable anyway
     # (the map read 404s first).
     org_only_tables = {"lifecycle_map_stages"}
 
@@ -875,7 +875,7 @@ async def test_team_scoped_tables_have_no_org_only_policy(db_engine: AsyncEngine
 
 
 # ---------------------------------------------------------------------------
-# FAR-1514 / migration 0286 — enforcement on the three neither-layer tables
+# FAR-1514 / migration 0287 — enforcement on the three neither-layer tables
 # ---------------------------------------------------------------------------
 
 _TEAM_RLS_TEST_TABLES: tuple[str, ...] = ("lifecycle_maps", "eval_datasets", "eval_suites")
@@ -925,7 +925,7 @@ async def test_lifecycle_and_eval_tables_team_rls_enforcement(
 ) -> None:
     """FAR-1514: ``lifecycle_maps`` / ``eval_datasets`` / ``eval_suites`` enforce team isolation.
 
-    Migration 0286 moved these three tables from org-only RLS to
+    Migration 0287 moved these three tables from org-only RLS to
     ``rls_team_isolation`` (0124 pattern: org check AND the visibility matrix
     AND the execution-context escape hatch). For each table this seeds a
     team-private row (``visibility='team'``, ``owner_team_id`` = team A) and an

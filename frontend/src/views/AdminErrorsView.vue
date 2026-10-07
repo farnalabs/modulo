@@ -6,8 +6,51 @@
     ]" />
     <PageHeader :title="$t('views.AdminErrorsView.error_dashboard')" :subtitle="$t('views.AdminErrorsView.monitor_and_manage_errors_across_your_organisation')" />
 
+    <!-- Instance scope (FAR-1547): system admins can switch the dashboard to
+         the SYSTEM_ORG_ID sentinel partition (instance-level / unattributed
+         errors). Hidden entirely for tenant users — they can never read it. -->
     <div
-      v-if="starvationItems.length > 0"
+      v-if="isSystemAdmin"
+      class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2"
+      role="group"
+      :aria-label="$t('views.AdminErrorsView.scope_group_label')"
+      data-testid="admin-errors-scope"
+    >
+      <span class="text-sm font-medium text-muted-foreground">{{ $t('views.AdminErrorsView.scope_label') }}</span>
+      <div class="inline-flex rounded-lg border border-input bg-background p-0.5">
+        <button
+          type="button"
+          class="rounded-md px-3 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="!isInstanceScope ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          :aria-pressed="!isInstanceScope"
+          data-testid="admin-errors-scope-organisation"
+          @click="setScope('organisation')"
+        >
+          {{ $t('views.AdminErrorsView.scope_organisation') }}
+        </button>
+        <button
+          type="button"
+          class="rounded-md px-3 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="isInstanceScope ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+          :aria-pressed="isInstanceScope"
+          data-testid="admin-errors-scope-instance"
+          @click="setScope('instance')"
+        >
+          {{ $t('views.AdminErrorsView.scope_instance') }}
+        </button>
+      </div>
+      <p
+        v-if="isInstanceScope"
+        class="basis-full text-sm text-muted-foreground sm:basis-auto"
+        aria-live="polite"
+        data-testid="admin-errors-scope-hint"
+      >
+        {{ $t('views.AdminErrorsView.scope_instance_hint') }}
+      </p>
+    </div>
+
+    <div
+      v-if="!isInstanceScope && starvationItems.length > 0"
       data-testid="scheduler-starvation"
       class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
     >
@@ -68,8 +111,8 @@
 
     <EmptyState
       v-else-if="groups.length === 0"
-      :title="$t('views.AdminErrorsView.no_error_groups_found')"
-      description="Try adjusting your filters or wait for errors to be ingested."
+      :title="isInstanceScope ? $t('views.AdminErrorsView.no_instance_error_groups_found') : $t('views.AdminErrorsView.no_error_groups_found')"
+      :description="isInstanceScope ? $t('views.AdminErrorsView.no_instance_error_groups_description') : $t('views.AdminErrorsView.no_error_groups_description')"
     />
 
     <template v-else>
@@ -184,20 +227,49 @@ import FeatureGate from '../components/FeatureGate.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import { ref, computed, watch } from 'vue'
 import { watchDebounced, useIntervalFn } from '@vueuse/core'
-import { useRouter } from 'vue-router'
-import { fetchErrorGroups, fetchSchedulerStarvation, type ErrorGroupSummary, type FetchErrorGroupsParams, type SchedulerStarvationResponse } from '../lib/api/errors'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  fetchErrorGroups,
+  fetchSchedulerStarvation,
+  type ErrorGroupSummary,
+  type ErrorListResponse,
+  type FetchErrorGroupsParams,
+  type SchedulerStarvationResponse,
+} from '../lib/api/errors'
+import { api } from '../lib/api/client'
+import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
-import { formatApiError } from "../lib/api/formatError"
+import { formatApiError, throwOnError } from "../lib/api/formatError"
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
+const { isSystemAdmin } = useCurrentUser()
+
+// FAR-1547: the instance scope reads the SYSTEM_ORG_ID sentinel partition
+// (system admin only). The query param is the single source of truth so the
+// scope survives the trip to the detail view and back; a forged ?scope=instance
+// from a non-system-admin resolves to the tenant scope here AND is refused 403
+// by the backend, so a tenant can never see (or be shown) instance rows.
+const scope = computed<'organisation' | 'instance'>(() =>
+  isSystemAdmin.value && route.query.scope === 'instance' ? 'instance' : 'organisation',
+)
+const isInstanceScope = computed(() => scope.value === 'instance')
+
+function setScope(next: 'organisation' | 'instance') {
+  if (next === scope.value) return
+  router.push({
+    path: '/admin/errors',
+    query: next === 'instance' ? { scope: 'instance' } : {},
+  })
+}
 
 const limit = ref(20)
 const offset = ref(0)
@@ -222,8 +294,21 @@ watch([filterLevel, filterStatus, filterSource], () => {
   loadGroups()
 })
 
+// FAR-1547: organisation scope reads the tenant partition (existing helper);
+// instance scope reads the system-admin-only sentinel partition. Both share
+// the same filters, pagination and rendering.
+async function fetchGroups(): Promise<ErrorListResponse> {
+  const params = buildParams()
+  if (!isInstanceScope.value) return fetchErrorGroups(params)
+  return throwOnError(
+    await api.GET('/api/v1/errors/instance', {
+      params: { query: params as unknown as Record<string, unknown> },
+    }),
+  ) as ErrorListResponse
+}
+
 const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(
-  () => fetchErrorGroups(buildParams()).then(
+  () => fetchGroups().then(
     d => ({ data: d }),
     e => ({ error: { detail: `Failed to load error groups: ${formatApiError(e)}` } }),
   ),
@@ -242,10 +327,15 @@ const total = computed(() => groupsData.value?.total ?? 0)
 // re-polled every 60s — useDataFetch's staleTime would otherwise freeze the
 // data at the mount fetch (refetchOnWindowFocus is disabled app-wide).
 const { data: starvationData, load: loadStarvation } = useDataFetch<SchedulerStarvationResponse>(
-  () => fetchSchedulerStarvation().then(
-    d => ({ data: d }),
-    e => ({ error: { detail: `Failed to load scheduler starvation: ${formatApiError(e)}` } }),
-  ),
+  // Instance scope reads the sentinel partition, which has no pipelines of its
+  // own: the starvation query is tenant-scoped, so skip it rather than polling
+  // the caller's org from the instance view.
+  () => (isInstanceScope.value
+    ? Promise.resolve({ data: { items: [], total: 0, threshold_minutes: 10 } })
+    : fetchSchedulerStarvation().then(
+        d => ({ data: d }),
+        e => ({ error: { detail: `Failed to load scheduler starvation: ${formatApiError(e)}` } }),
+      )),
   { initialValue: { items: [], total: 0, threshold_minutes: 10 } },
 )
 useIntervalFn(loadStarvation, 60_000)
@@ -271,6 +361,15 @@ function toggleMessage(id: string) {
   }
   expandedMessageIds.value = next
 }
+
+// A scope switch re-queries against a different partition: reset pagination
+// and the per-row expand state, then reload through the new scope's endpoint.
+watch(scope, () => {
+  currentPage.value = 1
+  offset.value = 0
+  expandedMessageIds.value = new Set()
+  loadGroups()
+})
 
 function formatStarvationAge(minutes: number): string {
   if (minutes < 120) return t('views.AdminErrorsView.scheduler_starvation_age_minutes', { minutes: Math.round(minutes) })
@@ -321,6 +420,12 @@ function prevPage() {
 }
 
 function navigateToDetail(id: string) {
+  if (isInstanceScope.value) {
+    // Carry the scope so the detail view reads (and renders read-only) the
+    // same sentinel partition the row came from.
+    router.push({ path: `/admin/errors/${id}`, query: { scope: 'instance' } })
+    return
+  }
   router.push(`/admin/errors/${id}`)
 }
 

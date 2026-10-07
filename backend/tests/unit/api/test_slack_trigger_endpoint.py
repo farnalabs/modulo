@@ -15,6 +15,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +27,7 @@ from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import make_system_session_mock
+from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -33,6 +35,24 @@ _TRIGGER_ID = uuid.uuid4()
 _RUN_ID = uuid.uuid4()
 _SECRET = "my-slack-signing-secret"
 _CHALLENGE = "3eZbrw1aBm2rZgRNFdxV2598559m"
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1516: stub the fresh ``audit_session`` the ``audited_system(...)``
+    dependency writes on (a real engine — no database in the unit tier); the
+    dependency itself still runs."""
+    session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    @asynccontextmanager
+    async def _factory() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
 
 
 def _make_settings() -> Settings:
@@ -442,6 +462,31 @@ def test_app_mention_trigger_busy_records_delivery_then_acks(client: TestClient)
     assert kwargs["org_id"] == _ORG_ID
     assert kwargs["trigger_type"] == "slack_app_mention"
     assert len(kwargs["payload_hash"]) == 64
+
+
+def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
+    """FAR-1528: an archived/soft-deleted pipeline refuses the delivery with
+    409 at the create_run choke point - never a generic 500."""
+    from modulo.core.exceptions import PipelineNotRunnableError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        # FAR-1287: the route snapshots the pipeline before dispatch, and the
+        # snapshot's advisory lock is resolved onto a dedicated engine.
+        patch("modulo.db.crud.pipeline_snapshot._dedicated_lock_engine", return_value=_lock_engine_stub()),
+    ):
+        m.side_effect = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 409
+    assert "archived" in resp.json()["detail"]
 
 
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:

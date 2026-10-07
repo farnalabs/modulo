@@ -143,7 +143,8 @@ async def test_passing_json_schema_eval_completes_and_persists(monkeypatch: pyte
     final_status, error_code, _error_detail, _node_token_usage = result
     assert final_status == "complete"
     assert error_code is None
-    assert ("run_completed", {}) in [c.args for c in broker.publish.call_args_list]
+    # FAR-1534: run_completed is published post-finalize, not by _stream_graph.
+    assert "run_completed" not in [c.args[0] for c in broker.publish.call_args_list]
 
     assert len(session.added) == 1
     row = session.added[0]
@@ -189,7 +190,8 @@ async def test_no_eval_definitions_runs_no_evals_and_completes(monkeypatch: pyte
     final_status, error_code, _error_detail, _node_token_usage = result
     assert final_status == "complete"
     assert error_code is None
-    assert ("run_completed", {}) in [c.args for c in broker.publish.call_args_list]
+    # FAR-1534: run_completed is published post-finalize, not by _stream_graph.
+    assert "run_completed" not in [c.args[0] for c in broker.publish.call_args_list]
 
 
 async def test_no_eval_definitions_for_this_node_skips_evals(monkeypatch: pytest.MonkeyPatch):
@@ -224,7 +226,8 @@ async def test_warn_eval_failure_logs_warning_and_run_continues(monkeypatch: pyt
     final_status, error_code, _error_detail, _node_token_usage = result
     assert final_status == "complete"
     assert error_code is None
-    assert ("run_completed", {}) in [c.args for c in broker.publish.call_args_list]
+    # FAR-1534: run_completed is published post-finalize, not by _stream_graph.
+    assert "run_completed" not in [c.args[0] for c in broker.publish.call_args_list]
     # The eval engine logs the warn-level failure; the post-node path persists a
     # failed row but does NOT block the run.
     assert any("JSON Schema validation failed" in r.message for r in caplog.records)

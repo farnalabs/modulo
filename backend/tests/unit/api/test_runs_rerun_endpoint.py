@@ -28,6 +28,7 @@ from modulo.api.main import app
 from modulo.api.routes import runs as runs_module
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.exceptions import PipelineNotRunnableError
 from modulo.settings import Settings, get_settings
 
 _VALID_32 = "a" * 32
@@ -440,6 +441,28 @@ def test_rerun_snapshot_row_missing_returns_409(client: TestClient, mock_session
     assert resp.status_code == 409
     assert "snapshot" in resp.json()["detail"]
     create_run_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("state", ["archived", "deleted"], ids=["archived-pipeline", "soft-deleted-pipeline"])
+def test_rerun_non_runnable_pipeline_returns_409(client: TestClient, state: str) -> None:
+    """FAR-1528: a rerun of a run whose pipeline has since been archived or
+    soft-deleted is refused with 409 at the create_run gate, not a 500."""
+    source_run = _make_source_run()
+
+    with (
+        patch("modulo.api.routes.runs.get_run", return_value=source_run),
+        patch("modulo.api.routes.runs.get_pipeline", return_value=_make_pipeline()),
+        patch(
+            "modulo.api.routes.runs.create_run",
+            side_effect=PipelineNotRunnableError(pipeline_id=_PIPELINE_ID, state=state),
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/runs/{_SOURCE_RUN_ID}/rerun", json={})
+
+    assert resp.status_code == 409
+    assert state in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

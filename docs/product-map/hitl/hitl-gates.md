@@ -42,6 +42,7 @@ bdd:
   - backend/tests/bdd/features/hitl/claim.feature
   - backend/tests/bdd/features/hitl/approve.feature
   - backend/tests/bdd/features/hitl/reject.feature
+  - backend/tests/integration/test_hitl_reject_bdd.py
   - backend/tests/bdd/features/hitl/deliver_manual.feature
   - backend/tests/bdd/features/hitl/manual_node.feature
   - backend/tests/bdd/features/hitl/gate_policies.feature
@@ -167,7 +168,12 @@ may decide.
       a removed hitl node or an explicit `human_only: false` write on one is
       denied for non-privileged callers and audited for operator+). Legacy
       stored gates whose config lacks the flag become human-only under the
-      default.
+      default. Switching a gate TO `on_reject: proceed` (from `terminate` or
+      unset) is likewise a weakening change on both gate shapes (FAR-1532) –
+      it restores continue-on-reject – while changing away from `proceed` is
+      not. Adding a truthy `correction_target` where none was set is the same
+      weakening (FAR-1532): an automated correction wins over terminating, so
+      it is the parallel vector for the exact continue-on-reject relaxation.
       Claim is human_only too – a non-browser credential can neither CLAIM
       nor decide a human_only gate (REST claim route + MCP `review_hitl`
       claim action both enforce it), and reject is NOT an agent escape

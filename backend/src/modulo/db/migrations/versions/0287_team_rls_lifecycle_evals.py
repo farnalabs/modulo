@@ -1,8 +1,12 @@
 """Add DB team RLS to the last neither-layer tables (FAR-1514).
 
-Revision ID: 0286_team_rls_lifecycle_evals
-Revises: 0285_system_audit_events
+Revision ID: 0287_team_rls_lifecycle_evals
+Revises: 0286_pipeline_run_state
 Create Date: 2026-10-06
+
+Renumbered from ``0286_team_rls_lifecycle_evals`` to ``0287`` at merge time:
+``origin/main`` had already claimed slot 0286 with ``0286_pipeline_run_state``,
+so this migration now chains onto that one (single linear head preserved).
 
 ``lifecycle_maps``, ``eval_datasets`` and ``eval_suites`` all carry
 ``visibility`` + ``owner_team_id`` (and the ``visibility IN ('org','team')`` /
@@ -62,8 +66,8 @@ import re
 
 from alembic import op
 
-revision: str = "0286_team_rls_lifecycle_evals"
-down_revision: str | None = "0285_system_audit_events"
+revision: str = "0287_team_rls_lifecycle_evals"
+down_revision: str | None = "0286_pipeline_run_state"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

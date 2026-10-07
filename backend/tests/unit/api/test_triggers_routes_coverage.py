@@ -26,7 +26,7 @@ from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.exceptions import OrgDeletedError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -903,6 +903,35 @@ def test_test_trigger_org_deleted_mapping(
             c.__exit__(None, None, None)
 
     assert resp.status_code == expected, resp.text
+
+
+@pytest.mark.parametrize("state", ["archived", "deleted"], ids=["archived-pipeline", "soft-deleted-pipeline"])
+def test_test_trigger_non_runnable_pipeline_mapping(
+    client: tuple[TestClient, AsyncMock],
+    state: str,
+) -> None:
+    """FAR-1528: the test run is refused with 409 at the create_run gate when
+    the target pipeline is archived/soft-deleted - never a generic 500."""
+    http, session = client
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger(trigger_type="manual")]))
+    ctxs = list(_happy_patches())
+    ctxs.append(patch(f"{_PREFIX}create_snapshot_from_live_graph", new=AsyncMock(return_value=MagicMock())))
+    ctxs.append(
+        patch(
+            f"{_PREFIX}create_run",
+            new=AsyncMock(side_effect=PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state=state)),
+        )
+    )
+    for c in ctxs:
+        c.__enter__()
+    try:
+        resp = http.post(f"/api/v1/triggers/{_TRIGGER_ID}/test", json={})
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+    assert resp.status_code == 409, resp.text
+    assert state in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

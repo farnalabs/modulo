@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -47,6 +48,13 @@ def _alembic_config(db_url: str) -> Config:
     # Skip fileConfig so we don't stomp module loggers (mirrors conftest).
     config.config_file_name = None
     return config
+
+
+def _migration_head(config: Config) -> str:
+    """The script's single Alembic head — the revision the shared DB sits at."""
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None, "migration script must define a head"
+    return head
 
 
 async def _count_fk(engine, table: str) -> list[str]:
@@ -92,6 +100,15 @@ async def test_0120_org_fk_hardening_on_drifted_schema(migrated_db_url, monkeypa
     # env.py upgrade path runs 0120 against live Postgres.
     monkeypatch.setenv("DATABASE_URL", db_url)
     config = _alembic_config(db_url)
+
+    # The shared DB is already at the true migration head. Capture it so the
+    # finally block restores the head rather than a hardcoded revision: once
+    # 0120 stopped being the head, restoring "0120_org_fk_hardening" left the
+    # shared DB's alembic_version behind, so the next boot that ran
+    # ``alembic upgrade heads`` replayed 0121..head and failed with
+    # ``DuplicateTable: relation "library_sync_state" already exists``
+    # (deploy pre-deploy-gate failure, 2026-10-06).
+    head_rev = _migration_head(config)
 
     engine = create_async_engine(db_url, poolclass=NullPool)
 
@@ -182,6 +199,8 @@ async def test_0120_org_fk_hardening_on_drifted_schema(migrated_db_url, monkeypa
             await conn.execute(text("DROP TABLE IF EXISTS t_orgfk_clean"))
             await conn.execute(text("DROP TABLE IF EXISTS t_orgfk_orphan"))
             await conn.execute(text("DELETE FROM organisations WHERE slug IN ('valid-org', 'del-org')"))
-            # Best-effort restore of the migration head on the shared test DB.
-            await conn.execute(text("UPDATE alembic_version SET version_num = '0120_org_fk_hardening'"))
+            # Restore the shared test DB to the true migration head (computed
+            # above) — never a hardcoded revision, which goes stale the moment
+            # a later migration lands on main.
+            await conn.execute(text("UPDATE alembic_version SET version_num = :rev"), {"rev": head_rev})
         await engine.dispose()

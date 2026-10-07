@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
-from modulo.core.exceptions import TriggersPausedError
+from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
 from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
@@ -99,6 +99,10 @@ FIRE_JOB_TTL = 300
 # Advisory-lock SQL and paused-trigger skip log message (S1192). Pure aliases.
 _SQL_TRY_ADVISORY_LOCK = "SELECT pg_try_advisory_xact_lock(:key1, :key2)"
 _LOG_TRIGGERS_PAUSED_SKIP = "triggers.paused.skip trigger=%s org=%s"
+# FAR-1528 companion: the pipeline-state gate refusal (archived / soft-deleted
+# pipeline) seen by a per-item fire job. Same quiet, typed-skip treatment as
+# the pause race backstop above — logged, never raised out of the job.
+_LOG_PIPELINE_NOT_RUNNABLE_SKIP = "pipeline.not_runnable.skip trigger=%s org=%s state=%s"
 
 # Missed-fire catch-up (2026-08-10 incident). The fire_due_triggers tick
 # advances next_fire_at ATOMICALLY (claiming the epoch) and THEN enqueues the
@@ -437,6 +441,9 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "last_error": None,
     "terminalize_capped": 0,
     "facts_deferred": 0,
+    # FAR-1525 per-org time bound counters (same additive .get() contract).
+    "org_timeouts": 0,
+    "orgs_deferred": 0,
 }
 
 
@@ -478,6 +485,10 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["last_error"] = stats.get("last_error")
     _dispatcher_reconcile_stats["terminalize_capped"] = stats.get("terminalize_capped", 0)
     _dispatcher_reconcile_stats["facts_deferred"] = stats.get("facts_deferred", 0)
+    # FAR-1525 per-org time bound: carry the cut/deferred org counters into
+    # the in-process mirror (a missing copy line would silently zero them).
+    _dispatcher_reconcile_stats["org_timeouts"] = stats.get("org_timeouts", 0)
+    _dispatcher_reconcile_stats["orgs_deferred"] = stats.get("orgs_deferred", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -1419,32 +1430,62 @@ async def fire_cron_trigger(
         if skip is not None:
             return skip
 
-        if snapshot_id is None:
-            snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
-            if snapshot_id is None:
-                return {"status": "skipped", "reason": "pipeline_not_found"}
-
-        config = trigger.config_json or {}
-        from modulo.core.trigger_engine import _warn_unrecognised_config_keys
-
-        _warn_unrecognised_config_keys(trigger_id, config)
-        input_payload = config.get("input_template", {})
-
+        # FAR-1519 item 3: an unpinned cron fire freezes the CURRENT live
+        # graph here (auto-create below), exactly like the manual/webhook/
+        # slack/test paths and like this function's own catch-up callers —
+        # never the "latest existing snapshot", which goes stale the moment
+        # the graph is edited and made every post-edit cron run execute the
+        # first snapshot forever. Only an explicit config pin bypasses this.
+        #
+        # FAR-1536: the auto-create and create_run share a SAVEPOINT. Every
+        # return out of this function (including skips) COMMITs the enclosing
+        # transaction, so the pause-race skip below would otherwise persist an
+        # unreferenced snapshot — a row no run points at, minted by a fire that
+        # did nothing. Rolling back to the savepoint restores the invariant
+        # "a fire that skips writes no snapshot" for this path. The skip itself
+        # is unchanged: only the savepoint rolls back, the outer transaction
+        # still commits, so the job still returns skipped (never a failed job
+        # that only becomes a skip after an SAQ retry).
         try:
-            run = await create_run(
-                session,
-                org_id=org_id,
-                pipeline_id=pipeline_id,
-                snapshot_id=snapshot_id,
-                trigger_type="cron",
-                trigger_id=trigger_id,
-                input_payload=input_payload,
-            )
+            async with session.begin_nested():
+                if snapshot_id is None:
+                    snapshot_id = await _auto_create_snapshot(session, trigger, org_id, pipeline_id)
+                    if snapshot_id is None:
+                        # The no_pipeline TriggerEvent and last_fired_at stamp
+                        # inside _auto_create_snapshot are meant to persist
+                        # (skip-not-defer, review PR #982): leaving the
+                        # savepoint normally RELEASEs it into the outer txn.
+                        return {"status": "skipped", "reason": "pipeline_not_found"}
+
+                config = trigger.config_json or {}
+                from modulo.core.trigger_engine import _warn_unrecognised_config_keys
+
+                _warn_unrecognised_config_keys(trigger_id, config)
+                input_payload = config.get("input_template", {})
+
+                run = await create_run(
+                    session,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    snapshot_id=snapshot_id,
+                    trigger_type="cron",
+                    trigger_id=trigger_id,
+                    input_payload=input_payload,
+                )
         except TriggersPausedError:
             # TOCTOU race backstop: the org was paused between the early check
             # and create_run. Skip, no paused TriggerEvent (race backstop only).
+            # The savepoint above rolled back the auto-created snapshot with it.
             _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
             return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+        except PipelineNotRunnableError as exc:
+            # FAR-1528: the pipeline was archived/soft-deleted. Mirrors the
+            # pause skip exactly — quiet typed skip, NO TriggerEvent, NO
+            # last_fired_at write — so an archived pipeline's still-active
+            # trigger is a per-tick skip instead of a job that fails on every
+            # tick (next_fire_at was already advanced at enqueue time).
+            _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+            return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
         event = await _log_event(
             session,
@@ -1621,6 +1662,12 @@ async def _run_poll_fire(
     except TriggersPausedError:
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         return {"status": "skipped", "reason": PAUSE_SKIP_REASON}
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: archived/soft-deleted pipeline — same quiet typed skip as
+        # the pause race above (no TriggerEvent, no last_fired_at write), so
+        # the refusal never escapes as an SAQ job failure every poll cycle.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        return {"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON}
 
     event = await _log_poll_event(
         session,
@@ -2173,6 +2220,15 @@ async def _create_ongoing_runs(
         _log.info(_LOG_TRIGGERS_PAUSED_SKIP, trigger_id, org_id)
         if outcome is not None:
             outcome.update({"status": "skipped", "reason": PAUSE_SKIP_REASON})
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the pipeline was archived/soft-deleted mid-loop — stop
+        # creating, exactly like the pause backstop above. Runs already created
+        # stay (dispatched below); the refusal lands in the outcome envelope as
+        # a quiet typed skip (no TriggerEvent, no last_fired_at write) so the
+        # top-up job returns instead of failing on every tick.
+        _log.info(_LOG_PIPELINE_NOT_RUNNABLE_SKIP, trigger_id, org_id, exc.state)
+        if outcome is not None:
+            outcome.update({"status": "skipped", "reason": PIPELINE_NOT_RUNNABLE_SKIP_REASON})
 
     if created:
         await session.execute(update(Trigger).where(Trigger.id == trigger_id).values(last_fired_at=now))
@@ -3404,15 +3460,17 @@ async def _process_due_cron_scan(
         _log.exception("fire_due_triggers: cron read failed (org %s)", org_id)
         cron_rows = []
 
-    pipelines_needing_snapshots = {
-        row.pipeline_id for row in cron_rows if not (row.config_json or {}).get("snapshot_id")
-    }
-    latest_snapshots = await _resolve_latest_snapshots(session, pipelines_needing_snapshots)
-
     # ``advanced_this_tick`` tracks epochs THIS tick advanced AND enqueued (or
     # SAQ-deduped as already handled). The missed-fire catch-up scan excludes
     # them so it can never double-fire a trigger the normal loop already fired
     # this tick.
+    #
+    # FAR-1519 item 3: NO latest-snapshot pre-resolution for cron rows. Only an
+    # explicit ``config_json.snapshot_id`` pin is resolved here; an unpinned
+    # fire passes None so ``fire_cron_trigger`` freezes the live graph at fire
+    # time (it used to resolve the latest EXISTING snapshot, pinning every
+    # post-edit run to the first snapshot until a manual run happened to
+    # create a newer one).
     advanced_this_tick: set[uuid.UUID] = set()
     await _process_due_cron_rows(
         session,
@@ -3422,7 +3480,6 @@ async def _process_due_cron_scan(
         org_id,
         org_paused,
         cron_rows,
-        latest_snapshots,
         advanced_this_tick,
         summary,
     )
@@ -3531,7 +3588,7 @@ async def _process_due_ongoing_scan(
         ongoing_rows = []
 
     # Pre-resolve latest snapshots per pipeline for ongoing rows WITHOUT a
-    # pinned snapshot_id (DISTINCT ON, mirroring cron).
+    # pinned snapshot_id (DISTINCT ON).
     ongoing_needing_snapshots = {
         row.pipeline_id for row in ongoing_rows if not (row.config_json or {}).get("snapshot_id")
     }
@@ -3558,9 +3615,13 @@ async def _resolve_latest_snapshots(
 ) -> dict[uuid.UUID, uuid.UUID]:
     """Resolve the latest snapshot id per pipeline (DISTINCT ON, by created_at).
 
-    Shared by the cron and ongoing scans in ``fire_due_triggers`` for the rows
-    that do NOT carry a pinned ``snapshot_id``. Returns a map of
+    Used by the ONGOING scan in ``fire_due_triggers`` for rows that do NOT
+    carry a pinned ``snapshot_id``. Returns a map of
     ``{pipeline_id: latest_snapshot_id}`` (empty when no pipeline needs one).
+
+    The CRON scan deliberately does NOT pre-resolve (FAR-1519 item 3): an
+    unpinned cron fire freezes the live graph at fire time instead of reusing
+    the latest existing snapshot, which went stale after a graph edit.
     """
     if not pipeline_ids:
         return {}
@@ -3665,11 +3726,18 @@ async def _process_one_due_cron_row(
     org_id: uuid.UUID,
     org_paused: bool,
     row: Any,
-    latest_snapshots: dict[uuid.UUID, uuid.UUID],
     advanced_this_tick: set[uuid.UUID],
     summary: dict[str, Any],
 ) -> None:
-    """Advance + enqueue ONE due cron row; roll the advance back on enqueue failure."""
+    """Advance + enqueue ONE due cron row; roll the advance back on enqueue failure.
+
+    Snapshot resolution (FAR-1519 item 3): only the explicit
+    ``config_json.snapshot_id`` pin is resolved at enqueue time — the empty
+    ``latest_snapshots`` map makes an unpinned row pass ``None`` through to
+    ``fire_cron_trigger``, which then freezes the live graph at fire time.
+    Resolving the latest EXISTING snapshot here instead pinned every post-edit
+    cron run to the first snapshot (the observed stale-snapshot defect).
+    """
     summary["cron_due"] += 1
     try:
         advanced = await _advance_cron_next_fire(session, row.id, row.cron_expression, row.cron_timezone)
@@ -3686,7 +3754,7 @@ async def _process_one_due_cron_row(
         # scheduled-path audit — no per-trigger TriggerEvent.
         summary["cron_skipped_paused"] += 1
         return
-    snapshot_id = _resolve_snapshot_id(row, latest_snapshots)
+    snapshot_id = _resolve_snapshot_id(row, {})
     if not await _enqueue_cron_fire(
         q,
         redis_client,
@@ -3730,7 +3798,6 @@ async def _process_due_cron_rows(
     org_id: uuid.UUID,
     org_paused: bool,
     cron_rows: Sequence[Any],
-    latest_snapshots: dict[uuid.UUID, uuid.UUID],
     advanced_this_tick: set[uuid.UUID],
     summary: dict[str, Any],
 ) -> None:
@@ -3744,7 +3811,6 @@ async def _process_due_cron_rows(
             org_id,
             org_paused,
             row,
-            latest_snapshots,
             advanced_this_tick,
             summary,
         )
@@ -5288,6 +5354,19 @@ _RECONCILE_BUDGET_DEFAULT_SECONDS = 95
 _RECONCILE_TERMINALIZE_DEFAULT_MAX = 25
 _RECONCILE_FACTS_DEFAULT_MAX = 25
 _RECONCILE_MAX_ROWS_DEFAULT = 500
+# FAR-1525: per-ORG time bound (the row budget bounds ROWS, not time) and the
+# tick-tail reserve that keeps record_facts + the compensating sweeps inside
+# the inner deadline even when an org runs to its bound.
+_RECONCILE_ORG_BUDGET_DEFAULT_SECONDS = 30
+# Seconds of the tick's tail never handed to an org pass: the facts writes
+# (bounded at dispatcher_reconcile_facts_max_per_tick, each an RLS session +
+# re-select) plus the compensating sweeps must still get their window after
+# the last org. Capped at a third of a tiny outer budget so a small
+# dispatcher_reconcile_budget_seconds can never starve the org loop entirely.
+_RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
+# Smallest org slice worth starting: below this the remaining budget goes to
+# record_facts / the compensating sweeps and the org is deferred, not cut.
+_RECONCILE_ORG_MIN_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -5902,6 +5981,41 @@ async def _record_fact_for_terminalized_run(run_id: uuid.UUID, org_id: uuid.UUID
         _log.warning("cron_helpers.terminalized_facts_failed run=%s", run_id, exc_info=True)
 
 
+async def _record_terminalisation_audits(entries: list[tuple[uuid.UUID, uuid.UUID]]) -> None:
+    """Record every run terminalised by dispatcher_reconcile on its audit chain (FAR-1549).
+
+    The terminalizer UPDATEs above commit inside the per-org transaction; this
+    helper runs AFTER those commits and opens its own RLS-scoped sessions — one
+    per organisation — so an audit failure can neither roll back nor be rolled
+    back by the sweep. Each run is re-selected and only recorded when its live
+    status is still terminal (the same phantom guard the facts helper applies),
+    so ids collected from a transaction that later rolled back are skipped.
+
+    SYSTEM actor (no request principal exists for a cron tick), fail-open: a
+    failure is logged under ``log_key`` and swallowed — the terminal write has
+    already happened and must not be turned into a tick failure by its own
+    record.
+    """
+    if not entries:
+        return
+    from modulo.core.audit_logger.background import record_run_state_change_audits
+
+    try:
+        await record_run_state_change_audits(
+            _open_factory(),
+            entries,
+            event_type="run.sweep_terminalised",
+            expected_statuses=TERMINAL_STATUSES,
+            actor_source="dispatcher_reconcile",
+            log_key="cron_helpers.terminalized_audit_failed",
+            summary_prefix="Run terminalised by background sweep:",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning("cron_helpers.terminalized_audits_failed", exc_info=True)
+
+
 async def run_classification_reconcile() -> dict[str, int]:
     """FAR-189 backfill: classify terminal runs missed by the inline hook.
 
@@ -6080,6 +6194,20 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         the compensating daily-fact writes at
         ``dispatcher_reconcile_facts_max_per_tick`` per tick — a big zombie
         backlog drains gradually instead of blowing the tick budget.
+      * PER-ORG TIME BOUND (FAR-1525): the row budget bounds ROWS, not time
+        — a single org whose pass hangs on a wedged await consumed the WHOLE
+        inner budget at ``stage=reconcile_org:<org-id>`` (7 consecutive prod
+        ticks, 2026-10) and never reached ``record_facts`` / the
+        compensating sweeps. Each org pass now runs under its own
+        ``asyncio.timeout`` at ``dispatcher_reconcile_org_budget_seconds``
+        (default 30s), clamped to the tick's remaining budget minus a tail
+        reserve for facts/sweeps. On expiry the org's transaction rolls back
+        at the same safe boundary, its in-memory counts and collected
+        terminalizer ids are unwound to match, a truthful ``status='timeout'``
+        + ``org_timeouts`` marker names the org, and the loop CONTINUES —
+        never a false success, never a silent no-op. The OUTER deadline
+        semantics are unchanged: it still fires only when the tick as a whole
+        exceeds ``dispatcher_reconcile_budget_seconds``.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
@@ -6223,7 +6351,26 @@ async def _dispatcher_reconcile_body(
     lifecycle. ``stage`` is the outer handler's mutable current-operation
     hint (FAR-904): the body names each stage before starting it so a
     deadline expiry can be attributed.
+
+    FAR-1525: each org pass is additionally bounded by TIME (not only by the
+    FAR-1425 row budget) via its own ``asyncio.timeout`` at
+    ``dispatcher_reconcile_org_budget_seconds``, clamped to the budget left
+    after reserving the tick tail — so one hung org can never spend the whole
+    inner budget, and ``record_facts`` + the compensating sweeps are always
+    reached.
     """
+    # FAR-1525: the tick's working clock and time knobs. Captured at body
+    # entry (the outer asyncio.timeout starts microseconds earlier —
+    # immaterial here) so each org's slice can be clamped to the budget that
+    # is actually left.
+    body_started = time.monotonic()
+    outer_budget_seconds = _int_setting(
+        getattr(_settings, "dispatcher_reconcile_budget_seconds", None), _RECONCILE_BUDGET_DEFAULT_SECONDS
+    )
+    org_budget_seconds = _int_setting(
+        getattr(_settings, "dispatcher_reconcile_org_budget_seconds", None),
+        _RECONCILE_ORG_BUDGET_DEFAULT_SECONDS,
+    )
     if stage is not None:
         stage["op"] = "collect_org_ids"
     org_ids = await _collect_org_ids(factory)
@@ -6281,24 +6428,79 @@ async def _dispatcher_reconcile_body(
             if rows_processed >= max_rows:
                 summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
                 break
+            # FAR-1525: per-organisation TIME bound. The row budget above bounds
+            # ROWS; a hung await inside ONE org's pass still had the whole inner
+            # budget to itself (prod: 7 consecutive ticks frozen at
+            # stage=reconcile_org:<org-id>, record_facts/sweeps never reached).
+            # The org's slice is ``org_budget`` clamped to the budget actually
+            # left after reserving the tick tail for record_facts + the
+            # compensating sweeps, so a bounded org can never push those stages
+            # past the OUTER deadline (whose semantics are unchanged: it still
+            # fires only for the tick as a whole).
+            remaining_seconds = outer_budget_seconds - (time.monotonic() - body_started)
+            tail_reserve = min(_RECONCILE_POST_ORGS_RESERVE_SECONDS, max(outer_budget_seconds // 3, 1))
+            org_slice_seconds = min(float(org_budget_seconds), remaining_seconds - tail_reserve)
+            if org_slice_seconds < _RECONCILE_ORG_MIN_SECONDS:
+                # Not even the minimum useful slice fits: stop starting org work
+                # (counted, drains on later 60s ticks) and spend the reserved
+                # tail on facts/sweeps instead of racing the deadline. Never a
+                # silent no-op — orgs_deferred makes the skip visible.
+                summary["orgs_deferred"] = summary.get("orgs_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                break
             rows_before = summary["scanned"]
-            enqueue_failed_redispatched = await _reconcile_org(
-                factory=factory,
-                q=q,
-                redis_client=redis_client,
-                org_id=org_id,
-                re_dispatch_predicate=re_dispatch_predicate,
-                tuning=tuning,
-                enqueue_failed_redispatched=enqueue_failed_redispatched,
-                summary=summary,
-                terminalized_run_ids=terminalized_run_ids,
-                terminalize_max=terminalize_max,
-                early_detect_minutes=early_detect_minutes,
-                # FAR-1425: hand the ORG the remainder of the tick's row budget,
-                # not just the inter-org gate.  ``rows_processed < max_rows`` is
-                # guaranteed here (the break above), so this is always >= 1.
-                row_budget=max_rows - rows_processed,
-            )
+            # FAR-1525 unwind anchors: if the bound fires, the org's transaction
+            # has rolled back, so its in-memory counts and the terminalizer ids
+            # it collected must be unwound to match — a rolled-back org must
+            # contribute neither counters nor compensating facts to the tick.
+            summary_before = dict(summary)
+            terminalized_len_before = len(terminalized_run_ids)
+            org_pass_started = time.monotonic()
+            try:
+                async with asyncio.timeout(org_slice_seconds):
+                    enqueue_failed_redispatched = await _reconcile_org(
+                        factory=factory,
+                        q=q,
+                        redis_client=redis_client,
+                        org_id=org_id,
+                        re_dispatch_predicate=re_dispatch_predicate,
+                        tuning=tuning,
+                        enqueue_failed_redispatched=enqueue_failed_redispatched,
+                        summary=summary,
+                        terminalized_run_ids=terminalized_run_ids,
+                        terminalize_max=terminalize_max,
+                        early_detect_minutes=early_detect_minutes,
+                        # FAR-1425: hand the ORG the remainder of the tick's row budget,
+                        # not just the inter-org gate.  ``rows_processed < max_rows`` is
+                        # guaranteed here (the break above), so this is always >= 1.
+                        row_budget=max_rows - rows_processed,
+                    )
+            except TimeoutError:
+                # FAR-1525: the org's pass hit the per-org bound. The session
+                # context managers inside _reconcile_org rolled back + closed at
+                # the safe boundary (same mechanism as the outer deadline), so
+                # unwind this org's in-memory accounting, record a TRUTHFUL
+                # bounded-failure marker, and CONTINUE — the remaining orgs,
+                # record_facts and the compensating sweeps still run this tick.
+                org_elapsed = time.monotonic() - org_pass_started
+                summary.clear()
+                summary.update(summary_before)
+                del terminalized_run_ids[terminalized_len_before:]
+                summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
+                summary["status"] = "timeout"
+                summary["last_error"] = (
+                    f"per-org bound after {org_elapsed:.1f}s "
+                    f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
+                    f"during stage=reconcile_org:{org_id}"
+                )[:200]
+                _log.warning(
+                    "dispatcher_reconcile: per-org time bound fired after %.1fs "
+                    "(org_budget=%ds, budget=%ds) for org %s; org transaction rolled back, tick continues",
+                    org_elapsed,
+                    org_budget_seconds,
+                    outer_budget_seconds,
+                    org_id,
+                )
+                continue
             rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -6319,6 +6521,13 @@ async def _dispatcher_reconcile_body(
             summary["facts_deferred"] += len(terminalized_run_ids) - facts_written
             break
         await _record_fact_for_terminalized_run(run_id, run_org_id)
+    # FAR-1549 — record every run terminalised this tick on its org's audit
+    # chain. Unlike the facts loop above this is deliberately UNCAPPED: a
+    # dropped daily fact is re-derivable from the run row on the next backfill,
+    # a dropped audit event is not, and the helper amortises the cost across
+    # ONE session per ORG (not one per run) so a terminalizer backlog cannot
+    # blow the tick budget the way per-run sessions would.
+    await _record_terminalisation_audits(terminalized_run_ids)
     # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
     # dispatched a node are the recurring ~30/week executor_stalled class;
     # a burst here points at degraded workers/sandboxes, not capacity.
@@ -6376,6 +6585,12 @@ def _dispatcher_summary() -> dict[str, Any]:
         "last_error": None,
         "terminalize_capped": 0,
         "facts_deferred": 0,
+        # FAR-1525 per-org time bound: orgs cut by the bound this tick (a cut
+        # org's transaction rolled back — its counts are unwound, never
+        # reported as work done) and orgs NOT started because only the
+        # reserved tail of the budget remained (drains on later ticks).
+        "org_timeouts": 0,
+        "orgs_deferred": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720) — a new terminalizer registers once below without a
@@ -6419,6 +6634,13 @@ async def _reconcile_org(
 
     ``row_budget=None`` (a direct caller such as a test that is exercising
     one specific branch) means unbounded, exactly as before FAR-1425.
+
+    TIME: this pass is bounded by the CALLER (FAR-1525) — the reconcile body
+    wraps the call in ``asyncio.timeout`` at
+    ``dispatcher_reconcile_org_budget_seconds``. On expiry the transaction
+    above rolls back at its safe boundary and the caller unwinds the counts
+    and terminalizer ids this pass recorded; direct callers (tests) remain
+    unbounded, exactly as before.
     """
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run

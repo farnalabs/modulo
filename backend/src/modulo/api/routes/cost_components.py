@@ -263,7 +263,7 @@ async def get_components(
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(audited("cost_component_created", "cost_component", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_post", "cost_component", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("costs.components.create")
 async def create_component(
@@ -308,7 +308,7 @@ async def create_component(
 
 @router.put(
     "/{component_id}",
-    dependencies=[Depends(audited("cost_component_updated", "cost_component", principal_dep=get_current_tenant_user))],
+    dependencies=[Depends(audited("api_access_put", "cost_component", principal_dep=get_current_tenant_user))],
 )
 @handle_db_errors("costs.components.update")
 async def update_component(
@@ -360,9 +360,7 @@ async def update_component(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[
         Depends(
-            audited(
-                "cost_component_deleted", "cost_component", principal_dep=get_current_tenant_user, fail_closed=True
-            ),
+            audited("api_access_delete", "cost_component", principal_dep=get_current_tenant_user, fail_closed=True),
             scope="function",  # NOSONAR python:S930 - valid FastAPI Depends() kwarg; bundled signature is stale
         )
     ],

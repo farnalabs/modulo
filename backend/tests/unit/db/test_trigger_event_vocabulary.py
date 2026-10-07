@@ -150,10 +150,10 @@ _MIGRATION_PATH = (
 # 0283_runs_drop_unused_indexes chained onto 0282_env_profiles_kubernetes, and
 # 0284_add_rejected_run_status chained onto 0283_runs_drop_unused_indexes, and
 # 0285_system_audit_events chained onto 0284_add_rejected_run_status, and
-# 0286_team_rls_lifecycle_evals chained onto 0285_system_audit_events as the chain head.
+# 0287_team_rls_lifecycle_evals chained onto 0286_pipeline_run_state as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0286_team_rls_lifecycle_evals"
+_CHAIN_HEAD_MIGRATION_NAME = "0287_team_rls_lifecycle_evals"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

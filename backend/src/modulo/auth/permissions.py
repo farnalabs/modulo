@@ -201,6 +201,12 @@ PERMISSIONS: dict[str, str] = {
     "admin.rotation.manage": "admin",
     "admin.sensitive.manage": "admin",
     "errors.resolve": "viewer",
+    # Instance-scope error reads (FAR-1547): reading the SYSTEM_ORG_ID
+    # sentinel partition (instance-level / unattributed error rows) is a
+    # strict ``is_system_admin`` gate via ``require_system_permission`` —
+    # the role value below is the same placeholder the other system keys
+    # carry (the org hierarchy is never consulted for a system permission).
+    "errors.resolve_instance": "admin",
     "library.manage": "operator",
     # Member management is admin-only in most registries, but a TEAM operator
     # may manage their own team's members (the handler enforces that with the
@@ -320,6 +326,9 @@ NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
         # break-glass / authz kill-switch controls.
         "org.authz_enforce.manage",
         "org.guardrails.kill_switch.manage",
+        # instance-scope (SYSTEM_ORG_ID sentinel partition) error reads —
+        # system-admin only, so never delegable to a credential (FAR-1547).
+        "errors.resolve_instance",
     }
 )
 # Credential lifecycle (api_key.*, oauth.client.*) and system administration

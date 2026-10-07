@@ -1060,6 +1060,40 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > emails carry no environment line (they do since FAR-1495), documented the
 > previously-undocumented `ALERT_CONTEXT` setting there and in
 > `.env.prod.example`. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-06):** tracked two untracked, recently-shipped
+> sub-surfaces. `feat-mcp` (`configure/mcp.md`): the FAR-1502 MCP/run_ws error
+> vocabulary — `_tool_error(msg, *, code)` requiring a keyword-only branchable
+> code, the shared `_tool_exception_error` classifier (insufficient_scope /
+> validation_failed / session_contract_error / conflict / migration_required /
+> database_unavailable with server_error as the only reserved catch-all), and
+> the run WebSocket control-frame alignment to the same codes via the shared
+> `db_error_handling` session-contract payload — with code/unit-test citations
+> and the manifest `feat-mcp` registry line. `feat-audit`
+> (`audit/audit-trail.md`): the FAR-1516 actor-less `audited_system` variant
+> for pre-auth and webhook routes (no fabricated actor; `SYSTEM_ACTOR` marker +
+> `actor_source` admission basis; `bind_audit_org` tenant publication with the
+> `SYSTEM_ORG_ID` sentinel fallback; `bind_audit_actor_source` promotion) with
+> code/unit-test citations and the manifest `feat-audit` registry line.
+> `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-07):** closed three untracked sub-surfaces merged
+> after the 2026-10-06 walk. `feat-audit` (`audit/audit-trail.md`): (1) FAR-1549
+> audited the background/cron/boot write paths — the new shared
+> `core/audit_logger/background.py` helper (`append_background_audit_event` /
+> `record_run_state_change_audits`) appends SYSTEM-actor events (NULL actor +
+> `SYSTEM_ACTOR` marker + `actor_source`, org RLS inside its own transaction,
+> live-status re-select phantom-event guard, fail-open after commit) and
+> `tests/architecture/test_background_audit_coverage.py` is a ratchet that
+> mechanically enumerates every SAQ task / cron / reconciler / seeder / boot
+> seed and fails until each is classified audited / exempt / gap; (2) FAR-1538
+> added the system-admin read surface for the durable `system_audit_events`
+> ledger (`GET /api/v1/admin/system-audit` plus the `/admin/audit` system tab),
+> which narrows the "no read API/UI" half of the per-organisation-chain Known
+> Gap. `feat-runs` (`build/runs.md`): FAR-1528 refuses a run for an archived /
+> soft-deleted pipeline at `create_run` with a typed `PipelineNotRunnableError`
+> mapped to 409 Conflict across every REST entry point through the shared
+> `pipeline_not_runnable_http` helper. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
