@@ -5,6 +5,12 @@ Runs only the lenses against test files that changed versus a given ref,
 using MODULO_TEST_STYLE_SCOPE + pytest-xdist for speed.  When no test
 files changed, exits immediately with 0.
 
+The suite it runs includes the structural BDD guard
+(``test_no_self_asserting_bdd_step_responses``): a pytest-BDD step that
+fabricates the HTTP response/status it later asserts on without invoking
+the app is reported as a file:line violation, so the self-asserting-step
+pattern (FAR-1578) cannot silently return.
+
 Usage:
     python scripts/run_test_suite_quality.py [--changed-files [REF]]
                                              [--lenses EXPR]
