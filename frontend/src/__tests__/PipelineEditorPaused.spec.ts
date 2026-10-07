@@ -126,11 +126,15 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
 
     const banner = wrapper.find(BANNER)
     expect(banner.exists()).toBe(true)
-    // Announced without stealing focus: status live region, polite.
-    expect(banner.attributes('role')).toBe('status')
+    // Announced without stealing focus: aria-live only. This view's FAR-1257
+    // comment codifies aria-live WITHOUT role="status" (SonarCloud Web:S6819),
+    // so the banner must not carry a role either.
+    expect(banner.attributes('role')).toBeUndefined()
     expect(banner.attributes('aria-live')).toBe('polite')
     expect(banner.text()).toContain('paused')
-    expect(banner.text()).toContain('Triggers are skipped')
+    // The pause blocks EVERY origin, so the copy must not read as if only
+    // triggers + manual runs were affected.
+    expect(banner.text()).toContain('any source')
     // Operator pauses carry no circuit-breaker remediation line.
     expect(banner.text()).not.toContain('circuit breaker')
 
@@ -152,12 +156,24 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
     const banner = wrapper.find(BANNER)
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('circuit breaker')
-    expect(banner.text()).toContain('organisation admin')
+    expect(banner.text()).toContain('org admin')
 
     // The blocked button must not reach the API.
     await resume.trigger('click')
     await flushPromises()
     expect(postMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('offers neither Pause nor Resume while the pipeline is archived', async () => {
+    state.pipeline = { ...state.pipeline, archived_at: '2026-01-01T00:00:00Z' }
+    const wrapper = await mountEditor()
+
+    // An archived pipeline is inert: it offers Unarchive, never an
+    // execution-state toggle (same !archived_at guard as Archive/Unarchive).
+    expect(wrapper.find(PAUSE).exists()).toBe(false)
+    expect(wrapper.find(RESUME).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pipeline-editor-unarchive"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })

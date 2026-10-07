@@ -90,16 +90,21 @@
             <button v-else type="button" :class="btnToolbarSecondary" data-testid="pipeline-editor-unarchive" @click="handleUnarchive">{{ $t('views.PipelineEditorView.unarchive') }}</button>
             <!-- FAR-1530: per-pipeline Paused execution state. Paused is a
                  visible state, not an archived one - the pipeline stays in the
-                 list and in the editor, it just starts no runs. -->
+                 list and in the editor, it just starts no runs. Pause/Resume
+                 are execution-state toggles for a LIVE pipeline, so both are
+                 gated on !archived_at (the same guard the Archive/Unarchive
+                 pairing above uses): an archived pipeline offers Unarchive,
+                 never a pause toggle. The two conditions are mutually
+                 exclusive, so exactly one of the pair renders when it should. -->
             <button
-              v-if="pipeline && pipeline.run_enabled !== false"
+              v-if="pipeline && !pipeline.archived_at && pipeline.run_enabled !== false"
               type="button"
               :class="btnToolbarSecondary"
               data-testid="pipeline-editor-pause"
               @click="handlePause"
             >{{ $t('views.PipelineEditorView.pause') }}</button>
             <button
-              v-else-if="pipeline"
+              v-else-if="pipeline && !pipeline.archived_at && pipeline.run_enabled === false"
               type="button"
               :class="btnToolbarSecondary"
               :disabled="pipeline?.run_disabled_reason === 'circuit_breaker'"
@@ -403,18 +408,19 @@
         </div>
         <!-- FAR-1530: persistent Paused banner. Deliberately NOT dismissible -
              while it holds, no run of any origin (trigger, manual, REST, MCP)
-             will start, so the state must stay announced. aria-live so a pause
-             applied while the editor is open is announced without focus. -->
+             will start, so the state must stay announced. aria-live (NOT
+             role="status"): FAR-1257's ownerless-gate advisory codifies that
+             aria-live alone announces without SonarCloud Web:S6819. Text
+             colour is --warning-text (WCAG AA), never text-warning. -->
         <div
           v-if="pipeline && pipeline.run_enabled === false"
-          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning"
-          role="status"
+          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning-text"
           aria-live="polite"
           data-testid="pipeline-editor-paused-banner"
         >
           <p class="font-medium">{{ $t('views.PipelineEditorView.paused_banner_title') }}</p>
-          <p class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.paused_banner_body') }}</p>
-          <p v-if="pipeline.run_disabled_reason === 'circuit_breaker'" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.paused_banner_circuit_breaker') }}</p>
+          <p class="mt-0.5 text-warning-text">{{ $t('views.PipelineEditorView.paused_banner_body') }}</p>
+          <p v-if="pipeline.run_disabled_reason === 'circuit_breaker'" class="mt-0.5 text-warning-text">{{ $t('views.PipelineEditorView.paused_banner_circuit_breaker') }}</p>
         </div>
         <!-- FAR-1287: system-admin-only snapshot-lock diagnostics. Gated on the
              JWT is_system_admin claim (useCurrentUser) so a non-admin never
@@ -426,7 +432,7 @@
              need descriptions so the user can find and fix them. -->
         <div
           v-if="showLegacyHitlBanner && legacyHitlIssues.length > 0"
-          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning"
+          class="border-b bg-warning/10 px-3 py-2 text-xs text-warning-text"
           role="alert"
           data-testid="pipeline-editor-legacy-hitl-banner"
         >
@@ -437,8 +443,8 @@
                    ("open the edge"); node-level gates have no hitl_config
                    panel here (documented deferral), so they get a distinct,
                    truthful hint instead of an unactionable one. -->
-              <p v-if="hasLegacyEdgeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
-              <p v-if="hasLegacyNodeIssues" class="mt-0.5 text-warning/80">{{ $t('views.PipelineEditorView.legacy_hitl_hint_node') }}</p>
+              <p v-if="hasLegacyEdgeIssues" class="mt-0.5 text-warning-text">{{ $t('views.PipelineEditorView.legacy_hitl_description_hint') }}</p>
+              <p v-if="hasLegacyNodeIssues" class="mt-0.5 text-warning-text">{{ $t('views.PipelineEditorView.legacy_hitl_hint_node') }}</p>
               <ul class="mt-1 list-inside list-disc space-y-0.5">
                 <li v-for="issue in legacyHitlIssues" :key="issue.key" class="max-w-full truncate" :title="issue.label">
                   {{ $t(issue.kind === 'node' ? 'views.PipelineEditorView.legacy_hitl_item_node' : 'views.PipelineEditorView.legacy_hitl_item_edge', { label: issue.label }) }}
@@ -1131,7 +1137,7 @@
                Web:S6819. -->
           <p
             v-if="ownerlessGateAdvisory"
-            class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
+            class="rounded-lg border border-warning/40 bg-warning/10 p-2 text-xs text-warning-text"
             aria-live="polite"
             data-testid="pipeline-editor-ownerless-gate-advisory"
           >

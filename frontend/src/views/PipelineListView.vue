@@ -202,13 +202,17 @@
                         <span class="font-medium text-foreground truncate">{{ (row.data as PipelineItem).name }}</span>
                         <!-- FAR-1530: Paused is a first-class visible state (unlike archived,
                              which hides the row) — badge it so a paused pipeline is never
-                             mistaken for a running one. Mirrors the editor's Archived badge. -->
+                             mistaken for a running one. Mirrors the editor's Archived badge.
+                             Help is reason-aware (a tripped breaker names the breaker) and is
+                             mirrored into an sr-only node: `title` alone is hover-only, so it
+                             reaches neither screen readers nor touch. Text colour is
+                             --warning-text (WCAG AA), never text-warning. -->
                         <span
                           v-if="isPaused(row.data as PipelineItem)"
-                          class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+                          class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
                           data-testid="pipeline-list-paused-badge"
-                          :title="$t('views.PipelineListView.paused_badge_help')"
-                        >{{ $t('views.PipelineListView.paused') }}</span>
+                          :title="pausedBadgeHelp(row.data as PipelineItem)"
+                        >{{ $t('views.PipelineListView.paused') }}<span class="sr-only"> {{ pausedBadgeHelp(row.data as PipelineItem) }}</span></span>
                       </span>
                     </td>
                     <td class="px-4 py-3">
@@ -963,6 +967,15 @@ async function handleUnarchive(p: PipelineItem) {
 // blocked) — distinct from `archived_at`, which hides the row entirely.
 function isPaused(p: PipelineItem): boolean {
   return p.run_enabled === false
+}
+
+// FAR-1530: the badge help must be reason-aware. A generic "paused until
+// resumed" is wrong for a breaker trip - that pause cannot be cleared by the
+// reader, only by an org admin resetting the breaker - so name it.
+function pausedBadgeHelp(p: PipelineItem): string {
+  return p.run_disabled_reason === 'circuit_breaker'
+    ? t('views.PipelineListView.paused_badge_help_circuit_breaker')
+    : t('views.PipelineListView.paused_badge_help')
 }
 
 async function handlePause(p: PipelineItem) {

@@ -811,6 +811,27 @@ describe('PipelineListView', () => {
     expect(blocked?.tooltip).toBeTruthy()
   })
 
+  // FAR-1530: the badge help is reason-aware - a breaker trip is NOT
+  // resumable by the reader, so a generic "paused until resumed" would be
+  // misleading. The help is also mirrored sr-only: `title` alone reaches
+  // neither screen readers nor touch.
+  it('names the circuit breaker in the paused badge help when that is why it is paused', async () => {
+    const tripped = { id: 'p1', organisation_id: 'org1', name: 'Tripped', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: false, run_disabled_reason: 'circuit_breaker' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [tripped], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const badge = wrapper.find('[data-testid="pipeline-list-paused-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toContain('circuit breaker')
+    expect(badge.find('.sr-only').text()).toContain('circuit breaker')
+  })
+
   it('deletes a pipeline via the action menu when the delete feature is enabled', async () => {
     const plan = usePlanStore()
     plan.features.pipeline_delete = true
