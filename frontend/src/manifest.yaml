@@ -2845,6 +2845,12 @@ elements:
       - testid: library-type-filter-dropdown
         type: element
         dynamic_testid: false
+      - testid: library-remove-type-filter
+        type: button
+        dynamic_testid: false
+      - testid: library-clear-type-filters
+        type: button
+        dynamic_testid: false
       - testid: library-section-native
         type: button
         dynamic_testid: false
@@ -2855,6 +2861,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: library-error
+        type: element
+        dynamic_testid: false
+      - testid: library-loading-skeleton
         type: element
         dynamic_testid: false
       - testid: library-previous-page
@@ -2873,6 +2882,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: library-preview-section
+        type: element
+        dynamic_testid: false
+      - testid: library-preview-summary
         type: element
         dynamic_testid: false
       - testid: library-view-details
