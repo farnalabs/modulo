@@ -21,7 +21,7 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_feature, require_permission
+from modulo.api.dependencies import get_db_session, require_feature, require_permission, require_system_permission
 from modulo.api.models.error import (
     ErrorEventInput,
     ErrorEventListResponse,
@@ -54,6 +54,7 @@ from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_ERRORS_RESOLVE = "errors.resolve"
+_CODE_ERRORS_RESOLVE_INSTANCE = "errors.resolve_instance"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 
@@ -455,6 +456,122 @@ async def _fetch_sample_event(session: AsyncSession, org_id: uuid.UUID, group: E
     return result.scalar_one_or_none()
 
 
+# ---------------------------------------------------------------------------
+# Shared read bodies (FAR-1547).
+#
+# Each helper owns ONE transaction: it pins the RLS org context and runs every
+# read inside ``session.begin()`` (an error-tracking read outside the pin would
+# run with no org context and silently see zero rows). The caller decides WHICH
+# org the transaction is pinned to — the tenant route passes
+# ``principal.organisation_id``, the instance-scope route passes the
+# SYSTEM_ORG_ID sentinel — so the sentinel-partition read cannot drift from the
+# tenant read, and RLS policies pass on both. The DB-error mapping stays with
+# the route (``handle_db_errors`` / the route-local arms).
+# ---------------------------------------------------------------------------
+
+
+async def _list_error_groups_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    *,
+    status_filter: str | None,
+    level: str | None,
+    source: str | None,
+    environment: str | None,
+    search: str | None,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        groups = await get_error_groups(
+            session=session,
+            org_id=org_id,
+            status=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        total = await count_error_groups(
+            session=session,
+            org_id=org_id,
+            status=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+        )
+
+        sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
+        if sample_ids:
+            result = await session.execute(
+                select(ErrorEvent).where(
+                    ErrorEvent.organisation_id == org_id,
+                    ErrorEvent.id.in_(sample_ids),
+                )
+            )
+            sample_events = {event.id: event for event in result.scalars().all()}
+        else:
+            sample_events = {}
+
+        items = []
+        for g in groups:
+            sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
+            items.append(_serialize_error_group_summary(g, sample))
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+async def _error_group_detail_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    error_id: uuid.UUID,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+        sample = await _fetch_sample_event(session, org_id, group)
+    return {
+        "id": str(group.id),
+        "fingerprint": group.fingerprint,
+        "status": group.status,
+        "level_peak": group.level_peak,
+        "count": group.count,
+        "first_seen": group.first_seen.isoformat() if group.first_seen else "",
+        "last_seen": group.last_seen.isoformat() if group.last_seen else "",
+        "sample_event": _serialize_error_event_detail(sample) if sample else None,
+        "assigned_to": str(group.assigned_to) if group.assigned_to else None,
+    }
+
+
+async def _error_group_events_body(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    error_id: uuid.UUID,
+    *,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    async with session.begin():
+        await set_rls_org(session, org_id)
+        group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
+        if group is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
+
+        events = await get_error_events_by_group(
+            session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
+        )
+        total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+
+    items = [_serialize_error_event_detail(e) for e in events]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("", response_model=ErrorListResponse, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.list_error_groups")
 async def list_error_groups(
@@ -473,45 +590,17 @@ async def list_error_groups(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            groups = await get_error_groups(
-                session=session,
-                org_id=org_id,
-                status=status_filter,
-                level=level,
-                source=source,
-                environment=environment,
-                search=search,
-                limit=limit,
-                offset=offset,
-            )
-            total = await count_error_groups(
-                session=session,
-                org_id=org_id,
-                status=status_filter,
-                level=level,
-                source=source,
-                environment=environment,
-                search=search,
-            )
-
-            sample_ids = [g.sample_event_id for g in groups if g.sample_event_id is not None]
-            if sample_ids:
-                result = await session.execute(
-                    select(ErrorEvent).where(
-                        ErrorEvent.organisation_id == org_id,
-                        ErrorEvent.id.in_(sample_ids),
-                    )
-                )
-                sample_events = {event.id: event for event in result.scalars().all()}
-            else:
-                sample_events = {}
-
-            items = []
-            for g in groups:
-                sample = sample_events.get(g.sample_event_id) if g.sample_event_id else None
-                items.append(_serialize_error_group_summary(g, sample))
+        return await _list_error_groups_body(
+            session,
+            org_id,
+            status_filter=status_filter,
+            level=level,
+            source=source,
+            environment=environment,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
     except ProgrammingError as exc:
         _log.exception("errors.list_error_groups")
         raise HTTPException(
@@ -532,8 +621,6 @@ async def list_error_groups(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
-
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get(
@@ -595,6 +682,99 @@ async def get_scheduler_starvation(
     return {"items": items, "total": len(items), "threshold_minutes": _STARVATION_THRESHOLD_MINUTES}
 
 
+# ---------------------------------------------------------------------------
+# Instance-scope read — the SYSTEM_ORG_ID sentinel partition (FAR-1547)
+#
+# The public error-ingest path and (per FAR-1484) org-less backend ERRORs
+# write instance-level / unattributed rows into the SYSTEM_ORG_ID partition,
+# which every tenant-scoped route is structurally unable to see (they all
+# pin ``principal.organisation_id``). These read routes expose that partition
+# to a SYSTEM ADMIN ONLY: the gate is the route-level
+# ``require_system_permission("errors.resolve_instance")`` dependency, which
+# is evaluated BEFORE the handler, so a tenant principal — with or without a
+# forged parameter — is refused 403 rather than silently served its own
+# rows. Each handler pins the transaction to the sentinel org (the helper
+# owns ``set_rls_org`` inside ``session.begin()``) so the org-only RLS
+# policies pass on the read.
+#
+# Deliberately READ-ONLY: no instance-scope PATCH. Mutating another tenant's
+# (or the instance's) error groups is out of scope for this view.
+#
+# The ``/instance`` list route is declared BEFORE the ``/{error_id}`` routes:
+# it is a single path segment and would otherwise be swallowed by the UUID
+# path converter (422), exactly like ``/scheduler-starvation`` above.
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/instance",
+    response_model=ErrorListResponse,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.list_instance_error_groups")
+async def list_instance_error_groups(
+    status_filter: str | None = Query(None, alias="status"),
+    level: str | None = Query(None),
+    source: str | None = Query(None),
+    environment: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """List the instance-scope (unattributed) error groups — system admin only."""
+    return await _list_error_groups_body(
+        session,
+        SYSTEM_ORG_ID,
+        status_filter=status_filter,
+        level=level,
+        source=source,
+        environment=environment,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/instance/{error_id}",
+    response_model=ErrorGroupDetail,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.get_instance_error_group_detail")
+async def get_instance_error_group_detail(
+    error_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """Read one instance-scope error group — system admin only."""
+    return await _error_group_detail_body(session, SYSTEM_ORG_ID, error_id)
+
+
+@router.get(
+    "/instance/{error_id}/events",
+    response_model=ErrorEventListResponse,
+    dependencies=[
+        require_system_permission(_CODE_ERRORS_RESOLVE_INSTANCE),
+        require_feature("error_tracking"),
+    ],
+)
+@handle_db_errors("errors.list_instance_error_events")
+async def list_instance_error_events(
+    error_id: uuid.UUID,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """List the raw events of one instance-scope error group — system admin only."""
+    return await _error_group_events_body(session, SYSTEM_ORG_ID, error_id, limit=limit, offset=offset)
+
+
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
 @handle_db_errors("errors.get_error_group_detail")
 async def get_error_group_detail(
@@ -607,12 +787,7 @@ async def get_error_group_detail(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-            sample = await _fetch_sample_event(session, org_id, group)
+        return await _error_group_detail_body(session, org_id, error_id)
     except HTTPException:
         raise
     except ProgrammingError as exc:
@@ -635,18 +810,6 @@ async def get_error_group_detail(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
-
-    return {
-        "id": str(group.id),
-        "fingerprint": group.fingerprint,
-        "status": group.status,
-        "level_peak": group.level_peak,
-        "count": group.count,
-        "first_seen": group.first_seen.isoformat() if group.first_seen else "",
-        "last_seen": group.last_seen.isoformat() if group.last_seen else "",
-        "sample_event": _serialize_error_event_detail(sample) if sample else None,
-        "assigned_to": str(group.assigned_to) if group.assigned_to else None,
-    }
 
 
 @router.patch(
@@ -737,16 +900,7 @@ async def list_error_events(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MSG_NO_ORGANISATION)
 
     try:
-        async with session.begin():
-            await set_rls_org(session, org_id)
-            group = await get_error_group(session=session, org_id=org_id, group_id=error_id)
-            if group is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Error group not found")
-
-            events = await get_error_events_by_group(
-                session=session, org_id=org_id, group_id=error_id, limit=limit, offset=offset
-            )
-            total = await count_error_events_by_group(session=session, org_id=org_id, group_id=error_id)
+        return await _error_group_events_body(session, org_id, error_id, limit=limit, offset=offset)
     except HTTPException:
         raise
     except ProgrammingError as exc:
@@ -769,6 +923,3 @@ async def list_error_events(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR_OCCURRED_WHILE,
         ) from exc
-
-    items = [_serialize_error_event_detail(e) for e in events]
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
