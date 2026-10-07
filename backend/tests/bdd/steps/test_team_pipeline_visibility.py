@@ -2,6 +2,8 @@
 
 import contextlib
 import uuid
+from types import SimpleNamespace
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -236,55 +238,273 @@ def trigger_exists(trigger_name: str, pipeline_name: str, ctx) -> None:
     ctx["triggers"][trigger_name] = {
         "id": str(uuid.uuid4()),
         "name": trigger_name,
-        "pipeline_id": pipeline.get("id", str(uuid.uuid4())),
+        "pipeline_id": pipeline.get("id"),
     }
 
 
-def _pipeline_allows(username: str | None, pipeline: dict | None, ctx) -> bool:
-    """Simulated outcome of the FAR-1513 gate (pipeline-level decision).
+# ---------------------------------------------------------------------------
+# FAR-1513: trigger mutations honour pipeline team visibility.
+#
+# These steps drive the REAL routes (POST /pipelines/{id}/triggers,
+# DELETE /triggers/{id}) through TestClient, so the team-scope resolver chain,
+# the REST team-gate dependency and the in-transaction re-verification run
+# their actual code paths. Only the DB layer is stood in: a statement-
+# dispatching fake session (no Postgres in this harness) seeded from the
+# shared scenario state. It reproduces exactly the RLS visibility rule the
+# resolver surface relies on -- a principal sees a pipeline row iff it is
+# admin, the row is org-visible (or has no owning team), or it holds a
+# membership row in the owning team; team-private rows are HIDDEN for
+# non-members (mirroring the RLS owner-subselect policy, which is what turns
+# a hidden row into the resolver's 404). Nothing predecides allow/deny: the
+# gate's own matrix reads the same seeded rows through the same session.
+# ---------------------------------------------------------------------------
 
-    Mirrors the real dependency chain proven by the integration suite
-    (``TestTriggerTeamGate``): the trigger resolver joins the trigger to its
-    pipeline, RLS hides a team-private pipeline from non-members (404), and
-    members and org admins pass the membership check.
-    """
-    if pipeline is None:
+
+class _GateResult:
+    """A minimal async-result stand-in transparent to consumers."""
+
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self) -> object:
+        return self._value
+
+    def first(self) -> object:
+        return self._value
+
+    def scalar(self) -> object:
+        return self._value
+
+    def all(self) -> list[object]:
+        return []
+
+    def one(self) -> object:
+        raise AssertionError("unexpected one() consumption in team-gate BDD flow")
+
+
+class _GateTransaction:
+    def __init__(self) -> None:
+        self.active = False
+
+    async def __aenter__(self) -> Self:
+        self.active = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self.active = False
         return False
-    if username is None:
-        return True  # the client fixture provides an org admin
-    return pipeline.get("visibility") == "org" or username in ctx.get("memberships", {})
+
+
+class _GateSession:
+    """Statement-dispatching AsyncSession stand-in for the trigger gate flows.
+
+    Scope: exactly the query classes the trigger create/delete path issues --
+    pipeline loads (resolver tuple select + in-txn FOR UPDATE gate select),
+    trigger loads, the trigger->pipeline join resolver, the duplicate-name
+    check, the membership row check and the soft-delete UPDATE...RETURNING.
+    Anything else is fail-closed (empty result).
+    """
+
+    def __init__(
+        self,
+        pipeline_rows: list[SimpleNamespace],
+        trigger_rows: list[SimpleNamespace],
+        *,
+        is_admin: bool,
+        member_team_ids: set[uuid.UUID],
+    ) -> None:
+        self._pipeline_rows = pipeline_rows
+        self._trigger_rows = trigger_rows
+        self._is_admin = is_admin
+        self._member_team_ids = member_team_ids
+        self._txn = _GateTransaction()
+        self.info: dict[str, object] = {}
+
+    def begin(self) -> _GateTransaction:  # the routes call `async with session.begin()`
+        return self._txn
+
+    def add(self, obj: object) -> None:
+        return None
+
+    async def get(self, model: object, pk: object) -> None:
+        """PK get (dependencies break-glass check) — no Account rows exist in
+        this fixture, so the deny dep short-circuits via ``account is None`` on
+        its own branch; nothing here needs real rows."""
+        return
+
+    async def flush(self) -> None:
+        return None
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+    def in_transaction(self) -> bool:
+        return self._txn.active
+
+    def get_bind(self) -> SimpleNamespace:
+        """SQLite-named dialect bind for ``set_rls_*`` / lock-timeout gating.
+
+        ``set_rls_org``/``set_rls_user_context`` and
+        ``set_mutation_row_lock_timeout`` read ``bind.dialect.name`` first and
+        take their generic (``session.info``) or no-op branch for non-Postgres
+        dialects — so with this bind they never issue statements against the
+        fake session, mirroring how the unit/BDD mocked-session suites run.
+        """
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+    def _visible_pipeline(self) -> SimpleNamespace | None:
+        row = self._pipeline_rows[0] if self._pipeline_rows else None
+        if row is None:
+            return None
+        if self._is_admin:
+            return row
+        if row.visibility in (None, "", "org"):
+            return row
+        # Team-private: RLS policy is owner_team_id IN (SELECT team_id FROM
+        # team_memberships WHERE account_id = ...) -- hidden unless member.
+        return row if row.owner_team_id in self._member_team_ids else None
+
+    async def execute(self, stmt: object, params: object = None, **kwargs: object) -> _GateResult:
+        sql = str(stmt).lower()
+        if "set_config(" in sql:
+            return _GateResult(1)
+        if "team_memberships" in sql:
+            # team_membership_exists selects TeamMembership.id filtered by
+            # account/team; a membership row tuple is present iff the
+            # principal holds a row in that team.
+            return _GateResult((uuid.UUID(int=1),) if self._member_team_ids else None)
+        pipeline = self._visible_pipeline()
+        if "triggers" in sql and "pipelines" in sql:
+            # resolve_trigger_team_scope's inner JOIN (trigger_id -> pipeline):
+            # RLS parity for free -- no visible pipeline => resolver row absent.
+            if pipeline is None or not self._trigger_rows:
+                return _GateResult(None)
+            return _GateResult((pipeline.owner_team_id, pipeline.visibility))
+        if "triggers" in sql:
+            # Duplicate-name check is the ONLY statement whose WHERE carries a
+            # name predicate; the entity load selects are simple id/org/
+            # deleted_at predicates (a full-entity SELECT renders all columns,
+            # including pipeline_id/name, so the column list alone cannot
+            # discriminate).
+            if "triggers.name =" in sql:
+                return _GateResult(None)  # duplicate-name check: no duplicate
+            if "update triggers" in sql or sql.startswith("update "):
+                return _GateResult(self._trigger_rows[0] if self._trigger_rows else None)
+            trigger_visible = pipeline is not None and len(self._trigger_rows) > 0
+            return _GateResult(self._trigger_rows[0] if trigger_visible else None)
+        if "pipelines" in sql:
+            if "for update" in sql:
+                return _GateResult(pipeline)
+            if pipeline is None:
+                return _GateResult(None)
+            return _GateResult((pipeline.owner_team_id, pipeline.visibility))
+        return _GateResult(None)
+
+
+def _drive_trigger_request(
+    ctx: dict,
+    request: object,
+    *,
+    username: str | None,
+    method: str,
+    url: str,
+    json_body: dict | None,
+) -> None:
+    """Run one trigger mutation through the real routes with the real gate.
+
+    ``username=None`` is the admin actor (``I create...``): the org admin
+    principal bypasses both the resolver chain and the in-txn matrix by the
+    gate's admin rule.
+    """
+    from tests.bdd.conftest import _make_test_client
+
+    principal_username = username or "testuser"
+    if username is not None and username in ctx["users"]:
+        account_id = uuid.UUID(ctx["users"][username]["id"])
+    else:
+        account_id = uuid.uuid4()
+    member_team_ids: set[uuid.UUID] = set()
+    if username is not None:
+        for membership in ctx.get("memberships", {}).values():
+            try:
+                member_team_ids.add(uuid.UUID(membership["team_id"]))
+            except (KeyError, ValueError):
+                continue
+    pipeline_rows = [
+        SimpleNamespace(
+            id=str(uuid.uuid4()),
+            owner_team_id=uuid.UUID(p["owner_team_id"]) if p.get("owner_team_id") else uuid.uuid4(),
+            visibility=p.get("visibility", "org"),
+        )
+        for p in ctx["pipelines"].values()
+    ]
+    trigger_rows = [
+        SimpleNamespace(
+            id=str(t["id"]),
+            pipeline_id=uuid.UUID(t["pipeline_id"]) if t.get("pipeline_id") else uuid.uuid4(),
+            trigger_type="manual",
+            active=True,
+        )
+        for t in ctx["triggers"].values()
+    ]
+    gate_session = _GateSession(
+        pipeline_rows,
+        trigger_rows,
+        is_admin=username is None,
+        member_team_ids=member_team_ids,
+    )
+    with contextlib.contextmanager(_make_test_client)(
+        gate_session,  # type: ignore[arg-type]
+        username=principal_username,
+        organisation_id=ORG_ID,
+        account_id=account_id,
+        org_role="admin" if username is None else "operator",
+    ) as client:
+        resp = client.post(url, json=json_body) if method == "post" else client.delete(url)
+    request.node._resp = resp
 
 
 @when(parsers.parse('user "{username}" creates a trigger on pipeline "{pipeline_name}"'))
 def user_creates_trigger(username: str, pipeline_name: str, request, ctx) -> None:
     pipeline = ctx["pipelines"].get(pipeline_name)
-    allowed = _pipeline_allows(username, pipeline, ctx)
-    resp = MagicMock()
-    resp.status_code = 201 if allowed else 404
-    if allowed:
-        resp.json = lambda: {"trigger_type": "manual"}
-    request.node._resp = resp
+    if pipeline is None:
+        pipeline = {"id": str(uuid.uuid4())}
+    _drive_trigger_request(
+        ctx,
+        request,
+        username=username,
+        method="post",
+        url=f"/api/v1/pipelines/{pipeline['id']}/triggers",
+        json_body={"trigger_type": "manual"},
+    )
 
 
 @when(parsers.parse('I create a trigger on pipeline "{pipeline_name}"'))
 def admin_creates_trigger(pipeline_name: str, request, ctx) -> None:
     pipeline = ctx["pipelines"].get(pipeline_name)
-    allowed = _pipeline_allows(None, pipeline, ctx)
-    resp = MagicMock()
-    resp.status_code = 201 if allowed else 404
-    if allowed:
-        resp.json = lambda: {"trigger_type": "manual"}
-    request.node._resp = resp
+    if pipeline is None:
+        pipeline = {"id": str(uuid.uuid4())}
+    _drive_trigger_request(
+        ctx,
+        request,
+        username=None,
+        method="post",
+        url=f"/api/v1/pipelines/{pipeline['id']}/triggers",
+        json_body={"trigger_type": "manual"},
+    )
 
 
 @when(parsers.parse('user "{username}" deletes the trigger "{trigger_name}"'))
 def user_deletes_trigger(username: str, trigger_name: str, request, ctx) -> None:
     trigger = ctx["triggers"].get(trigger_name, {})
-    pipeline = next(
-        (p for p in ctx["pipelines"].values() if p.get("id") == trigger.get("pipeline_id")),
-        None,
+    _drive_trigger_request(
+        ctx,
+        request,
+        username=username,
+        method="delete",
+        url=f"/api/v1/triggers/{trigger.get('id', uuid.uuid4())}",
+        json_body=None,
     )
-    allowed = _pipeline_allows(username, pipeline, ctx)
-    resp = MagicMock()
-    resp.status_code = 204 if allowed else 404
-    request.node._resp = resp

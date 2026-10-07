@@ -28,7 +28,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -135,7 +135,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
     rollback_to_snapshot,
     tag_snapshot,
 )
-from modulo.db.crud.run import get_dialect_name
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.model_backend import ModelBackend
@@ -145,7 +145,6 @@ from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
-from modulo.settings import get_settings
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
 _CODE_PIPELINE_LIST = "pipeline.list"
@@ -2795,69 +2794,11 @@ async def _require_team_membership(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=denial_detail)
 
 
-#: Bounded wait for a mutation transaction's row locks (the in-txn team gate's
-#: ``SELECT ... FOR UPDATE``, and every other lock the transaction takes after
-#: ``_set_mutation_row_lock_timeout`` sets the bound) - read from
-#: ``Settings.mutation_row_lock_timeout_ms`` (FAR-1279) at the call site rather
-#: than held as a module constant. Without it a contended PATCH parks a pooled
-#: connection on an UNBOUNDED lock wait; with it the wait degrades to a clear,
-#: mapped response (``api.db_error_handling`` translates SQLSTATE 55P03
-#: ``lock_not_available`` to 409) instead of a generic 503.
-#:
-#: ``set_config(..., is_local => true)`` is transaction-scoped - the SQL
-#: equivalent of ``SET LOCAL`` - so the bound also covers any row lock this
-#: mutation transaction takes AFTER the gate (same shape as the runner-capacity
-#: gate in ``core/runner_capacity.py``). That is deliberate: no part of a
-#: request-scoped mutation should hang indefinitely.
-#:
-#: It is a Settings field (default 5000 ms, unchanged from the constant this
-#: replaced) rather than a constant because the bound spans the WHOLE mutation
-#: transaction: a deploy can surface new 409s that an operator must be able to
-#: relax without shipping code. It stays its OWN field - the two pre-existing
-#: lock-timeout settings (``runner_capacity_lock_timeout_ms``,
-#: ``runner_marker_sweep_lock_timeout_seconds``) are pinned to their own
-#: subsystems; reusing either would silently couple API PATCH contention to an
-#: operator's runner-capacity tuning.
-
-
-async def _set_mutation_row_lock_timeout(session: AsyncSession) -> None:
-    """Bound every row-lock wait taken for the REST of the current transaction.
-
-    FAR-1313: the bound used to be set only inside
-    ``_reapply_team_gate_inside_mutation_txn``, so a mutation transaction whose
-    FIRST lock came from somewhere else ran that lock unbounded - e.g. the
-    clone endpoint's ``check_pipeline_name_available`` (``SELECT ... FOR
-    UPDATE`` on the target-name row), which fires BEFORE the clone's in-txn
-    team gate (FAR-1276) reaches ``clone_pipeline``'s step-(a) commit hook.
-    Endpoints whose mutation transaction takes a lock of its own call this at
-    the top of the transaction, before any lock; the gate helper calls it too,
-    so every mutation transaction sets the bound before its first lock.
-
-    Transaction-scoped (``set_config(..., is_local => true)`` == ``SET LOCAL``),
-    so the bound applies to every lock the transaction takes after it and
-    reverts on COMMIT/ROLLBACK - never to pooled connections. It takes no lock
-    itself, so calling it up front never conflicts with a later lock ordering
-    (the clone's step-(a) ``FOR SHARE`` runs on a SEPARATE connection and is
-    bounded by its own copy of this statement - see
-    ``db.crud.pipeline._read_clone_source_snapshot``).
-
-    POSTGRES-ONLY (the shared ``db.crud.run.get_dialect_name`` dialect gate -
-    the same helper ``core.hitl_manager.gate_coalescing`` and ``db/rls.py``
-    use, rather than another local bind dance): SQLite has no ``set_config``,
-    and the unit fixtures run on SQLite mocks. A bind that does not positively
-    report ``postgresql`` skips the statement: the lock bound this sets is a
-    safety improvement, never a correctness requirement, so the safe direction
-    to fail is the no-op.
-
-    The bound itself is ``Settings.mutation_row_lock_timeout_ms`` (FAR-1279):
-    read at the call site so an operator can relax it without a code change.
-    """
-    if await get_dialect_name(session) == "postgresql":
-        lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
-        await session.execute(
-            text("SELECT set_config('lock_timeout', :val, true)"),
-            {"val": f"{lock_timeout_ms}ms"},
-        )
+#: The bounded row-lock wait for mutation transactions is single-sourced in
+#: ``modulo.db.crud.row_lock.set_mutation_row_lock_timeout`` (FAR-1313 /
+#: FAR-1279 rationale lives on that function). It moved out of this route
+#: module so ``routes.triggers`` can import it without a cross-route (cyclic)
+#: import edge; the Settings field semantics are unchanged.
 
 
 async def _reapply_team_gate_inside_mutation_txn(
@@ -2887,8 +2828,8 @@ async def _reapply_team_gate_inside_mutation_txn(
     a member of its owner team nor an org admin.
     """
     # Must run BEFORE the FOR UPDATE below to bound that wait - see
-    # ``_set_mutation_row_lock_timeout`` for the dialect-gate rationale.
-    await _set_mutation_row_lock_timeout(session)
+    # ``set_mutation_row_lock_timeout`` (db.crud.row_lock) for the dialect-gate rationale.
+    await set_mutation_row_lock_timeout(session)
     scope = select(Pipeline).where(
         Pipeline.id == pipeline_id,
         Pipeline.organisation_id == principal.organisation_id,
@@ -3606,7 +3547,7 @@ async def clone_pipeline_endpoint(
             # gate FOR UPDATE ordering the clone docstring spells out. (The
             # separate read-session ``FOR SHARE`` of the SOURCE row is bounded
             # by its own copy of this statement in ``_read_clone_source_snapshot``.)
-            await _set_mutation_row_lock_timeout(session)
+            await set_mutation_row_lock_timeout(session)
             cloned, target_name = await _clone_pipeline_into_org(
                 session,
                 pipeline_id=pipeline_id,

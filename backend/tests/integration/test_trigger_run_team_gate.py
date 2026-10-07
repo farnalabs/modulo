@@ -24,7 +24,7 @@ import inspect
 import json
 import os
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -68,7 +68,7 @@ class _AllFeatures:
     def feature_enabled(self, name: str) -> bool:
         return True
 
-    def list_enabled_features(self) -> list:
+    def list_enabled_features(self) -> list[str]:
         return []
 
     def tier(self) -> str:
@@ -296,7 +296,7 @@ async def team_gate_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenerat
 
 
 @pytest.fixture(autouse=True)
-def _stub_run_dispatch() -> AsyncGenerator[None, None]:
+def _stub_run_dispatch() -> Generator[None, None, None]:
     """Stub the background dispatch so a 202 does not require Redis/SAQ.
 
     ``trigger_run`` awaits ``dispatch_run`` after the run row is committed; with
@@ -608,6 +608,74 @@ class TestTriggerTeamGate:
         resp = await team_gate_client.put(
             f"/api/v1/triggers/{team_private_trigger}",
             json={"active": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"
+
+    @pytest.mark.usefixtures("_add_trigger_member_to_team")
+    @pytest.mark.asyncio
+    async def test_member_can_restore_soft_deleted_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        trigger_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        """Restore-path team gate: the resolver resolves a SOFT-DELETED trigger.
+
+        delete -> restore round-trip proves ``resolve_trigger_team_scope``
+        deliberately does not filter ``trigger.deleted_at`` — the deleted row's
+        owning pipeline still gates the restore for a member.
+        """
+        token = _token(org, trigger_member_user, "operator")
+        created = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
+        trigger_id = created.json()["id"]
+
+        deleted = await team_gate_client.delete(
+            f"/api/v1/triggers/{trigger_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert deleted.status_code == 204, f"Seed delete failed: {deleted.status_code}: {deleted.text}"
+
+        restored = await team_gate_client.post(
+            f"/api/v1/triggers/{trigger_id}/restore",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert restored.status_code == 200, f"Expected 200, got {restored.status_code}: {restored.text}"
+        assert restored.json()["deleted_at"] is None, "restored trigger must be back in service"
+
+    @pytest.mark.asyncio
+    async def test_non_member_denied_restoring_trigger_on_team_private(
+        self,
+        team_gate_client: AsyncClient,
+        org: uuid.UUID,
+        admin_user: uuid.UUID,
+        trigger_non_member_user: uuid.UUID,
+        team_private_pipeline: uuid.UUID,
+    ) -> None:
+        """A soft-deleted team-private trigger stays gated for a non-member."""
+        admin_token = _token(org, admin_user, "admin")
+        created = await team_gate_client.post(
+            f"/api/v1/pipelines/{team_private_pipeline}/triggers",
+            json={"trigger_type": "manual"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert created.status_code == 201, f"Seed create failed: {created.status_code}: {created.text}"
+        trigger_id = created.json()["id"]
+        deleted = await team_gate_client.delete(
+            f"/api/v1/triggers/{trigger_id}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert deleted.status_code == 204, f"Seed delete failed: {deleted.status_code}: {deleted.text}"
+
+        token = _token(org, trigger_non_member_user, "operator")
+        resp = await team_gate_client.post(
+            f"/api/v1/triggers/{trigger_id}/restore",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}: {resp.text}"

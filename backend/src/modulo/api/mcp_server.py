@@ -616,46 +616,67 @@ async def _run_owner_team_id(session: AsyncSession, run: Run) -> uuid.UUID | Non
     return await _pipeline_owner_team_id(session, run.pipeline_id)
 
 
-async def _user_team_private_denial(
+async def _pipeline_team_gate(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
-    owner_team_id: uuid.UUID | None,
-) -> dict[str, Any] | None:
-    """FAR-1513: denial dict when a USER principal may not mutate triggers of a
-    team-private pipeline, else None.
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Fail-closed team gate for MCP trigger mutations (FAR-1513 CRITICAL fix).
 
-    MCP parity of the REST ``require_team_membership_or_admin`` gate: org-admins
-    bypass; org-visible (``visibility='org'``/NULL) and team-less pipelines
-    pass; a user principal must hold a membership row in the owning team.
-    Team-scoped API keys are bounded separately by ``_team_scoped_key_mismatch``
-    (the caller keeps that check) — the key owner's memberships are irrelevant.
-    Fail-closed: an unknown visibility value is treated as team-private, and an
-    unset user context denies (it cannot prove membership).
+    Replaces the fail-open pair ``(caller-facing owner read +
+    _user_team_private_denial on the RLS-hidden visibility)``: a caller-facing
+    read returns NOTHING for a team-private pipeline the principal cannot see,
+    so ``owner → None`` passed the key-boundary check (no owned team = no
+    boundary) and the unknown visibility passed the membership matrix. The
+    principal's real denial was invisible because the inputs to the decision
+    were themselves team-filtered.
+
+    This gate resolves the row through ``pipeline_team_scope_team_blind`` (a
+    ONE-read team-blind flip of ``app.execution_context``) and re-evaluates on
+    the RESOLVED row:
+
+    1. row absent (or soft-deleted) in the org → ``pipeline_not_found``
+       envelope — a hidden row is a denial, never an allow;
+    2. team-scoped key boundary applied on the RESOLVED owner (MCP semantics:
+       the boundary applies to any owned pipeline, org-visible included —
+       unlike the REST dependency, which bounds keys only on team-private
+       rows);
+    3. key principals pass (their memberships are irrelevant);
+    4. user principals run the shared ``evaluate_team_gate`` matrix
+       (admin bypass / org-visible allow / membership-or-deny, fail closed on
+       an unset user identity).
+
+    Returns ``(owner_team_id, denial)``: ``owner_team_id`` is the resolved
+    effective owner (None for an org-level pipeline); ``denial`` is the
+    envelope the caller MUST return (and never mutate) when the principal may
+    not proceed.
     """
-    if owner_team_id is None:
-        return None
-    if _ctx_role_val() == "admin":
-        return None
+    from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
+    from modulo.api.team_scope import evaluate_team_gate
+    from modulo.db.crud.team_scope import pipeline_team_scope_team_blind
+
+    scope = await pipeline_team_scope_team_blind(session, pipeline_id)
+    if scope is None:
+        return None, {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
+    if _team_scoped_key_mismatch(scope.owner_team_id):
+        return scope.owner_team_id, _team_scope_error("pipeline", str(pipeline_id))
     if _ctx_team_id_val() is not None:
-        return None
-    account_id = _ctx_user_id.get(None)
-    if account_id is None:
-        return {"error": "team_boundary_violation", "detail": _MSG_USER_NOT_TEAM_MEMBER}
-    from modulo.api.team_scope import team_membership_exists
-
-    visibility = await _pipeline_visibility(session, pipeline_id)
-    if visibility in ("org", None):
-        return None
-    if await team_membership_exists(session, account_id=account_id, team_id=owner_team_id):
-        return None
-    return {"error": "team_boundary_violation", "detail": _MSG_USER_NOT_TEAM_MEMBER}
-
-
-async def _pipeline_visibility(session: AsyncSession, pipeline_id: uuid.UUID) -> str | None:
-    """Resolve a pipeline's visibility ('org' | 'team' | None); None also for a missing row."""
-    from modulo.db.crud.team_scope import pipeline_visibility
-
-    return await pipeline_visibility(session, pipeline_id)
+        # A team-scoped key that passed the boundary has no membership matrix.
+        return scope.owner_team_id, None
+    denial = await evaluate_team_gate(
+        session,
+        row_present=True,
+        owner_team_id=scope.owner_team_id,
+        visibility=scope.visibility,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+        team_key_id=None,  # keys were bounded above with MCP's row-independent semantics
+    )
+    if denial is not None:
+        return scope.owner_team_id, {
+            "error": "team_boundary_violation",
+            "detail": _MSG_USER_NOT_TEAM_MEMBER,
+        }
+    return scope.owner_team_id, None
 
 
 # PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
@@ -3253,7 +3274,6 @@ async def _replace_pipeline_graph_txn(
     envelope (``pipeline_not_found`` / team-scope / connector-team-mismatch)
     when the write must not proceed.
     """
-    from modulo.api.routes.pipelines import _set_mutation_row_lock_timeout
     from modulo.core.team_visibility import (
         CONNECTOR_TEAM_MISMATCH,
         connector_team_mismatch_detail,
@@ -3261,6 +3281,7 @@ async def _replace_pipeline_graph_txn(
         find_connector_team_mismatches,
     )
     from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     async with _session(org_id) as s:
         # FAR-1361: bound every row-lock wait in this transaction BEFORE its
@@ -3274,7 +3295,7 @@ async def _replace_pipeline_graph_txn(
         # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
         # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
         # mutation endpoints use).
-        await _set_mutation_row_lock_timeout(s)
+        await set_mutation_row_lock_timeout(s)
 
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
@@ -6383,14 +6404,13 @@ async def _create_trigger_impl(
         raise RuntimeError("_create_trigger_impl: validate returned no error and no pipeline id")
 
     async with _session(org_id) as s:
-        owner_team_id = await _pipeline_owner_team_id(s, pid)
-        if _team_scoped_key_mismatch(owner_team_id):
-            return _team_scope_error("pipeline", pipeline_id)
-        # FAR-1513: user principals must also hold membership in the owning
-        # team when the pipeline is team-private (REST create-trigger parity).
-        user_denial = await _user_team_private_denial(s, pid, owner_team_id)
-        if user_denial:
-            return user_denial
+        # FAR-1513 CRITICAL fix: gate on the team-blind read (see
+        # _pipeline_team_gate) so an RLS-hidden team-private pipeline is
+        # DENIED, never allowed (the caller-facing owner read returned None,
+        # which passed every old boundary/membership check).
+        _, gate_denial = await _pipeline_team_gate(s, pid)
+        if gate_denial:
+            return gate_denial
         next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
             s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
         )
@@ -6546,14 +6566,26 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
-async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
-    """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
+async def _load_trigger_for_update(
+    s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Load the trigger row for update plus its pipeline's team-gate denial.
+
+    Returns ``(trigger, denial)``: `(None, None)` when the trigger row itself
+    is absent (caller renders ``_MSG_TRIGGER_NOT_FOUND``), `(trigger, None)`
+    when the gate allows, and `(None, envelope)`/`(trigger, envelope)` when
+    the gate denies — FAR-1513 fix: the gate evaluates the pipeline through
+    the team-blind read, so an RLS-hidden team-private pipeline denies
+    instead of falling through the key mismatch that consumed the old
+    ``_TEAM_SCOPE_ERROR`` sentinel.
+    """
     trigger = await _load_trigger_row(s, org_id, tid)
     if trigger is None:
-        return None
-    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-        return _TEAM_SCOPE_ERROR
-    return trigger
+        return None, None
+    _, denial = await _pipeline_team_gate(s, trigger.pipeline_id)
+    if denial is not None:
+        return None, denial
+    return trigger, None
 
 
 async def _validate_ongoing_config_change(
@@ -6727,18 +6759,16 @@ async def _update_trigger_txn(
     the commit.
     """
     async with _session(org_id) as s:
-        trigger = await _load_trigger_for_update(s, org_id, tid)
-        if trigger is _TEAM_SCOPE_ERROR:
-            return _team_scope_error("pipeline", str(tid))
+        # FAR-1513 CRITICAL fix: the team gate now runs inside
+        # _load_trigger_for_update against the team-blind-resolved pipeline;
+        # a denial envelope is returned verbatim (never re-mapped through the
+        # team-scope sentinel, which would misname a membership/not-found
+        # denial as a key-boundary message).
+        trigger, gate_denial = await _load_trigger_for_update(s, org_id, tid)
+        if gate_denial is not None:
+            return gate_denial
         if trigger is None:
             return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-        # FAR-1513: user principals must hold membership in the owning
-        # team when the pipeline is team-private (REST update parity).
-        user_denial = await _user_team_private_denial(
-            s, trigger.pipeline_id, await _pipeline_owner_team_id(s, trigger.pipeline_id)
-        )
-        if user_denial:
-            return user_denial
 
         cron_config_requested = cron_expression is not None or cron_timezone is not None
         if cron_config_requested and trigger.trigger_type != "cron":
@@ -6892,14 +6922,13 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
             ).scalar_one_or_none()
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-            owner_team_id = await _pipeline_owner_team_id(s, trigger.pipeline_id)
-            if _team_scoped_key_mismatch(owner_team_id):
-                return _team_scope_error("pipeline", str(trigger.pipeline_id))
-            # FAR-1513: user principals must hold membership in the owning
-            # team when the pipeline is team-private (REST delete parity).
-            user_denial = await _user_team_private_denial(s, trigger.pipeline_id, owner_team_id)
-            if user_denial:
-                return user_denial
+            # FAR-1513 CRITICAL fix: the team-blind gate re-evaluates the
+            # RLS-hidden pipeline row, so a team-private pipeline the caller
+            # cannot see is denied instead of silently allowed (the old
+            # caller-facing owner read returned None and passed every check).
+            _, gate_denial = await _pipeline_team_gate(s, trigger.pipeline_id)
+            if gate_denial:
+                return gate_denial
             deleted = await soft_delete_trigger(s, tid)
 
         if deleted is None:

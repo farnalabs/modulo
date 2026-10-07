@@ -3,7 +3,8 @@
 ``_clone_pipeline_into_org`` -> ``check_pipeline_name_available`` issues
 ``SELECT ... FOR UPDATE`` on the target-name row as the FIRST lock of the clone
 mutation transaction. The transaction-scoped bound
-(``_set_mutation_row_lock_timeout`` -> ``set_config('lock_timeout', <ms>, true)``,
+(``set_mutation_row_lock_timeout`` (db.crud.row_lock) ->
+``set_config('lock_timeout', <ms>, true)``,
 i.e. ``SET LOCAL``) used to be set only inside
 ``_reapply_team_gate_inside_mutation_txn`` - which the clone endpoint NEVER
 calls - so a concurrent holder of a row with that exact target name parked the
@@ -189,7 +190,7 @@ async def test_team_gate_helper_still_sets_the_bound_before_its_own_lock() -> No
     """Regression guard for the FAR-1313 helper extraction.
 
     The bound moved out of ``_reapply_team_gate_inside_mutation_txn`` into
-    ``_set_mutation_row_lock_timeout``; the gate's own ``FOR UPDATE`` must
+    ``set_mutation_row_lock_timeout`` (db.crud.row_lock); the gate's own ``FOR UPDATE`` must
     still be preceded by it.
     """
     session, executed = _recording_session()

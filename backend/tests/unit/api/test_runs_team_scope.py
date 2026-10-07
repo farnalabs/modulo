@@ -107,7 +107,7 @@ def _make_snapshot() -> MagicMock:
 
 def _make_mock_session(
     *,
-    pipeline_visibility: str = "team",
+    pipeline_visibility: str | None = "team",
     owner_team_id: uuid.UUID | None = _TEAM_ID,
     is_member: bool = True,
 ) -> AsyncMock:
@@ -406,6 +406,12 @@ class TestResolveTriggerTeamScope:
     trigger whose pipeline row is missing (or soft-deleted) resolves to None
     and the gate dependency raises 404 — the same RLS-parity behaviour the
     integration suite asserts end-to-end for ``resolve_trigger_run_team_scope``.
+
+    Note the asymmetry (locked by the restore-path integration tests in
+    ``tests/integration/test_trigger_run_team_gate.py``): only the PIPELINE is
+    filtered by ``deleted_at`` — a soft-deleted TRIGGER still resolves, so the
+    restore endpoint's gate can re-evaluate team membership instead of a
+    deleted trigger silently bypassing it.
     """
 
     @staticmethod
@@ -415,7 +421,7 @@ class TestResolveTriggerTeamScope:
         return request
 
     @staticmethod
-    def _session(row: tuple[uuid.UUID, str] | None) -> AsyncMock:
+    def _session(row: tuple[uuid.UUID | None, str] | None) -> AsyncMock:
         session = AsyncMock(spec=AsyncSession)
         result = MagicMock()
         result.first.return_value = row

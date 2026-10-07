@@ -14,7 +14,7 @@ FAR-1313 extends the same invariant to the lock the GATE does not take in
 time: the clone endpoint's ``check_pipeline_name_available`` fires its own
 ``SELECT ... FOR UPDATE`` (on the target-name row) BEFORE the clone's in-txn
 team gate reaches ``clone_pipeline``'s step-(a) commit hook, so it ran with NO
-bound at all until ``_set_mutation_row_lock_timeout`` was added at the top of
+bound at all until ``set_mutation_row_lock_timeout`` (db.crud.row_lock) was added at the top of
 the clone transaction. The second test below contends that name row instead.
 
 Each wait is ``Settings.mutation_row_lock_timeout_ms`` (5 s by default), so
@@ -183,15 +183,15 @@ async def test_contended_clone_name_check_times_out_with_a_mapped_409(
 ) -> None:
     """FAR-1313: the clone's target-name lock degrades to the same bounded 409.
 
-    The clone transaction's FIRST lock is ``check_pipeline_name_available``'s
-    ``SELECT ... FOR UPDATE`` on the row carrying the target name - it runs
-    BEFORE the clone's in-txn team gate (FAR-1276), which only fires inside
-    ``clone_pipeline``'s step-(a) commit hook, so the gate's own
-    ``set_config`` could not bound it. A concurrent holder on that exact name
+        The clone transaction's FIRST lock is ``check_pipeline_name_available``'s
+        ``SELECT ... FOR UPDATE`` on the row carrying the target name - it runs
+        BEFORE the clone's in-txn team gate (FAR-1276), which only fires inside
+        ``clone_pipeline``'s step-(a) commit hook, so the gate's own
+        ``set_config`` could not bound it. A concurrent holder on that exact name
     row therefore used to park the request with no bound at all; with
-    ``_set_mutation_row_lock_timeout`` at the top of the transaction it must
-    time out (SQLSTATE 55P03) and map to the same 409 within
-    ``Settings.mutation_row_lock_timeout_ms``.
+    ``set_mutation_row_lock_timeout`` (db.crud.row_lock) at the top of the transaction it must
+        time out (SQLSTATE 55P03) and map to the same 409 within
+        ``Settings.mutation_row_lock_timeout_ms``.
     """
     target_name = f"lock-timeout-clone-target-{uuid.uuid4().hex[:8]}"
     source_id = await _insert_pipeline(db_engine, test_org, test_user)
