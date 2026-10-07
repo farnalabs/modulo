@@ -116,6 +116,9 @@ class _ProvisionedSystemSettings:
     """
 
     modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-unit-test"
+    # FAR-1524: get_or_create_system_engine passes this to create_async_engine
+    # as pool_recycle; the stub must expose it just like the real Settings.
+    db_pool_recycle_seconds = 1500
 
 
 @pytest.fixture(autouse=True)
