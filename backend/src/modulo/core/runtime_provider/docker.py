@@ -32,7 +32,6 @@ _CLOSE_DESTROY_TIMEOUT_S = 30
 # Per-workspace resources: 1.0 CPU / 1 GiB (fixed per ADR 029's committed
 # table; per-profile overrides are a separately ticketed future effort).
 _DEFAULT_HARDENING_CPU = 1.0
-_DEFAULT_HARDENING_MEMORY_MB = 1024
 # Read-only rootfs + tmpfs workdir. The bundled runner image's agent HOME
 # (config/session/cache dirs) and /tmp are tmpfs-backed with sizing adequate
 # for an opencode session (verified by the GA opencode scenario).
