@@ -8,12 +8,15 @@ code:
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/core/pipeline_engine/classify.py
   - backend/src/modulo/core/pipeline_execution.py
+  - backend/src/modulo/core/exceptions.py
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
 unit-tests:
   - backend/tests/unit/api/test_runs_endpoint.py
+  - backend/tests/unit/api/test_runs_rerun_endpoint.py
+  - backend/tests/integration/test_pipeline_state_gate_rls.py
   - backend/tests/unit/api/test_run_events_endpoint.py
   - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/api/test_run_api_key_auth.py
@@ -181,6 +184,18 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       (`core/pipeline_execution.py`, `db/models/run.py`,
       `test_watchdog_firing_record_writer.py`,
       `test_pipeline_execution_watchdog_retry.py`)
+- [x] A run is refused for a pipeline that may not run (FAR-1528): `create_run`
+      raises `PipelineNotRunnableError` when the pipeline is archived or
+      soft-deleted, and every REST entry point that can reach it (manual
+      trigger, rerun, test trigger, webhook, replay, slack, variant runs,
+      feedback correction) maps the refusal to 409 Conflict through the shared
+      `pipeline_not_runnable_http` helper naming the pipeline id and state —
+      never a generic 500 — while the cron/polling/ongoing fire jobs handle the
+      same refusal without crashing. A pipeline that does not exist is still
+      refused upstream by the route's own 404 entry filter, so the state gate
+      only ever turns an existing-but-not-runnable pipeline into a 409
+      (`api/routes/runs.py`, `core/exceptions.py`, `test_runs_endpoint.py`,
+      `test_runs_rerun_endpoint.py`, `test_pipeline_state_gate_rls.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -195,6 +210,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1528 sub-surface: `create_run` now refuses an archived or soft-deleted
+  pipeline with a typed `PipelineNotRunnableError` mapped to 409 Conflict
+  across every REST entry point (manual trigger, rerun, test trigger, webhook,
+  replay, slack, variant runs, feedback correction) through the shared
+  `pipeline_not_runnable_http` helper, and the cron/polling/ongoing fire jobs
+  handle the same refusal without crashing. Added the checked behaviour line,
+  the `core/exceptions.py` code citation and the `test_runs_rerun_endpoint.py`
+  / `test_pipeline_state_gate_rls.py` citations. `_ORPHANED_BDD_FEATURES`
+  stays empty.
 - 2026-10-05: **Improve Architecture product-map walk** – closed the untracked
   FAR-1463 sub-surface: the node-deadline watchdog now durably records each
   firing on `runs.node_deadline_watchdog_fired_count` (and copies it onto
