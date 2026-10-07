@@ -408,6 +408,20 @@
     color: hsl(var(--preview));
   }
 
+  /* FAR-1530: text-safe counterpart of --warning. --warning is tuned as a
+     FILL/accent hue: at 50% lightness it is only ~2.1:1 on white (and ~1.8:1
+     at /80 over the bg-warning/10 tint), so amber BODY text fails WCAG AA in
+     light mode. --warning-text keeps the hue and the lightness for dark
+     themes (already ~7.9:1 on --background) but darkens light mode to 30%
+     lightness, which clears AA against every amber tint it sits on:
+       white           ~5.4:1
+       bg-warning/10   ~5.0:1
+       bg-warning/20   ~4.6:1
+     Use this class - never text-warning - for warning COLOURED TEXT. */
+  .text-warning-text {
+    color: hsl(var(--warning-text));
+  }
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -444,6 +458,7 @@
   --destructive-foreground: 210 28% 93%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
+  --warning-text: 38 92% 50%;
   --pending: 210 40% 60%;
   --preview: 18 60% 50%;
   --border: 213 19% 18%;
@@ -487,6 +502,7 @@
   --destructive-foreground: 210 40% 98%;
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
+  --warning-text: 38 92% 30%;
   --pending: 210 40% 60%;
   --preview: 18 60% 40%;
   --border: 215 15% 85%;
@@ -528,6 +544,7 @@
   --destructive-foreground: 0 0% 100%;
   --success: 142 80% 50%;
   --warning: 38 95% 55%;
+  --warning-text: 38 95% 55%;
   --preview: 18 60% 55%;
   --border: 222 20% 30%;
   --input: 222 20% 30%;

@@ -747,6 +747,143 @@ describe('PipelineListView', () => {
     expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/unarchive')
   })
 
+  // FAR-1530: per-pipeline Paused execution state (list half).
+  it('pauses a running pipeline from the action menu', async () => {
+    const running = { id: 'p1', organisation_id: 'org1', name: 'Pause Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [running], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, running)
+    await nextTick()
+
+    const pause = vm.actionMenuItems.find(i => i.label === 'Pause')
+    expect(pause).toBeDefined()
+    // A running pipeline must not offer Resume.
+    expect(vm.actionMenuItems.find(i => i.label === 'Resume')).toBeUndefined()
+    pause!.command()
+    await flushPromises()
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/pause')
+
+    // The row must not claim the pipeline is paused before the state changes.
+    expect(wrapper.find('[data-testid="pipeline-list-paused-badge"]').exists()).toBe(false)
+  })
+
+  it('badges a paused row and flips the action to Resume, blocked while the circuit breaker is tripped', async () => {
+    const paused = { id: 'p1', organisation_id: 'org1', name: 'Paused', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: false, run_disabled_reason: 'operator' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [paused], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="pipeline-list-paused-badge"]').exists()).toBe(true)
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void; disabled?: boolean; tooltip?: string }> }
+    vm.openActionMenu({} as MouseEvent, paused)
+    await nextTick()
+
+    const resume = vm.actionMenuItems.find(i => i.label === 'Resume')
+    expect(resume).toBeDefined()
+    expect(vm.actionMenuItems.find(i => i.label === 'Pause')).toBeUndefined()
+    expect(resume!.disabled).toBe(false)
+    resume!.command()
+    await flushPromises()
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/resume')
+
+    // A circuit-breaker pause can only be cleared by an org admin, so the
+    // menu must block Resume (PrimeVue's Menuitem refuses the click on a
+    // `disabled` item) and carry a tooltip explaining why.
+    const tripped = { ...paused, run_disabled_reason: 'circuit_breaker' }
+    vm.openActionMenu({} as MouseEvent, tripped)
+    await nextTick()
+    const blocked = vm.actionMenuItems.find(i => i.label === 'Resume')
+    expect(blocked?.disabled).toBe(true)
+    expect(blocked?.tooltip).toBeTruthy()
+  })
+
+  // FAR-1530: the badge help is reason-aware - a breaker trip is NOT
+  // resumable by the reader, so a generic "paused until resumed" would be
+  // misleading. The help is also mirrored sr-only: `title` alone reaches
+  // neither screen readers nor touch.
+  it('names the circuit breaker in the paused badge help when that is why it is paused', async () => {
+    const tripped = { id: 'p1', organisation_id: 'org1', name: 'Tripped', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: false, run_disabled_reason: 'circuit_breaker' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [tripped], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const badge = wrapper.find('[data-testid="pipeline-list-paused-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toContain('circuit breaker')
+    expect(badge.find('.sr-only').text()).toContain('circuit breaker')
+  })
+
+  // FAR-1530: a failed pause/resume must surface the API error in the list's
+  // error banner (the same `error` ref the initial load uses), not be swallowed.
+  it('shows the error banner when pausing fails', async () => {
+    const running = { id: 'p1', organisation_id: 'org1', name: 'Pause Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [running], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, running)
+    await nextTick()
+
+    postMock.mockRejectedValueOnce(new Error('Pause failed'))
+    vm.actionMenuItems.find(i => i.label === 'Pause')!.command()
+    await flushPromises()
+
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Pause failed')
+    wrapper.unmount()
+  })
+
+  it('shows the error banner when resuming fails', async () => {
+    const paused = { id: 'p1', organisation_id: 'org1', name: 'Resume Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: false, run_disabled_reason: 'operator' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [paused], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, paused)
+    await nextTick()
+
+    postMock.mockRejectedValueOnce(new Error('Resume failed'))
+    vm.actionMenuItems.find(i => i.label === 'Resume')!.command()
+    await flushPromises()
+
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Resume failed')
+    wrapper.unmount()
+  })
+
   it('deletes a pipeline via the action menu when the delete feature is enabled', async () => {
     const plan = usePlanStore()
     plan.features.pipeline_delete = true
