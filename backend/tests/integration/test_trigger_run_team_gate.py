@@ -647,7 +647,16 @@ class TestTriggerTeamGate:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert restored.status_code == 200, f"Expected 200, got {restored.status_code}: {restored.text}"
-        assert restored.json()["deleted_at"] is None, "restored trigger must be back in service"
+        # The API shape has no ``deleted_at`` field (_trigger_to_dict); the
+        # live-row list (which excludes soft-deleted rows) proving the restored
+        # id reappears is the in-service proof.
+        relisted = await team_gate_client.get(
+            f"/api/v1/triggers?pipeline_id={team_private_pipeline}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert relisted.status_code == 200, f"Relist failed: {relisted.status_code}: {relisted.text}"
+        relisted_ids = {item["id"] for item in relisted.json()["items"]}
+        assert trigger_id in relisted_ids, "restored trigger must be back in service (re-listed)"
 
     @pytest.mark.asyncio
     async def test_non_member_denied_restoring_trigger_on_team_private(

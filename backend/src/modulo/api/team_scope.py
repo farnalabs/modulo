@@ -272,6 +272,12 @@ async def resolve_trigger_team_scope(
     A soft-deleted PIPELINE denies (row filtered → 404); a soft-deleted
     TRIGGER still resolves so ``POST /triggers/{id}/restore`` reaches the
     gate (a team-private trigger must not become restorable by being deleted).
+    The SELECT opts out of the global soft-delete auto-filter with the
+    documented ``execution_options(include_deleted=True)`` equivalent form -
+    without it the ``Trigger``-join side silently drops soft-deleted rows
+    and restore 404s before the gate runs. The pipeline side is still
+    deleted-filtered by the explicit ``Pipeline.deleted_at.is_(None)``
+    predicate.
 
     Denial-naming divergence (FAR-1513 QA note): naming a row is per-consumer.
     REST routes surface this resolver's missing row as the flat 404
@@ -296,7 +302,9 @@ async def resolve_trigger_team_scope(
     stmt = (
         select(Pipeline.owner_team_id, Pipeline.visibility)
         .join(Trigger, Trigger.pipeline_id == Pipeline.id)
-        .where(Trigger.id == trigger_id, Pipeline.deleted_at.is_(None))
+        .where(Trigger.id == trigger_id)
+        .execution_options(include_deleted=True)
+        .where(Pipeline.deleted_at.is_(None))
     )
     result = await session.execute(stmt)
     row = result.first()

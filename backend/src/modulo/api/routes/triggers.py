@@ -331,6 +331,16 @@ async def _require_team_gate_in_txn(
     already set), so a row the principal cannot see 404s here; combined with
     the evaluator's own fail-closed branches the gate denies both ways.
     """
+    # The RLS membership/admin arms of ``rls_team_isolation`` need BOTH
+    # ``app.organisation_id`` AND ``app.user_id``/``app.org_role``. The
+    # dependency sets both, but ``set_config(..., is_local => true)`` dies at
+    # transaction end - and ``set_rls_org`` alone runs in the callers'
+    # transactions - so the membership arm cannot see the caller at all and
+    # would 404 legitimate members/admins. Set the user half here, inside the
+    # same txn this gate runs in (set_rls_user_context is itself transaction-scoped,
+    # so this covers every caller of THIS helper without touching the sites
+    # that never run it).
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
     # Must run BEFORE the FOR UPDATE below to bound that wait.
     await set_mutation_row_lock_timeout(session)
     current = (
