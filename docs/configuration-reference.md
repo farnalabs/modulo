@@ -25,8 +25,13 @@ The application refuses to start if any required variable is absent or invalid.
 | `MODULO_SYSTEM_DATABASE_URL` | No | `""` | Dedicated connection string for cross-org system cron jobs (`modulo_system` role). When set, system crons use this instead of `DATABASE_URL`. |
 
 `MODULO_DB=sqlite` switches to SQLite for local development (no RLS, no advisory locks, no flood protection).
-`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver (MariaDB is deprecated since 2026-07-11).
-See [`docs/system-requirements.md`](./system-requirements.md) for backend limitations.
+`MODULO_DB=mariadb` or `mysql` uses the aiomysql driver. Both values are accepted by
+the settings validator but are **not** production-ready: the per-node output
+store (`db/crud/run_node_outputs.py::dialect_insert`) raises `NotImplementedError`
+on any dialect other than `postgres` / `sqlite`, and MariaDB has been deprecated
+since 2026-07-11. Use Postgres in production, SQLite for local development. See
+[`docs/system-requirements.md`](./system-requirements.md) for the full backend
+matrix.
 
 ### DB Capacity Monitor
 
@@ -370,7 +375,7 @@ See [`docs/operations/backup.md`](./operations/backup.md) for backup configurati
 | `SMTP_TIMEOUT` | No | `30` | SMTP connection/send timeout in seconds |
 
 The same variables also drive the Docker Compose **health watchdog**'s email
-alerts (`watchdog` service in the root `docker-compose.yml`) — one SMTP setup
+alerts (`watchdog` service in the root `docker-compose.yml`) – one SMTP setup
 serves both. Watchdog alerting stays off until `SMTP_HOST`, `SMTP_PORT`,
 `EMAIL_FROM` and `ALERT_EMAIL_TO` are all set; leaving them unset is a
 supported state where monitoring still runs and only the emails are skipped.
@@ -381,7 +386,7 @@ The same SMTP setup also sends the **error-tracking**, **readiness** and **worke
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `MODULO_ENV` | No | `development` | Deployment environment name. Applied to error-tracking events and structured logs, and shown as `Environment: <value>` on error-tracking alert emails (an empty value renders as `N/A`) and on [readiness health](#readiness-health-alerts) / [worker-liveness watchdog](#worker-liveness-watchdog) alerts (an empty value renders as `unknown`). The Compose deployment sets it to `production` (`deploy/compose/docker-compose.prod.yml`) and the Helm chart defaults it to `production` (`deploy/helm/modulo/templates/configmap.yaml`). |
-| `ALERT_CONTEXT` | No | – | Operator-supplied free text appended verbatim to every readiness and [worker-liveness watchdog](#worker-liveness-watchdog) alert — runbook links, escalation notes, ticket pointers. One item per line; blank lines are dropped and the rendering is bounded (at most 20 lines, 300 chars each, the environment line always first). Carried on email, generic webhook and Teams channels alike. Never written to logs (the setting is `repr=False`). |
+| `ALERT_CONTEXT` | No | – | Operator-supplied free text appended verbatim to every readiness and [worker-liveness watchdog](#worker-liveness-watchdog) alert – runbook links, escalation notes, ticket pointers. One item per line; blank lines are dropped and the rendering is bounded (at most 20 lines, 300 chars each, the environment line always first). Carried on email, generic webhook and Teams channels alike. Never written to logs (the setting is `repr=False`). |
 
 The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails, webhooks and Teams messages carry the environment line and `ALERT_CONTEXT`; the out-of-process Gatus sentinel and the error-tracking pipeline do not use `ALERT_CONTEXT`.
 
@@ -389,10 +394,10 @@ The readiness and [worker-liveness watchdog](#worker-liveness-watchdog) emails, 
 
 The same SMTP configuration also drives the system worker's in-app readiness alerting: when **both** `SMTP_HOST` and `ALERT_EMAIL_TO` are set, the `health_readiness_alert` cron (every 5 minutes) evaluates health through the same checks as `/healthz/ready` and emails `ALERT_EMAIL_TO`:
 
-- **One alert email** when readiness *confirmedly* transitions into `degraded` or `unavailable` — the email lists each failing sub-check with its detail.
+- **One alert email** when readiness *confirmedly* transitions into `degraded` or `unavailable` – the email lists each failing sub-check with its detail.
 - **One recovery email** when readiness returns to `ok`, so an incident has a visible end.
 
-Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled — quiet, not silent.
+Notifications are edge-triggered and deduplicated: a new state must hold for 2 consecutive ticks (a ~10-minute worst-case notification latency, a single-probe blip never emails), and the dedup state is persisted in Redis so there is **one email per incident, never one per tick**. With no SMTP configuration (the compose deployment default), the cron still runs and evaluates health, never errors, and logs at most once per hour that alerting is disabled – quiet, not silent.
 
 This covers degradation *while the app is up*. A **full outage** is covered separately by the compose deployment's external [Gatus health watchdog](./deployment.md#health-watchdog-docker-compose), which does not depend on Modulo itself running.
 
@@ -543,10 +548,10 @@ readiness indefinitely.
 The database-hygiene probe is the exception to that wording (FAR-1510). When it does not
 complete within `MODULO_HEALTH_DB_HYGIENE_TIMEOUT_SECONDS` it reports `degraded` with the
 detail "database-hygiene probe did not complete within Ns (likely an event-loop stall; see
-event_loop_lag) — hygiene not measured", and that result is ADVISORY: it stays visible in
+event_loop_lag) – hygiene not measured", and that result is ADVISORY: it stays visible in
 the readiness body but is excluded from the aggregate gate, so on its own it neither flips
 `/healthz/ready` to `degraded` nor fires the `health_readiness_alert` email. Nothing was
-measured, so there is no hygiene verdict to act on — the stall itself is what the advisory
+measured, so there is no hygiene verdict to act on – the stall itself is what the advisory
 `event_loop_lag` check reports.
 
 The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_DEAD_TUPLES`,
@@ -554,7 +559,7 @@ The database-hygiene sub-check's two thresholds (`MODULO_HEALTH_DB_HYGIENE_MIN_D
 reports the worst table from `pg_stat_user_tables` plus this database's freeze age
 against `autovacuum_freeze_max_age`, and grades `degraded` (never `unavailable`, so it
 never 503s readiness on its own) when either threshold is breached. A completed reading
-that grades `degraded` DOES gate the aggregate — only a probe that never finished is
+that grades `degraded` DOES gate the aggregate – only a probe that never finished is
 advisory.
 
 ---

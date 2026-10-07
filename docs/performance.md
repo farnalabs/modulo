@@ -10,9 +10,11 @@ load testing tool. Scripts live in `tests/performance/` and target the Modulo AP
 
 - [k6](https://k6.io/docs/getting-started/installation/) installed locally (v0.49+)
 - The Modulo backend (and its dependencies: Postgres 16, Redis 8) is running
-- Test user credentials exist in the target environment:
-  - `admin@modulo.test` / `test-password-123`
-  - `user-one@modulo.test` / `test-password-123`
+- Test user credentials exist in the target environment (`auth-burst.js` rotates
+  through five of them so token caching does not distort the login numbers):
+  - `admin@modulo.test`, `user-one@modulo.test`, `user-two@modulo.test`,
+    `viewer@modulo.test`, `editor@modulo.test`
+  - all with password `test-password-123`
 
 ### Install k6
 
@@ -41,7 +43,7 @@ docker pull grafana/k6
 All tests accept `BASE_URL` as an environment variable (defaults to
 `http://localhost:8000/api/v1`).
 
-### Pipeline CRUD (100 concurrent users)
+### Pipeline CRUD (ramps to 100 VUs)
 
 ```bash
 k6 run tests/performance/pipeline-crud.js
@@ -54,19 +56,19 @@ docker run --rm -i -v "$(pwd)/tests/performance:/tests" \
   /tests/pipeline-crud.js
 ```
 
-### Run Execution (50 concurrent triggered runs)
+### Run Execution (ramps to 50 VUs)
 
 ```bash
 k6 run tests/performance/run-execution.js
 ```
 
-### Auth Burst (200 req/s login)
+### Auth Burst (ramping arrival rate to 200 req/s)
 
 ```bash
 k6 run tests/performance/auth-burst.js
 ```
 
-### Audit Query (paginated queries)
+### Audit Query (ramps to 50 VUs; page, cursor, and filtered queries)
 
 ```bash
 k6 run tests/performance/audit-query.js
@@ -83,22 +85,31 @@ done
 
 ## Baseline Targets
 
-| Endpoint / Operation | p50 | p95 | p99 | Error Rate |
-|---|---|---|---|---|
-| **Auth** | | | | |
-| `POST /auth/login` | <100ms | <300ms | <500ms | 0% |
-| **Pipelines** | | | | |
-| `POST /pipelines` | <200ms | <500ms | <1000ms | <1% |
-| `GET /pipelines` | <100ms | <300ms | <500ms | <1% |
-| `GET /pipelines/:id` | <50ms | <200ms | <400ms | <1% |
-| `PATCH /pipelines/:id` | <100ms | <300ms | <500ms | <1% |
-| `DELETE /pipelines/:id` | <100ms | <300ms | <500ms | <1% |
-| **Run Execution** | | | | |
-| `POST /runs` | <300ms | <1000ms | <2000ms | <1% |
-| `GET /runs/:id` (poll) | <50ms | <200ms | <400ms | <1% |
-| **Audit** | | | | |
-| `GET /admin/audit` (page) | <50ms | <200ms | <400ms | <1% |
-| `GET /admin/audit` (cursor) | <50ms | <200ms | <400ms | <1% |
+These are the aspirational per-endpoint numbers. The **enforced** gate is what
+each script actually sets in its `options.thresholds` block: every script
+asserts `p(95)` only, plus an `errors` rate below 1%. Where the two disagree,
+the threshold is the one CI enforces.
+
+| Endpoint / Operation | p50 | p95 | p99 | Error Rate | Script threshold (p95) |
+|---|---|---|---|---|---|
+| **Auth** | | | | | |
+| `POST /auth/login` | <100ms | <300ms | <500ms | 0% | `login_duration` <300ms |
+| **Pipelines** | | | | | |
+| `POST /pipelines` | <200ms | <500ms | <1000ms | <1% | `pipeline_create_duration` <500ms |
+| `GET /pipelines` | <100ms | <300ms | <500ms | <1% | `pipeline_list_duration` <500ms |
+| `GET /pipelines/:id` | <50ms | <200ms | <400ms | <1% | `pipeline_get_duration` <500ms |
+| `PATCH /pipelines/:id` | <100ms | <300ms | <500ms | <1% | `pipeline_update_duration` <500ms |
+| `DELETE /pipelines/:id` | <100ms | <300ms | <500ms | <1% | `pipeline_delete_duration` <500ms |
+| **Run Execution** | | | | | |
+| `POST /runs` | <300ms | <1000ms | <2000ms | <1% | `run_create_duration` <1000ms |
+| `GET /runs/:id` (poll) | <50ms | <200ms | <400ms | <1% | `run_poll_duration` <500ms |
+| **Audit** | | | | | |
+| `GET /admin/audit` (page) | <50ms | <200ms | <400ms | <1% | `audit_page_duration` <200ms |
+| `GET /admin/audit` (cursor) | <50ms | <200ms | <400ms | <1% | `audit_cursor_duration` <200ms |
+| `GET /admin/audit` (filtered) | - | - | - | <1% | `audit_filtered_duration` <200ms |
+
+`auth-burst.js` additionally pins `http_5xx_errors` to `rate==0`, so any 5xx
+fails the run even though the `errors` budget is 1%.
 
 ### Notes
 
@@ -195,6 +206,23 @@ Each script follows the k6 best-practice pattern:
 
 Custom Trend metrics track per-operation timing separately from the global
 `http_req_duration`. Thresholds enforce the baseline targets defined above.
+
+## Not covered here: the Locust suite
+
+These k6 scripts cover the HTTP CRUD, login, and run-dispatch paths. They do
+**not** cover HITL claim/approve/reject, WebSocket event-stream latency, or
+end-to-end run completion under load. Those three task sets live in the Locust
+suite:
+
+```bash
+cd backend
+locust -f tests/load/locustfile.py
+locust -f tests/load/locustfile.py --headless -u 50 -r 5 --run-time 5m
+```
+
+Seeding is explicit (`python -m tests.load.data_seed`). See
+[`docs/operations/performance-baseline.md`](./operations/performance-baseline.md)
+for the Locust baseline metrics and the k6 versus Locust split.
 
 ## Adding New Tests
 
