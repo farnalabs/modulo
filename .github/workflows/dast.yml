@@ -86,13 +86,28 @@ jobs:
               print("No JSON report generated - check the scan step output.")
               sys.exit(0)
           with open(path) as f:
-              data = json.load(f)
+              raw = f.read()
+          # A truncated report must not crash the summarizer: this harness is
+          # report-only (see the run step), so a partial file is reported, not
+          # raised.
+          try:
+              data = json.loads(raw)
+          except ValueError as exc:
+              print(f"ZAP report is not valid JSON ({exc}); skipping summary.")
+              sys.exit(0)
           totals = {}
           for site in data.get("site", []):
               for alert in site.get("alerts", []):
                   risk = alert.get("riskdesc", "?")
                   name = alert.get("name", "?")
-                  cnt = alert.get("count", 1)
+                  # ZAP emits `count` as a string on some alert types; the old
+                  # uncoerced value raised
+                  # `TypeError: unsupported operand type(s) for +: 'int' and 'str'`
+                  # and failed every nightly run.
+                  try:
+                      cnt = int(alert.get("count", 1))
+                  except (TypeError, ValueError):
+                      cnt = 1
                   key = f"{risk} | {name}"
                   totals[key] = totals.get(key, 0) + cnt
           print("=== ZAP findings summary ===")
