@@ -1036,3 +1036,138 @@ describe('AdminAuditView — system ledger (system admin)', () => {
     expect(wrapper.text()).toContain('req-sys-1')
   })
 })
+
+// ---- Branch coverage: system-ledger interaction arms ----
+describe('AdminAuditView — system ledger interaction branches', () => {
+  beforeEach(() => {
+    vi.mocked(getAccessToken).mockReturnValue(systemAdminToken())
+    mockSystemAuditGet([systemAuditEvent('sys-1')])
+  })
+
+  afterEach(() => {
+    vi.mocked(getAccessToken).mockReturnValue('mock-token')
+  })
+
+  async function mountSystem() {
+    const wrapper = await mountLoaded()
+    await wrapper.find('[data-testid="admin-audit-tab-system"]').trigger('click')
+    await nextTick()
+    return wrapper
+  }
+
+  it('toggles a ledger row via keyboard (Enter then Space) for a11y', async () => {
+    const wrapper = await mountSystem()
+    const row = wrapper.find('[data-testid="admin-audit-system-event-row-sys-1"]')
+
+    await row.trigger('keydown', { key: 'Enter' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+
+    // Space collapses the already-expanded row (the toggle's id-match arm).
+    await row.trigger('keydown', { key: ' ', code: 'Space' })
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
+  })
+
+  it('toggles a ledger row via its chevron button', async () => {
+    const wrapper = await mountSystem()
+
+    await wrapper.find('[data-testid="admin-audit-system-event-expand-sys-1"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+  })
+
+  it('renders dashes for ledger rows with no organisation or actor', async () => {
+    mockSystemAuditGet([systemAuditEvent('sys-null', { org_id: null, actor_user_id: null })])
+    const wrapper = await mountSystem()
+
+    const row = wrapper.find('[data-testid="admin-audit-system-event-row-sys-null"]')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('—')
+  })
+
+  it('omits the optional identifier detail rows when the ledger event lacks them', async () => {
+    mockSystemAuditGet([
+      systemAuditEvent('sys-sparse', { org_id: null, actor_user_id: null, request_id: null }),
+    ])
+    const wrapper = await mountSystem()
+
+    await wrapper.find('[data-testid="admin-audit-system-event-row-sys-sparse"]').trigger('click')
+    await nextTick()
+
+    // The payload viewer still renders (payload_json has keys); the org / actor
+    // / request-id detail blocks are omitted because those fields are absent.
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Request ID')
+  })
+
+  it('renders an empty detail panel when toggling an id absent from the ledger', async () => {
+    const wrapper = await mountSystem()
+    const vm = wrapper.vm as unknown as { toggleSystemExpand: (id: string) => void }
+
+    // find() returns undefined → the `?? null` fallback stores no event while
+    // expandedSystemId is still set, so the detail row renders without a payload.
+    vm.toggleSystemExpand('missing-id')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-audit-system-section"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="json-viewer-stub"]').exists()).toBe(false)
+  })
+
+  it('goSystemPage ignores a page below one', async () => {
+    const wrapper = await mountSystem()
+    const vm = wrapper.vm as unknown as { goSystemPage: (page: number) => void }
+    const before = (api.GET as Mock).mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/system-audit',
+    ).length
+
+    vm.goSystemPage(0)
+    await nextTick()
+
+    const after = (api.GET as Mock).mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/system-audit',
+    ).length
+    expect(after).toBe(before)
+  })
+
+  it('falls back to an empty ledger when the response carries no page body', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/system-audit') return { data: undefined, error: undefined }
+      if (url === '/api/v1/admin/audit') return pagePayload([auditEvent('evt-1')])
+      if (url === '/api/v1/admin/feature-flags') return { data: { license: { tier: 'team' }, flags: [] }, error: undefined }
+      if (url === '/api/v1/admin/license') return { data: { tier: 'team' }, error: undefined }
+      if (url === '/api/v1/admin/tiers') return { data: { tiers: [{ tier_id: 'team', label: 'Team', rank: 1 }] }, error: undefined }
+      return { data: undefined, error: { detail: `unrouted: ${url}` } }
+    })
+    const wrapper = await mountSystem()
+
+    expect(wrapper.text()).toContain('No organisation lifecycle records found')
+  })
+
+  it('catches a thrown ledger request and surfaces the failure', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/admin/system-audit') throw new Error('ledger exploded')
+      if (url === '/api/v1/admin/audit') return pagePayload([auditEvent('evt-1')])
+      if (url === '/api/v1/admin/feature-flags') return { data: { license: { tier: 'team' }, flags: [] }, error: undefined }
+      if (url === '/api/v1/admin/license') return { data: { tier: 'team' }, error: undefined }
+      if (url === '/api/v1/admin/tiers') return { data: { tiers: [{ tier_id: 'team', label: 'Team', rank: 1 }] }, error: undefined }
+      return { data: undefined, error: { detail: `unrouted: ${url}` } }
+    })
+    const wrapper = await mountSystem()
+
+    expect(wrapper.text()).toContain('ledger exploded')
+  })
+
+  it('switching back to the organisation trail does not refetch the ledger', async () => {
+    const wrapper = await mountSystem()
+
+    await wrapper.find('[data-testid="admin-audit-tab-org"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="admin-audit-event-row-evt-1"]').exists()).toBe(true)
+    const ledgerCalls = (api.GET as Mock).mock.calls.filter(
+      (c: unknown[]) => c[0] === '/api/v1/admin/system-audit',
+    )
+    expect(ledgerCalls).toHaveLength(1)
+  })
+})

@@ -8,17 +8,20 @@ asserts that the filters actually reach the SQL statement.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import Generator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.admin_system_audit import admin_list_system_audit_events
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
@@ -237,3 +240,47 @@ class TestDbErrorMapping:
             resp = client.get(_URL)
 
         assert resp.status_code == 500
+
+
+class TestExceptionPassthrough:
+    """Control-flow exceptions must pass through the handler untouched.
+
+    The handler's ``except HTTPException`` / ``except asyncio.CancelledError``
+    arms re-raise rather than remap: an HTTPException raised below already
+    carries the right response, and a cancellation must never be turned into a
+    503/500.  Both arms are exercised by calling the (decorated) route coroutine
+    directly, because the shared ``_translate_wrapped_exception`` classifier in
+    ``handle_db_errors`` would otherwise re-resolve them to a status for us.
+    """
+
+    async def test_http_exception_propagates_unmapped(self) -> None:
+        session = _make_session()
+        exc = HTTPException(status_code=409, detail="conflict")
+        with (
+            patch(
+                "modulo.api.routes.admin_system_audit.list_system_audit_events",
+                new=AsyncMock(side_effect=exc),
+            ),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await admin_list_system_audit_events(
+                _current_user=_principal(system_admin=True),
+                session=session,
+            )
+
+        # The original status survives; it is not rewritten to the generic 503/500.
+        assert raised.value.status_code == 409
+
+    async def test_cancelled_error_propagates(self) -> None:
+        session = _make_session()
+        with (
+            patch(
+                "modulo.api.routes.admin_system_audit.list_system_audit_events",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await admin_list_system_audit_events(
+                _current_user=_principal(system_admin=True),
+                session=session,
+            )
