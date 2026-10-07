@@ -482,7 +482,8 @@ export default {
       "no_raw_events_description": "Events for this group will appear here once they are ingested.",
       "events_of": "{count} of {total} events",
       "previous": "Previous",
-      "next": "Next"
+      "next": "Next",
+      "instance_scope_readonly": "Instance scope — this error group is not attributed to any organisation. Read-only."
     },
     "AdminProductAnalyticsView": {
       "title": "Product Analytics",
@@ -1004,7 +1005,15 @@ export default {
       "scheduler_starvation_age_minutes": "{minutes}m",
       "scheduler_starvation_age_hours": "{hours}h",
       "expand_message": "Expand error message",
-      "collapse_message": "Collapse error message"
+      "collapse_message": "Collapse error message",
+      "no_error_groups_description": "Try adjusting your filters or wait for errors to be ingested.",
+      "no_instance_error_groups_found": "No instance-scope error groups found",
+      "no_instance_error_groups_description": "Instance-level errors appear here once they are ingested by the public frontend endpoint or an org-less backend error.",
+      "scope_group_label": "Error scope",
+      "scope_label": "Scope",
+      "scope_organisation": "Organisation",
+      "scope_instance": "Instance",
+      "scope_instance_hint": "Instance-level errors are not attributed to any organisation (public frontend ingest and org-less backend errors). This view is read-only and for system admins."
     },
     "AdminNodeCategoriesView": {
       "failed_to_load_categories": "Failed to load categories:",
