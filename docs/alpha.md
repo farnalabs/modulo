@@ -26,7 +26,7 @@ Alpha means all four of:
 - **Documentation:** the public docs and quickstart valid and current, with no stale org/path/version references.
 - **Contribution path:** the public repo is usable by an outside contributor (CI runs for forks, internal references scrubbed).
 - **Release engineering:** signed images/artifacts and an SBOM per release.
-- **Deployment shape:** a Kubernetes deployment path (Helm chart plus a runtime provider) as the recommended production self-hosting shape. In progress - the Helm chart for the stack ships and was validated end-to-end on EKS (FAR-1052), but the runtime provider that runs agent workspaces as pods is not yet available (FAR-1051); the combined path is not to be presented publicly as an existing capability until it ships.
+- **Deployment shape:** a Kubernetes deployment path (Helm chart plus a runtime provider) as the recommended production self-hosting shape. Shipped - the Helm chart for the stack was validated end-to-end on EKS (FAR-1052), the runtime provider that runs agent workspaces as pods ships on main (FAR-1051), and its kind conformance gate is green (FAR-1053), so the combined path may be presented publicly as an existing capability. The scheduled managed-cluster conformance run has not executed yet (its kubeconfig secrets are pending), so no managed-cluster validation is claimed. The public reader-facing guide for the path is https://modulo.run/docs/kubernetes.
 - **Governance model:** the evaluation and policy-gate model ships before any customer exposure - it is a conceptual change to how runs are governed, not an incremental feature.
 - **Exit gate:** the exit criteria below are demonstrably met with named human sign-offs, not merely green CI.
 
