@@ -1,9 +1,9 @@
 name: "Audit chain continuity monitor"
 
 # FAR-1466: watch our OWN audit chain on app.modulo.run so a lapse is caught
-# early instead of at audit time. Modelled on uptime-monitor.yml - same Linear
-# ticket-on-failure path, same `if: failure()` pattern, same fail-open
-# behaviour when a credential is absent.
+# early instead of at audit time. Follows the repo's monitor convention - a
+# Linear ticket-on-failure path, the `if: failure()` pattern, and the same
+# fail-open behaviour when a credential is absent.
 #
 # FAR-1468 (live-tested against app.modulo.run) corrected two defects in the
 # original version: (1) both audit endpoints require audit.manage, which maps
@@ -43,7 +43,7 @@ jobs:
       # carries the returned JWT access token as MODULO_TOKEN. The token is
       # masked before it reaches $GITHUB_ENV so it never appears in logs.
       #
-      # Fail-open on missing credentials (consistent with uptime-monitor.yml):
+      # Fail-open on missing credentials (the repo's monitor convention):
       # a not-yet-configured secret must not red-queue the workflow. A FAILED
       # login, by contrast, exits 1 - the monitor cannot do its job without
       # auth, and the ticket step catches it.
