@@ -637,7 +637,7 @@ jobs:
 
   notify-deploy-failure:
     name: Trigger Branch Fixer on deploy failure
-    needs: [deploy-throttle, pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke]
+    needs: [deploy-throttle, pre-deploy-gate, deploy-staging, staging-e2e, staging-apply, deploy-production, prod-smoke]
     # FAR-912: fires when ANY downstream deploy job fails — not just the
     # pre-deploy gate. The original condition only checked
     # needs.pre-deploy-gate.result == 'failure', so failures at staging E2E,
@@ -684,6 +684,7 @@ jobs:
           PRE_DEPLOY_RESULT: ${{ needs.pre-deploy-gate.result }}
           STAGING_DEPLOY_RESULT: ${{ needs.deploy-staging.result }}
           STAGING_E2E_RESULT: ${{ needs.staging-e2e.result }}
+          STAGING_APPLY_RESULT: ${{ needs.staging-apply.result }}
           PROD_DEPLOY_RESULT: ${{ needs.deploy-production.result }}
           PROD_SMOKE_RESULT: ${{ needs.prod-smoke.result }}
         shell: bash
@@ -695,14 +696,15 @@ jobs:
           [ "${PRE_DEPLOY_RESULT}" = "failure" -o "${PRE_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} pre-deploy-gate"
           [ "${STAGING_DEPLOY_RESULT}" = "failure" -o "${STAGING_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-staging"
           [ "${STAGING_E2E_RESULT}" = "failure" -o "${STAGING_E2E_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-e2e"
+          [ "${STAGING_APPLY_RESULT}" = "failure" -o "${STAGING_APPLY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} staging-apply"
           [ "${PROD_DEPLOY_RESULT}" = "failure" -o "${PROD_DEPLOY_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} deploy-production"
           [ "${PROD_SMOKE_RESULT}" = "failure" -o "${PROD_SMOKE_RESULT}" = "cancelled" ] && FAILED_STAGES="${FAILED_STAGES} prod-smoke"
           FAILED_STAGES="${FAILED_STAGES# }"  # trim leading space
           # FIRST failed stage, in the same canonical order FAILED_STAGES
           # already uses (pre-deploy-gate, deploy-staging, staging-e2e,
-          # deploy-production, prod-smoke): the first word of FAILED_STAGES.
-          # Derived alongside — the FAILED_STAGES computation and its output
-          # are unchanged.
+          # staging-apply, deploy-production, prod-smoke): the first word of
+          # FAILED_STAGES. Derived alongside — the FAILED_STAGES computation
+          # and its output are unchanged.
           PRIMARY_STAGE="${FAILED_STAGES%% *}"
           FINGERPRINT="Deploy: Staging + Prod|${PRIMARY_STAGE}|${HEAD_SHA}"
 
@@ -2157,14 +2159,166 @@ jobs:
           path: frontend/test-results/
           if-no-files-found: ignore
 
+  staging-apply:
+    name: Staging apply gate (canonical example config)
+    # FAR-1531: sibling of staging-e2e. Applies the ONE canonical
+    # `modulo apply` example config (configs/apply/example.yaml) to the
+    # freshly deployed staging org, then re-runs `modulo apply --diff` and
+    # requires an all-unchanged report (exit 0) — the idempotency/convergence
+    # assertion. deploy-production gates on this job as well as staging-e2e.
+    #
+    # The example's pipelines are declared `run_enabled: false` (the Paused
+    # state, FAR-1530), so nothing executes on staging and no run credentials
+    # are involved. `apply` never creates agents, so the job's provisioning
+    # step below creates the two prerequisite agents (plus their input/output
+    # schemas and model backend) idempotently first — see the PREREQUISITES
+    # preamble in configs/apply/example.yaml.
+    #
+    # The `skip_staging_e2e` dispatch input skips this job too (it is the
+    # documented staging-gate bypass for a manual production deploy).
+    needs: [deploy-staging]
+    if: github.event.inputs.skip_staging_e2e != 'true'
+    timeout-minutes: 30
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Wait for staging health
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          Write-Host "Waiting for staging.modulo.run ..."
+          for ($i=0; $i -lt 60; $i++) {
+            try {
+              $r = curl -s -f "https://staging.modulo.run/healthz/ready" 2>$null
+              if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 5
+          }
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync deps
+        working-directory: backend
+        run: uv sync --frozen
+
+      # PREREQUISITES (configs/apply/example.yaml): `apply` never creates
+      # agents, and an Agent record needs input/output schema ids plus a model
+      # backend id — so those four entities are provisioned here first.
+      # Idempotent: existing entities are found by name and left untouched.
+      - name: Provision apply prerequisites (agents + their schemas/backend)
+        shell: bash
+        env:
+          MODULO_URL: https://staging.modulo.run
+          MODULO_API_KEY: ${{ secrets.STAGING_APPLY_OPERATOR_API_KEY }}
+          APPLY_EXAMPLE_MODEL_API_KEY: ${{ secrets.STAGING_APPLY_MODEL_API_KEY }}
+        run: |
+          set -euo pipefail
+          API="${MODULO_URL%/}/api/v1"
+          AUTH="Authorization: Bearer ${MODULO_API_KEY}"
+
+          # $1 = collection path, $2 = entity name, $3 = extra query string
+          get_id() {
+            curl -fsS -H "$AUTH" "$API$1?page=1&page_size=100$3" \
+              | jq -er --arg n "$2" '[.items[] | select(.name == $n)][0].id // empty'
+          }
+
+          # jq -e exits 1 on an empty output, so an absent entity is NOT an
+          # error there; create it instead. Status lines go to stderr so this
+          # function's stdout is ONLY the resolved id.
+          create_or_get_schema() {
+            local name="$1" desc="$2" id
+            id="$(get_id /schemas "$name" || true)"
+            if [ -z "$id" ]; then
+              id="$(curl -fsS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+                -d "$(jq -n --arg n "$name" --arg d "$desc" '{name:$n, description:$d}')" \
+                "$API/schemas" | jq -er '.id')"
+              echo "provisioned schema $name ($id)" >&2
+            else
+              echo "schema $name already present ($id)" >&2
+            fi
+            printf '%s' "$id"
+          }
+
+          INPUT_SCHEMA_ID="$(create_or_get_schema "apply-example-worker-input" "Apply example prerequisite: agent input schema (FAR-1531).")"
+          OUTPUT_SCHEMA_ID="$(create_or_get_schema "apply-example-worker-output" "Apply example prerequisite: agent output schema (FAR-1531).")"
+          echo "input=$INPUT_SCHEMA_ID output=$OUTPUT_SCHEMA_ID"
+
+          BACKEND_ID="$(get_id /model-backends "apply-example-worker-backend" "&include_in_dev=true" || true)"
+          if [ -z "$BACKEND_ID" ]; then
+            BACKEND_ID="$(curl -fsS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+              -d "$(jq -n --arg k "$APPLY_EXAMPLE_MODEL_API_KEY" \
+                '{name:"apply-example-worker-backend", display_name:"Apply example worker backend", provider:"deepseek", model_id:"deepseek-chat", api_key:$k, default_params:{temperature:0.2}, visibility:"org", tier:"native"}')" \
+              "$API/model-backends" | jq -er '.id')"
+            echo "provisioned model backend apply-example-worker-backend ($BACKEND_ID)"
+          else
+            echo "model backend apply-example-worker-backend already present ($BACKEND_ID)"
+          fi
+
+          for name in apply-example-worker apply-example-reviewer; do
+            AGENT_ID="$(get_id /agents "$name" || true)"
+            if [ -z "$AGENT_ID" ]; then
+              AGENT_ID="$(curl -fsS -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+                -d "$(jq -n --arg n "$name" --arg i "$INPUT_SCHEMA_ID" --arg o "$OUTPUT_SCHEMA_ID" --arg b "$BACKEND_ID" \
+                  '{name:$n, description:"Apply example prerequisite agent (FAR-1531); referenced by name from configs/apply/example.yaml.", is_executable:true, input_schema_id:$i, output_schema_id:$o, prompt_template:"You are the Modulo apply example agent. Acknowledge the input briefly.", model_backend_id:$b, required_environment_capabilities:[], template_id:null}')" \
+                "$API/agents" | jq -er '.id')"
+              echo "provisioned agent $name ($AGENT_ID)"
+            else
+              echo "agent $name already present ($AGENT_ID)"
+            fi
+          done
+
+      # Shared env for both apply runs: MODULO_* target staging with an
+      # operator (mk_) org key; the example's model backend health check needs
+      # the REAL provider key; the webhook trigger's hmac_secret is a mock
+      # (encrypted + masked server-side, excluded from the drift hash).
+      # DATABASE_URL/SECRET_KEY/FERNET_KEY are dummies: the `modulo` console
+      # script imports the settings graph at startup (apply itself never
+      # touches a local database).
+      - name: "modulo apply: converge staging to the canonical example"
+        working-directory: backend
+        env:
+          MODULO_URL: https://staging.modulo.run
+          MODULO_API_KEY: ${{ secrets.STAGING_APPLY_OPERATOR_API_KEY }}
+          APPLY_EXAMPLE_MODEL_API_KEY: ${{ secrets.STAGING_APPLY_MODEL_API_KEY }}
+          MOCK_APPLY_EXAMPLE_WEBHOOK_HMAC: mock-apply-example-webhook-hmac
+          DATABASE_URL: postgresql+asyncpg://unused:unused@localhost/unused
+          SECRET_KEY: dummy-secret-key-for-the-apply-gate-only
+          FERNET_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+        run: uv run --no-build --no-sync modulo apply -f ../configs/apply/example.yaml
+
+      - name: "modulo apply --diff: assert convergence (idempotency gate)"
+        working-directory: backend
+        env:
+          MODULO_URL: https://staging.modulo.run
+          MODULO_API_KEY: ${{ secrets.STAGING_APPLY_OPERATOR_API_KEY }}
+          APPLY_EXAMPLE_MODEL_API_KEY: ${{ secrets.STAGING_APPLY_MODEL_API_KEY }}
+          MOCK_APPLY_EXAMPLE_WEBHOOK_HMAC: mock-apply-example-webhook-hmac
+          DATABASE_URL: postgresql+asyncpg://unused:unused@localhost/unused
+          SECRET_KEY: dummy-secret-key-for-the-apply-gate-only
+          FERNET_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+        run: uv run --no-build --no-sync modulo apply -f ../configs/apply/example.yaml --diff
+
   deploy-production:
     name: Deploy to app.modulo.run
     # deploy-throttle added to needs so this job can consume the run-identity
     # outputs; it was already a transitive dependency via pre-deploy-gate, so
-    # the graph's behaviour is unchanged (the always() condition below is
-    # untouched).
-    needs: [deploy-throttle, pre-deploy-gate, staging-e2e]
-    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
+    # the graph's behaviour is unchanged.
+    # FAR-1531: staging-apply joins staging-e2e as a production gate — a
+    # staging org that does not converge to configs/apply/example.yaml (or
+    # whose second `apply --diff` reports drift) must not ship to production.
+    # The `skip_staging_e2e` dispatch input bypasses BOTH staging gates (it is
+    # the documented manual-deploy escape hatch, and staging-apply carries the
+    # same `if:` so its result is 'skipped', never 'failure', under the flag).
+    needs: [deploy-throttle, pre-deploy-gate, staging-e2e, staging-apply]
+    if: always() && (needs.staging-e2e.result == 'success' || github.event.inputs.skip_staging_e2e == 'true') && (needs.staging-apply.result == 'success' || github.event.inputs.skip_staging_e2e == 'true')
     runs-on: ubicloud-standard-2
     # 180 min budget: same structure as deploy-staging (build + rehearsal +
     # pre-migrate + deploy + health gate). Without this, the GitHub default
@@ -3460,7 +3614,7 @@ jobs:
     # pipeline run for a throttled no-op creates noise. The throttle-status
     # job already produced a loud summary annotation.
     if: always()
-    needs: [deploy-throttle, deploy-throttle-status, pre-deploy-gate, notify-deploy-failure, deploy-staging, notify-deploy-staging-failure, staging-e2e, notify-staging-e2e-failure, deploy-production, notify-deploy-production-failure, prod-smoke, notify-prod-smoke-failure]
+    needs: [deploy-throttle, deploy-throttle-status, pre-deploy-gate, notify-deploy-failure, deploy-staging, notify-deploy-staging-failure, staging-e2e, notify-staging-e2e-failure, staging-apply, deploy-production, notify-deploy-production-failure, prod-smoke, notify-prod-smoke-failure]
     runs-on: ubicloud-standard-2
     steps:
       - name: Audit notification coverage
@@ -3489,6 +3643,7 @@ jobs:
           | `notify-deploy-staging-failure` | Yes | No (notification only) | N/A — IS the signal | — |
           | `staging-e2e` | Yes | Yes | Branch Fixer webhook | Modulo pipeline |
           | `notify-staging-e2e-failure` | Yes | No (notification only) | N/A — IS the signal | — |
+          | `staging-apply` | Yes | Yes | Branch Fixer webhook (via notify-deploy-failure) | Modulo pipeline |
           | `deploy-production` | Yes | Yes | Branch Fixer webhook (triage) + staleness-check escalation | Modulo pipeline + Actions |
           | `notify-deploy-production-failure` | Yes | No (notification only) | N/A — IS the signal | — |
           | `prod-smoke` | Yes | Yes | Branch Fixer webhook | Modulo pipeline |
@@ -3497,7 +3652,7 @@ jobs:
           ### Coverage rules
           - **Code failures** (tests, lint): routed to Branch Fixer via webhook → Modulo pipeline run
           - **Infrastructure failures** (deploy-staging, deploy-production): routed to Branch Fixer as triage + deploy-watchdog re-dispatches + deploy-staleness-check escalates
-          - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
+          - **ALL deploy-stage failures** (FAR-912): `notify-deploy-failure` now fires on ANY downstream failure (pre-deploy-gate, deploy-staging, staging-e2e, staging-apply, deploy-production, prod-smoke) — the broad catch-all dispatch for the Branch Fixer; the per-stage notify-* jobs add stage-specific feedback
           - **Notification-only jobs** (notify-*): always succeed; their purpose IS the signal
           - **Throttled runs** (FAR-954): when `deploy-throttle` outputs `should_deploy=false`, all downstream jobs are skipped. The `deploy-throttle-status` job produces a loud summary annotation. No notification dispatches fire (nothing to fix).
 

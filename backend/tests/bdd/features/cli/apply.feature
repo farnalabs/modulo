@@ -173,3 +173,28 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     When I render the drift report
     Then the rendered table contains "drift create"
     And the rendered summary reads "drift summary"
+
+  # -- The canonical example config (FAR-1531) --------------------------
+  # configs/apply/example.yaml is the ONE artefact that is both the public
+  # "how to use modulo apply" example and the config the staging deploy gate
+  # applies. These scenarios keep it loading and structurally valid so it
+  # cannot rot; the full apply-then-converge proof lives in
+  # tests/unit/cli/test_apply_example_config.py.
+
+  Scenario: The canonical example config loads with every apply kind declared
+    Given the canonical example apply config file "configs/apply/example.yaml"
+    When I load the apply config
+    Then the config declares a schema named "apply-example-ticket"
+    And the config declares a schema named "apply-example-summary"
+    And the config declares a model backend named "apply-example-chat"
+    And the config declares a pipeline named "apply-example-graphed"
+    And the config declares a pipeline named "apply-example-graphless"
+    And the config declares the trigger "apply-example-graphed/nightly"
+    And the config declares the trigger "apply-example-graphed/ingest"
+    And every declared pipeline declares run_enabled false
+
+  Scenario: The canonical example's model-backend key blocks when its env var is unset
+    Given the canonical example apply config file "configs/apply/example.yaml"
+    When I load the apply config
+    And I resolve secret refs
+    Then the backend "apply-example-chat" is blocked mentioning "is not set"

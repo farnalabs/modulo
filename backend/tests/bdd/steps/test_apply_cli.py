@@ -24,6 +24,7 @@ import json
 import re
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -44,6 +45,9 @@ _API_BASE = "https://api.test"
 _API_KEY = "key"
 _DOC_SEP = "---\n"
 _BACKENDS_LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE), "include_in_dev": "true"}
+# backend/tests/bdd/steps/<this file> -> repository root (FAR-1531: the
+# canonical example lives at configs/apply/example.yaml, outside backend/).
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _schema_item(name: str, description: str | None, schema_id: str | None = None) -> dict:
@@ -233,6 +237,19 @@ def step_empty_config(request) -> None:
     _state(request)["docs"] = ["# only a comment\n"]
 
 
+@given(parsers.parse('the canonical example apply config file "{path}"'))
+def step_canonical_example_config(request, path: str) -> None:
+    """Load the ONE canonical `modulo apply` example (FAR-1531) verbatim.
+
+    The file is shared by this feature, the apply unit suite and the staging
+    deploy gate — whatever is asserted here is asserted against the exact
+    artefact every consumer runs.
+    """
+    example = _REPO_ROOT / path
+    assert example.is_file(), f"missing canonical apply example at {example}"
+    _state(request)["docs"] = [example.read_text(encoding="utf-8")]
+
+
 @given(parsers.parse('an apply config declaring the model backend "{name}" with the raw api_key "{raw}"'))
 def step_config_raw_backend(request, name: str, raw: str) -> None:
     _state(request)["docs"] = [_backend_doc(name, api_key=raw)]
@@ -297,6 +314,47 @@ def step_config_has_backend(request, name: str) -> None:
     config = _state(request)["config"]
     assert config is not None, _state(request).get("load_error")
     assert [b.name for b in config.entities.model_backends] == [name]
+
+
+@then(parsers.parse('the config declares a schema named "{name}"'))
+def step_config_declares_schema_named(request, name: str) -> None:
+    config = _state(request)["config"]
+    assert config is not None, _state(request).get("load_error")
+    assert name in [s.name for s in config.entities.schemas]
+
+
+@then(parsers.parse('the config declares a model backend named "{name}"'))
+def step_config_declares_backend(request, name: str) -> None:
+    config = _state(request)["config"]
+    assert config is not None, _state(request).get("load_error")
+    assert name in [b.name for b in config.entities.model_backends]
+
+
+@then(parsers.parse('the config declares a pipeline named "{name}"'))
+def step_config_declares_pipeline(request, name: str) -> None:
+    config = _state(request)["config"]
+    assert config is not None, _state(request).get("load_error")
+    assert name in [p.name for p in config.entities.pipelines]
+
+
+@then(parsers.parse('the config declares the trigger "{display_key}"'))
+def step_config_declares_trigger(request, display_key: str) -> None:
+    config = _state(request)["config"]
+    assert config is not None, _state(request).get("load_error")
+    assert display_key in [t.display_key() for t in config.entities.triggers]
+
+
+@then("every declared pipeline declares run_enabled false")
+def step_every_pipeline_paused(request) -> None:
+    """The canonical corpus must never express a running pipeline (FAR-1530):
+    run_enabled is false-only, and the staging gate relies on the pause to
+    guarantee nothing executes on the target org."""
+    config = _state(request)["config"]
+    assert config is not None, _state(request).get("load_error")
+    assert config.entities.pipelines, "the canonical example must declare pipelines"
+    for pipeline in config.entities.pipelines:
+        assert pipeline.manages_run_enabled is True, pipeline.name
+        assert pipeline.run_enabled is False, pipeline.name
 
 
 @then(parsers.parse('the load fails with an error mentioning "{fragment}"'))

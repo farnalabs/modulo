@@ -1,0 +1,179 @@
+# configs/apply/example.yaml — the CANONICAL `modulo apply` example (FAR-1531).
+#
+# This one file is both the public "how do I use `modulo apply`" example and the
+# config the staging deploy gate applies on every deploy (the `staging-apply`
+# job in .github/workflows/deploy.yml):
+#
+#   # converge the target org to this config
+#   MODULO_URL=https://staging.modulo.run MODULO_API_KEY=mk_... \
+#     modulo apply -f configs/apply/example.yaml
+#
+#   # read-only convergence check: exit 0 = org matches, exit 1 = drift
+#   MODULO_URL=... MODULO_API_KEY=... \
+#     modulo apply -f configs/apply/example.yaml --diff
+#
+# Design rules (ratified in FAR-1531 — do not re-litigate here):
+#
+#   * DETERMINISTIC, NOT RANDOM. `apply` is a convergent upsert with NO delete
+#     verb, so a random corpus would accrete on the target org and make the
+#     gate unreproducible. This is a fixed, representative set; randomness
+#     belongs in the seeded fuzz/property tests of the apply unit suite.
+#
+#   * NON-EXECUTING. Every pipeline declares `run_enabled: false` — the
+#     Paused execution state (FAR-1530) — so nothing ever runs on the target
+#     org and no execution credentials are needed. The apply field is
+#     FALSE-ONLY: `run_enabled: true` (and an explicit null) are rejected at
+#     config load, because resume is authority-bearing. Triggers deliberately
+#     stay `active: true`: the pause, not an inactive trigger, is what stops
+#     execution — an inactive trigger would hide a broken schedule.
+#
+#   * SECRETS ARE REFERENCES ONLY. Every secret is an `${env:VAR}` reference
+#     resolved client-side at apply time; an inline secret literal is rejected
+#     at config load. `secretref://` values parse but are blocked at plan time
+#     (server-side resolution does not exist yet).
+#
+#   * NEVER DELETES. Removing an entity from this file stops managing it — it
+#     does NOT remove it from the target org. Staging keeps what it has.
+#
+# PREREQUISITES — `apply` never creates agents or connectors, so this config is
+# NOT self-contained. A target org must provide the following first:
+#
+#   1. AGENTS `apply-example-worker` and `apply-example-reviewer` — referenced
+#      by NAME from the pipeline graph below; a missing agent BLOCKS that
+#      pipeline at plan time (apply never auto-creates agents). The
+#      `staging-apply` gate's "provision prerequisites" step creates them
+#      idempotently, together with the two schemas and one model backend that
+#      an Agent record requires (input/output schema ids + a model backend
+#      id). On any other target org, create them by hand before running apply.
+#   2. CONNECTORS — none are referenced (no node declares a
+#      `connector_binding`), so no connector needs to pre-exist.
+#   3. ENVIRONMENT VARIABLES — every one below must be set at apply time or
+#      the referencing entity is BLOCKED (exit 1) with an "is not set" reason:
+#
+#        APPLY_EXAMPLE_MODEL_API_KEY          REAL provider key for the
+#                                             `apply-example-chat` model backend
+#                                             (provider: deepseek — a low-cost
+#                                             provider; the deploy gate supplies
+#                                             it from a CI secret). It must be
+#                                             real: apply re-runs the server's
+#                                             health check after writing the
+#                                             backend, and a mock/garbage key
+#                                             turns into a RED gate.
+#        MOCK_APPLY_EXAMPLE_WEBHOOK_HMAC      any non-empty dummy string. The
+#                                             webhook trigger's hmac_secret is
+#                                             Fernet-encrypted and masked
+#                                             server-side (and excluded from the
+#                                             drift hash), so a mock value is
+#                                             safe and needs no vault entry.
+#
+# The deploy gate runs `modulo apply -f <this file>` and then a second
+# `modulo apply --diff` that must report all-unchanged (exit 0) — the
+# idempotency assertion. Keep this file convergent: any field the server
+# normalises differently from the way it is written here shows up as
+# permanent drift on every deploy.
+api_version: modulo.dev/v1
+entities:
+  # -- Schemas (declarative JSON-Schema registry entries + versions) --------
+  # A declared version is IMMUTABLE via apply: re-declaring an existing
+  # version string with different content blocks the schema at plan time.
+  # Bump `version_number` / rename `version` to evolve a definition.
+  schemas:
+    - name: apply-example-ticket
+      description: Canonical apply example - a work-item record.
+      versions:
+        - version: v1
+          version_number: 1
+          published: true
+          definition_json:
+            type: object
+            title: Apply example ticket
+            properties:
+              title:
+                type: string
+              priority:
+                type: string
+                enum: [low, medium, high]
+              estimate:
+                type: number
+            required: [title]
+            additionalProperties: false
+    # A version-less schema is also valid: apply creates the schema record and
+    # the server seeds its "latest" placeholder version.
+    - name: apply-example-summary
+      description: Canonical apply example - a summary record (no pinned versions).
+
+  # -- Model backends (write-only api_key, health-checked on write) ---------
+  # `api_key` MUST be a reference; inline secret values are rejected at load.
+  # The health check runs against the real provider after every create/update,
+  # so this key has to actually work — see the PREREQUISITES preamble.
+  model_backends:
+    - name: apply-example-chat
+      display_name: Apply example (DeepSeek)
+      provider: deepseek
+      model_id: deepseek-chat
+      api_key: ${env:APPLY_EXAMPLE_MODEL_API_KEY}
+      default_params:
+        temperature: 0.2
+      visibility: org
+      tier: native
+
+  # -- Pipelines (paused; agent referenced BY NAME) -------------------------
+  # `graph` is OPTIONAL: declare it to manage the graph, omit it to leave a
+  # UI-authored graph untouched. Both shapes are exercised below.
+  pipelines:
+    - name: apply-example-graphed
+      description: "Canonical apply example - graphed pipeline, paused (run_enabled: false)."
+      max_concurrent_runs: 2
+      # Monthly spend circuit breaker (USD, > 0). Managed only when declared.
+      circuit_breaker_threshold: 50
+      # The Paused execution state (FAR-1530). False-only: a config can pause
+      # a pipeline but can never resume one.
+      run_enabled: false
+      graph:
+        nodes:
+          - id: 7a000000-0000-4000-8000-000000000001
+            node_type: agent
+            # NAME reference: apply resolves this against GET /agents and
+            # BLOCKS the pipeline when the agent does not exist (see
+            # PREREQUISITES) — apply never auto-creates agents.
+            agent: apply-example-worker
+            label: Example worker
+            position: {x: 0, y: 0}
+          - id: 7a000000-0000-4000-8000-000000000002
+            node_type: agent
+            agent: apply-example-reviewer
+            label: Example reviewer
+            position: {x: 320, y: 0}
+        edges:
+          - id: 7a000000-0000-4000-8000-000000000003
+            source_node_id: 7a000000-0000-4000-8000-000000000001
+            target_node_id: 7a000000-0000-4000-8000-000000000002
+            edge_type: normal
+    # Graph-less: apply manages only the declared top-level fields and never
+    # writes a graph, so a pipeline whose graph is authored in the UI keeps it.
+    - name: apply-example-graphless
+      description: "Canonical apply example - graph-less pipeline, paused (run_enabled: false)."
+      max_concurrent_runs: 1
+      run_enabled: false
+
+  # -- Triggers (identity is (pipeline, name)) ------------------------------
+  # Declared `active: true` on purpose — the pipelines above are paused, which
+  # is what keeps execution stopped (see the NON-EXECUTING rule).
+  triggers:
+    - pipeline: apply-example-graphed
+      name: nightly
+      trigger_type: cron
+      active: true
+      cron_expression: "17 3 * * *"
+      cron_timezone: UTC
+      max_concurrent_runs: 1
+      daily_spend_limit: 5
+    - pipeline: apply-example-graphed
+      name: ingest
+      trigger_type: webhook
+      active: true
+      max_concurrent_runs: 1
+      config_json:
+        # Secret-shaped keys must be references (mock value is fine here —
+        # encrypted + masked server-side, excluded from the drift hash).
+        hmac_secret: ${env:MOCK_APPLY_EXAMPLE_WEBHOOK_HMAC}
