@@ -16219,6 +16219,8 @@ export interface components {
             business_owner_id?: string | null;
             /** Reliability Owner Id */
             reliability_owner_id?: string | null;
+            /** Environment Profile Id */
+            environment_profile_id?: string | null;
             /**
              * Connector Rebind Required
              * @default false
@@ -16331,6 +16333,11 @@ export interface components {
              * @description Reliability accountability owner id. Omit to leave unchanged; null clears.
              */
             reliability_owner_id?: string | null;
+            /**
+             * Environment Profile Id
+             * @description Environment profile this pipeline's sandbox nodes dispatch on (FAR-1558). Must exist in this organisation and be visible to the pipeline's owner team (an org-visible profile, or a team profile owned by the pipeline's effective owner team). Omit to leave unchanged; null clears the binding and restores the default route.
+             */
+            environment_profile_id?: string | null;
         };
         /** PlanInfo */
         PlanInfo: {

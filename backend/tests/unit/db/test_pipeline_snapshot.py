@@ -1146,3 +1146,70 @@ async def test_terminate_non_privilege_db_error_propagates_unchanged() -> None:
         await terminate_snapshot_lock_holders(session, pipeline_id)
 
     assert not isinstance(excinfo.value, SnapshotLockTerminateDeniedError)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1558: the pipeline's environment-profile binding is frozen onto the
+# snapshot (the column dispatch already reads; it was simply never written).
+# ---------------------------------------------------------------------------
+
+
+def _binding_snapshot_setup(bound_profile_id: uuid.UUID | None) -> tuple[AsyncMock, uuid.UUID]:
+    """Build an agent-less pipeline + edge and a session whose five graph-copy
+    reads serve it (pipeline, edges, version max, guardrails, policy gates)."""
+    pipeline_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = uuid.uuid4()
+    pipeline.environment_profile_id = bound_profile_id
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {}
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_review_config = None
+    edge.condition_expression = None
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
+        _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
+        _scalar_result(1),  # snapshot_version max -> version 2
+        _scalars_result([]),  # guardrail rows (none bound)
+        _scalars_result([]),  # policy gate rows (none bound)
+    ]
+    return session, pipeline_id
+
+
+async def test_environment_profile_binding_is_frozen_onto_the_snapshot() -> None:
+    """FAR-1558: a pipeline bound to an environment profile freezes that
+    binding onto the new snapshot — the value dispatch reads at run start."""
+    bound_profile_id = uuid.uuid4()
+    session, pipeline_id = _binding_snapshot_setup(bound_profile_id)
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    assert snapshot.environment_profile_id == bound_profile_id
+
+
+async def test_unbound_pipeline_freezes_a_null_binding() -> None:
+    """NULL is the historical default and must stay byte-identical: an
+    unbound pipeline freezes NULL, so dispatch keeps its default route."""
+    session, pipeline_id = _binding_snapshot_setup(None)
+
+    with _bind_lock_connection(session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert isinstance(snapshot, PipelineSnapshot)
+    assert snapshot.environment_profile_id is None

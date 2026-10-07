@@ -147,6 +147,7 @@ from modulo.db.crud.pipeline_snapshot_versioning import (
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.pipeline import Pipeline
@@ -864,6 +865,22 @@ class PipelineUpdate(TeamVisibilityMixin):
         None,
         description="Reliability accountability owner id. Omit to leave unchanged; null clears.",
     )
+    # FAR-1558: per-pipeline environment-profile binding (which runtime tier
+    # sandbox_agent nodes dispatch on). Omit to leave unchanged; null clears
+    # the binding (back to the default E2B route). Validated in the update
+    # route: the profile must exist in this organisation and be visible to the
+    # pipeline's EFFECTIVE (post-update) owner team — see
+    # ``_assert_environment_profile_bindable``.
+    environment_profile_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Environment profile this pipeline's sandbox nodes dispatch on "
+            "(FAR-1558). Must exist in this organisation and be visible to the "
+            "pipeline's owner team (an org-visible profile, or a team profile "
+            "owned by the pipeline's effective owner team). Omit to leave "
+            "unchanged; null clears the binding and restores the default route."
+        ),
+    )
 
     @field_validator("circuit_breaker_threshold", mode="before")
     @classmethod
@@ -979,6 +996,9 @@ class PipelineResponse(BaseModel):
     # exists on this response). Additive, backward-compatible.
     business_owner_id: uuid.UUID | None = None
     reliability_owner_id: uuid.UUID | None = None
+    # FAR-1558: the per-pipeline environment-profile binding, so a PATCH that
+    # sets it round-trips. Additive, nullable: null = unbound (default route).
+    environment_profile_id: uuid.UUID | None = None
     # Set on PATCH /pipelines/{id} responses when owner_team_id changed: the
     # UI warns the user to re-save the graph so connectors/model backends are
     # rebound for the new team (PRD §9.3 ownership transfer).
@@ -1054,6 +1074,15 @@ class PipelineResponse(BaseModel):
     @field_validator("business_owner_id", "reliability_owner_id", mode="before")
     @classmethod
     def _coerce_owner_id(cls, value: Any) -> Any:
+        return value if isinstance(value, uuid.UUID | str) else None
+
+    # FAR-1558: same defensive read as ``_coerce_owner_id`` (kept separate
+    # only so each validator's name still describes the fields it guards) —
+    # a partial stand-in that lacks the new column must serialise the binding
+    # as "unbound" (None), never fail validation.
+    @field_validator("environment_profile_id", mode="before")
+    @classmethod
+    def _coerce_environment_profile_id(cls, value: Any) -> Any:
         return value if isinstance(value, uuid.UUID | str) else None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
@@ -3190,6 +3219,67 @@ async def _reapply_team_gate_inside_mutation_txn(
     return current
 
 
+async def _assert_environment_profile_bindable(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    profile_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+) -> None:
+    """FAR-1558: an environment-profile binding must be same-org and team-visible.
+
+    Eligibility — the same rule ``core.team_visibility`` applies to a
+    team-private connector or model backend bound into a pipeline:
+
+    * ``visibility == "org"`` — usable by ANY pipeline in the organisation;
+    * ``visibility == "team"`` — usable ONLY by a pipeline whose effective
+      owner team equals the profile's ``owner_team_id``. A team-private
+      profile with no owner team is usable by nothing, and a pipeline with no
+      owner team (org-wide) can only ever hold an org-visible profile.
+
+    Missing, soft-deleted (the global ``do_orm_execute`` filter plus the
+    explicit predicate below) and cross-organisation ids ALL resolve to the
+    same 422, so a foreign id is never confirmed to exist. The DB-level tenant
+     trigger ``trg_pipelines_environment_profile_id_tenant`` (migration 0289) is
+    the fail-closed backstop: a binding that somehow bypasses this check raises
+    SQLSTATE 23503 rather than being stored.
+
+    Raises HTTP 422 (no new exception types) — never a 404, because an
+    invalid *field value* is a validation failure, not a missing resource.
+    """
+    profile = (
+        await session.execute(
+            select(EnvironmentProfile).where(
+                EnvironmentProfile.id == profile_id,
+                EnvironmentProfile.organisation_id == org_id,
+                EnvironmentProfile.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "environment_profile_id does not resolve to an environment profile in this "
+                "organisation (it may not exist, may have been deleted, or may belong to "
+                "another organisation)"
+            ),
+        )
+    # Mirror of ``core.team_visibility.model_backend_team_mismatch``: anything
+    # that is not declared team-private is org-visible and never mismatches.
+    if (profile.visibility or "org") != "team":
+        return
+    if profile.owner_team_id is None or profile.owner_team_id != pipeline_owner_team_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"environment_profile_team_mismatch: environment profile '{profile.name}' "
+                f"(id={profile.id}) is team-private (owner team {profile.owner_team_id}) but the "
+                f"pipeline is owned by team {pipeline_owner_team_id}"
+            ),
+        )
+
+
 async def _assert_team_transition_allowed(
     session: AsyncSession,
     principal: TenantPrincipal,
@@ -3430,6 +3520,36 @@ async def update_pipeline_endpoint(
             # row, so both names below read post-lock values.
             locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
             await _assert_team_transition_allowed(session, principal, current, updates)
+            # FAR-1558: environment-profile binding validation (the payload's
+            # value, or the STORED one when a scope change could strand it —
+            # the same fail-closed re-validation the accountability-owner block
+            # in crud.pipeline.update_pipeline applies). Both run against the
+            # EFFECTIVE post-update owner team, computed the same way the
+            # ceiling/default merge below computes its effective values.
+            _binding_in_payload = "environment_profile_id" in updates
+            _scope_changed = "visibility" in updates or "owner_team_id" in updates
+            # Read the STORED binding defensively: a partial stand-in row (test
+            # doubles, MagicMock rows) exposes a non-column attribute child, so
+            # anything that is not a UUID is treated as "unbound" rather than
+            # fed into the profile query — the same treatment
+            # crud.pipeline.update_pipeline gives stored accountability owners.
+            _stored = getattr(locked, "environment_profile_id", None)
+            _stored_binding = _stored if isinstance(_stored, uuid.UUID) else None
+            if _binding_in_payload:
+                _candidate_binding = updates["environment_profile_id"]
+            elif _scope_changed:
+                _candidate_binding = _stored_binding
+            else:
+                _candidate_binding = None
+            if _candidate_binding is not None:
+                await _assert_environment_profile_bindable(
+                    session,
+                    org_id=principal.organisation_id,
+                    profile_id=_candidate_binding,
+                    # .get is correct: an explicit owner_team_id=None (clear) is in
+                    # the dict, so .get returns it rather than the row's stale team.
+                    pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
+                )
             # FAR-1163: a PATCH may set only one of default/max — validate the
             # MERGED effective values (ceiling NULL = effective ceiling is the
             # default, so it never violates on its own).

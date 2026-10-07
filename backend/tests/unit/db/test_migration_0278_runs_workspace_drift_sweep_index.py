@@ -26,7 +26,8 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0285_system_audit_events`` ->
 ``0286_pipeline_run_state`` ->
 ``0287_team_rls_lifecycle_evals`` ->
-``0288_runs_execution_origin`` as the single linear head) and the
+``0288_runs_execution_origin`` ->
+``0289_pipelines_environment_profile`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -53,7 +54,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0288_runs_execution_origin"
+_CHAIN_HEAD_MIGRATION = "0289_pipelines_environment_profile"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
@@ -190,7 +191,7 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0288_runs_execution_origin(self) -> None:
+    def test_single_head_is_0289_pipelines_environment_profile(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

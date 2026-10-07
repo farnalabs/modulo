@@ -5,14 +5,22 @@ upgrade rule (never-dispatch-relevant providers raise a typed config error
 instead of silently activating), the locked-ephemeral persistence policy,
 the loud E2B dispatch-time timeout validation (GraphValidator parity), and
 the hardened WorkspaceSpec construction.
+
+Also covers FAR-1558: the pipeline's environment-profile binding reaches
+dispatch THROUGH the frozen snapshot — ``create_snapshot_from_live_graph``
+copies ``pipelines.environment_profile_id`` onto
+``PipelineSnapshot.environment_profile_id``, and that snapshot value is what
+route resolution queries with.
 """
 
 import json
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.bundled_runner.profile import (
     TEMPLATE_CONFIG_JSON,
@@ -28,7 +36,14 @@ from modulo.core.bundled_runner.runner_dispatch import (
     validate_e2b_dispatch_timeout,
 )
 from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
+from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.util import WorkspaceNetworkValidationError
+from tests.unit.db.test_pipeline_snapshot import (
+    _bind_lock_connection,
+    _lock_attempt_result,
+    _scalar_result,
+    _scalars_result,
+)
 
 _ORG = uuid.uuid4()
 _PROFILE_ID = uuid.uuid4()
@@ -546,3 +561,117 @@ def test_workspace_spec_rejects_default_network() -> None:
             node_id="node-9",
             run_uuid=uuid.uuid4(),
         )
+
+
+# ---------------------------------------------------------------------------
+# FAR-1558: pipeline -> frozen snapshot -> dispatch route
+# ---------------------------------------------------------------------------
+
+
+class _MatchingProfileSessionCM:
+    """Session double that serves the profile row ONLY when the executed
+    same-org SELECT actually asks for ``expected_id``.
+
+    This is what makes the FAR-1558 chain test discriminating: route
+    resolution must hand the SNAPSHOT's frozen id to
+    ``load_environment_profile``'s query. A resolution that read some other
+    source would get ``None`` back and resolve the default route instead.
+    """
+
+    def __init__(self, profile: object, expected_id: uuid.UUID) -> None:
+        self._expected = expected_id
+        self._profile = profile
+        self._session = SimpleNamespace(
+            execute=AsyncMock(side_effect=self._execute),
+            in_transaction=lambda: True,
+            get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+            info={},
+        )
+
+    def _execute(self, stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        try:
+            params = {str(value) for value in stmt.compile().params.values()}
+        except (AttributeError, TypeError, ValueError):
+            params = set()
+        found = self._profile if str(self._expected) in params else None
+        return SimpleNamespace(scalar_one_or_none=lambda: found)
+
+    async def __aenter__(self) -> SimpleNamespace:
+        return self._session
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _matching_session_factory(profile: object, expected_id: uuid.UUID) -> Any:
+    cm = _MatchingProfileSessionCM(profile, expected_id)
+    return lambda: cm
+
+
+async def test_run_dispatch_uses_the_profile_frozen_onto_the_snapshot() -> None:
+    """FAR-1558: a run's resolved route comes from the SNAPSHOT's binding.
+
+    Both halves run for real: ``create_snapshot_from_live_graph`` performs the
+    pipeline -> snapshot copy, and ``resolve_sandbox_dispatch_route`` ->
+    ``load_environment_profile`` performs the same-org lookup. Only the DB rows
+    are faked — and the session double refuses to serve the profile unless the
+    lookup asked for the id the snapshot froze, so the chain cannot pass by
+    accident. The provider itself is faked (no container/cluster touched).
+    """
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    bound_profile_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = org_id
+    pipeline.environment_profile_id = bound_profile_id
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {}
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_review_config = None
+    edge.condition_expression = None
+
+    snapshot_session = AsyncMock(spec=AsyncSession)
+    snapshot_session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        _scalar_result(1),
+        _scalars_result([]),
+        _scalars_result([]),
+    ]
+
+    with _bind_lock_connection(snapshot_session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(snapshot_session, pipeline_id=pipeline_id)
+
+    assert snapshot is not None
+    assert snapshot.environment_profile_id == bound_profile_id
+
+    route = await resolve_sandbox_dispatch_route(
+        _matching_session_factory(_profile("e2b", id=bound_profile_id), bound_profile_id),
+        org_id,
+        snapshot.environment_profile_id,
+    )
+
+    assert route.provider_type == "e2b"
+    assert route.profile is not None
+    assert route.profile.id == snapshot.environment_profile_id
+
+
+async def test_null_snapshot_binding_keeps_the_default_route() -> None:
+    """FAR-1558 regression guard for the default path: an UNBOUND pipeline
+    freezes NULL, and a NULL binding resolves the default (provider-less)
+    route exactly as before the binding existed."""
+    route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("e2b")), _ORG, None)
+    assert route.provider_type == "none"
+    assert route.profile is None
