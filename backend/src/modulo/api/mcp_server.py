@@ -3346,6 +3346,7 @@ async def _replace_pipeline_graph_txn(
     from modulo.api.routes.pipelines import _set_mutation_row_lock_timeout
     from modulo.core.team_visibility import (
         CONNECTOR_TEAM_MISMATCH,
+        ConnectorBindingMissingError,
         connector_team_mismatch_detail,
         extract_connector_bindings,
         find_connector_team_mismatches,
@@ -3377,12 +3378,21 @@ async def _replace_pipeline_graph_txn(
         # resolved against the stored graph before the write commits — the
         # same parity routes/pipelines.py applies on REST graph writes.
         nodes = merge_masked_graph_nodes(nodes, list(pipeline.graph_nodes_json or []))
-        mismatches = await find_connector_team_mismatches(
-            s,
-            org_id=org_id,
-            pipeline_owner_team_id=pipeline.owner_team_id,
-            connector_bindings=extract_connector_bindings(nodes),
-        )
+        try:
+            mismatches = await find_connector_team_mismatches(
+                s,
+                org_id=org_id,
+                pipeline_owner_team_id=pipeline.owner_team_id,
+                connector_bindings=extract_connector_bindings(nodes),
+            )
+        except ConnectorBindingMissingError as exc:
+            # FAR-1515 CRITICAL 1: a binding the team-blind org-scoped read
+            # cannot resolve is the same named refusal the REST surface
+            # returns (409 connector_team_mismatch), never a silent skip.
+            return {
+                "error": CONNECTOR_TEAM_MISMATCH,
+                "detail": str(exc),
+            }
         if mismatches:
             return {
                 "error": CONNECTOR_TEAM_MISMATCH,
@@ -3810,16 +3820,30 @@ async def bind_connector_to_node(
 
             from modulo.core.team_visibility import (
                 CONNECTOR_TEAM_MISMATCH,
+                ConnectorTeamMismatch,
                 connector_team_mismatch,
+                connector_team_mismatch_detail,
             )
 
             if connector_team_mismatch(connector.visibility, connector.owner_team_id, pipeline.owner_team_id):
+                # FAR-1515: route through the shared detail builder so this
+                # surface names the same fix as the REST save path - a
+                # team-private connector reaching outside its team, or an
+                # org-only connector pinned by a team pipeline whose every run
+                # would be rejected at the connector gate.
                 return {
                     "error": CONNECTOR_TEAM_MISMATCH,
-                    "detail": (
-                        f"connector_team_mismatch: connector '{connector.name}' (id={cid}) is team-private "
-                        f"(owner team {connector.owner_team_id}) but pipeline is owned by team "
-                        f"{pipeline.owner_team_id}"
+                    "detail": connector_team_mismatch_detail(
+                        [
+                            ConnectorTeamMismatch(
+                                connector_id=cid,
+                                connector_name=connector.name,
+                                connector_owner_team_id=connector.owner_team_id,
+                                pipeline_owner_team_id=pipeline.owner_team_id,
+                                connector_visibility=connector.visibility,
+                                node_id=node_id,
+                            )
+                        ]
                     ),
                 }
 

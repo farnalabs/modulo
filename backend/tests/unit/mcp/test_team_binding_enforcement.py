@@ -107,6 +107,36 @@ class TestUpdatePipelineGraphEnforcement:
     @patch("modulo.api.mcp_server._session")
     @patch("modulo.core.team_visibility.find_connector_team_mismatches")
     @patch("modulo.db.crud.pipeline.get_pipeline")
+    async def test_unresolvable_binding_is_refused(
+        self,
+        mock_get_pipeline: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1515 CRITICAL 1: a binding the team-blind read cannot resolve is
+        the SAME named refusal as a real mismatch - never a silent skip."""
+        from modulo.core.team_visibility import ConnectorBindingMissingError
+
+        pipeline_id = uuid.uuid4()
+        connector_id = uuid.uuid4()
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=_TEAM_A)
+        mock_find_mismatches.side_effect = ConnectorBindingMissingError([(connector_id, "node-1")])
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+
+        result = await update_pipeline_graph(
+            pipeline_id=str(pipeline_id),
+            nodes=[_valid_graph_node(connector_id)],
+            edges=[],
+        )
+
+        assert result["error"] == CONNECTOR_TEAM_MISMATCH
+        assert str(connector_id) in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
     @patch("modulo.db.crud.pipeline.replace_pipeline_graph")
     async def test_same_team_binding_proceeds(
         self,

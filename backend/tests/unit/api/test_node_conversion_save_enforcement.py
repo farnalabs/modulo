@@ -23,7 +23,11 @@ answers) and assert:
 * a cross-team connector binding is rejected 409, named
   ``connector_team_mismatch``, and the rejection happens BEFORE the graph write
   (``_save_graph`` is never called),
-* an org-visible or same-team connector is accepted,
+* an ORG-ONLY connector on a TEAM pipeline is rejected 409 the same way
+  (FAR-1515) — before this the save accepted a graph whose every run is
+  team-scoped and rejected at the connector gate,
+* an org connector on an ORG pipeline, or the pipeline's own team connector,
+  is accepted,
 * ``_resolve_graph_references`` runs before the write and its 422 stops the write,
 * ``_validate_graph_save`` runs AFTER the write, receives the converted node's
   connector binding, and its blocking 422 propagates (rolling the txn back),
@@ -33,10 +37,11 @@ answers) and assert:
 * a stored node the current schema can no longer parse fails closed with a
   422 naming that node, rather than being reference-checked as unchecked.
 
-The enforcement RULES themselves (the mismatch predicate, the capability-scope
-predicate) are covered by ``tests/unit/api/test_pipelines_routes_coverage.py``;
-what is new here is that the node-conversion save path CALLS them, and in the
-same order the siblings use.
+The enforcement RULES themselves are covered elsewhere — the team-mismatch
+predicates by ``tests/unit/core/test_team_visibility.py``, the capability-scope
+predicate by ``tests/unit/api/test_pipelines_routes_coverage.py``; what is new
+here is that the node-conversion save path CALLS them, and in the same order
+the siblings use.
 """
 
 from __future__ import annotations
@@ -127,6 +132,21 @@ def _enforcement_session(*, connector_visibility: str, connector_owner_team: uui
     return session
 
 
+def _gate_clearing_connector_session() -> AsyncMock:
+    """Session double whose connector CLEARS the team gate on the team pipeline.
+
+    ``_PIPELINE_TEAM`` owns both the pipeline (``_save``'s default) and this
+    connector, so ``connector_team_mismatch`` is False and the save reaches
+    the step under test — reference resolution, post-write validation, the
+    advisory return, the edge mapping. Every test that needs to get PAST the
+    connector gate uses this instead of hand-picking a visibility: since
+    FAR-1515 an org-only connector on a team pipeline is its own 409, so
+    ``visibility="org"`` here would stop the request before the step it exists
+    to exercise.
+    """
+    return _enforcement_session(connector_visibility="team", connector_owner_team=_PIPELINE_TEAM)
+
+
 # ---------------------------------------------------------------------------
 # Graph + principal fixtures
 # ---------------------------------------------------------------------------
@@ -156,6 +176,8 @@ def _principal() -> TenantPrincipal:
 async def _save(
     session: AsyncMock,
     nodes: list[dict[str, Any]] | None = None,
+    *,
+    pipeline_owner_team: uuid.UUID | None = _PIPELINE_TEAM,
 ) -> tuple[list[dict[str, Any]], list[Any], list[Any]] | None:
     from modulo.api.routes.pipelines import _save_locked_graph
 
@@ -164,7 +186,7 @@ async def _save(
         pipeline_id=_PIPELINE_ID,
         org_id=_ORG_ID,
         principal=_principal(),
-        pipeline_owner_team_id=_PIPELINE_TEAM,
+        pipeline_owner_team_id=pipeline_owner_team,
         nodes=nodes if nodes is not None else [_converted_node()],
         edges=[],
     )
@@ -223,25 +245,65 @@ async def test_cross_team_connector_binding_is_rejected_before_the_write() -> No
     resolve.assert_not_awaited()
 
 
+async def test_org_only_connector_on_team_pipeline_is_rejected_409() -> None:
+    """FAR-1515: a TEAM pipeline pinning an ORG-ONLY connector must not persist.
+
+    Every run of a team-owned pipeline is team-scoped, and the ConnectorHub ACL
+    fails closed on team-scoped access to an org-only connector (FAR-516), so a
+    save accepted here produced a graph whose runs could never execute. This
+    fails without the new check: the predicate returned False for every
+    non-team connector, so ``_save_graph`` used to be reached.
+
+    The detail must be actionable too — a named error alone tells the client
+    WHAT happened, not what to do about it.
+    """
+    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    save = AsyncMock(return_value=([], []))
+    resolve = AsyncMock(return_value=([], []))
+
+    with (
+        patch(f"{_PREFIX}_save_graph", new=save),
+        patch(f"{_PREFIX}_resolve_graph_references", new=resolve),
+        patch(f"{_PREFIX}_validate_graph_save", new=AsyncMock(return_value=[])),
+        pytest.raises(HTTPException) as excinfo,
+    ):
+        # ``_save``'s default pipeline owner IS ``_PIPELINE_TEAM`` - a team pipeline.
+        await _save(session)
+
+    assert excinfo.value.status_code == 409, excinfo.value.detail
+    detail = str(excinfo.value.detail)
+    assert "connector_team_mismatch" in detail, detail
+    assert "is org-only" in detail, detail
+    assert "flip the connector to `team`" in detail, detail
+    save.assert_not_awaited()
+    resolve.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
-# 2. Org-visible / same-team connectors are accepted
+# 2. Permitted connectors are accepted: org pipeline + org connector,
+#    or the pipeline's own team connector (FAR-1515)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("visibility", "owner_team"),
+    ("visibility", "owner_team", "pipeline_owner_team"),
     [
-        # Org-wide connectors are usable by any pipeline in the organisation.
-        ("org", None),
+        # An ORG-wide connector is usable by an ORG pipeline (unchanged rule).
+        ("org", None, None),
         # A team-private connector IS usable by a pipeline owned by that team.
-        ("team", _PIPELINE_TEAM),
-        # An org pipeline (no owner) binding a team connector whose owner is
-        # also None is still a mismatch, so this case is deliberately absent -
-        # it is covered by the mismatch predicate tests.
+        ("team", _PIPELINE_TEAM, _PIPELINE_TEAM),
+        # The reverse of each case above is refused and has its own test: an
+        # org-only connector on a TEAM pipeline (FAR-1515), and a team-private
+        # connector on an org pipeline or another team's pipeline - both
+        # covered by the mismatch predicate tests.
     ],
-    ids=["org_visible", "same_team"],
+    ids=["org_visible_on_org_pipeline", "same_team"],
 )
-async def test_allowed_connector_bindings_reach_the_write(visibility: str, owner_team: uuid.UUID | None) -> None:
+async def test_allowed_connector_bindings_reach_the_write(
+    visibility: str,
+    owner_team: uuid.UUID | None,
+    pipeline_owner_team: uuid.UUID | None,
+) -> None:
     """The gate must not blanket-block: permitted bindings still get persisted."""
     session = _enforcement_session(connector_visibility=visibility, connector_owner_team=owner_team)
     saved_nodes = [_converted_node()]
@@ -252,7 +314,7 @@ async def test_allowed_connector_bindings_reach_the_write(visibility: str, owner
         patch(f"{_PREFIX}_resolve_graph_references", new=AsyncMock(return_value=([], []))),
         patch(f"{_PREFIX}_validate_graph_save", new=AsyncMock(return_value=[])),
     ):
-        result = await _save(session)
+        result = await _save(session, pipeline_owner_team=pipeline_owner_team)
 
     assert result is not None
     assert result[0] == saved_nodes
@@ -271,7 +333,7 @@ async def test_resolve_graph_references_runs_before_the_write_and_stops_it() -> 
     ran after, the write would already be staged and only the rollback would
     hide it.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     save = AsyncMock(return_value=([], []))
     resolve = AsyncMock(side_effect=HTTPException(status_code=422, detail="Unknown agent IDs"))
 
@@ -295,7 +357,7 @@ async def test_resolve_graph_references_receives_the_pipeline_owner_team() -> No
     an org pipeline - the exact gap the sibling call sites close by passing
     ``pipeline.owner_team_id``.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     resolve = AsyncMock(return_value=([], []))
 
     with (
@@ -317,7 +379,7 @@ async def test_resolve_graph_references_receives_the_pipeline_owner_team() -> No
 
 async def test_validate_graph_save_runs_after_the_write() -> None:
     """Validation must see the POST-write graph, so a blocking code rolls it back."""
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     saved_nodes = [_converted_node()]
     save = AsyncMock(return_value=(saved_nodes, []))
     validate = AsyncMock(return_value=[])
@@ -340,7 +402,7 @@ async def test_validate_graph_save_receives_the_converted_nodes_connector_bindin
     Feeding it the PRE-conversion bindings would let a guardrail/redaction rule
     keyed on the new connector slip through untouched.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     validate = AsyncMock(return_value=[])
 
     with (
@@ -367,7 +429,7 @@ async def test_validate_graph_save_failure_propagates_out_of_the_save() -> None:
     test is the pairing half of that change - the blocking path must still
     raise rather than come back as a third tuple element.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     validate = AsyncMock(side_effect=HTTPException(status_code=422, detail="GUARDRAIL_CAP_EXCEEDED"))
 
     with (
@@ -396,7 +458,7 @@ async def test_advisory_issues_are_returned_by_the_save() -> None:
     widens its return to ``(nodes, edges, issues)``. Anything that only logged
     the advisory half would leave the two surfaces inconsistent.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     saved_nodes = [_converted_node()]
     advisory = MagicMock(code="guardrail_cap_advisory", severity="warning", message="over cap", node_id=_NODE_ID)
 
@@ -429,7 +491,7 @@ async def test_unparsable_stored_node_is_422_and_names_the_node() -> None:
     unchecked - and with a detail that names the node, so the failure is
     diagnosable rather than a bare "Data validation failed".
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     broken = {"id": "not-a-uuid", "node_type": "agent", "position": {"x": 0, "y": 0}}
     save = AsyncMock(return_value=([], []))
 
@@ -457,7 +519,7 @@ async def test_missing_pipeline_row_returns_none() -> None:
     The endpoint maps None to 404; validating a graph that was never written
     would report issues for a pipeline that no longer exists.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     validate = AsyncMock(return_value=[])
 
     with (
@@ -502,7 +564,7 @@ async def test_saved_edge_rows_are_mapped_to_the_validator_shape() -> None:
     the only way that helper runs, so this asserts the translation end to end -
     including the port defaults for a row that carries neither port.
     """
-    session = _enforcement_session(connector_visibility="org", connector_owner_team=None)
+    session = _gate_clearing_connector_session()
     target_id = uuid.uuid4()
 
     def _edge(*, source_port: str | None, target_port: str | None) -> MagicMock:

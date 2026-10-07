@@ -1,4 +1,4 @@
-"""Unit tests for cross-team binding enforcement (PRD §9.3).
+"""Unit tests for cross-team binding enforcement (PRD §9.3, FAR-1515).
 
 Covers both resource types that the pipeline-save command layer gates on:
 team-private connector instances and team-private model backends. The two
@@ -6,6 +6,13 @@ halves share the ``_find_team_scope_mismatches`` fetch-and-filter pattern, so
 each half is exercised end-to-end (pure rule -> detail builder -> async DB
 fetch) to prove the shared abstraction is not only tested through the
 connector half.
+
+The connector rule has TWO directions (FAR-1515): a team-private connector
+reaching outside its team, and a team pipeline pinning an ORG-ONLY connector
+(the save-time mirror of the executor's team-scoped invocation gate). The
+model-backend rule stays team-private-only on purpose — ModelBackendHub has no
+invocation-time visibility gate to mirror — so its direction matrix is
+asserted unchanged here.
 """
 
 import uuid
@@ -75,13 +82,34 @@ def _model_backend(*, visibility: str, owner_team_id: uuid.UUID | None, name: st
 @pytest.mark.parametrize(
     ("visibility", "connector_team", "pipeline_team", "expected"),
     [
+        # Team-private connector: only its own team's pipeline may bind it.
         ("team", _TEAM_A, _TEAM_B, True),
         ("team", _TEAM_A, _TEAM_A, False),
         ("team", _TEAM_A, None, True),
         ("team", None, _TEAM_A, True),
-        ("org", _TEAM_A, _TEAM_B, False),
+        # Org pipeline (owner_team_id=None) + org connector: saves, unchanged.
         ("org", None, None, False),
-        (None, _TEAM_A, _TEAM_B, False),
+        ("org", _TEAM_A, None, False),
+        (None, None, None, False),
+        # FAR-1515: a TEAM pipeline pinning an ORG-ONLY connector is a mismatch
+        # (every run would be team-scoped and rejected at the connector gate).
+        ("org", None, _TEAM_A, True),
+        ("org", _TEAM_A, _TEAM_B, True),
+        (None, _TEAM_A, _TEAM_B, True),
+        (None, None, _TEAM_A, True),
+    ],
+    ids=[
+        "team_conn_other_team",
+        "team_conn_own_team",
+        "team_conn_org_pipeline",
+        "team_conn_no_owner",
+        "org_conn_org_pipeline",
+        "org_conn_owned_by_no_team",
+        "default_vis_org_pipeline",
+        "org_conn_team_pipeline",
+        "org_conn_owned_by_other_team",
+        "default_vis_other_team",
+        "default_vis_team_pipeline",
     ],
 )
 def test_connector_team_mismatch_rule(
@@ -91,6 +119,25 @@ def test_connector_team_mismatch_rule(
     expected: bool,
 ) -> None:
     assert connector_team_mismatch(visibility, connector_team, pipeline_team) is expected
+
+
+def test_team_pipeline_rejects_an_org_only_connector() -> None:
+    """FAR-1515: the exact gap — this used to save a graph that could never run.
+
+    The executor sets ``request_visibility="team"`` for a run with an owner
+    team, and ``ConnectorACL.check`` fails closed on team-scoped access to an
+    org-only connector, so a save accepted here produced a dead-on-arrival
+    graph. Without the new check both assertions below return False.
+    """
+    assert connector_team_mismatch("org", None, _TEAM_A) is True
+    assert connector_team_mismatch(None, None, _TEAM_A) is True
+
+
+def test_org_pipeline_still_accepts_an_org_connector() -> None:
+    """Regression guard: the org-pipeline rule must NOT change (FAR-1515)."""
+    assert connector_team_mismatch("org", None, None) is False
+    assert connector_team_mismatch(None, None, None) is False
+    assert connector_team_mismatch("org", _TEAM_A, None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +151,7 @@ def test_detail_contains_named_error() -> None:
         connector_name="eng-db",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
+        connector_visibility="team",
         node_id=_NODE_ID,
     )
     detail = connector_team_mismatch_detail([mismatch])
@@ -119,6 +167,7 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-a",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
+        connector_visibility="team",
         node_id=_NODE_ID,
     )
     m2 = ConnectorTeamMismatch(
@@ -126,6 +175,7 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-b",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
+        connector_visibility="team",
         node_id="node-2",
     )
     detail = connector_team_mismatch_detail([m1, m2])
@@ -136,6 +186,31 @@ def test_detail_joins_multiple_mismatches() -> None:
     assert str(_TEAM_B) in detail
     assert detail.count("is team-private") == 2
     assert "; " in detail
+
+
+def test_org_only_detail_names_the_fix() -> None:
+    """FAR-1515: the org-only case must not claim the connector is team-private.
+
+    The detail is the actionable half of the 409 — it has to say what the
+    operator should actually do (flip to ``team`` or duplicate), not describe
+    a state the connector is not in.
+    """
+    mismatch = ConnectorTeamMismatch(
+        connector_id=uuid.uuid4(),
+        connector_name="shared-ci",
+        connector_owner_team_id=None,
+        pipeline_owner_team_id=_TEAM_A,
+        connector_visibility="org",
+        node_id=_NODE_ID,
+    )
+    detail = connector_team_mismatch_detail([mismatch])
+    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
+    assert "shared-ci" in detail
+    assert "is org-only" in detail
+    assert "is team-private" not in detail
+    assert str(_TEAM_A) in detail
+    assert "flip the connector to `team`" in detail
+    assert "duplicate it" in detail
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +273,37 @@ async def test_same_team_connector_is_allowed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_org_connector_is_allowed_across_teams() -> None:
+async def test_org_connector_is_allowed_on_an_org_pipeline() -> None:
+    """FAR-1515: the org-pipeline rule is unchanged - org connector still saves."""
     conn = _connector(visibility="org", owner_team_id=None, name="shared")
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([conn])
-    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert not await find_connector_team_mismatches(session, _ORG_ID, None, bindings)
+
+
+@pytest.mark.asyncio
+async def test_org_connector_on_a_team_pipeline_returns_mismatch() -> None:
+    """FAR-1515: team pipeline + org-only connector is now a named mismatch.
+
+    Fails without the new check: ``connector_team_mismatch`` returned False
+    for any non-team connector, so this row used to pass the save gate while
+    every run was rejected at the connector gate.
+    """
+    conn = _connector(visibility="org", owner_team_id=None, name="shared")
+    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, bindings)
+    assert len(mismatches) == 1
+    assert mismatches[0].connector_id == conn.id
+    assert mismatches[0].connector_name == "shared"
+    assert mismatches[0].connector_visibility == "org"
+    assert mismatches[0].connector_owner_team_id is None
+    assert mismatches[0].pipeline_owner_team_id == _TEAM_A
+    assert mismatches[0].node_id == _NODE_ID
+    detail = connector_team_mismatch_detail(mismatches)
+    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
+    assert "is org-only" in detail
+    assert "flip the connector to `team`" in detail
 
 
 @pytest.mark.asyncio
@@ -257,19 +358,69 @@ async def test_mixed_valid_and_invalid_instance_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_connector_is_ignored() -> None:
+async def test_missing_connector_raises_the_named_refusal() -> None:
+    """FAR-1515 CRITICAL 1: absent from the team-blind org read = fail closed.
+
+    This used to return no mismatches (the id was silently skipped), which is
+    exactly how a team-private row HIDDEN by ``rls_team_isolation`` slipped
+    through the gate. The candidate read is now team-blind, so an absent row
+    can only mean the organisation has no such connector - and a binding the
+    gate cannot validate must be refused, never waved through. The refusal
+    carries the same machine-readable ``connector_team_mismatch`` prefix so
+    every surface maps it to the same named 409.
+    """
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
     session = _mock_session([])
-    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(uuid.uuid4())}]
-    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    missing_id = uuid.uuid4()
+    bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(missing_id)}]
+    with pytest.raises(ConnectorBindingMissingError) as excinfo:
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert excinfo.value.missing == [(missing_id, _NODE_ID)]
+    detail = str(excinfo.value)
+    assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
+    assert str(missing_id) in detail
+    assert "does not resolve to a connector in this organisation" in detail
 
 
 @pytest.mark.asyncio
-async def test_connector_from_other_org_is_ignored() -> None:
+async def test_connector_from_other_org_raises_the_named_refusal() -> None:
+    """Another org's connector is absent from the org-scoped read -> refused.
+
+    Same fail-closed rule as the missing-id case: the gate only ever judges
+    rows it can see, so a binding it cannot see cannot be judged - and an
+    unjudged binding must not save.
+    """
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
     conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="other-org")
     conn.organisation_id = uuid.uuid4()
     bindings = [{"node_id": _NODE_ID, "connector_instance_id": str(conn.id)}]
     session = _mock_session([])
-    assert not await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    with pytest.raises(ConnectorBindingMissingError) as excinfo:
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert excinfo.value.missing == [(conn.id, _NODE_ID)]
+
+
+@pytest.mark.asyncio
+async def test_a_found_mismatch_takes_precedence_over_a_missing_id() -> None:
+    """When BOTH a cross-team violation and an unresolvable id are present the
+    real mismatch is returned (the caller refuses with its actionable detail);
+    the missing id only raises when it is the SOLE refusal."""
+    from modulo.core.team_visibility import ConnectorBindingMissingError
+
+    conn = _connector(visibility="team", owner_team_id=_TEAM_A, name="eng-db")
+    bindings = [
+        {"node_id": _NODE_ID, "connector_instance_id": str(conn.id)},
+        {"node_id": _NODE_ID, "connector_instance_id": str(uuid.uuid4())},
+    ]
+    session = _mock_session([conn])
+    mismatches = await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
+    assert [m.connector_name for m in mismatches] == ["eng-db"]
+    # ...and the sole-refusal case still raises rather than returning [].
+    session = _mock_session([])
+    with pytest.raises(ConnectorBindingMissingError):
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_B, bindings)
 
 
 @pytest.mark.asyncio
@@ -282,6 +433,11 @@ async def test_invalid_binding_ids_are_ignored() -> None:
 
 # ---------------------------------------------------------------------------
 # model_backend_team_mismatch (pure rule, PRD §9.3 mirror of the connector rule)
+#
+# Deliberately NOT widened to the org-only case (FAR-1515 parity finding):
+# ModelBackendHub resolves a pin with hub.get(backend_id) and never consults
+# visibility, so a save-time rejection would refuse a graph the run accepts.
+# The rows below pin that the direction matrix is UNCHANGED.
 # ---------------------------------------------------------------------------
 
 

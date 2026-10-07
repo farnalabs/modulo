@@ -22,8 +22,6 @@ from modulo.core.runtime_provider.endpoint_tls import (
 _log = logging.getLogger(__name__)
 
 _DEFAULT_IMAGE = "python:3.13-slim"
-# D4 hardening default (ADR 029 config table): 1.0 CPU / 1 GiB per workspace.
-_DEFAULT_MEMORY_MB = 1024
 _WORKSPACE_PREFIX = "modulo-workspace-"
 _UUID_TRUNC_LEN = 12
 _CLOSE_DESTROY_TIMEOUT_S = 30
@@ -208,7 +206,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         try:
             memory_mb = int(raw_memory)
         except (ValueError, TypeError):
-            memory_mb = _DEFAULT_MEMORY_MB
+            memory_mb = _DEFAULT_HARDENING_MEMORY_MB
         return max(4, min(memory_mb, 131072))
 
     @staticmethod
@@ -393,7 +391,7 @@ class DockerRuntimeProvider(RuntimeProvider):
         client = await self._get_client()
         image = spec.image_ref.strip() if spec.image_ref else self._default_image
         ref = uuid.uuid4().hex[:_UUID_TRUNC_LEN]
-        memory_mb = self._resolve_memory_mb(spec.resource_limits.get("memory_mb", _DEFAULT_MEMORY_MB))
+        memory_mb = self._resolve_memory_mb(spec.resource_limits.get("memory_mb", _DEFAULT_HARDENING_MEMORY_MB))
         container_name = f"{_WORKSPACE_PREFIX}{ref}"
 
         env = self._build_container_env(spec.labels)

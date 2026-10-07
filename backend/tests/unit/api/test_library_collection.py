@@ -752,6 +752,48 @@ class TestInstallCollectionEndpoint:
         assert data["runnable"] is True
         assert data["install_id"] == str(mock_install.install_id)
 
+    def test_install_runs_the_connector_team_gate(self, client: TestClient) -> None:
+        """FAR-1515 MAJOR 4: an installed collection's pipeline is read back and
+        its rewired bindings run through the connector-team gate."""
+        pipeline_id = uuid.uuid4()
+        mock_install = _make_install_record()
+        mock_install.resolved_manifest = {"schemas": {}, "agents": {}, "pipeline_id": str(pipeline_id)}
+        installed = MagicMock()
+        installed.graph_nodes_json = [
+            {
+                "id": "node-1",
+                "node_type": "agent",
+                "agent_id": str(uuid.uuid4()),
+                "connector_binding": {"type": "github", "instance_id": str(uuid.uuid4())},
+            }
+        ]
+        with (
+            patch(
+                "modulo.api.routes.library.install_collection",
+                new_callable=AsyncMock,
+                return_value=mock_install,
+            ),
+            patch(
+                "modulo.api.routes.library.get_pipeline",
+                new_callable=AsyncMock,
+                return_value=installed,
+            ),
+            patch(
+                "modulo.api.routes.library._enforce_imported_connector_team_gate",
+                new_callable=AsyncMock,
+            ) as gate,
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
+            )
+        assert resp.status_code == 201, resp.text
+        gate.assert_awaited_once()
+
     def test_install_not_published(self, client: TestClient) -> None:
         from modulo.core.library_service.install import CollectionNotPublishedError
 

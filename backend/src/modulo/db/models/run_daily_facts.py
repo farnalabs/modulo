@@ -96,7 +96,7 @@ class RunDailyFact(OrgScoped):
     # ``'dispatched'`` (EXECUTION_ORIGIN_DISPATCHED) = the run's graph
     # contains at least one ``dispatch`` node; NULL = executed by Modulo /
     # fact finalized before this shipped. Same additive/no-backfill contract
-    # as the source column (migration 0287).
+    # as the source column (migration 0288).
     execution_origin: Mapped[str | None] = mapped_column(String(20))
     # FAR-1421: the trigger that fired the run, copied from Run.trigger_id so
     # claim→dispatch latency can be bucketed per trigger WITHOUT joining runs

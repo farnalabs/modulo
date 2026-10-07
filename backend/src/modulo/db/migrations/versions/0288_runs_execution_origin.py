@@ -1,14 +1,16 @@
 """FAR-1141: run-level execution origin provenance for dispatched runs.
 
-Revision ID: 0287_runs_execution_origin
-Revises: 0286_pipeline_run_state
+Revision ID: 0288_runs_execution_origin
+Revises: 0287_team_rls_lifecycle_evals
 Create Date: 2026-10-05
 
 Originally numbered ``0283_runs_execution_origin``; ``main`` landed
 ``0283_runs_drop_unused_indexes``, ``0284_add_rejected_run_status``,
 ``0285_system_audit_events`` and then ``0286_pipeline_run_state`` in the
-intervening slots, so this was renumbered onto the next free sequential number
-and now chains onto ``0286_pipeline_run_state`` (single linear head preserved
+intervening slots, so this was renumbered onto ``0287``. At merge time
+``main`` had also claimed slot ``0287`` with ``0287_team_rls_lifecycle_evals``,
+so this was renumbered again onto the next free sequential number ``0288`` and
+now chains onto ``0287_team_rls_lifecycle_evals`` (single linear head preserved
 for ``check-migration-heads``).
 
 ADR-042 requires that no claim-ready surface lets a run containing
@@ -47,8 +49,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0287_runs_execution_origin"
-down_revision: str | None = "0286_pipeline_run_state"
+revision: str = "0288_runs_execution_origin"
+down_revision: str | None = "0287_team_rls_lifecycle_evals"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

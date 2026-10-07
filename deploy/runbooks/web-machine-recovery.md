@@ -70,9 +70,11 @@ flyctl logs -a app-modulo --no-tail
   unresponsive, so in-flight HTTP requests are already dead; the restart
   cannot make that worse.
 - There is no automated restart: the ops watchdogs were removed in FAR-283
-  (commit 33652cc7a). The remaining `.github/workflows/uptime-monitor.yml`
-  only probes `/healthz/ready` and files a Linear ticket when the check stays
-  critical - it never restarts the machine. This runbook is therefore the only
+  (commit 33652cc7a). The external `.github/workflows/uptime-monitor.yml` that
+  probed `/healthz/ready` and filed a Linear ticket when the check stayed
+  critical has since been removed too, in favour of the product's own in-app
+  alerting (readiness-degradation email + worker-liveness watchdog) - none of
+  them ever restarts the machine. This runbook is therefore the only
   recovery path when the app machine becomes unresponsive.
 - VM sizing in `fly.toml` (`[[vm]]`) applies to NEW machines only. Resizing
   the LIVE machine takes an explicit update (brief restart):

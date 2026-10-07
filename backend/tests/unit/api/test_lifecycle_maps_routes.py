@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import Self
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.main import app
@@ -954,3 +955,464 @@ def test_integrity_error_maps_to_409(
     resp = http.request(method, url, json=payload)
 
     assert resp.status_code == 409, f"{endpoint}: {resp.text}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1514: the request-time team gate — DENY paths, the member pass, the
+# soft-deleted restore fix (CRITICAL 1) and the WITH CHECK transfer (MAJOR 2)
+# ---------------------------------------------------------------------------
+#
+# Coverage before this section stopped at "the dependency is attached"
+# (tests/architecture/test_team_scope_wiring.py) and "the DB policy denies"
+# (tests/integration/test_rls_isolation.py): nothing drove the real route and
+# observed the gate DENY a request. Every test below goes through TestClient
+# with the real FastAPI dependency stack — only the session and the service
+# layer are doubled.
+
+_TEAM_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
+#: The team a transfer/assignment targets in the MAJOR 2 test — deliberately
+#: not ``_TEAM_ID`` so the transition validator has a real denial to raise.
+_OTHER_TEAM_ID = uuid.UUID("77777777-7777-7777-7777-777777777777")
+_NON_MEMBER_DETAIL = "Not a member of the team that owns this resource"
+_REASSIGN_DETAIL = "Cannot reassign a resource to a team you are not a member of"
+
+
+def _result(*, first: Any = None, scalar_one_or_none: Any = None) -> MagicMock:
+    result = MagicMock()
+    result.first.return_value = first
+    result.scalar_one_or_none.return_value = scalar_one_or_none
+    scalars = MagicMock()
+    scalars.all.return_value = []
+    result.scalars.return_value = scalars
+    return result
+
+
+def _team_map_row(*, owner_team_id: uuid.UUID | None, visibility: str) -> MagicMock:
+    row = _map_row()
+    row.owner_team_id = owner_team_id
+    row.visibility = visibility
+    return row
+
+
+def _team_gate_session(
+    *,
+    is_member_of: set[uuid.UUID],
+    owner_team_id: uuid.UUID | None = _TEAM_ID,
+    visibility: str = "team",
+    row_present: bool = True,
+    row_deleted: bool = False,
+) -> AsyncMock:
+    """Session double that answers the lifecycle-map team gate by SQL text.
+
+    Dispatch is on the statement text (never call order), so a dependency
+    reordering cannot silently swap answers:
+
+    * ``authz_enforce`` — require_permission's kill-switch read: no override;
+    * ``set_config`` — the RLS preamble (dialect reports ``sqlite``, so only
+      ``session.info`` is written);
+    * ``FROM lifecycle_maps`` — the team-scope resolver's projection. When the
+      map is SOFT-DELETED (``row_deleted=True``, the restore case), a
+      statement carrying a ``deleted_at`` predicate does NOT see it, exactly as
+      Postgres would behave: that is what makes the restore test fail when the
+      stock (deleted-filtering) resolver is wired;
+    * ``team_memberships`` — membership for the QUERIED team only (the team id
+      is read out of the compiled bind params), so a transfer to a foreign
+      team is denied while the caller's own team still passes;
+    * ``FROM teams`` — the transition validator's existence check: the target
+      team exists in this org.
+    """
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.begin_nested = MagicMock(return_value=begin_cm)
+    session.in_transaction = MagicMock(return_value=True)
+    session.info = {}
+    session.refresh = AsyncMock(return_value=None)
+    session.add = MagicMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = MagicMock(return_value=bind)
+
+    async def _execute(stmt: object, *_args: Any, **_kwargs: Any) -> MagicMock:
+        sql = str(stmt)
+        if "set_config" in sql:
+            return _result()
+        if "authz_enforce" in sql:
+            return _result(scalar_one_or_none=None)
+        if "team_memberships" in sql:
+            queried = _queried_team_id(stmt)
+            return _result(first=queried if queried in is_member_of else None)
+        if "FROM teams" in sql:
+            return _result(first=_OTHER_TEAM_ID)
+        if "FROM lifecycle_maps" in sql:
+            if not row_present or (row_deleted and "deleted_at" in sql):
+                return _result(first=None)  # absent row / filtered-out deleted row
+            return _result(first=(owner_team_id, visibility))
+        raise AssertionError(f"Unexpected session.execute(): {sql}")
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _queried_team_id(stmt: object) -> uuid.UUID | None:
+    """The team id a ``team_membership_exists`` statement is filtering on."""
+    params = getattr(stmt, "compile", None)
+    if params is None:
+        return None
+    for value in stmt.compile().params.values():  # type: ignore[union-attr]
+        if isinstance(value, uuid.UUID) and value != _USER_ID:
+            return value
+    return None
+
+
+@contextmanager
+def _gate_client(
+    session: AsyncMock,
+    *,
+    org_role: str = "operator",
+) -> Generator[tuple[TestClient, _Harness], None, None]:
+    """TestClient with the real dependency stack and this team-gate session."""
+    harness = _Harness()
+    harness.session = session
+    _install_overrides(harness, org_role=org_role)
+    with harness:
+        yield TestClient(app), harness
+    app.dependency_overrides.clear()
+
+
+# --- CRITICAL 1: restore must see the soft-deleted row ----------------------
+
+
+def test_restore_non_admin_member_restores_a_soft_deleted_team_map() -> None:
+    """The FAR-1514 CRITICAL regression: restore 404'd every non-admin.
+
+    The gate resolves the target row BEFORE the handler, and restore's target
+    row IS soft-deleted. With the stock ``resolve_lifecycle_map_team_scope``
+    (which filters ``deleted_at IS NULL``) the resolver returns ``None`` and
+    the dependency answers 404 before the handler runs — while admins, who
+    bypass the gate, kept working. The deleted-inclusive resolver wired here
+    must let a non-admin TEAM MEMBER through to a 200.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID}, row_deleted=True)
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub(
+            "restore_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        )
+        resp = http.post(f"{_BASE}/{_MAP_ID}/restore")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["id"] == str(_MAP_ID)
+
+
+def test_restore_non_member_is_denied_403() -> None:
+    """A non-member still cannot restore: the gate denies, the handler never runs."""
+    session = _team_gate_session(is_member_of=set(), row_deleted=True)
+    with _gate_client(session, org_role="operator") as (http, harness):
+        restore = AsyncMock(return_value=_map_row())
+        harness.stub("restore_lifecycle_map", restore)
+        resp = http.post(f"{_BASE}/{_MAP_ID}/restore")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == _NON_MEMBER_DETAIL
+    restore.assert_not_awaited()
+
+
+# --- MAJOR 5: the gate DENIES at request time -------------------------------
+
+
+def test_get_team_private_map_member_is_allowed() -> None:
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub(
+            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        )
+        resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Delivery Map"
+
+
+def test_get_team_private_map_non_member_is_denied_403() -> None:
+    """Non-member GET on a team-private map: 403 from the gate, not a 200."""
+    session = _team_gate_session(is_member_of=set())
+    with _gate_client(session, org_role="operator") as (http, harness):
+        read = AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        harness.stub("get_lifecycle_map", read)
+        resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == _NON_MEMBER_DETAIL
+    read.assert_not_awaited()
+
+
+def test_get_unknown_map_is_404_from_the_gate() -> None:
+    """Resolver returns no row -> 404, never "allowed with a missing row"."""
+    session = _team_gate_session(is_member_of={_TEAM_ID}, row_present=False)
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
+        resp = http.get(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_delete_non_member_is_denied_403() -> None:
+    """The gate is wired on every {lifecycle_map_id} mutation, not just read."""
+    session = _team_gate_session(is_member_of=set())
+    with _gate_client(session, org_role="operator") as (http, harness):
+        delete = AsyncMock(return_value=True)
+        harness.stub("delete_lifecycle_map", delete)
+        resp = http.delete(f"{_BASE}/{_MAP_ID}")
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == _NON_MEMBER_DETAIL
+    delete.assert_not_awaited()
+
+
+# --- MAJOR 2: a team transfer is validated BEFORE the write -----------------
+
+
+def test_update_transfer_to_a_foreign_team_is_403_before_the_write() -> None:
+    """The RLS WITH CHECK denial must surface as 403, never 503.
+
+    ``LifecycleMapUpdate`` carries ``owner_team_id``/``visibility``. Without
+    the pre-write ``validate_team_transition_for_update`` a non-admin handing
+    the map to a foreign team trips the policy's WITH CHECK (SQLSTATE 42501),
+    which lands in the route's ``except SQLAlchemyError`` arm and answers
+    ``503 "Database temporarily unavailable"`` — a permission denial reported
+    as a DB outage. The transition is now checked first, and the write must
+    not run.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub(
+            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        )
+        updater = AsyncMock(return_value=_map_row())
+        harness.stub("update_lifecycle_map", updater)
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
+
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["detail"] == _REASSIGN_DETAIL
+    updater.assert_not_awaited()
+
+
+def test_update_same_team_transfer_still_succeeds() -> None:
+    """The validator must not blanket-block: a transfer to the caller's own team lands."""
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub(
+            "get_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        )
+        harness.stub(
+            "update_lifecycle_map", AsyncMock(return_value=_team_map_row(owner_team_id=_TEAM_ID, visibility="team"))
+        )
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_TEAM_ID)})
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_transfer_missing_map_returns_404_before_the_write() -> None:
+    """A transfer for a map that vanished since the team gate answers 404 itself.
+
+    The pre-write ``get_lifecycle_map`` re-read added with the FAR-1514
+    transition check is the route's only chance to observe a row missing from
+    the handler's own view (the gate resolver resolved it, but a concurrent
+    delete can drop it before the write). It must answer 404 BEFORE calling
+    ``update_lifecycle_map`` — not fall through to the write and discover the
+    absence there.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
+        updater = AsyncMock(return_value=_map_row())
+        harness.stub("update_lifecycle_map", updater)
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_TEAM_ID)})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Lifecycle map not found"
+    updater.assert_not_awaited()
+
+
+def test_update_visibility_only_missing_map_returns_404_before_the_write() -> None:
+    """The same pre-write read guards a ``visibility``-only update.
+
+    ``visibility`` alone (no ``owner_team_id``) still triggers the transition
+    check, so a missing row must 404 there too rather than reach the write.
+    """
+    session = _team_gate_session(is_member_of={_TEAM_ID})
+    with _gate_client(session, org_role="operator") as (http, harness):
+        harness.stub("get_lifecycle_map", AsyncMock(return_value=None))
+        updater = AsyncMock(return_value=_map_row())
+        harness.stub("update_lifecycle_map", updater)
+        resp = http.put(f"{_BASE}/{_MAP_ID}", json={"visibility": "org"})
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == "Lifecycle map not found"
+    updater.assert_not_awaited()
+
+
+def _rls_denial(sqlstate: str = "42501") -> Exception:
+    """A driver error carrying ``sqlstate``, as asyncpg's does."""
+
+    class _DriverError(Exception):
+        pass
+
+    error = _DriverError("new row violates row-level security policy")
+    error.sqlstate = sqlstate  # type: ignore[attr-defined]
+    return error
+
+
+def test_update_real_rls_denial_programming_error_maps_to_403(client: tuple[TestClient, _Harness]) -> None:
+    """The REAL production path: asyncpg 42501 arrives as a ProgrammingError.
+
+    asyncpg's ``InsufficientPrivilegeError`` subclasses ``SyntaxOrAccessError``,
+    which SQLAlchemy's asyncpg dialect maps to ``ProgrammingError`` — and that
+    arm PRECEDES the base ``SQLAlchemyError`` arm, so checking only the latter
+    (the first shipped version of this test) reported 501 "migration required"
+    for a permission denial. The test builds the exception type production
+    actually raises, and must observe 403.
+    """
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    denial = ProgrammingError("UPDATE lifecycle_maps", {}, _rls_denial("42501"))
+    harness.stub("update_lifecycle_map", AsyncMock(side_effect=denial))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_update_rls_denial_on_the_base_sqlalchemy_arm_maps_to_403(client: tuple[TestClient, _Harness]) -> None:
+    """Dialect backstop: a 42501 surfaced as a plain DBAPI error is also 403.
+
+    A backend whose driver does NOT fold 42501 into ProgrammingError reaches
+    the ``except SQLAlchemyError`` arm; the same check runs there so the
+    denial is never reported as a 503 outage either.
+    """
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    denial = DBAPIError("UPDATE lifecycle_maps", {}, _rls_denial("42501"))
+    harness.stub("update_lifecycle_map", AsyncMock(side_effect=denial))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_update_non_42501_programming_error_still_maps_to_501(client: tuple[TestClient, _Harness]) -> None:
+    """The 42501 check must discriminate on the SQLSTATE, not the exception type.
+
+    A genuinely missing migration (``42P01`` undefined_table) still answers
+    501 "migration required" — only ``insufficient_privilege`` becomes 403.
+    """
+    http, harness = client
+    harness.stub(
+        "update_lifecycle_map", AsyncMock(side_effect=ProgrammingError("SELECT nope", {}, _rls_denial("42P01")))
+    )
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 501, resp.text
+
+
+def test_update_generic_sqlalchemy_error_still_maps_to_503(client: tuple[TestClient, _Harness]) -> None:
+    """The 42501 arm must not swallow genuine DB outages."""
+    http, harness = client
+    harness.stub("update_lifecycle_map", AsyncMock(side_effect=SQLAlchemyError("boom")))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 503
+
+
+# --- the resolver itself: deleted-inclusive, fail-closed --------------------
+
+
+async def test_restore_resolver_opts_out_of_the_global_soft_delete_filter() -> None:
+    """The stock resolver cannot be used on restore — this one must opt out.
+
+    A soft-deleted row is hidden from a plain ORM SELECT TWICE: the stock
+    ``team_scope_resolver`` adds an explicit ``deleted_at IS NULL`` predicate,
+    AND the global ``do_orm_execute`` listener (``db.soft_delete``) injects the
+    same clause into every SELECT on a ``SoftDeleteMixin`` model. This
+    statement must carry NEITHER — no explicit predicate, and the
+    ``include_deleted`` execution option the listener reads to skip its
+    injection.
+    """
+    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+    from modulo.api.team_scope import resolve_lifecycle_map_team_scope
+
+    request = MagicMock()
+    request.path_params = {"lifecycle_map_id": str(_MAP_ID)}
+
+    stock_stmts: list[Any] = []
+    restore_stmts: list[Any] = []
+
+    def _recorder(bucket: list[Any]) -> AsyncMock:
+        async def _execute(stmt: object, *_args: Any, **_kwargs: Any) -> MagicMock:
+            bucket.append(stmt)
+            return _result(first=(_TEAM_ID, "team"))
+
+        return AsyncMock(side_effect=_execute)
+
+    stock_session = AsyncMock()
+    stock_session.execute = _recorder(stock_stmts)
+    restore_session = AsyncMock()
+    restore_session.execute = _recorder(restore_stmts)
+
+    stock = await resolve_lifecycle_map_team_scope(request, stock_session)
+    restored = await _resolve_lifecycle_map_team_scope_including_deleted(request, restore_session)
+
+    assert stock is not None
+    assert restored is not None
+    assert restored.owner_team_id == _TEAM_ID
+    assert restored.visibility == "team"
+    assert stock_stmts, stock_stmts
+    assert "deleted_at" in str(stock_stmts[0]), stock_stmts
+    assert restore_stmts, restore_stmts
+    assert "deleted_at" not in str(restore_stmts[0]), restore_stmts
+    assert restore_stmts[0].get_execution_options().get("include_deleted") is True, restore_stmts[0]
+
+
+async def test_restore_resolver_missing_row_returns_none() -> None:
+    """Fail-closed parity with the stock resolver: no row -> None -> 404."""
+    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+
+    request = MagicMock()
+    request.path_params = {"lifecycle_map_id": str(_MAP_ID)}
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(first=None))
+
+    assert await _resolve_lifecycle_map_team_scope_including_deleted(request, session) is None
+
+
+async def test_restore_resolver_missing_path_param_returns_none() -> None:
+    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+
+    request = MagicMock()
+    request.path_params = {}
+    session = AsyncMock()
+
+    assert await _resolve_lifecycle_map_team_scope_including_deleted(request, session) is None
+    session.execute.assert_not_awaited()
+
+
+async def test_restore_resolver_rejects_a_non_uuid_path_param() -> None:
+    """A malformed path param is a 400, never an unscoped read."""
+    from fastapi import HTTPException
+
+    from modulo.api.routes.lifecycle_maps import _resolve_lifecycle_map_team_scope_including_deleted
+
+    request = MagicMock()
+    request.path_params = {"lifecycle_map_id": "not-a-uuid"}
+    session = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _resolve_lifecycle_map_team_scope_including_deleted(request, session)
+
+    assert exc_info.value.status_code == 400
+    session.execute.assert_not_awaited()
