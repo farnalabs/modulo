@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS
 from modulo.settings import get_settings
@@ -67,7 +67,7 @@ _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pip
 
 
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Advance journeys + daily facts for a slot-released run (fail-open).
+    """Advance journeys + daily facts + audit for a slot-released run (fail-open).
 
     Thin delegate to the shared langgraph-free orchestration
     (``run_terminal_advance.advance_terminalised_run`` — FAR-604 F4), the same
@@ -77,11 +77,12 @@ async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, or
     transitively import langgraph and break the import-linter API-layer
     contract. The shared module's facts half runs UNCONDITIONALLY (no
     ``work_item_refs`` early return — a refs-less released run still gets its
-    analytics fact; F3).
+    analytics fact; F3), and its audit half records the terminalisation on the
+    org chain with this sweep as the ``actor_source`` (FAR-1549).
     """
     from modulo.core.run_terminal_advance import advance_terminalised_run
 
-    await advance_terminalised_run(async_engine, run_id, org_id)
+    await advance_terminalised_run(async_engine, run_id, org_id, source="slot_reconciliation")
 
 
 class SlotReconciliationError(RuntimeError):
@@ -301,8 +302,43 @@ async def park_expired_hitl_runs(
             _log.warning("hitl_park.swept parked=%d", len(parked))
 
     if sweep_error is not None:
+        # FAR-1549: record the parks that DID land before re-raising — a
+        # partial sweep still changed run state, and the status guard below
+        # drops any row whose transaction rolled back.
+        await _record_parked_run_audits(async_engine, parked, window)
         raise HitlParkError("HITL park sweep failed", parked=len(parked)) from sweep_error
+    await _record_parked_run_audits(async_engine, parked, window)
     return {"parked": len(parked)}
+
+
+async def _record_parked_run_audits(async_engine: AsyncEngine, parked: list[Any], window: int) -> None:
+    """Record each landed park on the org's audit chain (FAR-1549).
+
+    The per-org park transactions above have already committed by the time
+    this runs, so the append opens its OWN session (it can neither roll back
+    nor be rolled back by the sweep) and writes with the SYSTEM actor — there
+    is no request principal in scope for a cron sweep. Best-effort: a failure
+    is logged and swallowed; the park itself is already committed and must not
+    be turned into a sweep failure by its own audit record.
+    """
+    if not parked:
+        return
+    try:
+        from modulo.core.audit_logger.background import record_run_state_change_audits
+
+        await record_run_state_change_audits(
+            async_sessionmaker(async_engine, expire_on_commit=False, autobegin=False),
+            [(row.id, row.organisation_id) for row in parked],
+            event_type="hitl.run_parked",
+            expected_statuses={HITL_PARKED_STATUS},
+            actor_source="hitl_park_sweep",
+            log_key="run_admission.hitl_park_audit_failed",
+            summary_prefix=f"Run parked unanswered past {window}s grace by",
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("hitl_park.audit_failed parked=%d", len(parked))
 
 
 async def reconcile_pipeline_slots(

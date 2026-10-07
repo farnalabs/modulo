@@ -77,11 +77,12 @@ class _MockSession:
         # RLS set_config is plumbing — do not consume a result slot.
         if "set_config" in str(stmt):
             return MagicMock()
-        # FAR-1528 create_run pipeline-state gate: answer the lifecycle read
-        # (archived_at, deleted_at) with an ACTIVE pipeline row — plumbing like
-        # set_config above, so it never consumes a canned result slot and the
-        # pause-classification tests keep exercising the pause gate itself.
-        if "SELECT archived_at, deleted_at FROM pipelines WHERE id = :pid" in str(stmt):
+        # FAR-1528/FAR-1530 create_run pipeline-state gate: answer the lifecycle
+        # read (archived_at, deleted_at, run_enabled) with an ACTIVE pipeline row
+        # — plumbing like set_config above, so it never consumes a canned result
+        # slot and the pause-classification tests keep exercising the pause gate
+        # itself.
+        if "SELECT archived_at, deleted_at, run_enabled FROM pipelines WHERE id = :pid" in str(stmt):
             return _pipeline_state_result()
         if not self._results:
             return MagicMock()
@@ -111,15 +112,17 @@ def _pipeline_state_result(
     *,
     archived_at: datetime | None = None,
     deleted_at: datetime | None = None,
+    run_enabled: bool = True,
 ) -> MagicMock:
-    """Result for the create_run pipeline-state gate read (FAR-1528).
+    """Result for the create_run pipeline-state gate read (FAR-1528/FAR-1530).
 
-    Defaults to an ACTIVE pipeline (both lifecycle timestamps NULL) so a test
-    concerned with pause classification or run creation is not refused by the
-    gate; pass a timestamp to exercise the archived/deleted refusal.
+    Defaults to an ACTIVE, run-enabled pipeline (both lifecycle timestamps NULL
+    and ``run_enabled`` true) so a test concerned with pause classification or
+    run creation is not refused by the gate; pass a timestamp — or
+    ``run_enabled=False`` — to exercise the archived/deleted/paused refusal.
     """
     r = MagicMock()
-    r.first.return_value = (archived_at, deleted_at)
+    r.first.return_value = (archived_at, deleted_at, run_enabled)
     return r
 
 

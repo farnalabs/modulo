@@ -421,9 +421,10 @@ async def test_fire_cron_trigger_paused_race_backstop_skips():
     assert outcome == {"status": "skipped", "reason": ch.PAUSE_SKIP_REASON}
 
 
-async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
-    """FAR-1528: an ARCHIVED pipeline with a still-active cron trigger must be
-    a quiet typed skip, NOT an escaping PipelineNotRunnableError.
+async def _assert_non_runnable_pipeline_is_a_typed_skip(state: str) -> None:
+    """A non-runnable pipeline (archived or paused) with a still-active cron
+    trigger must be a quiet typed skip, NOT an escaping
+    PipelineNotRunnableError.
 
     Without the handler the refusal propagates out of the SAQ per-item fire job
     on EVERY tick (the epoch was already advanced at enqueue time, so the job
@@ -438,7 +439,7 @@ async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
         patch(
             "modulo.db.crud.run.create_run",
             new_callable=AsyncMock,
-            side_effect=PipelineNotRunnableError(state="archived", pipeline_id=PIPELINE),
+            side_effect=PipelineNotRunnableError(state=state, pipeline_id=PIPELINE),
         ),
     ):
         outcome = await ch.fire_cron_trigger(
@@ -453,6 +454,20 @@ async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
     # Skip parity with the pause path: NO TriggerEvent row is written (there is
     # no validation_result vocabulary value for a lifecycle refusal).
     assert not session.added
+
+
+async def test_fire_cron_trigger_archived_pipeline_is_a_typed_skip():
+    """FAR-1528: an ARCHIVED pipeline with a still-active cron trigger is a
+    quiet typed skip, NOT an escaping PipelineNotRunnableError."""
+    await _assert_non_runnable_pipeline_is_a_typed_skip("archived")
+
+
+async def test_fire_cron_trigger_paused_pipeline_is_a_typed_skip():
+    """FAR-1530: the state-agnostic proof — the SAME
+    ``PIPELINE_NOT_RUNNABLE_SKIP_REASON`` covers the Paused state too, so the
+    Paused state needed NO new vocabulary value and NO fire-job change; without
+    that invariant this case would fail with an unhandled state."""
+    await _assert_non_runnable_pipeline_is_a_typed_skip("paused")
 
 
 # ---------------------------------------------------------------------------

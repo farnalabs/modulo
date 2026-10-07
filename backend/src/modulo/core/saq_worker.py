@@ -59,7 +59,7 @@ import sys
 import time
 import uuid
 from collections.abc import Collection
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -92,6 +92,14 @@ _CRON_EVERY_MINUTE = "* * * * *"
 _CRON_EVERY_5_MINUTES = "*/5 * * * *"
 _CRON_EVERY_15_MINUTES = "*/15 * * * *"
 _CRON_HOURLY = "0 * * * *"
+
+# Scheduled run-retention window (FAR-1549). Pinned explicitly so the purge
+# and its audit record read the SAME cutoff: ``batch_delete_old_terminal_runs``
+# defaults to 90 days, and the audit helper counts the affected orgs with the
+# identical predicate immediately before the purge runs. Change BOTH together —
+# the count is the pre-image of the delete.
+_RETENTION_MAX_AGE_DAYS = 90
+_RETENTION_AUDIT_LOG_KEY = "saq.retention_cleanup.audit_failed"
 
 
 def _sync_interval_to_cron(interval_seconds: int) -> str:
@@ -1094,8 +1102,24 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
     from modulo.db.crud.run import batch_delete_old_terminal_runs
 
     factory = _make_system_session_factory()
+    # FAR-1549: capture the per-org pre-image BEFORE the purge so every
+    # affected org gets one record of its own runs being deleted. The count
+    # uses the same predicate as the purge itself (terminal status, created_at
+    # older than the retention window), so it is the number of rows that purge
+    # is about to remove. Fail-OPEN: losing the record for one tick must never
+    # skip the purge itself (the guard is here as well as in the helper so a
+    # future refactor cannot silently turn a count failure into a job failure).
+    try:
+        purge_targets = await _retention_purge_targets(factory)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(_RETENTION_AUDIT_LOG_KEY, extra={"stage": "target_count"}, exc_info=True)
+        purge_targets = {}
     async with factory() as session, session.begin():
-        deleted = await batch_delete_old_terminal_runs(session)
+        deleted = await batch_delete_old_terminal_runs(session, max_age_days=_RETENTION_MAX_AGE_DAYS)
+    if deleted:
+        await _record_retention_purge_audits(purge_targets, deleted)
 
     checkpoints_deleted = 0
     try:
@@ -1135,6 +1159,80 @@ async def retention_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:
         "checkpoints_deleted": checkpoints_deleted,
         "artifact_gc": artifact_gc,
     }
+
+
+async def _retention_purge_targets(factory: Any) -> dict[uuid.UUID, int]:
+    """Per-org count of terminal runs the scheduled purge is about to delete.
+
+    Reads on the caller's (system, BYPASSRLS) factory so the count is
+    cross-org, using the SAME predicate
+    ``db.crud.run.batch_delete_old_terminal_runs`` deletes by: terminal status
+    and ``created_at`` older than :data:`_RETENTION_MAX_AGE_DAYS`. The result
+    is the pre-image of the delete — captured immediately before it runs, so a
+    row that only becomes old between the count and the purge (impossible at
+    this granularity) is the only drift possible.
+
+    Fail-OPEN, guarded by the caller: :func:`retention_cleanup` wraps this
+    count so a failure logs and lets the purge run — losing the record for one
+    tick is strictly better than skipping retention.
+    """
+    from sqlalchemy import func, select
+
+    from modulo.db.models.run import TERMINAL_STATUSES, Run
+
+    cutoff = datetime.now(UTC) - timedelta(days=_RETENTION_MAX_AGE_DAYS)
+    async with factory() as session, session.begin():
+        result = await session.execute(
+            select(Run.organisation_id, func.count(Run.id))
+            .where(Run.status.in_(TERMINAL_STATUSES), Run.created_at < cutoff)
+            .group_by(Run.organisation_id)
+        )
+        return {row[0]: int(row[1]) for row in result.all() if row[1]}
+
+
+async def _record_retention_purge_audits(targets: dict[uuid.UUID, int], deleted: int) -> None:
+    """Record the scheduled retention purge on each affected org's audit chain (FAR-1549).
+
+    The org-independent ``system_audit_events`` ledger would be the wrong
+    home: an org admin reviewing their own chain must see that their runs were
+    deleted, so each event is written into ``audit_events`` under that org with
+    a SYSTEM actor (there is no request principal for a cron tick). Every
+    append opens its own app-role session, so one org's failure never blocks
+    another's record.
+
+    Fail-open with a loud log: the purge has already committed, and a record
+    failure must never fail the retention job itself.
+    """
+    if not targets:
+        if deleted:
+            _log.warning(
+                _RETENTION_AUDIT_LOG_KEY,
+                extra={"stage": "targets_missing", "deleted": deleted},
+            )
+        return
+    from modulo.core.audit_logger.background import append_background_audit_event
+
+    app_factory = _make_session_factory()
+    recorded = 0
+    for org_id, count in targets.items():
+        if await append_background_audit_event(
+            app_factory,
+            org_id=org_id,
+            event_type="run_retention_purge",
+            resource_type="run",
+            actor_source="retention_cleanup",
+            payload_json={
+                "summary": f"Scheduled retention deleted {count} terminal run(s)",
+                "purged_runs": count,
+                "max_age_days": _RETENTION_MAX_AGE_DAYS,
+            },
+            log_key=_RETENTION_AUDIT_LOG_KEY,
+        ):
+            recorded += 1
+    _log.info(
+        "saq.retention_cleanup.audit_recorded",
+        extra={"orgs": len(targets), "recorded": recorded, "deleted": deleted},
+    )
 
 
 async def webhook_dedup_cleanup(_ctx: dict[str, Any]) -> dict[str, Any]:

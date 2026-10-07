@@ -112,6 +112,34 @@ def test_write_version_json(root_tmp):
     assert "1.2.3" not in content
 
 
+def test_write_version_preserves_crlf(root_tmp):
+    """A CRLF version file must round-trip byte-exactly.
+
+    Without ``newline=""`` the read normalizes CRLF to LF and the write emits
+    native newlines, silently rewriting every line of the file. This is the
+    regression the explicit ``newline=""`` guards against.
+    """
+    path = root_tmp / "pyproject.toml"
+    path.write_bytes(b'[project]\r\nname = "modulo"\r\nversion = "1.2.3"\r\n')
+    bv.write_version(path, "1.2.3", "2.0.0")
+    data = path.read_bytes()
+    assert b'version = "2.0.0"\r\n' in data
+    assert data.count(b"\r\n") == 3
+    assert data.replace(b"\r\n", b"").count(b"\n") == 0
+
+
+def test_write_version_preserves_utf8_non_ascii(root_tmp):
+    """Non-ASCII bytes (em dashes) must survive a version write byte-exactly."""
+    path = root_tmp / "pyproject.toml"
+    original = '[project]\nname = "modulo"\nversion = "1.2.3"\n# \u2014 em dash\n'.encode()
+    path.write_bytes(original)
+    bv.write_version(path, "1.2.3", "2.0.0")
+    data = path.read_bytes()
+    assert b'version = "2.0.0"' in data
+    assert "\u2014".encode() in data
+    assert data == original.replace(b'"1.2.3"', b'"2.0.0"')
+
+
 def test_write_version_refuses_outside_root(tmp_path):
     path = tmp_path / "pyproject.toml"
     path.write_text('[project]\nname = "modulo"\nversion = "1.2.3"\n')

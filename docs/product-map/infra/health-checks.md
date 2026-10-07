@@ -11,7 +11,6 @@ code:
   - backend/src/modulo/core/saq_worker.py
   - deploy/watchdog/config.yaml
   - fly.toml
-  - .github/workflows/uptime-monitor.yml
 unit-tests:
   - backend/tests/unit/api/test_health.py
   - backend/tests/unit/core/test_health_alerts.py
@@ -23,16 +22,21 @@ bdd:
   - backend/tests/bdd/features/infra/health.feature
   - backend/tests/bdd/features/infra/test_health_steps.py
 depends-on: []
-status: covered
+status: partial
 ---
 
 # Health Checks
 
-Liveness and readiness endpoints for deployment health monitoring, plus the production
-uptime watchdog that alerts on outage (FAR-400), plus three alerting legs: the
-`health_readiness_alert` system-cron email (FAR-1446), the in-process worker-liveness
-watchdog (ADR 021 worker-resilience) and the compose deployment's out-of-process Gatus
-sentinel (PR #1260). Every operator alert – the readiness cron and the watchdog, across
+Liveness and readiness endpoints for deployment health monitoring, plus production
+alerting – now entirely the PRODUCT's own in-app alerting, the external
+`.github/workflows/uptime-monitor.yml` GitHub probe (FAR-400 / FAR-1156) having been
+removed in its favour: the `health_readiness_alert` system-cron email (FAR-1446), the
+in-process worker-liveness watchdog (ADR 021 worker-resilience, email + generic
+webhook / Teams) and the compose deployment's out-of-process Gatus sentinel (PR #1260).
+The advisory / dead-sweep class that removed workflow used to scan is tracked by
+FAR-1571. A TOTAL app outage cannot be alerted from in-app at all, and `deploy.yml`'s
+`--auto-rollback` runs only around a deploy — see Known Gaps. Every operator
+alert – the readiness cron and the watchdog, across
 email, generic webhook and Teams – identifies the deployment environment and carries the
 operator's `ALERT_CONTEXT` free text through one shared renderer (`core/alert_context.py`,
 FAR-1495 / FAR-1499). Liveness (`/healthz`) is advisory – it never flips readiness.
@@ -87,8 +91,14 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 - [x] Latency tracked per check
 - [x] Fly.io deployment wiring – `fly.toml` `[[http_service.checks]]` probes `/healthz/ready`
 - [x] Worker process-group health check via top-level `[checks]` (ADR 021)
-- [x] Production uptime monitor – `.github/workflows/uptime-monitor.yml` probes
-      `app.modulo.run/healthz/ready` every 10 minutes and fails + opens a ticket on outage
+- [ ] External uptime monitoring is GONE – `.github/workflows/uptime-monitor.yml`
+      (the 10-minute off-platform probe of `app.modulo.run/healthz/ready` that failed
+      and opened a Linear ticket on outage or on a degraded sub-check, FAR-400 /
+      FAR-1156) has been removed in favour of dogfooding the product's own alerting:
+      GitHub's scheduler was dropping its `*/10` cron (FAR-492) and it false-fired
+      (FAR-1512). Its alerting role is taken by the in-app legs below; the
+      ADVISORY / dead-sweep class only the workflow covered is tracked by FAR-1571
+      (open)
 - [x] Readiness-degradation email alert (FAR-1446): the `health_readiness_alert`
       system cron runs every 5 minutes and emails `ALERT_EMAIL_TO` when readiness
       CONFIRMEDLY transitions into `degraded`/`unavailable` (edge-triggered with a
@@ -144,12 +154,36 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 
 ## Known Gaps
 
+- **Advisory / dead-sweep degradation currently reaches no operator (FAR-1571).**
+  `evaluate_readiness` deliberately excludes the advisory checks from the aggregate and
+  the readiness-degradation email keys on that aggregate, so a dead sweep
+  (`stale_run_recovery`, `slot_reconciliation`, `hitl_park_sweep`,
+  `runner_workspace_reconcile`, `runner_marker_sweep`, `runner_health_probe`,
+  `dispatcher_reconcile` at its degraded tier) emits nothing in-app. Until FAR-1571
+  extends the watchdog's existing channels to that class — sustained failure alerts,
+  transient `event_loop_lag` blips do not — only the removed uptime-monitor workflow
+  used to see it.
+- **A TOTAL app outage has no operator channel and no ticket (untracked).**
+  In-app alerting cannot fire from inside an app that is down, and `deploy.yml`'s
+  `--auto-rollback` plus its post-deploy gate run only around a deploy — a runtime
+  crash or hang with no deploy in flight (the ~7h unalerted connection-refused
+  incident that motivated FAR-400) reaches no channel. FAR-1571 explicitly excludes
+  this case, so it needs its own tracked ticket (an external / off-platform probe);
+  this entry records it as a gap rather than an accepted residual.
 - **No PRD section reference.** The health endpoints are an internal infrastructure
   concern spanning deployment, monitoring, and operations; no single PRD section covers
   liveness/readiness.
 
 ## QA History
 
+- 2026-10-07: **uptime-monitor removal**: deleted the external
+  `.github/workflows/uptime-monitor.yml` (FAR-400 / FAR-1156) and re-pointed this
+  entry at the product's own in-app alerting as the production channel — the
+  `health_readiness_alert` readiness-degradation email (FAR-1446) and the in-process
+  worker-liveness watchdog (ADR 021). Dropped the workflow from the `code:` citations,
+  retired its behaviour bullet to an unchecked deferral, and moved the entry to
+  `status: partial` because the advisory / dead-sweep class only that workflow scanned
+  now has no in-app owner until FAR-1571 lands.
 - 2026-10-06: **Improve Architecture product-map walk**: closed two untracked
   sub-surfaces on this tracker, both invisible to the feature graph and to
   Assistant's `search_documentation` indexer. (1) The in-process worker-liveness
@@ -189,5 +223,6 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
   rebuilding the `docs/product-map/` feature graph that was lost from the public tree.
   Registered the dangling `feat-infra-health` reference: `backend/tests/unit/api/test_health.py`
   documented the per-check-timeout feature with a `feat-infra-health` tag that resolved
-  nowhere. Re-verified all 19 behaviours against `backend/src/modulo/api/routes/health.py`,
-  `fly.toml`, and `.github/workflows/uptime-monitor.yml`; status: covered.
+  nowhere. Re-verified all 19 behaviours against `backend/src/modulo/api/routes/health.py`
+  and `fly.toml`; status: covered at the time (the `.github/workflows/uptime-monitor.yml`
+  also cited then was removed on 2026-10-07, see above).

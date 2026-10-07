@@ -11,6 +11,10 @@ These tests drive the REAL ``create_run`` against an in-memory SQLite database
   * a soft-deleted pipeline is refused,
   * an ACTIVE pipeline still creates its run (control — the gate refuses
     nothing else),
+  * a PAUSED pipeline (FAR-1530, ``run_enabled = FALSE``) is refused with
+    ``state="paused"`` — the regression test for this slice; it FAILS without
+    the gate extension (the gate's SELECT would not carry ``run_enabled`` and
+    the helper would not know the state) and PASSES with it,
   * a pipeline row that is absent is NOT refused by this gate (lifecycle
     state is its scope; existence is enforced by the ``runs.pipeline_id``
     FK upstream/downstream — pinned so the scope does not drift),
@@ -19,7 +23,7 @@ These tests drive the REAL ``create_run`` against an in-memory SQLite database
   * the gate's read is ORG-SCOPED (RLS equivalence: the raw ``text()`` select
     carries ``organisation_id = :org`` so SQLite/MariaDB see what Postgres'
     ``rls_org_isolation`` policy would show them),
-  * the state-priority helper that FAR-1530 (per-pipeline Paused) extends.
+  * the state-priority helper FAR-1530 extended: deleted > archived > paused.
 """
 
 import logging
@@ -95,6 +99,7 @@ async def _seed_pipeline(
     *,
     archived_at: datetime | None = None,
     deleted_at: datetime | None = None,
+    run_enabled: bool = True,
 ) -> None:
     session.add(
         Pipeline(
@@ -105,6 +110,10 @@ async def _seed_pipeline(
             visibility="org",
             archived_at=archived_at,
             deleted_at=deleted_at,
+            # ck_pipelines_run_enabled: a disabled row must carry its cause.
+            run_enabled=run_enabled,
+            run_disabled_reason=None if run_enabled else "operator",
+            run_disabled_at=None if run_enabled else datetime.now(UTC),
         )
     )
     await session.flush()
@@ -129,7 +138,9 @@ class _ReadFailingSession:
     """Session double whose read raises, exactly like a DB outage would."""
 
     async def execute(self, *args: object, **kwargs: object) -> object:
-        raise OperationalError("SELECT archived_at, deleted_at FROM pipelines", {}, Exception("connection lost"))
+        raise OperationalError(
+            "SELECT archived_at, deleted_at, run_enabled FROM pipelines", {}, Exception("connection lost")
+        )
 
 
 class TestCreateRunRefusesNonRunnablePipelines:
@@ -165,6 +176,55 @@ class TestCreateRunRefusesNonRunnablePipelines:
         """Control: the gate refuses ONLY the non-runnable states."""
         await _seed_org(session)
         await _seed_pipeline(session)
+
+        run = await _create(session)
+
+        assert run.id is not None
+        assert await _run_count(session) == 1
+
+    async def test_paused_pipeline_run_is_refused(self, session: AsyncSession) -> None:
+        """REGRESSION (FAR-1530): a Paused pipeline must not start a run.
+
+        ``run_enabled = FALSE`` is present + visible but NON-EXECUTING — every
+        origin (manual REST, MCP trigger, webhook, cron, polling, ...)
+        converges on ``create_run``, so this one refusal covers them all.
+        FAILS without the gate extension: before it, the gate's SELECT carried
+        no ``run_enabled`` and a paused pipeline's manual run was created
+        exactly like an active one.
+        """
+        await _seed_org(session)
+        await _seed_pipeline(session, run_enabled=False)
+
+        with pytest.raises(PipelineNotRunnableError) as excinfo:
+            await _create(session)
+
+        assert excinfo.value.state == "paused"
+        assert excinfo.value.pipeline_id == _PIPELINE
+        # The refusal happens before any run row exists — nothing persists.
+        assert await _run_count(session) == 0
+
+    async def test_enabled_pipeline_with_a_cause_still_creates_run(self, session: AsyncSession) -> None:
+        """Scope pin: the gate reads ``run_enabled``, never the cause columns.
+
+        A row whose reason/timestamp columns are populated but whose
+        ``run_enabled`` is TRUE must not be refused on the cause alone (the
+        state, not the metadata, is the gate's subject). Such a row cannot be
+        written through the CHECK constraints — it exists only as a direct
+        column write, which is exactly why the helper keys on the boolean.
+        """
+        await _seed_org(session)
+        pipeline = Pipeline(
+            id=_PIPELINE,
+            organisation_id=_ORG,
+            name="pipeline",
+            account_id=_ORG,
+            visibility="org",
+            run_enabled=True,
+            run_disabled_reason="operator",
+            run_disabled_at=datetime.now(UTC),
+        )
+        session.add(pipeline)
+        await session.flush()
 
         run = await _create(session)
 
@@ -233,20 +293,43 @@ class TestPipelineStateGateOrgScope:
 
 
 class TestPipelineNotRunnableStateHelper:
-    """The one place the not-runnable state set is defined (FAR-1530 adds its
-    Paused condition here, at the same choke point)."""
+    """The one place the not-runnable state set is defined (FAR-1530 extended
+    it with Paused, at the same choke point)."""
 
     def test_active_pipeline_is_runnable(self) -> None:
-        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=None) is None
+        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=None, run_enabled=True) is None
 
     def test_archived_is_refused(self) -> None:
         stamp = datetime.now(UTC)
-        assert _pipeline_not_runnable_state(archived_at=stamp, deleted_at=None) == "archived"
+        assert _pipeline_not_runnable_state(archived_at=stamp, deleted_at=None, run_enabled=True) == "archived"
 
     def test_soft_deleted_is_refused(self) -> None:
         stamp = datetime.now(UTC)
-        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=stamp) == "deleted"
+        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=stamp, run_enabled=True) == "deleted"
 
     def test_deleted_outranks_archived(self) -> None:
         stamp = datetime.now(UTC)
-        assert _pipeline_not_runnable_state(archived_at=stamp, deleted_at=stamp) == "deleted"
+        assert _pipeline_not_runnable_state(archived_at=stamp, deleted_at=stamp, run_enabled=True) == "deleted"
+
+    def test_paused_is_refused(self) -> None:
+        """FAR-1530: ``run_enabled=False`` is the Paused refusal state."""
+        assert _pipeline_not_runnable_state(archived_at=None, deleted_at=None, run_enabled=False) == "paused"
+
+    def test_archived_outranks_paused(self) -> None:
+        """An archived pipeline already implies non-executing: report the
+        archived state, not paused."""
+        assert (
+            _pipeline_not_runnable_state(archived_at=datetime.now(UTC), deleted_at=None, run_enabled=False)
+            == "archived"
+        )
+
+    def test_deleted_outranks_paused(self) -> None:
+        assert (
+            _pipeline_not_runnable_state(archived_at=None, deleted_at=datetime.now(UTC), run_enabled=False) == "deleted"
+        )
+
+    def test_run_enabled_is_required(self) -> None:
+        """Fail closed: a caller that forgets ``run_enabled`` must fail loudly
+        (TypeError) instead of silently reading a paused pipeline as runnable."""
+        with pytest.raises(TypeError):
+            _pipeline_not_runnable_state(archived_at=None, deleted_at=None)  # type: ignore[call-arg]

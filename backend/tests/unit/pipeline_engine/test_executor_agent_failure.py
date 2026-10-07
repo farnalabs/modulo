@@ -212,7 +212,8 @@ async def test_elevation_disabled_run_completes_as_today(elevation_disabled):
     assert error_code is None
     assert error_detail is None
     assert not _run_failed_publishes(broker)
-    assert ("run_completed", {}) in [c.args for c in broker.publish.call_args_list]
+    # FAR-1534: run_completed is published post-finalize, not by _stream_graph.
+    assert "run_completed" not in [c.args[0] for c in broker.publish.call_args_list]
 
 
 async def test_no_agent_failure_signal_no_elevation(elevation_enabled):

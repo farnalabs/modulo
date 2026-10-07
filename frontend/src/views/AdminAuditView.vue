@@ -559,7 +559,7 @@
 import PageHeader from '../components/shared/PageHeader.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -874,6 +874,17 @@ const applySystemFiltersDebounced = () => {
 }
 watch([systemFilterEventType, systemFilterOrgId], applySystemFiltersDebounced)
 watch([systemFilterDateFrom, systemFilterDateTo], applySystemFiltersDebounced)
+
+// Pending debounced filter refetches must not outlive the component. A timer
+// that fires after unmount would call the API and update state on a dead
+// component; in tests it also pollutes a later spec's shared API mock with a
+// stale page-1 request (observed as a flaky AdminAuditView pagination spec).
+onBeforeUnmount(() => {
+  if (actorDebounce) clearTimeout(actorDebounce)
+  if (dateFromDebounce) clearTimeout(dateFromDebounce)
+  if (dateToDebounce) clearTimeout(dateToDebounce)
+  if (systemDebounce) clearTimeout(systemDebounce)
+})
 
 async function exportCsv() {
   exporting.value = true

@@ -12,7 +12,7 @@ FRONTEND_PACKAGE = PROJECT_ROOT / "frontend" / "package.json"
 
 def read_version(path: Path) -> str | None:
     """Extract version from pyproject.toml or package.json."""
-    content = path.read_text()
+    content = path.read_text(encoding="utf-8")
     if path.suffix == ".toml":
         m = re.search(r'version\s*=\s*"([^"]+)"', content)
     else:
@@ -37,12 +37,18 @@ def write_version(path: Path, old_version: str, new_version: str) -> None:
     resolved = path.resolve()
     if resolved != PROJECT_ROOT and PROJECT_ROOT not in resolved.parents:
         raise ValueError(f"refusing to write version outside project root: {path}")
-    content = path.read_text()
+    # Read/write with an explicit UTF-8 encoding and preserved line endings:
+    # backend/pyproject.toml contains non-ASCII characters, and the platform
+    # default encoding would either fail the read or round-trip the file
+    # through CRLF on Windows, churning every line of the version file.
+    with path.open(encoding="utf-8", newline="") as fh:
+        content = fh.read()
     if path.suffix == ".toml":
         content = content.replace(f'version = "{old_version}"', f'version = "{new_version}"')
     else:
         content = content.replace(f'"version": "{old_version}"', f'"version": "{new_version}"')
-    path.write_text(content)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(content)
     print(f"  {path.name}: {old_version} -> {new_version}")
 
 

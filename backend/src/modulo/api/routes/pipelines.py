@@ -92,6 +92,7 @@ from modulo.core.run_context.autonomy import (
 from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 from modulo.core.team_visibility import (
+    ConnectorBindingMissingError,
     connector_team_mismatch_detail,
     extract_connector_bindings,
     find_connector_team_mismatches,
@@ -119,8 +120,10 @@ from modulo.db.crud.pipeline import (
     get_pipeline_graph,
     list_pipelines,
     normalize_circuit_breaker_threshold,
+    pause_pipeline,
     replace_pipeline_graph,
     restore_pipeline,
+    resume_pipeline,
     soft_delete_pipeline,
     unarchive_pipeline,
     update_pipeline,
@@ -142,6 +145,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
@@ -946,6 +950,15 @@ class PipelineResponse(BaseModel):
     circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
     circuit_breaker_tripped: bool = False
     circuit_breaker_tripped_at: datetime | None = None
+    # FAR-1530: unified per-pipeline Paused execution state. ``run_enabled``
+    # is the state the ``create_run`` gate enforces (false = present, visible,
+    # non-executing); the reason/timestamp name the first cause ('operator' |
+    # 'circuit_breaker'). Carried on every response so the UI can badge it and
+    # ``modulo apply``'s drift hash can read the live value. Additive with
+    # safe defaults (pre-migration / partial stand-ins serialise as running).
+    run_enabled: bool = True
+    run_disabled_reason: str | None = None
+    run_disabled_at: datetime | None = None
     snapshot_count: int = 0
     # Additive, backward-compatible: every response builder derives node_count
     # from the row's stored graph via _pipeline_response, so detail/create/
@@ -1007,6 +1020,25 @@ class PipelineResponse(BaseModel):
     @field_validator("circuit_breaker_tripped_at", mode="before")
     @classmethod
     def _coerce_circuit_breaker_tripped_at(cls, value: Any) -> datetime | None:
+        return value if isinstance(value, datetime) else None
+
+    # FAR-1530: the run-state columns are read defensively like the breaker
+    # columns above — partial ORM stand-ins (tests, MagicMock rows) expose
+    # non-column attributes, which must serialise as "running" (enabled, no
+    # cause), never 500.
+    @field_validator("run_enabled", mode="before")
+    @classmethod
+    def _coerce_run_enabled(cls, value: Any) -> bool:
+        return value if isinstance(value, bool) else True
+
+    @field_validator("run_disabled_reason", mode="before")
+    @classmethod
+    def _coerce_run_disabled_reason(cls, value: Any) -> str | None:
+        return value if isinstance(value, str) else None
+
+    @field_validator("run_disabled_at", mode="before")
+    @classmethod
+    def _coerce_run_disabled_at(cls, value: Any) -> datetime | None:
         return value if isinstance(value, datetime) else None
 
     # FAR-1161: owner ids read defensively like the breaker columns above —
@@ -2052,18 +2084,28 @@ async def _enforce_connector_team_bindings(
     pipeline_owner_team_id: uuid.UUID | None,
     connector_bindings: list[dict[str, Any]],
 ) -> None:
-    """Block graph saves that bind a team-private connector to a different team's pipeline.
+    """Block graph saves whose connector binding crosses a team boundary.
 
-    PRD §9.3: a connector with ``visibility: team`` is only usable within pipelines
-    owned by the same team. Violations raise 409 ``connector_team_mismatch`` at the
-    pipeline-save command layer.
+    PRD §9.3 + FAR-1515: a team-private connector may only bind to a pipeline
+    owned by the same team, and a team pipeline may not pin an org-only
+    connector (every run of that graph would be team-scoped and rejected at
+    the connector gate). Violations raise 409 ``connector_team_mismatch`` at
+    the pipeline-save command layer. A binding the team-blind org-scoped read
+    cannot resolve (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is
+    the same named 409: a binding the gate cannot validate never saves.
     """
-    mismatches = await find_connector_team_mismatches(
-        session,
-        org_id=org_id,
-        pipeline_owner_team_id=pipeline_owner_team_id,
-        connector_bindings=connector_bindings,
-    )
+    try:
+        mismatches = await find_connector_team_mismatches(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline_owner_team_id,
+            connector_bindings=connector_bindings,
+        )
+    except ConnectorBindingMissingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
     if mismatches:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2286,9 +2328,13 @@ async def _resolve_graph_references(
     Whenever the graph resolves model-backend pins, they are checked against
     the pipeline's team: a team-private model backend pinned by a pipeline owned
     by a different team (or by no team at all) raises 409
-    ``model_backend_team_mismatch`` (PRD §9.3), mirroring the connector rule
-    which is also enforced unconditionally. The mismatch rule itself decides
-    whether an org-owned pipeline (``owner_team_id=None``) may pin a team-private
+    ``model_backend_team_mismatch`` (PRD §9.3), alongside the connector rule
+    enforced just before this. The two predicates are NOT identical: the
+    connector rule also refuses an org-only connector on a team pipeline
+    (FAR-1515), while this one stays team-private-only because ModelBackendHub
+    has no invocation-time visibility gate to mirror — see the parity note on
+    ``model_backend_team_mismatch``. The mismatch rule itself decides whether
+    an org-owned pipeline (``owner_team_id=None``) may pin a team-private
     backend.
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
@@ -3136,6 +3182,28 @@ async def update_pipeline_endpoint(
                         detail=str(exc),
                     ) from None
             ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
+            # FAR-1515 MAJOR 2: an ownership/visibility-only PATCH used to
+            # re-validate MEMBERSHIP only, while the advisory
+            # ``connector_rebind_required`` flag (set on the response below)
+            # was consumed by nothing - so moving a pipeline to a new team
+            # re-created the forbidden state (its STORED graph still pinning a
+            # connector the new owner team may not use) without ever running
+            # the connector-team gate. When the team boundary changes and the
+            # payload does NOT also replace the graph (that case is gated by
+            # ``_apply_graph_update`` against the EFFECTIVE owner below), the
+            # pipeline's stored bindings are gated here, in the same
+            # transaction, against the effective NEW owner team.
+            visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
+            graph_replaced = has_graph and req.graph_json is not None
+            if (ownership_changed or visibility_changed) and not graph_replaced:
+                stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
+                if stored_bindings:
+                    await _enforce_connector_team_bindings(
+                        session,
+                        principal.organisation_id,
+                        updates.get("owner_team_id", current.owner_team_id),
+                        stored_bindings,
+                    )
             await _maybe_audit_autonomy_change(
                 session,
                 principal=principal,
@@ -3310,14 +3378,16 @@ async def _toggle_pipeline_archive_state(
     principal: TenantPrincipal,
     pipeline_id: uuid.UUID,
     *,
-    toggle: Callable[[AsyncSession, uuid.UUID], Awaitable[Pipeline | None]],
+    toggle: Callable[..., Awaitable[Pipeline | None]],
 ) -> PipelineResponse:
     """Archive or unarchive a pipeline inside the shared team-gated transaction.
 
     ``archive_pipeline_endpoint`` and ``unarchive_pipeline_endpoint`` differ only
     in the CRUD function they apply, so the in-txn team re-check, the
     404-on-missing guard and the post-flush ``session.refresh`` live here once
-    instead of being copy-pasted into both endpoints.
+    instead of being copy-pasted into both endpoints. The CRUD toggle is passed
+    the same organisation scope as the existence read above, so its re-fetch
+    cannot resolve a row the scoped read rejected.
     """
     pipeline: Pipeline | None = None
     try:
@@ -3327,7 +3397,7 @@ async def _toggle_pipeline_archive_state(
             existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if existing is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
-            pipeline = await toggle(session, pipeline_id)
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
             # Refresh the ORM row inside the transaction so the DB-computed
             # `updated_at` (onupdate=func.current_timestamp()) is loaded while
             # the transaction is active. The UPDATE flush expires it, and after
@@ -3373,6 +3443,122 @@ async def unarchive_pipeline_endpoint(
     _: TenantPrincipal = require_team_membership_or_admin(resolve_pipeline_team_scope),
 ) -> PipelineResponse:
     return await _toggle_pipeline_archive_state(session, principal, pipeline_id, toggle=unarchive_pipeline)
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume (FAR-1530: the per-pipeline Paused execution state)
+# ---------------------------------------------------------------------------
+
+
+async def _set_pipeline_run_state(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    *,
+    resume: bool,
+) -> PipelineResponse:
+    """Pause or resume a pipeline inside the shared team-gated transaction.
+
+    Mirrors ``_toggle_pipeline_archive_state`` (in-txn team re-check, 404 on
+    missing row, post-flush ``session.refresh``) with FAR-1530's two
+    state-machine traps:
+
+    * RESUME is REFUSED 409 while the spend circuit breaker's witness holds —
+      an operator must reset the breaker first, so a resume can never revive a
+      tripped pipeline. The check reads the row with an organisation-scoped,
+      unlocked SELECT and then the write re-fetches it in the same
+      transaction; a concurrent trip that commits between the two is the same
+      accepted bounded race the pause gate documents (``crud/run.py``
+      deliberately holds no row locks), so a resume can at worst clear a
+      programmatic pause while a trip lands, never revive a row that was
+      already tripped at read time.
+    * Both directions are idempotent no-ops when the pipeline is already in
+      the requested state — FIRST CAUSE OWNS THE REASON: pausing an
+      already-disabled pipeline never overwrites the original
+      ``run_disabled_reason`` (that is enforced in the CRUD functions).
+
+    The refusal is deliberately PER-PIPELINE (``PipelineNotRunnableError``'s
+    sibling semantics): it must never be confused with the org-level
+    ``triggers_paused`` kill-switch or its ``TriggersPausedError`` envelope.
+    """
+    pipeline: Pipeline | None = None
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+            existing = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+            if existing is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+            if resume and existing.circuit_breaker_tripped:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; "
+                        "reset it first (POST /api/v1/admin/costs/circuit-breaker/"
+                        f"{pipeline_id}/reset) before resuming"
+                    ),
+                )
+            toggle = resume_pipeline if resume else pause_pipeline
+            pipeline = await toggle(session, pipeline_id, organisation_id=principal.organisation_id)
+            # Refresh inside the transaction (same rationale as the archive
+            # toggle): the UPDATE flush expires the DB-computed `updated_at`,
+            # and reading it after commit raises outside the async greenlet ->
+            # 422 silent-success.
+            if pipeline is not None:
+                await session.refresh(pipeline)
+    except ProgrammingError as exc:
+        _raise_db_migration_error(exc)
+    if pipeline is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    return _pipeline_response(pipeline)
+
+
+@router.post(
+    "/{pipeline_id}/pause",
+    dependencies=[Depends(audited("pipeline_paused", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.pause")
+async def pause_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    # FAR-1530: any-credential pair (parity with PATCH /pipelines/{id}) so
+    # declarative apply's mk_ API key can pause the pipeline a config declares
+    # as ``run_enabled: false``; UI operators pass the same permission gate.
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Pause a pipeline: present and visible, but no runs from any origin.
+
+    Sets ``run_enabled=false, run_disabled_reason='operator',
+    run_disabled_at=now`` — or is an idempotent no-op when the pipeline is
+    already disabled (first cause owns the reason, so a circuit-breaker pause
+    keeps its ``'circuit_breaker'`` reason). In-flight runs finish (disabling
+    is prospective, mirroring the org pause); every NEW run — trigger, manual,
+    REST, MCP — is refused at the ``create_run`` state gate. Audited as
+    ``pipeline_paused``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=False)
+
+
+@router.post(
+    "/{pipeline_id}/resume",
+    dependencies=[Depends(audited("pipeline_resumed", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
+)
+@handle_db_errors("pipelines.resume")
+async def resume_pipeline_endpoint(
+    pipeline_id: uuid.UUID,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_PIPELINE_UPDATE),
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
+) -> PipelineResponse:
+    """Resume a paused pipeline: clear the unified Paused state.
+
+    REFUSED with 409 Conflict while ``circuit_breaker_tripped`` holds (reset
+    the breaker first — an operator resume must never revive a tripped
+    pipeline). Idempotent when already running. Audited as
+    ``pipeline_resumed``.
+    """
+    return await _set_pipeline_run_state(session, principal, pipeline_id, resume=True)
 
 
 # ---------------------------------------------------------------------------
@@ -4125,6 +4311,33 @@ async def rollback_snapshot_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+
+            # FAR-1515 MAJOR 3: a rollback replays the target snapshot's graph
+            # verbatim, so it must run the same connector-team gate every other
+            # graph write path runs — otherwise rolling back to a snapshot that
+            # pins a cross-team (or org-only-on-a-team-pipeline) connector
+            # re-creates state the save paths refuse. The gate runs INSIDE
+            # ``rollback_to_snapshot`` as a post-lock callback (the pipeline row
+            # lock is already held there), against the pipeline's CURRENT owner
+            # team — the team boundary may have moved since the snapshot was
+            # taken — and raises the same named 409 ``connector_team_mismatch``
+            # as ``PATCH /graph``. The model-backend gate is deliberately NOT
+            # mirrored here: the FAR-1515 parity note on
+            # ``model_backend_team_mismatch`` (ModelBackendHub has no
+            # invocation-time visibility gate) applies to rollbacks too.
+
+            async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
+                snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
+                stored_bindings = extract_connector_bindings(snapshot_nodes)
+                if not stored_bindings:
+                    return
+                await _enforce_connector_team_bindings(
+                    session,
+                    pipeline.organisation_id,
+                    pipeline.owner_team_id,
+                    stored_bindings,
+                )
+
             new_snapshot = await rollback_to_snapshot(
                 session,
                 pipeline_id,
@@ -4135,6 +4348,7 @@ async def rollback_snapshot_endpoint(
                 is_guardrail_admin=_is_guardrail_admin(principal),
                 grants_deny_privilege=_grants_deny_privilege(principal),
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
+                post_lock_gate=_connector_team_gate_after_lock,
             )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
@@ -4420,7 +4634,8 @@ async def _save_locked_graph(
     ``_apply_graph_update``), in the same order, around the same write:
 
     1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
-       for a team-private connector bound from outside its team,
+       for a team-private connector bound from outside its team, or an
+       org-only connector pinned by a team pipeline (FAR-1515),
     2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
        guard (422), unknown agent/schema ids (422) and the model-backend team
        check (409),

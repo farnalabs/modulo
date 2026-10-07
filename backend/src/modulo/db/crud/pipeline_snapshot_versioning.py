@@ -206,6 +206,7 @@ async def rollback_to_snapshot(
     grants_deny_privilege: bool = False,
     grants_deny_guardrail_admin: bool = False,
     _on_lock_acquired: Callable[[], Awaitable[None]] | None = None,
+    post_lock_gate: Callable[["PipelineSnapshot", "Pipeline"], Awaitable[None]] | None = None,
 ) -> PipelineSnapshot | None:
     """Create a new snapshot that restores the graph from a previous snapshot.
 
@@ -222,6 +223,15 @@ async def rollback_to_snapshot(
     strip the binding). ``is_guardrail_admin`` is the caller-supplied admin
     flag; for ``"rest"`` with ``account_id`` the live role is re-read under the
     lock.
+
+    FAR-1515 (MAJOR 3): ``post_lock_gate`` is the caller's hook for running a
+    write gate under THIS row lock, before any write — the REST route passes
+    the connector-team gate (the target snapshot's bindings against the
+    pipeline's CURRENT owner team, raising 409 ``connector_team_mismatch``).
+    The hook receives the resolved ``target`` snapshot and the LOCKED
+    ``pipeline`` row; the callback lives in the route layer so this module
+    never imports ``modulo.core`` (layer contract). A hook that raises rolls
+    the whole rollback back with it.
 
     FAR-1471: the rollback itself also appends a ``pipeline.graph_updated``
     audit event (actor, pipeline id, before/after node+edge summary) so every
@@ -242,6 +252,12 @@ async def rollback_to_snapshot(
 
     if _on_lock_acquired is not None:
         await _on_lock_acquired()
+
+    # FAR-1515 MAJOR 3: run the caller's write gate under the row lock, with
+    # the resolved target snapshot and the locked pipeline row, BEFORE any
+    # graph mutation (same position as the two guards below).
+    if post_lock_gate is not None:
+        await post_lock_gate(target, pipeline)
 
     effective_privileged = await resolve_effective_privilege(
         session,

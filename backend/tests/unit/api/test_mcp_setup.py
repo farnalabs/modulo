@@ -146,7 +146,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 404
-        assert "Token not found, expired, or already used" in resp.json()["detail"]
+        body = resp.json()
+        assert "Token not found, expired, or already used" in body["detail"]
+        # FAR-1545: distinct problem type, not the generic 404.
+        assert body["type"] == "urn:problem:modulo:invalid_token"
+        assert body["title"] == "Invalid Token"
+        assert body["code"] == "invalid_token"
+        assert body["status"] == resp.status_code
 
     def test_token_resource_mismatch_returns_400(self, client: TestClient) -> None:
         with (
@@ -164,7 +170,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 400
-        assert "Token does not match" in resp.json()["detail"]
+        body = resp.json()
+        assert "Token does not match" in body["detail"]
+        # FAR-1545: distinct problem type, not the generic 400.
+        assert body["type"] == "urn:problem:modulo:token_mismatch"
+        assert body["title"] == "Token Mismatch"
+        assert body["code"] == "token_mismatch"
+        assert body["status"] == resp.status_code
 
     def test_backend_not_found_returns_404(self, client: TestClient) -> None:
         with (
@@ -183,7 +195,15 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 404
-        assert "backend_not_found" in resp.json()["detail"]
+        body = resp.json()
+        assert "backend_not_found" in body["detail"]
+        # FAR-1545: a plain resource not-found stays status-derived (RFC 9457
+        # §4 — no type minted for a generic condition); the specificity is
+        # carried by the ``code`` extension member.
+        assert body["type"] == "urn:problem:modulo:not_found"
+        assert body["title"] == "Not Found"
+        assert body["code"] == "backend_not_found"
+        assert body["status"] == resp.status_code
 
     def test_complete_setup_foreign_org_returns_404(self, client: TestClient) -> None:
         """IDOR regression: completing setup for a model backend owned by a
@@ -208,7 +228,15 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 404
-        assert "backend_not_found" in resp.json()["detail"]
+        body = resp.json()
+        assert "backend_not_found" in body["detail"]
+        # FAR-1545: a plain resource not-found stays status-derived (RFC 9457
+        # §4 — no type minted for a generic condition); the specificity is
+        # carried by the ``code`` extension member.
+        assert body["type"] == "urn:problem:modulo:not_found"
+        assert body["title"] == "Not Found"
+        assert body["code"] == "backend_not_found"
+        assert body["status"] == resp.status_code
 
     def test_already_configured_backend_returns_400(self, client: TestClient) -> None:
         backend = _pending_backend()
@@ -229,7 +257,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 400
-        assert "already configured" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert "already configured" in body["detail"].lower()
+        # FAR-1545: distinct problem type, not the generic 400.
+        assert body["type"] == "urn:problem:modulo:already_configured"
+        assert body["title"] == "Already Configured"
+        assert body["code"] == "already_configured"
+        assert body["status"] == resp.status_code
 
     def test_missing_fernet_key_returns_500(self, client: TestClient) -> None:
         empty_key_settings = MagicMock()
@@ -250,7 +284,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 500
-        assert "Encryption is not configured" in resp.json()["detail"]
+        body = resp.json()
+        assert "Encryption is not configured" in body["detail"]
+        # FAR-1545: distinct 500 problem type — no longer internal_error.
+        assert body["type"] == "urn:problem:modulo:encryption_config_error"
+        assert body["title"] == "Encryption Not Configured"
+        assert body["code"] == "encryption_config_error"
+        assert body["status"] == resp.status_code
 
     def test_invalid_fernet_key_returns_500(self, client: TestClient) -> None:
         with (
@@ -269,7 +309,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 500
-        assert "Failed to initialise encryption" in resp.json()["detail"]
+        body = resp.json()
+        assert "Failed to initialise encryption" in body["detail"]
+        # FAR-1545: distinct 500 problem type — no longer internal_error.
+        assert body["type"] == "urn:problem:modulo:encryption_error"
+        assert body["title"] == "Encryption Error"
+        assert body["code"] == "encryption_error"
+        assert body["status"] == resp.status_code
 
     def test_update_failure_returns_500(self, client: TestClient) -> None:
         with (
@@ -289,7 +335,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 500
-        assert "Failed to update model backend" in resp.json()["detail"]
+        body = resp.json()
+        assert "Failed to update model backend" in body["detail"]
+        # FAR-1545: distinct 500 problem type — no longer internal_error.
+        assert body["type"] == "urn:problem:modulo:update_failed"
+        assert body["title"] == "Update Failed"
+        assert body["code"] == "update_failed"
+        assert body["status"] == resp.status_code
 
     def test_sqlalchemy_error_returns_503(self, client: TestClient) -> None:
         from sqlalchemy.exc import SQLAlchemyError as SQLAlchemyError_
@@ -309,7 +361,13 @@ class TestCompleteModelBackendSetup:
             )
 
         assert resp.status_code == 503
-        assert "database" in resp.json()["detail"].lower()
+        body = resp.json()
+        assert "database" in body["detail"].lower()
+        # FAR-1545: a generic database outage stays status-derived (§4); the
+        # ``code`` still names it for clients that branch on the extension.
+        assert body["type"] == "urn:problem:modulo:service_unavailable"
+        assert body["code"] == "database_error"
+        assert body["status"] == resp.status_code
 
     def test_programming_error_returns_501_migration_required(self, client: TestClient) -> None:
         """FAR-1540: an un-migrated database (42P01 undefined_table) is a
@@ -337,6 +395,7 @@ class TestCompleteModelBackendSetup:
         assert resp.status_code == 501
         assert body["type"] == "urn:problem:modulo:migration_required"
         assert "Run database migrations" in body["detail"]
+        assert body["status"] == resp.status_code
 
     def test_integrity_error_returns_409_conflict(self, client: TestClient) -> None:
         """FAR-1540: a CHECK/FK/UNIQUE violation is a conflict, not an outage —
@@ -361,6 +420,7 @@ class TestCompleteModelBackendSetup:
         assert resp.status_code == 409
         assert body["type"] == "urn:problem:modulo:conflict"
         assert body["detail"] == "Resource conflict. The operation could not be completed."
+        assert body["status"] == resp.status_code
 
     def test_unexpected_error_returns_500(self, client: TestClient) -> None:
         """The route's LAST-RESORT arm: every knowable failure mode above it is
@@ -386,6 +446,7 @@ class TestCompleteModelBackendSetup:
         assert resp.status_code == 500
         assert "unexpected" in resp.json()["detail"].lower()
         assert resp.json()["type"] == "urn:problem:modulo:internal_error"
+        assert resp.json()["status"] == resp.status_code
 
     def test_unauthenticated_returns_4xx(self) -> None:
         mock_session = _make_mock_session()

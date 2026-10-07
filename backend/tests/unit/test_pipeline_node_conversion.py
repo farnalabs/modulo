@@ -56,8 +56,12 @@ def _stub_reference_resolution_loaders() -> Generator[None, None, None]:
 
     Deliberately NOT stubbed: ``_enforce_connector_team_bindings``,
     ``_validate_graph_save`` and ``GraphValidator.validate_definition`` still
-    run for real against the double - their empty-result path is exactly what
-    these tests should exercise.
+    run for real against the double. For the team gate that means its read is
+    answered by ``make_gate_clearing_connector`` (see the note there): the
+    gate is FAIL-CLOSED since FAR-1515, so an unresolved binding would 409
+    and mask the status mapping under test. The remaining checks still
+    exercise their no-rows path, which is exactly what these tests should
+    see.
     """
 
     def _fake_agents(_session: object, org_id: uuid.UUID, agent_ids: set[uuid.UUID]) -> dict[uuid.UUID, MagicMock]:
@@ -130,6 +134,12 @@ def make_pipeline_row(nodes=None, edges=None) -> MagicMock:
     pipeline.id = PIPELINE_ID
     pipeline.graph_nodes_json = nodes or []
     pipeline.edges = edges or []
+    # Explicit org pipeline: these tests drive handler STATUS MAPPING, not the
+    # team gate. An unset owner would be an auto-MagicMock, which is truthy -
+    # so every connector would look like it crossed a team boundary and the
+    # fail-closed gate (FAR-1515) would 409 before the step under test ran.
+    pipeline.visibility = "org"
+    pipeline.owner_team_id = None
     return pipeline
 
 
@@ -145,6 +155,32 @@ def make_connector_mock(connector_type: str = "github") -> MagicMock:
     connector.id = CONNECTOR_ID
     connector.organisation_id = ORG_ID
     connector.connector_type_id = connector_type
+    return connector
+
+
+def make_gate_clearing_connector() -> MagicMock:
+    """A connector row that CLEARS the connector-team gate for these tests.
+
+    The positional ``results`` list below only covers the endpoint's own
+    lookups (pipeline, edges, agent, connector, model backend) by call index.
+    The save path then runs ``_enforce_connector_team_bindings`` — and since
+    FAR-1515 that read is FAIL-CLOSED: a binding whose connector row the
+    read cannot resolve is a named 409 ``connector_team_mismatch`` rather than
+    the silent skip it used to be. Those later reads fall off the end of the
+    list, so without this the three tests that get past the endpoint lookups
+    (happy path / programming-error / save-returns-None) would die 409 instead
+    of exercising the status mapping they exist for.
+
+    This mirrors ``_gate_clearing_connector_session`` in
+    ``tests/unit/api/test_node_conversion_save_enforcement.py``: an ORG
+    connector on the (org) test pipeline, for which
+    ``connector_team_mismatch("org", None, None)`` is False. The team gate
+    itself is covered there and in ``test_pipeline_node_conversion_team_gate``.
+    """
+    connector = make_connector_mock()
+    connector.name = "github-connector"
+    connector.visibility = "org"
+    connector.owner_team_id = None
     return connector
 
 
@@ -206,7 +242,16 @@ def setup_execute_side_effect(session, results):
                 raise val
             result.scalar_one_or_none = MagicMock(return_value=val)
         else:
-            val = None
+            # Past the positional list: these are the save path's OWN reads
+            # (the connector-team gate, reference resolution, post-write
+            # validation), which the endpoint lookups above already cleared.
+            # The fail-closed connector read (FAR-1515) must still see a row
+            # it can judge, or it refuses the binding with a named 409 and
+            # masks the status mapping these tests assert. Everything else
+            # keeps the old "no rows" answer - a missing model backend / eval
+            # row / guardrail row is ignored by those gates by design.
+            sql = str(args[0]) if args else ""
+            val = [make_gate_clearing_connector()] if "connector_instances" in sql else None
             result.scalar_one_or_none = MagicMock(return_value=None)
         result.scalar_one = MagicMock(return_value=0)
         scalar_result = MagicMock()

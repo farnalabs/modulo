@@ -21,8 +21,11 @@ name: "Deploy staleness check (prod vs main)"
 # the staleness detail (prod SHA, main HEAD, hours stale) so the signal
 # reaches the ready queue, not just the Actions tab. The warning branches
 # (unreachable endpoint, missing SHA) remain warn-only for transient failures;
-# persistent blindness is covered by the uptime-monitor (FAR-400) and the
-# deploy-watchdog's own escalation (3 consecutive failures).
+# persistent blindness is covered by the product's own in-app alerting (the
+# readiness-degradation email plus the worker-liveness watchdog; FAR-1571 for
+# the advisory class) and the deploy-watchdog's own escalation (3 consecutive
+# failures). The external uptime-monitor workflow (FAR-400) that also probed
+# prod has been removed in favour of dogfooding that in-app alerting.
 # FAR-1407: the escalation dedupes on the CONDITION (title marker + open
 # state), not on the run -- an existing open starvation ticket gets the
 # latest figures appended as a comment instead of a fresh duplicate ticket

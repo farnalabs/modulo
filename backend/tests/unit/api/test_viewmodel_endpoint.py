@@ -356,7 +356,6 @@ def test_viewmodel_current_includes_feature_flags(client: TestClient) -> None:
     assert len(body["feature_flags"]) == 2
     flag_names = [f["name"] for f in body["feature_flags"]]
     assert "eval_system" in flag_names
-    assert "eval_system" in flag_names
     for flag in body["feature_flags"]:
         assert flag["active"] is True
         assert flag["tier"] == "community"

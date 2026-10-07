@@ -5,6 +5,7 @@ admin reset, and notifier dispatch wiring.
 """
 
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from modulo.core.cost_controller import (
     check_pipeline_circuit_breaker,
     reset_pipeline_circuit_breaker,
     sum_pipeline_monthly_spend,
+    trip_pipeline_circuit_breaker,
 )
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -28,7 +30,12 @@ def mock_session() -> AsyncMock:
     return s
 
 
-def _make_pipeline(threshold: Decimal | None = None, tripped: bool = False) -> MagicMock:
+def _make_pipeline(
+    threshold: Decimal | None = None,
+    tripped: bool = False,
+    run_enabled: bool = True,
+    run_disabled_reason: str | None = None,
+) -> MagicMock:
     p = MagicMock()
     p.id = _PIPELINE_ID
     p.organisation_id = _ORG_ID
@@ -36,6 +43,11 @@ def _make_pipeline(threshold: Decimal | None = None, tripped: bool = False) -> M
     p.circuit_breaker_threshold = threshold
     p.circuit_breaker_tripped = tripped
     p.circuit_breaker_tripped_at = None
+    # FAR-1530 unified Paused state (real columns, not auto-Mock attributes —
+    # the trip/reset fold reads and writes these, so they must be deterministic).
+    p.run_enabled = run_enabled
+    p.run_disabled_reason = run_disabled_reason
+    p.run_disabled_at = datetime.now(UTC) if run_disabled_reason else None
     return p
 
 
@@ -203,3 +215,139 @@ class TestResetPipelineCircuitBreaker:
 
         assert reset is None
         mock_session.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1530: the trip/reset fold into the unified Paused state
+# ---------------------------------------------------------------------------
+
+
+class TestUnifiedPausedStateFold:
+    """The circuit breaker folds into ``(run_enabled, run_disabled_reason,
+    run_disabled_at)`` while ``circuit_breaker_tripped(_at)`` STAYS the
+    breaker's witness.
+
+    Each test FAILS without its production change: the trip fold lives in
+    ``trip_pipeline_circuit_breaker`` and the conditional clear in
+    ``reset_pipeline_circuit_breaker``.
+    """
+
+    async def test_trip_folds_the_unified_state(self, mock_session: AsyncMock) -> None:
+        pipeline = _make_pipeline(threshold=Decimal(1000))
+        mock_session.execute = AsyncMock(return_value=MagicMock())
+        with patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
+            tripped = await trip_pipeline_circuit_breaker(
+                mock_session,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                pipeline_name=pipeline.name,
+                pipeline=pipeline,
+            )
+
+        assert tripped is True
+        # The witness is set ...
+        assert pipeline.circuit_breaker_tripped is True
+        assert pipeline.circuit_breaker_tripped_at is not None
+        # ... AND the unified state the create_run gate enforces is folded in
+        # (without the fold this stays run_enabled=True: triggers paused, but
+        # manual/REST/MCP runs would still start).
+        assert pipeline.run_enabled is False
+        assert pipeline.run_disabled_reason == "circuit_breaker"
+        assert pipeline.run_disabled_at == pipeline.circuit_breaker_tripped_at
+
+    async def test_trip_leaves_an_operator_pause_untouched(self, mock_session: AsyncMock) -> None:
+        """FIRST CAUSE OWNS THE REASON: a trip on an already-disabled
+        pipeline sets only the witness — the operator cause survives, so a
+        later admin reset cannot clear a pause the operator set."""
+        operator_pause_at = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+        pipeline = _make_pipeline(
+            threshold=Decimal(1000),
+            run_enabled=False,
+            run_disabled_reason="operator",
+        )
+        pipeline.run_disabled_at = operator_pause_at
+        mock_session.execute = AsyncMock(return_value=MagicMock())
+        with patch("modulo.core.cost_controller._dispatch_circuit_breaker_tripped", new=AsyncMock()):
+            tripped = await trip_pipeline_circuit_breaker(
+                mock_session,
+                org_id=_ORG_ID,
+                pipeline_id=_PIPELINE_ID,
+                pipeline_name=pipeline.name,
+                pipeline=pipeline,
+            )
+
+        assert tripped is True
+        assert pipeline.circuit_breaker_tripped is True
+        assert pipeline.run_enabled is False
+        assert pipeline.run_disabled_reason == "operator"
+        assert pipeline.run_disabled_at == operator_pause_at
+
+    async def test_second_trip_is_a_noop(self, mock_session: AsyncMock) -> None:
+        """Idempotent trip: an already-tripped witness returns False and
+        touches nothing (so it can never downgrade an operator cause either)."""
+        pipeline = _make_pipeline(threshold=Decimal(1000), tripped=True, run_enabled=False)
+        pipeline.run_disabled_reason = "operator"
+        mock_session.execute = AsyncMock()
+
+        tripped = await trip_pipeline_circuit_breaker(
+            mock_session,
+            org_id=_ORG_ID,
+            pipeline_id=_PIPELINE_ID,
+            pipeline_name=pipeline.name,
+            pipeline=pipeline,
+        )
+
+        assert tripped is False
+        assert pipeline.run_disabled_reason == "operator"
+        mock_session.execute.assert_not_awaited()
+
+    async def test_reset_clears_a_circuit_breaker_cause(self, mock_session: AsyncMock) -> None:
+        pipeline = _make_pipeline(
+            threshold=Decimal(1000),
+            tripped=True,
+            run_enabled=False,
+            run_disabled_reason="circuit_breaker",
+        )
+        pipeline_result = _pipeline_result(pipeline)
+        update_result = MagicMock()
+        update_result.scalars.return_value.all.return_value = [uuid.uuid4()]
+        mock_session.execute = AsyncMock(side_effect=[pipeline_result, update_result])
+
+        reset = await reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID)
+
+        assert reset == 1
+        assert pipeline.circuit_breaker_tripped is False
+        # The breaker's own cause clears with the witness: the pipeline runs again.
+        assert pipeline.run_enabled is True
+        assert pipeline.run_disabled_reason is None
+        assert pipeline.run_disabled_at is None
+
+    async def test_reset_preserves_an_operator_pause(self, mock_session: AsyncMock) -> None:
+        """REGRESSION (FAR-1530): an admin reset must NOT clear an operator
+        pause. Without the conditional clear in
+        ``reset_pipeline_circuit_breaker`` this test FAILS — the reset would
+        reactivate a pipeline the operator deliberately paused."""
+        operator_pause_at = datetime(2026, 10, 2, 9, 30, tzinfo=UTC)
+        pipeline = _make_pipeline(
+            threshold=Decimal(1000),
+            tripped=True,
+            run_enabled=False,
+            run_disabled_reason="operator",
+        )
+        pipeline.run_disabled_at = operator_pause_at
+        pipeline_result = _pipeline_result(pipeline)
+        update_result = MagicMock()
+        update_result.scalars.return_value.all.return_value = [uuid.uuid4()]
+        mock_session.execute = AsyncMock(side_effect=[pipeline_result, update_result])
+
+        reset = await reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID)
+
+        # The witness still clears (the reset's own contract: the breaker is
+        # no longer tripped and triggers re-arm) ...
+        assert reset == 1
+        assert pipeline.circuit_breaker_tripped is False
+        assert pipeline.circuit_breaker_tripped_at is None
+        # ... but the operator's pause SURVIVES (first cause owns the reason).
+        assert pipeline.run_enabled is False
+        assert pipeline.run_disabled_reason == "operator"
+        assert pipeline.run_disabled_at == operator_pause_at

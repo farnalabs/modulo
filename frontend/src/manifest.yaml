@@ -2845,6 +2845,12 @@ elements:
       - testid: library-type-filter-dropdown
         type: element
         dynamic_testid: false
+      - testid: library-remove-type-filter
+        type: button
+        dynamic_testid: false
+      - testid: library-clear-type-filters
+        type: button
+        dynamic_testid: false
       - testid: library-section-native
         type: button
         dynamic_testid: false
@@ -2855,6 +2861,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: library-error
+        type: element
+        dynamic_testid: false
+      - testid: library-loading-skeleton
         type: element
         dynamic_testid: false
       - testid: library-previous-page
@@ -2873,6 +2882,9 @@ elements:
         type: button
         dynamic_testid: false
       - testid: library-preview-section
+        type: element
+        dynamic_testid: false
+      - testid: library-preview-summary
         type: element
         dynamic_testid: false
       - testid: library-view-details
@@ -5410,6 +5422,10 @@ features:
             - "[x] Pre-auth and webhook routes are audited through the actor-less audited_system variant (FAR-1516): sign-in/out, token refresh, the SAML ACS POST, the public error ingest and inbound webhooks record the same isolated-append event WITHOUT fabricating an actor — actor_user_id stays NULL, the payload carries the SYSTEM_ACTOR marker plus an actor_source string (pre_auth / unauthenticated / signature_verified / authenticated) stating HOW the request was admitted, never WHO; the route publishes its tenant via bind_audit_org at the point it becomes known (with no tenant yet, the unattributed SYSTEM_ORG_ID sentinel is used so the attempt is still recorded and the real org rebinds the moment it resolves), an event with no published org is logged and skipped rather than written into a fabricated tenant, and bind_audit_actor_source lets the route STRENGTHEN its declared actor_source once a verified signature or an authenticated principal lands, so recorded provenance is always the strongest TRUE admission statement (core/audit_coverage.py audited_system/bind_audit_org/bind_audit_actor_source, routes auth/sso/slack/stripe_webhook/webhooks/errors; test_audit_coverage.py, test_webhooks_endpoint.py, test_far1464_route_arm_coverage.py)"
             # Org-independent durable ledger for org-lifecycle events (FAR-1517)
             - "[x] Org-lifecycle audit records survive a hard delete (FAR-1517): `audit_events.organisation_id` FKs `organisations.id` with ON DELETE CASCADE, so the org-scoped chain - including the `org_deletion_requested` row written moments earlier - dies with the org, and a post-commit append can never satisfy the FK afterwards. The org-lifecycle writers (`DELETE /api/v1/admin/org`, `POST /api/v1/admin/org/deletion-request`, `POST /api/v1/admin/org/deletion-confirm`, `PATCH /api/v1/admin/org/deletion-cancel`, and system-admin `DELETE /api/v1/admin/orgs/{org_id}`) now mirror the same evidence into the org-independent `system_audit_events` ledger IN the deleting transaction BEFORE the org row is removed: the table carries `org_id`/`actor_user_id` as PLAIN values with NO FK and no `organisation_id` tenant column, so nothing cascades into it and no RLS scope excludes it; the record commits only with the delete and a failed append aborts the delete (fail-closed, deliberately no try/except), while UPDATE/DELETE are rejected by database append-only triggers (migration 0285). The ledger is deliberately NOT hash-chained - the tamper-evident chain is per-org and its head cascades away - so immutability here comes from the triggers. Those routes sit in the audit-coverage baseline because `audited()`'s post-commit org-scoped append can never satisfy the audit_events FK after the delete (core/system_audit_logger.py, db/models/system_audit_event.py, db/migrations/versions/0285_system_audit_events.py, tests/integration/test_system_audit_org_deletion.py, tests/unit/core/test_system_audit_logger.py)"
+            # Background / cron / boot write-path audit ratchet (FAR-1549)
+            - "[x] Writes that never see a request (SAQ system-cron sweeps, runs-worker tasks, reconcilers, boot seeds) are audited or explicitly classified (FAR-1549): the shared append_background_audit_event / record_run_state_change_audits helpers append a SYSTEM-actor event with actor_user_id NULL, a SYSTEM_ACTOR payload marker and an actor_source naming the process, set the org RLS context inside their own fresh transaction, re-select each run and drop any whose live status is not an expected one (the phantom-event guard), and fail open (log + swallow) after the already-committed mutation while always propagating CancelledError; tests/architecture/test_background_audit_coverage.py mechanically enumerates every SAQ task, cron job, reconciler, seeder and boot seed and fails until each is classified audited / exempt (fixed EXEMPT_REASONS vocabulary) / gap, with the SuiteRun-lifecycle and modulo_users boot-seed gaps recorded explicitly (backend/src/modulo/core/audit_logger/background.py, backend/src/modulo/core/cron_helpers.py, backend/src/modulo/core/run_admission.py, backend/src/modulo/core/run_terminal_advance.py, backend/src/modulo/core/runner_capacity.py, backend/src/modulo/core/saq_worker.py, test_background_audit.py, test_background_audit_wiring.py, test_background_audit_coverage.py)"
+            # System-admin read surface for the durable org-lifecycle ledger (FAR-1538)
+            - "[x] The org-independent system_audit_events ledger (FAR-1517) has a system-admin read surface (FAR-1538): GET /api/v1/admin/system-audit lists the records read-only with offset pagination and event-type / org-id / date-range filters, gated purely by require_system_permission (the is_system_admin claim — no RLS org context because the table has no organisation_id column, and no audited() dependency because reads are not audited), and the /admin/audit page exposes a system source tab with the same filters, pagination and a detail panel that reveals the full identifiers (backend/src/modulo/api/routes/admin_system_audit.py, backend/src/modulo/db/crud/system_audit_event.py, frontend/src/views/AdminAuditView.vue, test_admin_system_audit.py, test_system_audit_event.py)"
 
             # Frontend (AdminAuditLogView, /admin/audit)
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
@@ -5516,6 +5532,7 @@ features:
             - "[x] The pipeline monthly spend circuit breaker threshold (circuit_breaker_threshold, USD, null = disabled, must be > 0 and fit Numeric(14,6)) is configurable on pipeline create / PATCH / GET (plus circuit_breaker_tripped / circuit_breaker_tripped_at on the response), on the MCP create_pipeline + set_pipeline_circuit_breaker tools, and in modulo apply (managed only when the key is declared; explicit null disables) (test_pipeline_circuit_breaker_threshold.py, test_apply_circuit_breaker.py)"
             - "[x] Every threshold change (create with a value, set, change, clear) writes a pipeline.circuit_breaker_threshold_changed audit event with previous/new USD and the actor; an unchanged write records nothing; a reset writes pipeline.circuit_breaker_reset"
             - "[x] The pipeline circuit breaker is Community-tier: setting the threshold and the admin reset carry no plan feature gate (Modulo never paywalls basic safety); the reset stays behind the org-admin cost.manage permission (403 for operators and below)"
+            - "[x] Threshold changes follow one permission rule (FAR-1184): lowering the threshold or setting one where none existed needs only pipeline.update, while raising it or clearing an existing one requires cost.manage — a refused change returns 403 on REST (the MCP tools return a permission_denied result instead) and writes a pipeline.circuit_breaker_threshold_change_denied audit event (test_pipeline_circuit_breaker_threshold.py)"
             - "[x] The pipeline editor toolbar has a 'Monthly spend circuit breaker (USD)' field (empty = disabled) and shows a 'Circuit breaker tripped' badge with a Reset action rendered only for org admins (PipelineEditorViewCircuitBreaker.spec.ts)"
 
             # Org cost-controls auto-stop (FAR-1183)
@@ -5841,6 +5858,8 @@ features:
             - "[x] The delivery signal is agent-reported and honestly labelled (FAR-1336, renamed by FAR-1388): delivered_pr_urls are harvested from the run's own output (node structured return / telemetry value / FAR-188 raw-output markers) with a per-URL pr_url_provenance (declared vs matched, declared wins) and a delivery_confidence of agent_reported on every record today (verified reserved); rows stored before the FAR-1388 rename carry the deprecated self_reported alias, are never backfilled, and readers tolerate either spelling — additive metadata that never changes the verdict, forward-only over legacy six-key rows (readers treat an absent key as legacy/unknown)"
             # Node-deadline watchdog firing record (FAR-1463)
             - "[x] The node-deadline watchdog records each firing distinctly from terminal failures (FAR-1463): pipeline_execution._fail_overdue_node durably increments runs.node_deadline_watchdog_fired_count on its own connection BEFORE the shared retry consult, so BOTH the re-dispatch (which nulls error_code via the fenced pending-reset) and the terminal fail count; the marker survives the re-dispatch (neither the atomic claim nor the pending-reset names the column), a run that never dispatched a node reads 0, and error_code separates a genuine terminal failure from a firing — internal/analytics-only (never on RunResponse or the MCP run payloads), migration 0280 adds the NOT NULL DEFAULT 0 column and it is copied onto run_daily_facts at finalize so the analytics read never joins runs (ADR 020) (backend/src/modulo/core/pipeline_execution.py, backend/src/modulo/db/models/run.py, test_watchdog_firing_record_writer.py, test_pipeline_execution_watchdog_retry.py)"
+            # Archived / soft-deleted pipeline run refusal (FAR-1528)
+            - "[x] A run is refused for a pipeline that may not run (FAR-1528): create_run raises PipelineNotRunnableError when the pipeline is archived or soft-deleted, and every REST entry point that can reach it (manual trigger, rerun, test trigger, webhook, replay, slack, variant runs, feedback correction) maps the refusal to 409 Conflict through the shared pipeline_not_runnable_http helper naming the pipeline id and state — never a generic 500 — while the cron/polling/ongoing fire jobs handle the same refusal without crashing; a pipeline that does not exist is still refused upstream by the route's own 404 entry filter (backend/src/modulo/api/routes/runs.py, backend/src/modulo/core/exceptions.py, test_runs_endpoint.py, test_runs_rerun_endpoint.py, test_pipeline_state_gate_rls.py)"
     feat-runtime:
         description: Runtime configuration, rate limits, retention, sandbox concurrency, and the Runners page (D5)
         status: covered

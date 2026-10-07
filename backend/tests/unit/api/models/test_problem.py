@@ -73,6 +73,12 @@ def _body(resp: Any) -> Any:
         (ProblemType.SERVICE_UNAVAILABLE, 503, "Service Unavailable"),
         (ProblemType.GATEWAY_TIMEOUT, 504, "Gateway Timeout"),
         (ProblemType.INTERNAL_ERROR, 500, "Internal Error"),
+        (ProblemType.INVALID_TOKEN, 404, "Invalid Token"),
+        (ProblemType.TOKEN_MISMATCH, 400, "Token Mismatch"),
+        (ProblemType.ALREADY_CONFIGURED, 400, "Already Configured"),
+        (ProblemType.ENCRYPTION_CONFIG_ERROR, 500, "Encryption Not Configured"),
+        (ProblemType.ENCRYPTION_ERROR, 500, "Encryption Error"),
+        (ProblemType.UPDATE_FAILED, 500, "Update Failed"),
     ],
     ids=(
         "bad_request",
@@ -94,6 +100,12 @@ def _body(resp: Any) -> Any:
         "service_unavailable",
         "gateway_timeout",
         "internal_error",
+        "invalid_token",
+        "token_mismatch",
+        "already_configured",
+        "encryption_config_error",
+        "encryption_error",
+        "update_failed",
     ),
 )
 def test_problem_type_metadata(problem_type: ProblemType, expected_status: int, expected_title: str) -> None:
@@ -219,6 +231,82 @@ class TestProblemFromHttpException:
         problem = _problem_from_http_exception(None, 418, "teapot")
         assert problem.type == "urn:problem:modulo:internal_error"
         assert problem.status == 500
+
+    @pytest.mark.parametrize(
+        ("code", "status", "expected_type", "expected_title"),
+        [
+            ("invalid_token", 404, "invalid_token", "Invalid Token"),
+            ("token_mismatch", 400, "token_mismatch", "Token Mismatch"),
+            ("already_configured", 400, "already_configured", "Already Configured"),
+            ("encryption_config_error", 500, "encryption_config_error", "Encryption Not Configured"),
+            ("encryption_error", 500, "encryption_error", "Encryption Error"),
+            ("update_failed", 500, "update_failed", "Update Failed"),
+        ],
+        ids=(
+            "invalid_token",
+            "token_mismatch",
+            "already_configured",
+            "encryption_config_error",
+            "encryption_error",
+            "update_failed",
+        ),
+    )
+    def test_distinct_code_wins_over_status_derived_type(
+        self, code: str, status: int, expected_type: str, expected_title: str
+    ) -> None:
+        """FAR-1545: a code naming a distinct problem type overrides the
+        coarse status lookup, and the problem ``status`` stays identical to
+        the status the route raised (RFC 9457 §3.1.2). Without the override,
+        every 500 here collapsed to ``urn:problem:modulo:internal_error``."""
+        exc = HTTPException(  # type: ignore[arg-type]
+            status_code=status,
+            detail={"error": code, "detail": "boom"},
+        )
+        problem = problem_from_http_exception(_Request("rid"), exc)  # type: ignore[arg-type]
+        assert problem.code == code
+        assert problem.type == f"urn:problem:modulo:{expected_type}"
+        assert problem.title == expected_title
+        assert problem.status == status
+
+    def test_unknown_code_falls_back_to_status_derived_type(self) -> None:
+        """An unmapped code keeps the status-derived type while the ``code``
+        extension member is still preserved for the client."""
+        exc = HTTPException(  # type: ignore[arg-type]
+            status_code=503,
+            detail={"error": "brand_new_code", "detail": "later"},
+        )
+        problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
+        assert problem.type == "urn:problem:modulo:service_unavailable"
+        assert problem.status == 503
+        assert problem.code == "brand_new_code"
+
+    @pytest.mark.parametrize(
+        ("code", "status", "expected_type"),
+        [
+            ("backend_not_found", 404, "not_found"),
+            ("database_error", 503, "service_unavailable"),
+            ("conflict", 409, "conflict"),
+            ("migration_required", 501, "migration_required"),
+            ("internal_error", 500, "internal_error"),
+        ],
+        ids=(
+            "backend_not_found",
+            "database_error",
+            "conflict",
+            "migration_required",
+            "internal_error",
+        ),
+    )
+    def test_generic_codes_stay_status_derived(self, code: str, status: int, expected_type: str) -> None:
+        """RFC 9457 §4: no type is minted for a truly generic condition —
+        these codes resolve to exactly the status-derived type."""
+        exc = HTTPException(  # type: ignore[arg-type]
+            status_code=status,
+            detail={"error": code, "detail": "boom"},
+        )
+        problem = problem_from_http_exception(_Request(), exc)  # type: ignore[arg-type]
+        assert problem.type == f"urn:problem:modulo:{expected_type}"
+        assert problem.status == status
 
     def test_uses_request_id_from_request_state(self) -> None:
         problem = _problem_from_http_exception("rid-42", 404, "nope")
