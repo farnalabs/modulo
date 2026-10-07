@@ -85,14 +85,42 @@ _CODE_LIFECYCLE_MAPS_GET_JOURNEY = "lifecycle_maps.get_journey_endpoint"
 # to the USING expression) rejected the NEW row — here a team-ownership /
 # visibility transfer to a team the caller is not a member of. ``update`` now
 # validates the transition up front (``validate_team_transition_for_update``),
-# so this arm is the race backstop: the DB refusal is a permission denial, not a
-# database outage, and must never surface as 503 "Database temporarily
-# unavailable" (that was the FAR-1514 QA Major 2 finding).
+# so the mapping below is the race backstop: the DB refusal is a permission
+# denial, never a "database unavailable" 503 and never the 501 "migration
+# required" the ProgrammingError arm would otherwise report.
+#
+# WHICH ARM IT REACHES (FAR-1514 QA follow-up): asyncpg's
+# ``InsufficientPrivilegeError`` subclasses ``SyntaxOrAccessError``, which
+# SQLAlchemy's asyncpg dialect maps to ``ProgrammingError`` — so on the
+# production driver a genuine 42501 arrives at the ``except ProgrammingError``
+# arm, which PRECEDES the base ``SQLAlchemyError`` arm. Checking only the base
+# arm would have left the real denial reporting 501. Both arms consult
+# :func:`_raise_if_rls_denied`, so a driver that surfaces 42501 as a plain
+# DBAPI error is covered too.
 _RLS_WITH_CHECK_DENIED_SQLSTATE = "42501"
 _MSG_TEAM_POLICY_DENIED = "Not permitted to change this resource's team ownership or visibility."
 
 
 _log = logging.getLogger(__name__)
+
+
+def _raise_if_rls_denied(exc: SQLAlchemyError) -> None:
+    """Convert a real RLS WITH CHECK refusal (SQLSTATE 42501) into 403.
+
+    Returns normally for every other error so the caller's own arm continues
+    unchanged (``ProgrammingError`` -> 501, generic ``SQLAlchemyError`` ->
+    503); raises ``HTTPException(403)`` only for 42501, which is a permission
+    denial — the row's team ownership/visibility changed between the
+    pre-write validation and the write, so the policy refused the NEW row.
+    """
+    if sqlstate_of(exc) != _RLS_WITH_CHECK_DENIED_SQLSTATE:
+        return
+    _log.warning("%s.rls_with_check_denied", _CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_MSG_TEAM_POLICY_DENIED,
+    ) from exc
+
 
 router = APIRouter(prefix="/api/v1/lifecycle-maps", tags=["lifecycle_maps"])
 
@@ -838,6 +866,11 @@ async def update_lifecycle_map_endpoint(
     except LifecycleMapContentError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     except ProgrammingError as exc:
+        # FIRST: a real asyncpg RLS refusal (42501) is a ProgrammingError, so
+        # it must be recognised here — before the 501 "migration required"
+        # reply below would misreport a permission denial as a missing
+        # migration. Every other ProgrammingError keeps its 501 mapping.
+        _raise_if_rls_denied(exc)
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -851,16 +884,10 @@ async def update_lifecycle_map_endpoint(
         ) from exc
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "lifecycle_maps.update_lifecycle_map_endpoint")
-        if sqlstate_of(exc) == _RLS_WITH_CHECK_DENIED_SQLSTATE:
-            # Race backstop for the pre-write validation above: the row's team
-            # ownership/visibility changed between the gate and the write, so
-            # the RLS WITH CHECK refused the NEW row. That is a permission
-            # denial — never the 503 outage the generic arm reports.
-            _log.warning("%s.rls_with_check_denied", _CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=_MSG_TEAM_POLICY_DENIED,
-            ) from exc
+        # Dialect backstop: the same check for a driver that surfaces 42501
+        # as a plain DBAPI error rather than ProgrammingError (asyncpg maps it
+        # to ProgrammingError, which the arm above already handles).
+        _raise_if_rls_denied(exc)
         _log.exception(_CODE_LIFECYCLE_MAPS_UPDATE_LIFECYCLE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

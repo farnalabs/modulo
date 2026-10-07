@@ -1213,27 +1213,70 @@ def test_update_same_team_transfer_still_succeeds() -> None:
     assert resp.status_code == 200, resp.text
 
 
-def test_update_rls_with_check_denial_maps_to_403(client: tuple[TestClient, _Harness]) -> None:
-    """Race backstop: a 42501 that escapes the validator is still a 403.
+def _rls_denial(sqlstate: str = "42501") -> Exception:
+    """A driver error carrying ``sqlstate``, as asyncpg's does."""
 
-    The pre-write validator closes the common path; this arm covers the row
-    changing teams between the check and the write. Before it, the SQLSTATE
-    fell through to the generic 503 "Database temporarily unavailable".
+    class _DriverError(Exception):
+        pass
+
+    error = _DriverError("new row violates row-level security policy")
+    error.sqlstate = sqlstate  # type: ignore[attr-defined]
+    return error
+
+
+def test_update_real_rls_denial_programming_error_maps_to_403(client: tuple[TestClient, _Harness]) -> None:
+    """The REAL production path: asyncpg 42501 arrives as a ProgrammingError.
+
+    asyncpg's ``InsufficientPrivilegeError`` subclasses ``SyntaxOrAccessError``,
+    which SQLAlchemy's asyncpg dialect maps to ``ProgrammingError`` — and that
+    arm PRECEDES the base ``SQLAlchemyError`` arm, so checking only the latter
+    (the first shipped version of this test) reported 501 "migration required"
+    for a permission denial. The test builds the exception type production
+    actually raises, and must observe 403.
     """
-    from fastapi import HTTPException  # noqa: F401  (kept local: documents the arm under test)
-
     http, harness = client
     harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
 
-    class _DriverError(Exception):
-        sqlstate = "42501"
-
-    denial = DBAPIError("UPDATE lifecycle_maps", {}, _DriverError())
+    denial = ProgrammingError("UPDATE lifecycle_maps", {}, _rls_denial("42501"))
     harness.stub("update_lifecycle_map", AsyncMock(side_effect=denial))
 
     resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
 
     assert resp.status_code == 403, resp.text
+
+
+def test_update_rls_denial_on_the_base_sqlalchemy_arm_maps_to_403(client: tuple[TestClient, _Harness]) -> None:
+    """Dialect backstop: a 42501 surfaced as a plain DBAPI error is also 403.
+
+    A backend whose driver does NOT fold 42501 into ProgrammingError reaches
+    the ``except SQLAlchemyError`` arm; the same check runs there so the
+    denial is never reported as a 503 outage either.
+    """
+    http, harness = client
+    harness.stub("get_lifecycle_map", AsyncMock(return_value=_map_row()))
+
+    denial = DBAPIError("UPDATE lifecycle_maps", {}, _rls_denial("42501"))
+    harness.stub("update_lifecycle_map", AsyncMock(side_effect=denial))
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"owner_team_id": str(_OTHER_TEAM_ID)})
+
+    assert resp.status_code == 403, resp.text
+
+
+def test_update_non_42501_programming_error_still_maps_to_501(client: tuple[TestClient, _Harness]) -> None:
+    """The 42501 check must discriminate on the SQLSTATE, not the exception type.
+
+    A genuinely missing migration (``42P01`` undefined_table) still answers
+    501 "migration required" — only ``insufficient_privilege`` becomes 403.
+    """
+    http, harness = client
+    harness.stub(
+        "update_lifecycle_map", AsyncMock(side_effect=ProgrammingError("SELECT nope", {}, _rls_denial("42P01")))
+    )
+
+    resp = http.put(f"{_BASE}/{_MAP_ID}", json={"name": "Renamed"})
+
+    assert resp.status_code == 501, resp.text
 
 
 def test_update_generic_sqlalchemy_error_still_maps_to_503(client: tuple[TestClient, _Harness]) -> None:
