@@ -1236,6 +1236,95 @@ async def test_execute_publishes_run_completed_event():
     assert "run_completed" in published_types
 
 
+async def _execute_capturing_terminal_order(
+    final_row_status: str,
+) -> tuple[list[str], list[tuple[str, dict]], MagicMock]:
+    """Run ``execute`` and record the order of finalize_cost / publish / registry.close (FAR-1534)."""
+    run = _make_run()
+    run.status = final_row_status
+    snapshot = _make_snapshot()
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    compiled = _mock_compiled()
+    registry = _mock_registry()
+    broker = registry.get_or_create.return_value
+    order: list[str] = []
+    published: list[tuple[str, dict]] = []
+
+    async def _finalize(*_args, **_kwargs):
+        order.append("finalize_cost")
+
+    def _publish(event_type, payload):
+        order.append(f"publish:{event_type}")
+        published.append((event_type, payload))
+
+    broker.publish.side_effect = _publish
+    registry.close.side_effect = lambda _run_id: order.append("close")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={})
+    return order, published, registry
+
+
+async def test_execute_run_completed_is_published_after_finalize_commit():
+    """FAR-1534: a normal complete run publishes ONE bare run_completed, only after
+    finalize_cost committed, and the broker closes after the publish."""
+    order, published, registry = await _execute_capturing_terminal_order("complete")
+
+    assert [p for p in published if p[0] == "run_completed"] == [("run_completed", {})]
+    assert order.index("finalize_cost") < order.index("publish:run_completed") < order.index("close")
+    registry.close.assert_called_once()
+
+
+async def test_execute_downgraded_run_publishes_final_status_not_complete():
+    """FAR-1534: when finalize downgrades the would-be complete run (committed row
+    status ``rejected``), the SSE run_completed carries ``rejected``."""
+    order, published, _registry = await _execute_capturing_terminal_order("rejected")
+
+    assert [p for p in published if p[0] == "run_completed"] == [("run_completed", {"status": "rejected"})]
+    assert order.index("finalize_cost") < order.index("publish:run_completed")
+
+
+def test_publish_run_completed_reraises_cancelled_error():
+    """FAR-1534: cancellation during the best-effort publish must propagate so a
+    torn-down run is not reported as a silent success."""
+    registry = _mock_registry()
+    registry.get_or_create.return_value.publish.side_effect = asyncio.CancelledError()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        PipelineExecutor._publish_run_completed(uuid.uuid4(), "complete")
+
+
+def test_publish_run_completed_logs_and_swallows_publish_failure():
+    """FAR-1534: a broker that fails to publish must not abort finalization - the
+    failure is logged best-effort, never surfaced as a run failure."""
+    run_id = uuid.uuid4()
+    registry = _mock_registry()
+    registry.get_or_create.return_value.publish.side_effect = RuntimeError("broker down")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor._log") as log_mock,
+    ):
+        PipelineExecutor._publish_run_completed(run_id, "failed")
+
+    log_mock.exception.assert_called_once_with("pipeline.run_completed_publish_failed", extra={"run_id": str(run_id)})
+
+
 async def test_execute_publishes_run_stalled_when_node_output_carries_stall_reason():
     """A sandbox-agent node output carrying stall_reason publishes run_stalled
     so the run.stalled notification advertised by FAR-98 is actually reachable."""
