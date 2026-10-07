@@ -235,13 +235,51 @@ class DockerRuntimeProvider(RuntimeProvider):
         (deployment-identity / org / run correlation, ADR 029). This is
         separate from ``spec.labels`` (Env injection) and from
         ``repo_url``/``repo_ref`` (clone semantics, unused here).
+
+        FAR-1493: reserved identity keys are stamped AFTER applying operator
+        metadata and win outright (assignment, not ``setdefault``) — the
+        ordering mirror of ``KubernetesRuntimeProvider._build_metadata``
+        (FAR-1051). Identity is this provider's OWN fact, never caller input:
+        an operator-supplied ``workspace_metadata`` carrying
+        ``modulo.machine.id`` (hides the container from this deployment's
+        orphan sweep, which filters on it — two deployments sharing one
+        engine would never reclaim it) or ``modulo.created_at`` (a backdated
+        or future stamp defeats the 5-minute grace window AND the 24-hour
+        max-lifetime backstop, or marks the container forever-new) must never
+        re-stamp them — the reconciler's leak repair keys on exactly these
+        labels, so a shadowed value is a permanent orphan leak. Non-reserved
+        keys (``modulo.run.id`` / ``modulo.org.id`` / ``modulo.node.id``,
+        the egress allowlist, anything else the caller carries) still flow
+        through unchanged.
+
+        Cross-tier decision (FAR-1493): identity is provider-authoritative on
+        EVERY tier that carries an identity surface — Docker stamps the two
+        labels above; Kubernetes stamps ``modulo.provider`` /
+        ``modulo.created_at`` labels + ``modulo.provider`` /
+        ``modulo.machine.id`` annotations (both assigned after metadata).
+        NOTE the tiers disagree on ``modulo.provider``: the Kubernetes tier
+        reserves and stamps it (its list/destroy primitives select on it),
+        while this Docker tier has NEVER stamped a ``modulo.provider`` label
+        and nothing on the Docker side reads one — the reconciler's Docker
+        source filters on ``modulo.machine.id`` + ``modulo.run.id`` only.
+        The reserved set here is therefore unchanged (``setdefault`` ->
+        assignment for the two keys this provider actually stamps); the
+        discrepancy is reported, not silently reconciled. The E2B and Local
+        tiers carry NO such identity surface: E2B forwards
+        ``workspace_metadata`` as sandbox metadata (a passive tag carrier —
+        no provider-identity keys stamped, no reconciler filter reads them)
+        and Local ignores ``workspace_metadata`` entirely (host-process
+        workspaces carry no provider-side carrier), so no shadowing is
+        possible there and no change is needed.
         """
         workspace_labels = dict(spec.workspace_metadata or {})
-        # Deployment-identity label: machine-scoped reconciler filters ride
-        # on it (two deployments sharing one engine never destroy each
-        # other's workspaces). The creation marker drives reconciler ages.
-        workspace_labels.setdefault(_DEPLOYMENT_IDENTITY_LABEL, self._deployment_identity())
-        workspace_labels.setdefault("modulo.created_at", str(int(time.time())))
+        # Reserved identity labels — applied last, always authoritative
+        # (FAR-1493). The deployment-identity label scopes machine-scoped
+        # reconciler filters (two deployments sharing one engine never
+        # destroy each other's workspaces); the creation marker drives
+        # reconciler grace/max-lifetime ages.
+        workspace_labels[_DEPLOYMENT_IDENTITY_LABEL] = self._deployment_identity()
+        workspace_labels["modulo.created_at"] = str(int(time.time()))
         return workspace_labels
 
     def _resolve_network_mode(self, spec: WorkspaceSpec) -> str:
