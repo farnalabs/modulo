@@ -3515,8 +3515,7 @@ async def _set_pipeline_run_state(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=(
                         "pipeline_circuit_breaker_tripped: the spend circuit breaker is tripped; "
-                        "reset it first (POST /api/v1/admin/costs/circuit-breaker/"
-                        f"{pipeline_id}/reset) before resuming"
+                        "reset the pipeline's spend circuit breaker first, then resume"
                     ),
                 )
             toggle = resume_pipeline if resume else pause_pipeline
