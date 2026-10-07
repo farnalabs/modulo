@@ -832,6 +832,58 @@ describe('PipelineListView', () => {
     expect(badge.find('.sr-only').text()).toContain('circuit breaker')
   })
 
+  // FAR-1530: a failed pause/resume must surface the API error in the list's
+  // error banner (the same `error` ref the initial load uses), not be swallowed.
+  it('shows the error banner when pausing fails', async () => {
+    const running = { id: 'p1', organisation_id: 'org1', name: 'Pause Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: true }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [running], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, running)
+    await nextTick()
+
+    postMock.mockRejectedValueOnce(new Error('Pause failed'))
+    vm.actionMenuItems.find(i => i.label === 'Pause')!.command()
+    await flushPromises()
+
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Pause failed')
+    wrapper.unmount()
+  })
+
+  it('shows the error banner when resuming fails', async () => {
+    const paused = { id: 'p1', organisation_id: 'org1', name: 'Resume Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', archived_at: null, run_enabled: false, run_disabled_reason: 'operator' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [paused], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { ErrorAlert: true, FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openActionMenu: (e: MouseEvent, p: unknown) => void; actionMenuItems: Array<{ label: string; command: () => void }> }
+    vm.openActionMenu({} as MouseEvent, paused)
+    await nextTick()
+
+    postMock.mockRejectedValueOnce(new Error('Resume failed'))
+    vm.actionMenuItems.find(i => i.label === 'Resume')!.command()
+    await flushPromises()
+
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Resume failed')
+    wrapper.unmount()
+  })
+
   it('deletes a pipeline via the action menu when the delete feature is enabled', async () => {
     const plan = usePlanStore()
     plan.features.pipeline_delete = true

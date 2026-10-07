@@ -176,4 +176,36 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
     expect(wrapper.find('[data-testid="pipeline-editor-unarchive"]').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  // FAR-1530: pause/resume are in-place toggles, so a failed toggle must
+  // surface through the inline toolbar error (saveGraphError) rather than
+  // replacing the whole editor via pageError — the open graph must survive.
+  it('reports a failed pause through the inline toolbar error', async () => {
+    const wrapper = await mountEditor()
+
+    postMock.mockRejectedValueOnce(new Error('Pause failed'))
+    await wrapper.find(PAUSE).trigger('click')
+    await flushPromises()
+
+    const errorEl = wrapper.find('[data-testid="pipeline-editor-save-error"]')
+    expect(errorEl.exists()).toBe(true)
+    expect(errorEl.text()).toContain('Failed to pause pipeline')
+    expect(errorEl.text()).toContain('Pause failed')
+    wrapper.unmount()
+  })
+
+  it('reports a failed resume through the inline toolbar error', async () => {
+    state.pipeline = { ...state.pipeline, run_enabled: false, run_disabled_reason: 'operator' }
+    const wrapper = await mountEditor()
+
+    postMock.mockRejectedValueOnce(new Error('Resume failed'))
+    await wrapper.find(RESUME).trigger('click')
+    await flushPromises()
+
+    const errorEl = wrapper.find('[data-testid="pipeline-editor-save-error"]')
+    expect(errorEl.exists()).toBe(true)
+    expect(errorEl.text()).toContain('Failed to resume pipeline')
+    expect(errorEl.text()).toContain('Resume failed')
+    wrapper.unmount()
+  })
 })
