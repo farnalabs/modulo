@@ -30,6 +30,9 @@ class TestGetOrCreateEngine:
         settings = MagicMock()
         settings.modulo_db = "postgres"
         settings.database_url = "postgresql+asyncpg://u:p@localhost/db"
+        # FAR-1524: pool_recycle is settings-driven (db_pool_recycle_seconds),
+        # default 1500s — below the Fly HAProxy 30m session window.
+        settings.db_pool_recycle_seconds = 1500
 
         with (
             patch("modulo.db.session.get_settings", return_value=settings),
@@ -41,7 +44,8 @@ class TestGetOrCreateEngine:
             assert kw["pool_pre_ping"] is True
             assert kw["pool_size"] == 20
             assert kw["max_overflow"] == 10
-            assert kw["pool_recycle"] == 3600
+            assert kw["pool_recycle"] == 1500
+            assert kw["pool_recycle"] < 1800  # FAR-1524: under the HAProxy 30m window
             assert kw["pool_timeout"] == 30
             assert kw["connect_args"]["timeout"] == 10
 

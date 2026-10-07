@@ -290,6 +290,27 @@ class Settings(BaseSettings):
     # "mariadb" / "mysql" use the aiomysql driver.
     modulo_db: str = Field("postgres")
 
+    # FAR-1524: pool_recycle age for the shared async engine's pooled
+    # connections (env DB_POOL_RECYCLE_SECONDS). MUST stay STRICTLY BELOW the
+    # Fly HAProxy session inactivity window in front of Postgres —
+    # ``timeout client 30m`` (1800s) in the DB machine's /fly/haproxy.cfg.
+    # A pooled connection older than that window is silently closed by the
+    # proxy while it sits in the pool: pool_pre_ping masks the death at
+    # checkout, but every death costs a reconnect round-trip, and a
+    # connection checked out across the window (held quiet through a long
+    # node execution or a blocked statement) is killed WHILE IN USE —
+    # surfacing as ``asyncpg.ConnectionDoesNotExistError: connection was
+    # closed in the middle of operation`` (71 prod run failures in 30 days,
+    # clustered in run-heavy windows; investigation:
+    # docs/operations/far-1524-pg-connection-drops.md). The previous
+    # hardcoded 3600s (60m) EXCEEDED the proxy window — that mismatch is
+    # this field's reason to exist. Default 1500s (25m) leaves a 5m margin;
+    # ``lt=1800``/``ge=60`` enforce the invariant structurally at Settings
+    # load (fail-fast), so no operator can reintroduce a value that lets a
+    # pooled connection outlive the proxy window. ``pool_pre_ping`` in
+    # db/session.py remains the checkout-time safety net on top of this.
+    db_pool_recycle_seconds: int = Field(default=1500, alias="DB_POOL_RECYCLE_SECONDS", ge=60, lt=1800)
+
     modulo_ratelimit_bypass_token: str = Field("")
 
     modulo_max_local_concurrency: int = Field(2)
