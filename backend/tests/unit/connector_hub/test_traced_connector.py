@@ -564,3 +564,18 @@ async def test_dispatch_methods_are_acl_gated(
     else:
         await getattr(traced, method_name)(**kwargs)
         assert [name for name, _call in inner.calls] == [method_name]
+
+
+async def test_list_runs_without_a_pipeline_id_omits_the_pipeline_span_attr(
+    tracer, exporter: InMemorySpanExporter
+) -> None:
+    """An unfiltered list carries no ``connector.pipeline_id`` attribute."""
+    inner = _FakeCIRunner()
+    traced = _TracedConnector(inner, tracer=tracer)
+
+    await traced.list_runs()
+
+    assert inner.calls == [("list_runs", {"pipeline_id": None, "status": None, "limit": 20})]
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert "connector.pipeline_id" not in span.attributes

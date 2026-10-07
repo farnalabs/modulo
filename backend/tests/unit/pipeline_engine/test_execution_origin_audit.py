@@ -28,12 +28,14 @@ No DB: the session and run rows are in-memory stand-ins.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine.executor import PipelineExecutor
@@ -178,3 +180,47 @@ class TestEvalBlockedExecutionOrigin:
         assert payload["pipeline_id"] == str(_PIPELINE_ID)
         assert payload["actor"] is not None
         assert payload["summary"] is not None
+
+
+class TestEvalBlockedOriginReadFailure:
+    """The origin read is best-effort: a read failure degrades to NULL and must
+    NEVER suppress the audit event; a cancellation must still propagate."""
+
+    async def test_a_read_failure_degrades_to_null_and_still_audits(self) -> None:
+        executor = _executor_with_session(_mock_session())
+        with (
+            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch(
+                "modulo.core.pipeline_engine.executor.get_run",
+                new=AsyncMock(side_effect=RuntimeError("origin row read failed")),
+            ),
+            patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()) as audit,
+        ):
+            await executor._record_eval_blocked_audit(
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                pipeline_id=_PIPELINE_ID,
+                error_detail="score 0.3 below threshold 0.8",
+            )
+        assert audit.await_count == 1, "a failed origin read must not suppress the audit event"
+        assert audit.await_args.kwargs["payload_json"]["execution_origin"] is None
+
+    async def test_a_cancelled_origin_read_propagates(self) -> None:
+        executor = _executor_with_session(_mock_session())
+        with (
+            patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+            patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+            patch(
+                "modulo.core.pipeline_engine.executor.get_run",
+                new=AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            patch("modulo.core.pipeline_engine.executor.append_audit_event", new=AsyncMock()),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await executor._record_eval_blocked_audit(
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                pipeline_id=_PIPELINE_ID,
+                error_detail="score 0.3 below threshold 0.8",
+            )

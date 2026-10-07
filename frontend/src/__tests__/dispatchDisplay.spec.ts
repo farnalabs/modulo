@@ -157,3 +157,42 @@ describe('PipelineEditorView dispatch node-type recognition', () => {
     wrapper.unmount()
   })
 })
+
+describe('PipelineEditorView dispatch canvas template (FAR-1141)', () => {
+  it('renders the dispatch label, falling back to the generic dispatch label', async () => {
+    // The VueFlow stub renders the `#node-dispatch` scoped slot with a label
+    // present and absent, exercising both arms of the `label || $t(...)`.
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = usePlanStore()
+    store.currentTier = 'team'
+    store.features = { pipeline_delete: true, pipeline_diff_rollback: true }
+    const wrapper = mount(PipelineEditorView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          VueFlow: {
+            name: 'VueFlow',
+            props: ['nodes', 'edges'],
+            template: `<div>
+              <slot name="node-dispatch" :id="'d1'" :data="{ label: 'Fire job', description: '' }" />
+              <slot name="node-dispatch" :id="'d2'" :data="{ label: '', description: '' }" />
+            </div>`,
+          },
+          Background: true,
+          Controls: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('Fire job')
+    // the empty-label arm falls back to the locale label
+    expect(text).toContain('Dispatch')
+
+    wrapper.unmount()
+  })
+})

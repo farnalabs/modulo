@@ -35,10 +35,13 @@ import pytest
 import modulo.core.pipeline_engine.node_runner as nr
 from modulo.connectors.base import (
     CIRun,
+    CIRunLog,
     CIRunStatus,
     ConnectorPermissionError,
     connector_binding_operation,
+    connector_type_supports_dispatch,
     node_fires_dispatch_job,
+    node_routes_binding_to_connector,
 )
 from modulo.core.node_output_split import DISPATCH_PROVENANCE_FIELDS, split_node_output
 from modulo.core.pipeline_engine.decorator import set_connector_hub
@@ -908,3 +911,136 @@ async def test_list_runs_node_output_carries_provenance():
     assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
     assert output["execution_identity"] == "customer_substrate"
     assert output["declared_external_cost"] is None
+
+
+# ---------------------------------------------------------------------------
+# Coverage sweep: the dispatch helpers' remaining branch / error paths
+# ---------------------------------------------------------------------------
+
+
+def test_connector_type_supports_dispatch_is_false_for_a_blank_type():
+    """An empty / missing type id is fail-closed, never guessed."""
+    assert connector_type_supports_dispatch("") is False
+    assert connector_type_supports_dispatch(None) is False
+
+
+def test_node_routes_binding_to_connector_is_false_for_a_non_dict_node():
+    assert node_routes_binding_to_connector("not-a-node") is False
+
+
+def test_connector_binding_operation_defaults_to_query_for_a_non_dict_node():
+    assert connector_binding_operation("not-a-node") == "query"
+
+
+def test_a_network_transport_error_is_transient():
+    """A connect/read failure (and the builtin ``ConnectionError``) is retryable;
+    only HTTP 4xx and contract faults are permanent."""
+    assert nr._is_transient_dispatch_poll_error(httpx.ConnectError("dns failure")) is True
+    assert nr._is_transient_dispatch_poll_error(ConnectionError("connection reset")) is True
+
+
+def test_wait_timeout_rejects_a_non_numeric_value():
+    with pytest.raises(ValueError, match="must be a number"):
+        nr._resolve_dispatch_wait_timeout("soon", None, "n1")
+
+
+def test_wait_timeout_rejects_a_bool():
+    """``bool`` is an ``int`` subclass — a True/False window is meaningless."""
+    with pytest.raises(ValueError, match="must be a number"):
+        nr._resolve_dispatch_wait_timeout(True, None, "n1")
+
+
+async def test_await_completion_requires_a_run_id():
+    with pytest.raises(ValueError, match="requires a run id"):
+        await nr._await_dispatch_terminal(_PollConnector(), {}, wait_timeout=1)
+
+
+class _RawStatusConnector:
+    """``get_run_status`` returns a canned object verbatim (no CIRun shaping)."""
+
+    def __init__(self, payload: Any) -> None:
+        self._payload = payload
+
+    async def get_run_status(self, run_id: str) -> Any:
+        return self._payload
+
+
+async def test_a_non_dict_status_result_fails_loud():
+    """A contract breach (a non-dict status result) is surfaced, never read."""
+    with pytest.raises(ValueError, match="non-dict result"):
+        await nr._await_dispatch_terminal(_RawStatusConnector("oops"), {"id": "job-1"}, wait_timeout=1)
+
+
+async def test_an_unknown_substrate_status_fails_loud():
+    with pytest.raises(ValueError, match="Unknown substrate status"):
+        await nr._await_dispatch_terminal(
+            _RawStatusConnector({"status": "teleporting"}),
+            {"id": "job-1"},
+            wait_timeout=1,
+        )
+
+
+class _DispatchVerbStub:
+    """Records each CI-runner verb call and returns a shape-valid result."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def trigger_run(
+        self, pipeline_id: str = "", branch: str = "", variables: dict[str, str] | None = None
+    ) -> Any:
+        self.calls.append(("trigger_run", pipeline_id, branch, variables))
+        return CIRun(id="r-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
+
+    async def get_run_status(self, run_id: str) -> Any:
+        self.calls.append(("get_run_status", run_id))
+        return CIRun(id=run_id, pipeline_id="p", status=CIRunStatus.SUCCESS)
+
+    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> Any:
+        self.calls.append(("get_run_logs", run_id, cursor))
+        return CIRunLog(run_id=run_id, lines=["line"])
+
+    async def list_runs(self, pipeline_id: str | None = None, status: Any = None, limit: int = 20) -> Any:
+        self.calls.append(("list_runs", pipeline_id, status, limit))
+        return [CIRun(id="r-1", pipeline_id=pipeline_id or "p", status=CIRunStatus.SUCCESS)]
+
+
+async def test_dispatch_get_run_status_requires_a_run_id():
+    with pytest.raises(ValueError, match="get_run_status requires a 'run_id' input"):
+        await nr._run_connector_dispatch(_DispatchVerbStub(), "", {}, {}, "get_run_status")
+
+
+async def test_dispatch_get_run_logs_routes_and_requires_a_run_id():
+    stub = _DispatchVerbStub()
+    result = await nr._run_connector_dispatch(stub, "", {}, {"run_id": "r-1", "cursor": "c-1"}, "get_run_logs")
+    assert result["run_id"] == "r-1"
+    assert result["lines"] == ["line"]
+    assert stub.calls == [("get_run_logs", "r-1", "c-1")]
+    with pytest.raises(ValueError, match="get_run_logs requires a 'run_id' input"):
+        await nr._run_connector_dispatch(stub, "", {}, {}, "get_run_logs")
+
+
+async def test_dispatch_list_runs_normalises_status_forms():
+    stub = _DispatchVerbStub()
+    await nr._run_connector_dispatch(stub, "", {}, {"status": "success"}, "list_runs")
+    assert stub.calls[0][2] is CIRunStatus.SUCCESS
+    stub.calls.clear()
+    await nr._run_connector_dispatch(stub, "", {}, {"status": CIRunStatus.FAILURE}, "list_runs")
+    assert stub.calls[0][2] is CIRunStatus.FAILURE
+    stub.calls.clear()
+    await nr._run_connector_dispatch(stub, "", {}, {"status": ""}, "list_runs")
+    assert stub.calls[0][2] is None
+
+
+def test_stamp_dispatch_provenance_without_status_omits_substrate_status():
+    stamped = nr._stamp_dispatch_provenance({"id": "job-1"}, "inst-1")
+    assert "substrate_status" not in stamped
+    assert stamped["witnessed_via"] == "inst-1"
+    assert stamped["execution_identity"] == "customer_substrate"
+
+
+def test_failed_dispatch_envelope_without_provenance_keys_is_still_valid():
+    envelope = nr._dispatch_trigger_failure_envelope("n1", {"status": "failure"})
+    assert envelope is not None
+    assert envelope["artifacts"][0]["error"] == "failure"
+    assert envelope["output"] == {"status": "failure"}

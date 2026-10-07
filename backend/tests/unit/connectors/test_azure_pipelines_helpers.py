@@ -38,6 +38,13 @@ def test_split_run_id_invalid_raises():
         c._split_run_id("/")
 
 
+def test_split_run_id_empty_run_identifier_raises():
+    """``pipeline/`` parses a pipeline but an empty run id — still invalid."""
+    c = _connector()
+    with pytest.raises(ValueError, match="Invalid run_id format"):
+        c._split_run_id("pipeline/")
+
+
 async def test_append_log_content_ok():
     c = _connector()
     client = AsyncMock()

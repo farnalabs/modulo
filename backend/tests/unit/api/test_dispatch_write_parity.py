@@ -414,3 +414,50 @@ def test_each_write_surface_calls_the_shared_resolver_for_the_default():
         assert "connector_binding_operation(" in source, (
             f"{path} must derive the operation default from the shared resolver, not a local rule"
         )
+
+
+# ---------------------------------------------------------------------------
+# MAJOR 8 — the instance-level capability check SKIPS unreadable shapes
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchCapabilityCheckSkips:
+    """A graph we cannot read, a node without a binding, an unparseable instance
+    id and an unresolved instance are all SKIPPED — never guessed at, and never
+    a crash. The ordinary binding checks report those shapes."""
+
+    def _run(self, graph_json: Any, found: dict[uuid.UUID, Any] | None = None) -> Any:
+        from modulo.core.graph_validator._types import ValidationResult
+
+        result = ValidationResult()
+        GraphValidator._check_dispatch_binding_capabilities(graph_json, found or {}, result)
+        return result
+
+    def test_a_non_dict_graph_is_skipped(self) -> None:
+        for graph in (None, [], "nope", 42):
+            assert not self._run(graph).issues
+
+    def test_nodes_not_a_list_is_skipped(self) -> None:
+        assert not self._run({"nodes": "nope"}).issues
+
+    def test_a_dispatch_node_without_a_binding_is_skipped(self) -> None:
+        result = self._run({"nodes": [{"id": "n1", "node_type": "dispatch"}]})
+        assert not any(i.code == "CONNECTOR_DISPATCH_UNSUPPORTED" for i in result.issues)
+
+    def test_a_dispatch_node_with_an_unparseable_instance_id_is_skipped(self) -> None:
+        node = {
+            "id": "n1",
+            "node_type": "dispatch",
+            "connector_binding": {"operation": "dispatch", "instance_id": "not-a-uuid"},
+        }
+        result = self._run({"nodes": [node]})
+        assert not any(i.code == "CONNECTOR_DISPATCH_UNSUPPORTED" for i in result.issues)
+
+    def test_a_dispatch_node_whose_instance_is_not_found_is_skipped(self) -> None:
+        node = {
+            "id": "n1",
+            "node_type": "dispatch",
+            "connector_binding": {"operation": "dispatch", "instance_id": str(uuid.uuid4())},
+        }
+        result = self._run({"nodes": [node]})
+        assert not any(i.code == "CONNECTOR_DISPATCH_UNSUPPORTED" for i in result.issues)

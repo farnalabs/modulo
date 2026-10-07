@@ -269,6 +269,20 @@ def test_split_dispatch_failure_preserves_witness_provenance() -> None:
     assert "output" not in telemetry
 
 
+def test_split_dispatch_failure_without_provenance_keys_is_a_noop() -> None:
+    """A failed output carrying NO provenance keys must not raise while the
+    splitter lifts the declared set — every key is simply absent."""
+    envelope = {
+        "artifacts": [{"node_id": "d1", "status": "failed", "error": "boom"}],
+        "output": {"foo": 1},
+    }
+    value, telemetry = split_node_output(envelope, "dispatch", None)
+    assert value is None
+    assert telemetry["status"] == "failed"
+    assert telemetry["error"] == "boom"
+    assert "output" not in telemetry
+
+
 # ---------------------------------------------------------------------------
 # split_node_output -- HITL gate (incl. pinned deliver_manual)
 # ---------------------------------------------------------------------------

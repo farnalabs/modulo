@@ -1042,6 +1042,34 @@ class TestApplyNodeConnectorBinding:
         # rejected BEFORE anything is persisted - no coerced "query" survives.
         assert "connector_binding" not in nodes[0]
 
+    def test_bind_rejects_an_unknown_operation_value(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github", "conn-1", operation="bogus")
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "operation"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_rejects_an_unknown_dispatch_action_value(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "github_actions_ci",
+            "conn-1",
+            operation="dispatch",
+            dispatch_action="bogus",
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "dispatch_action"
+        assert "connector_binding" not in nodes[0]
+
     def test_bind_still_accepts_a_query_verb_on_a_non_routed_node(self) -> None:
         """The rejection is scoped to ``dispatch``: ``query``/``write`` on the
         same shapes stay valid (the convert-to-agent endpoint persists one)."""
@@ -1142,6 +1170,32 @@ class TestRejectUnsupportedDispatchBindings:
         cid = uuid.uuid4()
         nodes = _dispatch_graph(cid, "github_actions_ci")
         session = _session_returning_instances([])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
+    async def test_malformed_and_bindingless_nodes_are_skipped(self) -> None:
+        """A binding-less dispatch node, a non-dispatch node and a dispatch node
+        with an unparseable instance id are all skipped on BOTH passes — they
+        are the ordinary binding checks' business, never a guessed rejection."""
+        cid = uuid.uuid4()
+        nodes = [
+            _dispatch_graph(cid, "github_actions_ci")[0],
+            {"id": str(uuid.uuid4()), "node_type": "dispatch"},
+            {"id": str(uuid.uuid4()), "node_type": "agent"},
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "dispatch",
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": "not-a-uuid",
+                    "operation": "dispatch",
+                    "dispatch_action": "trigger_run",
+                },
+            },
+        ]
+        session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
 
         err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
 

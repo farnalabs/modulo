@@ -705,3 +705,43 @@ async def test_double_list_runs(jenkins_double):
     runs = await jenkins_double.list_runs(pipeline_id="my-job")
     assert len(runs) == 1
     assert runs[0].status == CIRunStatus.SUCCESS
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 security sweep: remaining fail-loud branches
+# ---------------------------------------------------------------------------
+
+
+def test_reject_unsafe_job_name_rejects_a_non_string():
+    """A dict/list/None job name (Any-typed filter/payload) is refused — never
+    f-stringed into a credentialed path."""
+    from modulo.connectors.jenkins import _reject_unsafe_job_name
+
+    with pytest.raises(ValueError, match="is not a string job path"):
+        _reject_unsafe_job_name(None, "run id")  # type: ignore[arg-type]
+
+
+async def test_queue_executable_404_fails_loud(jenkins):
+    """An evicted queue item (404) fails loud instead of polling a dead id."""
+    from unittest.mock import AsyncMock
+
+    client = AsyncMock()
+    client.get.return_value = httpx.Response(
+        404, request=httpx.Request("GET", f"{_JENKINS_BASE}/queue/item/7/api/json")
+    )
+    with pytest.raises(ValueError, match="no longer exists"):
+        await jenkins._queue_executable(client, "7", "my-job/queue/7")
+
+
+async def test_queue_executable_non_object_body_fails_loud(jenkins):
+    """A non-object JSON body cannot resolve a build — fail loud, never guess."""
+    from unittest.mock import AsyncMock
+
+    client = AsyncMock()
+    client.get.return_value = httpx.Response(
+        200,
+        json="not-an-object",
+        request=httpx.Request("GET", f"{_JENKINS_BASE}/queue/item/7/api/json"),
+    )
+    with pytest.raises(ValueError, match="non-object body"):
+        await jenkins._queue_executable(client, "7", "my-job/queue/7")
