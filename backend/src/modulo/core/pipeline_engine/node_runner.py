@@ -6272,7 +6272,7 @@ async def _await_dispatch_terminal(
             raise ValueError(
                 f"dispatch get_run_status returned a non-dict result for run {run_id!r}: {type(state).__name__}",
             )
-        last_status = str(state.get("status", ""))
+        last_status = str(state.get("status") or "")
         outcome = DISPATCH_STATUS_OUTCOME_MAP.get(last_status)
         if outcome is None:
             raise ValueError(
@@ -6722,7 +6722,7 @@ def make_connector_fn(
     """
     node_id: str = str(node_def["id"])
     binding = node_def.get("connector_binding") or {}
-    node_type: str = str(node_def.get("node_type", "agent"))
+    node_type: str = str(node_def.get("node_type") or "agent")
     # FAR-1141: the verb comes from the ONE shared resolver
     # (``graph_validator.connector_binding_operation``) — the engine's route,
     # the run's ``execution_origin`` classification and the executor's
