@@ -1,6 +1,6 @@
 """Tests for the admin system config API."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -27,6 +27,15 @@ REGULAR_ADMIN = AuthenticatedPrincipal(
     account_id=uuid4(),
     org_role="admin",
     is_system_admin=False,
+)
+#: A system-admin JWT carrying NO organisation claim — the system-wide admin
+#: shape the ``require_system_permission`` routes are built for.
+ORG_LESS_SYSTEM_ADMIN = AuthenticatedPrincipal(
+    username="sysadmin-no-org@test",
+    organisation_id=None,
+    account_id=uuid4(),
+    org_role="admin",
+    is_system_admin=True,
 )
 
 
@@ -72,6 +81,22 @@ def client_regular_admin(mock_session):
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[get_db_session] = lambda: mock_session
     app.dependency_overrides[get_current_user] = lambda: REGULAR_ADMIN
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://test")
+    yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def client_org_less_sys_admin(mock_session):
+    """System admin whose JWT carries no organisation claim at all."""
+    from modulo.api.main import app
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    app.dependency_overrides[get_current_user] = lambda: ORG_LESS_SYSTEM_ADMIN
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     yield client
@@ -227,3 +252,53 @@ class TestAdminDeleteConfig:
         mock_session.execute.side_effect = ProgrammingError("", "", "")
         resp = await client_sys_admin.delete("/api/v1/system-admin/config/some_key")
         assert resp.status_code == 501
+
+
+class TestAuditWrapperNeverGatesAccess:
+    """FAR-1538 residual: ``audited(...)`` must never be an access gate.
+
+    The ``audited(...)`` principal resolver is solved BEFORE the route's own
+    ``require_system_permission`` check (route-level dependencies are solved
+    first), so a resolver that refuses a principal the route would admit turns
+    the audit wrapper into an incidental access gate. These system-wide routes
+    are reachable by a system admin whose JWT carries NO organisation claim —
+    the audit principal must not be the thing that stops them, and the event it
+    records must land in the instance partition rather than a tenant's org.
+    """
+
+    @pytest.mark.anyio
+    async def test_org_less_system_admin_reaches_the_route_and_is_audited(
+        self,
+        client_org_less_sys_admin,
+        mock_session,
+    ) -> None:
+        from modulo.db.models.organisation import SYSTEM_ORG_ID
+        from modulo.db.models.system_config import SystemConfig
+
+        mock_session.execute.return_value.scalar_one_or_none.return_value = None
+        mock_session.execute.return_value.scalar_one.return_value = SystemConfig(key="my_key", value="my_value")
+        captured = AsyncMock()
+        with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+            resp = await client_org_less_sys_admin.put(
+                "/api/v1/system-admin/config/my_key",
+                json={"value": "my_value"},
+            )
+        assert resp.status_code == 200, resp.text
+        assert captured.await_count == 1, "the audit wrapper must still record the event"
+        recorded_for = captured.call_args.args[1]
+        # No org anywhere: the honest home for the event is the instance
+        # partition (SYSTEM_ORG_ID), never a tenant's organisation.
+        assert recorded_for.organisation_id == SYSTEM_ORG_ID
+        assert recorded_for.account_id == ORG_LESS_SYSTEM_ADMIN.account_id
+        assert captured.call_args.kwargs["event_type"] == "system_config_updated"
+
+    @pytest.mark.anyio
+    async def test_non_system_admin_is_refused_by_the_route_gate(self, client_regular_admin) -> None:
+        resp = await client_regular_admin.put(
+            "/api/v1/system-admin/config/my_key",
+            json={"value": "my_value"},
+        )
+        assert resp.status_code == 403
+        # The refusal must come from the route's own permission check, not
+        # from the audit dependency (which resolves the org from the claim).
+        assert "requires system admin role" in resp.text

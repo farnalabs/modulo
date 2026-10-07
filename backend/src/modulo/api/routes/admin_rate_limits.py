@@ -3,9 +3,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from modulo.api.dependencies import require_feature, require_system_permission
+from modulo.api.dependencies import require_feature, require_system_permission, resolve_audit_principal
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware, redis_available
-from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.rate_limiter import RateLimitRule
@@ -53,7 +52,7 @@ async def get_rate_limits(
 @router.put(
     "",
     dependencies=[
-        Depends(audited("rate_limits_updated", "organisation", principal_dep=get_current_tenant_user)),
+        Depends(audited("rate_limits_updated", "organisation", principal_dep=resolve_audit_principal)),
         require_feature("rate_limits"),
     ],
 )

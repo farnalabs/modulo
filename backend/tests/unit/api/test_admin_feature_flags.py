@@ -811,12 +811,16 @@ class TestOrgOverrideOrgIdGuard:
             else:
                 resp = no_org_client.delete(url)
             assert resp.status_code == 403, (method, resp.status_code, resp.text)
-            # The mutating routes carry audited(..., principal_dep=
-            # get_current_tenant_user), so a principal with no organisation is
-            # refused by that dependency ("Organisation membership required")
-            # before the route's own guard runs; the un-annotated GET still
-            # reports the route guard's message ("Organisation ID required").
-            # Both are the same 403 org refusal - only the detail differs.
+            # The refusal comes from the ROUTE's own org-id guard
+            # (``_apply_org_flag_override`` / the handler's explicit check),
+            # not from the audit dependency. It used to be the other way
+            # round: ``audited(..., principal_dep=get_current_tenant_user)``
+            # is solved before the handler and refused any principal without
+            # an organisation ("Organisation membership required"), i.e. the
+            # audit wrapper acted as an incidental access gate. The principal
+            # now resolves without refusing (FAR-1538), so these 403s are the
+            # real gate. The un-annotated GET raises the same guard's message.
+            # Both are the same 403 org refusal - only the layer differs.
             assert "Organisation" in resp.text
 
 
