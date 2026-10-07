@@ -176,6 +176,90 @@ async def test_get_run_status_invalid_id_fails_loud():
         await connector.get_run_status("bare42")
 
 
+# ---------------------------------------------------------------------------
+# FAR-1141 (security): run-id job_name path traversal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "run_id",
+    [
+        # `..` escapes /job/ once httpx normalises the path — the credentialed
+        # request lands on a completely different Jenkins endpoint.
+        "job/../../computer/api/json/1",
+        "my-job/../../admin/1",
+        # a '.' segment silently rewrites the path too.
+        "my-job/./config/1",
+        # double slash / trailing slash produce empty segments.
+        "my-job//42",
+        # off-allowlist characters: percent-escape traversal, query/fragment
+        # separators, backslash, and scheme-shaped ':'.
+        "%2e%2e/secret/1",
+        "my-job%2f../x/1",
+        "my-job?x=/1",
+        "my-job#frag/1",
+        "my-job\\..\\x/1",
+        "http://evil.example.com/1",
+    ],
+    ids=[
+        "dotdot-escape",
+        "dotdot-mid-path",
+        "single-dot-segment",
+        "empty-segment",
+        "percent-encoded-traversal",
+        "percent-encoded-slash",
+        "query-separator",
+        "fragment-separator",
+        "backslash-separator",
+        "scheme-shaped",
+    ],
+)
+def test_split_build_run_id_rejects_unsafe_job_names(run_id: str):
+    """Unsafe job-name segments/characters are refused at parse time."""
+    from modulo.connectors.jenkins import _split_build_run_id
+
+    with pytest.raises(ValueError, match=r"Unsafe job name|Invalid run_id format"):
+        _split_build_run_id(run_id)
+
+
+@pytest.mark.parametrize(
+    ("run_id", "job_name", "build_number"),
+    [
+        ("my-job/42", "my-job", "42"),
+        # folder-nested jobs are a legitimate Jenkins path shape.
+        ("folder/job/my-job/42", "folder/job/my-job", "42"),
+        ("my job/7", "my job", "7"),
+        ("my-job-v2/12", "my-job-v2", "12"),
+    ],
+)
+def test_split_build_run_id_accepts_safe_job_names(run_id: str, job_name: str, build_number: str):
+    from modulo.connectors.jenkins import _split_build_run_id
+
+    assert _split_build_run_id(run_id) == (job_name, build_number)
+
+
+async def test_traversal_run_id_is_rejected_before_any_http_call():
+    """The rejection must fire at parse time: no request is issued, so the
+    traversal can never reach the Jenkins host with credentials attached."""
+    connector = JenkinsConnector(username="admin", token="secret", base_url=_JENKINS_BASE)
+    # no respx mock: an HTTP attempt would raise AllMockedAssertionError
+    with pytest.raises(ValueError, match="Unsafe job name"):
+        await connector.get_run_status("job/../../computer/api/json/1")
+
+
+@respx.mock
+async def test_a_nested_folder_job_name_still_reaches_the_right_path(jenkins):
+    """The guard must not reject the legitimate folder-nested job shape."""
+    respx.get(f"{_JENKINS_BASE}/job/folder/job/my-job/42/api/json").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "42", "number": 42, "result": "SUCCESS", "url": "", "timestamp": 1700000000000},
+        ),
+    )
+    run = await jenkins.get_run_status("folder/job/my-job/42")
+    assert run.status is CIRunStatus.SUCCESS
+
+
 @respx.mock
 async def test_trigger_run_unusable_location_fails_loud(jenkins):
     """A build response whose Location resolves to no id fails loud — never an

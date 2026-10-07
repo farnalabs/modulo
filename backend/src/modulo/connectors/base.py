@@ -374,8 +374,19 @@ CI_RUNNER_CAPABILITIES: frozenset[Capability] = frozenset(
 #: Hub-native connector-type ids that build a CI runner but are NOT members of
 #: the ``ConnectorType`` enum (``connector_hub._build_connector`` matches them
 #: by literal), so ``ConnectorType(id)`` would raise. Keep in step with the
-#: hub's ``case`` arms for CI runners.
-_HUB_CI_RUNNER_TYPE_IDS: frozenset[str] = frozenset({"github_actions_ci", "gitlab_ci", "ci_runner"})
+#: hub's ``case`` arms for CI runners: ``github_actions_ci`` and ``gitlab_ci``.
+#:
+#: The ids must be EXACTLY the ids the hub can build. ``ci_runner`` used to sit
+#: in here too, but it is the library's *family label* (the ``connector_type``
+#: of ``GITHUB_ACTIONS_INTEGRATION`` / the ``connector_binding.type`` of the CI
+#: workflow templates), never an instance's ``connector_type_id``: the hub has
+#: no ``case "ci_runner"`` arm, so ``_build_connector("ci_runner", ...)`` falls
+#: through to the plugin registry and raises ``Unknown connector type``. A
+#: dispatch binding to a type the hub cannot build would fail at run time, so
+#: the set stays honest and ``connector_type_supports_dispatch`` fails CLOSED
+#: on it (the enum member is spelled ``ci-runner`` and reaches the capability
+#: table through ``ConnectorType`` below, not through this set).
+_HUB_CI_RUNNER_TYPE_IDS: frozenset[str] = frozenset({"github_actions_ci", "gitlab_ci"})
 
 
 def connector_type_supports_dispatch(connector_type_id: Any) -> bool:

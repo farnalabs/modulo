@@ -1413,6 +1413,7 @@ export default {
       "dimension_folder": "Folder",
       "dimension_team": "Team",
       "dimension_error_code": "Error code",
+      "dimension_execution_origin": "Execution origin",
       "filter_folder": "Folder",
       "filter_pipeline": "Pipeline",
       "filter_trigger_type": "Trigger type",

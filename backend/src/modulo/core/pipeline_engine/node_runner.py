@@ -5951,19 +5951,39 @@ _DISPATCH_WAIT_TIMEOUT_MAX_SECONDS = 3600.0
 #: typed ``dispatch.wait_timeout``.
 _DISPATCH_WAIT_NODE_MARGIN_SECONDS = 1.0
 
-#: FAR-1141 (MAJOR 5): consecutive ``get_run_status`` failures tolerated inside
-#: one wait window before the LAST error is re-raised. A single transient poll
-#: failure (429 / 5xx / network blip) used to abort the whole wait through the
-#: generic connector-failure path, leaving the already-fired external job
-#: running while the run reported a misleading failure — so a poll error is now
-#: retried inside the window with a bounded backoff. Only faults classified
-#: transient by :func:`_is_transient_dispatch_poll_error` ever reach this
-#: counter; a permanent one (ACL denial / contract ``ValueError`` / 4xx)
-#: propagates immediately instead. The cap keeps a genuinely dead /
-#: permanently-broken status endpoint from spinning for the whole window: past
-#: it the fault surfaces AS ITSELF (a loud connector failure), not as a wait
-#: timeout that would blame the substrate.
+#: FAR-1141 (MAJOR 5): the FLOOR of consecutive ``get_run_status`` failures
+#: tolerated inside one wait window before the LAST error is re-raised. A single
+#: transient poll failure (429 / 5xx / network blip) used to abort the whole
+#: wait through the generic connector-failure path, leaving the already-fired
+#: external job running while the run reported a misleading failure — so a poll
+#: error is now retried inside the window with a bounded backoff. Only faults
+#: classified transient by :func:`_is_transient_dispatch_poll_error` ever reach
+#: this counter; a permanent one (ACL denial / contract ``ValueError`` / 4xx)
+#: propagates immediately instead.
+#:
+#: It is a FLOOR, not the whole budget: :func:`_dispatch_poll_error_budget`
+#: scales the tolerance with the window still remaining (FAR-1141 FIX 4), so a
+#: short window behaves exactly as before and a 1-hour wait survives a 60 s
+#: rate-limit window. The scaled cap keeps a genuinely dead / permanently-broken
+#: status endpoint from spinning for the whole window: past it the fault
+#: surfaces AS ITSELF (a loud connector failure), not as a wait timeout that
+#: would blame the substrate.
 _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS = 8
+
+#: FAR-1141 FIX 4: seconds of remaining wait window that buy ONE extra
+#: tolerated consecutive poll failure on top of
+#: :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS`. Chosen so a 60 s
+#: rate-limit window (~30 polls at the 2 s interval) fits comfortably inside a
+#: long wait's budget, while the budget at the 3600 s maximum (68 failures)
+#: still keeps a fast-failing dead endpoint surfacing as itself in ~2 minutes
+#: and a slow-failing one well before the window closes.
+_DISPATCH_POLL_ERROR_BUDGET_SECONDS = 60.0
+
+#: FAR-1141 FIX 4: upper clamp on a provider's ``Retry-After``. Honouring the
+#: header is what makes the loop back off instead of hammering a rate limiter;
+#: the clamp keeps a broken/hostile header from parking a run slot for longer
+#: than five minutes. The remaining window always clamps it further.
+_DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS = 300.0
 
 #: FAR-1141 / ADR-042 mapping-table artefact: substrate ``CIRunStatus`` code ->
 #: dispatch-node outcome.
@@ -6041,6 +6061,67 @@ def _is_transient_dispatch_poll_error(exc: BaseException) -> bool:
     return False
 
 
+def _dispatch_poll_error_budget(remaining: float) -> int:
+    """Consecutive transient poll failures tolerated for *remaining* seconds.
+
+    FAR-1141 iteration 2 (FIX 4): the tolerance used to be a fixed COUNT, so a
+    ~8-attempt cap was ~16 s of slack whether ``wait_timeout`` was the 300 s
+    default or the 3600 s maximum. A single 60 s rate-limit window (a 429 with
+    ``Retry-After``) on a long wait therefore aborted a run whose external job
+    was still going.
+
+    The budget is now time-scaled: a documented FLOOR (the original count, so a
+    short window behaves exactly as before) plus one further tolerated failure
+    per :data:`_DISPATCH_POLL_ERROR_BUDGET_SECONDS` of window left. The bound
+    stays relative to ``remaining``, so the cap cannot be outlived: even at the
+    3600 s maximum the budget is 68 failures, and a permanently-dead endpoint
+    that fails FAST still surfaces as itself after ~2 minutes of a 1-hour window
+    rather than spinning it, while one that fails SLOW (the 30 s per-call cap)
+    still surfaces as itself well before the window closes.
+    """
+    if remaining <= 0:
+        return _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS
+    return _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS + int(
+        remaining // _DISPATCH_POLL_ERROR_BUDGET_SECONDS,
+    )
+
+
+def _transient_poll_retry_after(exc: BaseException) -> float | None:
+    """Seconds a transient HTTP fault's ``Retry-After`` header asks us to wait.
+
+    FAR-1141 iteration 2 (FIX 4): the poll loop slept a flat
+    :data:`_DISPATCH_WAIT_POLL_INTERVAL_SECONDS` between retries, so it hammered
+    a rate limiter that had just said "back off" — burning the consecutive-error
+    budget in seconds and turning a polite 60 s window into an aborted wait.
+
+    Walks the same ``__cause__`` / ``__context__`` chain the transient classifier
+    walks (connectors wrap HTTP faults in ``ValueError``). Only the delta-seconds
+    form is honoured — an HTTP-date form is undecidable without a clock
+    comparison and returns ``None`` (the flat interval then applies, which is
+    the pre-fix behaviour). The value is clamped to
+    :data:`_DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS` so a hostile or broken header
+    cannot park a run slot; the caller additionally clamps to the remaining
+    window.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            raw = current.response.headers.get("Retry-After")
+            if not raw:
+                return None
+            try:
+                seconds = float(raw)
+            except ValueError:
+                return None  # HTTP-date form: not honoured, documented above.
+            if seconds <= 0:
+                return None
+            return min(seconds, _DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS)
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _resolve_dispatch_wait_timeout(
     configured: Any,
     node_timeout: float | None,
@@ -6098,13 +6179,17 @@ async def _await_dispatch_terminal(
 
     * a **transient** fault (timeout / 429 / 5xx / transport) is RETRIED inside
       the window with a bounded backoff — at most
-      :data:`_DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS` consecutive failures —
-      instead of aborting the wait through the generic connector-failure path
-      (which left the already-fired external job running while the run reported
-      a misleading failure). A persistent transient fault surfaces AS ITSELF
-      once the cap is hit — with a non-empty message, even when the fault is a
-      bare ``asyncio.TimeoutError`` (whose ``str()`` is ``""``) — never
-      disguised as a wait timeout.
+      :func:`_dispatch_poll_error_budget` consecutive failures, a cap that
+      SCALES with the window still remaining rather than a fixed count, so a
+      60 s rate-limit window cannot abort a 1-hour wait — instead of aborting
+      the wait through the generic connector-failure path (which left the
+      already-fired external job running while the run reported a misleading
+      failure). A provider's ``Retry-After`` (delta-seconds form) is honoured
+      as the backoff, so the loop backs off instead of hammering a rate
+      limiter. A persistent transient fault surfaces AS ITSELF once the cap is
+      hit — with a non-empty message, even when the fault is a bare
+      ``asyncio.TimeoutError`` (whose ``str()`` is ``""``) — never disguised as
+      a wait timeout.
     * a **permanent** fault (ACL denial, contract ``ValueError``, HTTP 4xx)
       propagates IMMEDIATELY as itself: not retried, and never relabelled
       ``dispatch.wait_timeout``, because the window ending is not what broke
@@ -6148,7 +6233,11 @@ async def _await_dispatch_terminal(
                 # timeout is what actually ended the wait (cause chained).
                 raise _timeout_error() from exc
             consecutive_errors += 1
-            if consecutive_errors > _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS:
+            # FAR-1141 FIX 4: the tolerance is time-scaled to the window that
+            # is actually left, not a fixed count — recomputed on every failure
+            # so it shrinks with the deadline instead of outliving it.
+            poll_error_budget = _dispatch_poll_error_budget(deadline - loop.time())
+            if consecutive_errors > poll_error_budget:
                 if not str(exc):
                     # A bare asyncio.TimeoutError renders as "" — an empty
                     # error tells an operator nothing about which run failed or
@@ -6156,17 +6245,24 @@ async def _await_dispatch_terminal(
                     raise TimeoutError(
                         f"dispatch get_run_status(run_id={run_id!r}) timed out on "
                         f"{consecutive_errors} consecutive polls "
-                        f"(per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
+                        f"(budget {poll_error_budget} for {max(deadline - loop.time(), 0.0):g}s remaining; "
+                        f"per-call cap {_DISPATCH_WAIT_POLL_CALL_TIMEOUT_SECONDS:g}s)",
                     ) from exc
                 raise
             _log.warning(
                 "dispatch.await_completion.poll_retry run=%s attempt=%s/%s error=%s",
                 run_id,
                 consecutive_errors,
-                _DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS,
+                poll_error_budget,
                 exc,
             )
-            await asyncio.sleep(min(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, max(deadline - loop.time(), 0.0)))
+            # FAR-1141 FIX 4: honour the provider's Retry-After rather than
+            # hammering a rate limiter at the flat poll interval (which burned
+            # the budget in seconds and turned a 60 s window into an aborted
+            # wait). Bounded by the remaining window as every other sleep is.
+            retry_after = _transient_poll_retry_after(exc)
+            sleep_for = max(_DISPATCH_WAIT_POLL_INTERVAL_SECONDS, retry_after or 0.0)
+            await asyncio.sleep(min(sleep_for, max(deadline - loop.time(), 0.0)))
             continue
         consecutive_errors = 0
         state = _dispatch_result_to_state(polled)

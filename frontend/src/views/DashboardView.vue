@@ -189,6 +189,18 @@
               <span :class="runStatusBadgeClass(run.status)" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize">
                 {{ runStatusLabel(run.status) }}
               </span>
+              <!-- FAR-1141: run provenance. A dispatched run must never read
+                   indistinguishably from one Modulo executed itself, so the
+                   badge renders whenever execution_origin is 'dispatched'.
+                   Static label (the visible text IS the accessible name - no
+                   role/aria-live needed); the hover title carries the full
+                   explanation. Same helper + key as RunsListView. -->
+              <span
+                v-if="isDispatchedRun(run.execution_origin)"
+                :data-testid="'dashboard-dispatched-' + run.id"
+                :title="$t('common.execution_origin.dispatched_hint')"
+                class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+              >{{ $t('common.execution_origin.dispatched') }}</span>
               <span class="text-xs text-muted-foreground hidden sm:inline">{{ run.trigger_type }}</span>
             </div>
           </router-link>
@@ -213,7 +225,7 @@ import StatCard from '../components/StatCard.vue'
 import { ChevronUp, ChevronDown } from '@lucide/vue'
 import { RUN_STATUS } from '../constants/filters'
 import { formatMoney } from '../lib/money'
-import { runStatusBadgeClass, runStatusLabel, formatRunDate } from '../utils/runUtils'
+import { runStatusBadgeClass, runStatusLabel, formatRunDate, isDispatchedRun } from '../utils/runUtils'
 import { useOrgCurrency } from '../composables/useOrgCurrency'
 
 const { t } = useI18n()

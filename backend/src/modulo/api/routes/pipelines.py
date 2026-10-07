@@ -64,7 +64,12 @@ from modulo.auth.permissions import (
     resolve_required,
 )
 from modulo.auth.team_rbac import org_role_level
-from modulo.connectors.base import connector_type_supports_dispatch, node_fires_dispatch_job
+from modulo.connectors.base import (
+    connector_binding_operation,
+    connector_type_supports_dispatch,
+    node_fires_dispatch_job,
+    node_routes_binding_to_connector,
+)
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -1385,6 +1390,11 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "dispatch": self._validate_dispatch_node,
         }
         node_validators[self.node_type]()
+        # FAR-1141 FIX 2: a ``dispatch`` verb on a node the engine does NOT
+        # route to a connector is dead configuration, not a softer query.
+        # Runs for EVERY node type right after the type validator so a dispatch
+        # node's verb defaulting has already happened.
+        self._validate_dispatch_binding_routing()
         # FAR-1141 (CRITICAL 1): runs for EVERY node type, immediately after the
         # type validator so a dispatch node's verb defaulting has already
         # happened. Keyed on the BINDING's operation, not on ``node_type`` —
@@ -1663,9 +1673,34 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         binding = self.connector_binding
         if "operation" not in binding.model_fields_set:
             # The field default ("query") exists for every OTHER node type.
-            # Inherit the engine's fallback instead of persisting a verb that
-            # would silently turn this node into a plain query (MAJOR 3).
-            binding.operation = "dispatch"
+            # Inherit the engine's OWN routing verdict instead of persisting a
+            # verb that would silently turn this node into a plain query (MAJOR
+            # 3). FAR-1141 FIX 6: the default is DERIVED from
+            # ``connector_binding_operation`` (the declared single source of
+            # truth for "which verb does this node route to") rather than
+            # restating the ``node_type == "dispatch" -> "dispatch"`` rule here;
+            # the probe omits the unset ``operation`` key so the resolver sees
+            # the same absence the engine will see, not this model's "query"
+            # field default.
+            raw = binding.model_dump(mode="json")
+            raw.pop("operation", None)
+            # The cast is sound, not a bypass: ``_validate_dispatch_node`` only
+            # runs for ``node_type == "dispatch"``, which
+            # ``node_routes_binding_to_connector`` always routes once the
+            # (required, non-empty) binding is present, and the probe carried no
+            # explicit ``operation`` — so the resolver can only reach its
+            # ``node_type`` fallback and answer ``"dispatch"``, a member of this
+            # field's Literal vocabulary.
+            binding.operation = cast(
+                Literal["query", "write", "dispatch"],
+                connector_binding_operation(
+                    {
+                        "node_type": self.node_type,
+                        "agent_id": self.agent_id,
+                        "connector_binding": raw,
+                    },
+                ),
+            )
         if binding.operation != "dispatch":
             raise ValueError(
                 "Dispatch nodes require connector_binding.operation='dispatch' "
@@ -1684,6 +1719,43 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             )
         if self.wait_timeout is not None and not self.await_completion:
             raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_dispatch_binding_routing(self) -> None:
+        """FAR-1141 criterion 4 / FIX 2: reject a dispatch verb the engine cannot route.
+
+        Two shapes carry a ``connector_binding`` the engine NEVER routes to a
+        connector — an ``agent`` node with an ``agent_id`` (LLM factory) and a
+        ``sandbox_agent`` (sandbox factory) — so ``operation="dispatch"`` on
+        either is declared-but-unread: nothing fires, yet the binding reads as a
+        dispatch to every other consumer of the graph. Persisting it would leave
+        a config the engine silently ignores; the resolver would even coerce the
+        verb back to ``query`` on some read paths, which is exactly the "silent
+        coercion" this rejects instead.
+
+        Checked through ``node_routes_binding_to_connector`` — the SAME gate
+        ``node_runner``/``graph_cache`` branch on — so the save rule and the
+        engine's routing can never disagree. Runs on the write path for REST and
+        MCP graph writes alike (both go through this model); graph READS skip it
+        via the ``legacy_read`` context, so a pre-existing stored graph still
+        loads. A ``query``/``write`` binding on the same shapes stays valid: it
+        is what the convert-to-agent endpoint persists and the engine
+        legitimately ignores it there.
+        """
+        binding = self.connector_binding
+        if binding is None or binding.operation != "dispatch":
+            return
+        probe = {
+            "node_type": self.node_type,
+            "agent_id": self.agent_id,
+            "connector_binding": binding.model_dump(mode="json"),
+        }
+        if node_routes_binding_to_connector(probe):
+            return
+        raise ValueError(
+            f"{self.node_type} nodes do not route their connector_binding to a connector, so "
+            "operation='dispatch' would never fire while the run read as dispatched — use a "
+            "dispatch or connector node for the dispatch binding",
+        )
 
     def _validate_dispatch_binding_non_idempotent(self) -> None:
         """FAR-1141 (CRITICAL 1): any node whose binding FIRES a job is

@@ -48,6 +48,40 @@ _BUILD_PATH_RE = re.compile(r"/job/(.+)/(\d+)/?$")
 #: ``get_run_status``/``get_run_logs`` until the queue resolves it to a build.
 _QUEUE_RUN_ID_RE = re.compile(r"^(?P<job>.+)/queue/(?P<qid>\d+)$")
 
+#: Characters a job PATH may contain inside a run id: letters, digits, the
+#: separators Jenkins itself allows (``-``, ``_``, ``.``), spaces, and ``/``
+#: for folder-nested jobs (``folder/job/real-job`` — the form
+#: ``_BUILD_PATH_RE`` captures). Everything else is refused BEFORE the value is
+#: interpolated into a credentialed URL: ``..``-style traversal (httpx
+#: normalises it out of the path, so ``job/../../computer/api/json`` would
+#: escape ``/job/``), percent-escapes (``%2e%2e``), query/fragment separators
+#: (``?``, ``#``), backslashes, ``:`` (scheme-shaped values) and control bytes.
+_JOB_NAME_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/ ]+$")
+
+
+def _reject_unsafe_job_name(job_name: str, run_id: str) -> None:
+    """Reject a run-id ``job_name`` that could steer the request elsewhere.
+
+    The extracted job name is interpolated verbatim into the path of a request
+    carrying Basic credentials, so an unsafe value is a path-traversal /
+    request-redirection primitive, not a bad id. Fail CLOSED at parse time with
+    a message naming the run id — never let httpx normalise it into a different
+    endpoint on the same host.
+    """
+    if not _JOB_NAME_PATH_RE.fullmatch(job_name):
+        raise ValueError(
+            f"Unsafe job name in run_id {run_id!r}: {job_name!r} contains characters outside the "
+            "job-path allowlist (letters, digits, '-', '_', '.', space, '/' for folders)",
+        )
+    for segment in job_name.split("/"):
+        # ``""`` (leading/trailing/double slash) and ``"."``/``".."`` are the
+        # traversal shapes; a segment of dots in any count is never a job name.
+        if not segment or set(segment) == {"."}:
+            raise ValueError(
+                f"Unsafe job name in run_id {run_id!r}: segment {segment!r} is empty or a '.'/'..' "
+                "traversal segment — refusing to address another path on the Jenkins host",
+            )
+
 
 def _split_build_run_id(run_id: str) -> tuple[str, str]:
     """Split a ``job_name/build_number`` run id into its two parts.
@@ -55,12 +89,20 @@ def _split_build_run_id(run_id: str) -> tuple[str, str]:
     Raises ``ValueError`` on anything else — a bare number is never
     reinterpreted as ``job=<number>``, which would address a nonexistent (or
     worse, unrelated) job.
+
+    FAR-1141 (security): the extracted ``job_name`` is interpolated verbatim
+    into the path of a request carrying the connector's Basic credentials, so
+    it is validated through :func:`_reject_unsafe_job_name` before it can
+    reach a URL. A traversal segment (``..``) or an off-allowlist character
+    (``%``, ``?``, ``#``, ``\\``, ``:``) is rejected here rather than normalised
+    away by httpx into a different endpoint on the same Jenkins host.
     """
     job_name, separator, build_number = run_id.rpartition("/")
     if not separator or not job_name or not build_number.isdigit():
         raise ValueError(
             f"Invalid run_id format: {run_id!r}. Expected 'job_name/build_number' or 'job_name/queue/queue_id'.",
         )
+    _reject_unsafe_job_name(job_name, run_id)
     return job_name, build_number
 
 

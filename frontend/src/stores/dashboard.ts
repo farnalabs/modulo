@@ -40,6 +40,11 @@ interface RecentRun {
   status: string;
   created_at: string;
   trigger_type: string;
+  /** FAR-1141: `'dispatched'` when part of the run executed outside Modulo,
+   *  `null` for runs Modulo executed itself (and for pre-column rows). The
+   *  backend `_load_recent_runs` has always returned it; the type omitted it,
+   *  so the dashboard could not render the provenance badge. */
+  execution_origin?: string | null;
 }
 
 export interface ConfigWarning {

@@ -10,10 +10,11 @@ from __future__ import annotations
 import re
 import uuid
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+from modulo.connectors.base import connector_binding_operation
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 
 API_VERSION_PREFIX = "modulo.dev/v"
@@ -365,16 +366,42 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         and ``api_node_payload`` always serialises it. A config that omitted
         the key would therefore send an EXPLICIT ``"query"``, which the API now
         rejects (and which pre-rejection persisted a node that silently ran a
-        query instead of firing a job). Inherit the engine's own fallback
-        (``node_type == "dispatch"`` -> ``"dispatch"``) so REST, MCP and the
-        CLI derive the same default from the same shape. An EXPLICIT
+        query instead of firing a job).
+
+        FAR-1141 FIX 6: the default is no longer restated here as
+        ``node_type == "dispatch" -> "dispatch"``; it is DERIVED from
+        ``connector_binding_operation`` — the declared single source of truth
+        for "which verb does this node route to" — so the CLI, the API model and
+        the engine cannot drift apart on what the fallback is. The probe omits
+        the unset ``operation`` key so the resolver sees the same absence the
+        engine will, not this model's ``"query"`` field default. An EXPLICIT
         non-dispatch verb is left alone: the API model is the single authority
         that rejects it, so the CLI fails at apply with the server's message.
         """
         if self.node_type != "dispatch" or self.connector_binding is None:
             return self
-        if "operation" not in self.connector_binding.model_fields_set:
-            self.connector_binding.operation = "dispatch"
+        if "operation" in self.connector_binding.model_fields_set:
+            return self
+        raw = self.connector_binding.model_dump(mode="json")
+        raw.pop("operation", None)
+        # The cast is sound, not a bypass: the guard above pins
+        # ``node_type == "dispatch"``, which ``node_routes_binding_to_connector``
+        # always routes once the (required, non-empty) binding is present, and
+        # the probe carried no explicit ``operation`` — so the resolver can only
+        # reach its ``node_type`` fallback and answer ``"dispatch"``, a member of
+        # this field's Literal vocabulary.
+        self.connector_binding.operation = cast(
+            Literal["query", "write", "dispatch"],
+            connector_binding_operation(
+                {
+                    "node_type": self.node_type,
+                    # A dispatch node never references an agent (the API rejects
+                    # that combination), so the routing gate reads it as routed.
+                    "agent_id": None,
+                    "connector_binding": raw,
+                },
+            ),
+        )
         return self
 
     def api_node_payload(self) -> dict[str, Any]:

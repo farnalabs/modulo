@@ -626,6 +626,98 @@ async def test_a_persistent_poll_failure_surfaces_as_itself_not_a_wait_timeout()
     assert len(connector.calls) == nr._DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS + 1
 
 
+# ---------------------------------------------------------------------------
+# iteration 2 (FAR-1141) FIX 4 — the error budget is time-scaled, not a count
+# ---------------------------------------------------------------------------
+
+
+def test_the_poll_error_budget_scales_with_the_remaining_window():
+    """The tolerance must grow with the window that is actually left.
+
+    The old fixed count was ~16 s of slack for a wait_timeout up to an hour, so
+    a single 60 s rate-limit window on a long wait aborted a live job.
+    """
+    floor = nr._DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS
+
+    # A short window keeps exactly the old behaviour (the floor).
+    assert nr._dispatch_poll_error_budget(0) == floor
+    assert nr._dispatch_poll_error_budget(30) == floor
+
+    # A long window buys strictly more tolerance, one step per budgeted period.
+    long_window = 3600.0
+    expected = floor + int(long_window // nr._DISPATCH_POLL_ERROR_BUDGET_SECONDS)
+    assert nr._dispatch_poll_error_budget(long_window) == expected
+    assert expected > floor
+
+    # ...and the budget is monotonic in the remaining window.
+    assert nr._dispatch_poll_error_budget(1800) > nr._dispatch_poll_error_budget(600)
+
+
+async def test_a_long_wait_survives_many_more_transient_failures_than_the_old_fixed_cap():
+    """FAR-1141 FIX 4: 40 consecutive 429s inside a 1-hour window must NOT abort
+    the wait — the old fixed cap of 8 aborted on the 9th, stranding a live
+    external job behind a misleading failure."""
+    connector = _PollConnector([_http_status_error(429)] * 40 + [CIRunStatus.SUCCESS])
+    with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001):
+        state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=3600)
+
+    assert state["status"] == "success"
+    assert len(connector.calls) == 41
+    # the run survived strictly past what the old fixed count allowed.
+    assert len(connector.calls) > nr._DISPATCH_WAIT_MAX_CONSECUTIVE_POLL_ERRORS + 1
+
+
+def test_retry_after_is_read_off_the_wrapped_http_fault():
+    """The provider's ``Retry-After`` is parsed from the same ``__cause__``
+    chain the transient classifier walks, and only in delta-seconds form."""
+    request = httpx.Request("GET", "https://api.example.com/runs/1")
+
+    def _fault(status: int, header: str | None) -> httpx.HTTPStatusError:
+        headers = {"Retry-After": header} if header is not None else {}
+        return httpx.HTTPStatusError(
+            f"HTTP {status}",
+            request=request,
+            response=httpx.Response(status, headers=headers, request=request),
+        )
+
+    # a connector's fail-loud wrap still exposes the header through the cause.
+    wrapped = ValueError("GitHub API error (429): rate limited")
+    wrapped.__cause__ = _fault(429, "60")
+    assert nr._transient_poll_retry_after(wrapped) == 60.0
+
+    # clamped so a broken/hostile header cannot park a run slot.
+    assert nr._transient_poll_retry_after(_fault(429, "99999")) == nr._DISPATCH_WAIT_RETRY_AFTER_MAX_SECONDS
+
+    # absent header, HTTP-date form, non-positive, and non-HTTP faults: fall
+    # back to the flat poll interval rather than guessing.
+    assert nr._transient_poll_retry_after(_fault(429, None)) is None
+    assert nr._transient_poll_retry_after(_fault(429, "Wed, 21 Oct 2026 07:28:00 GMT")) is None
+    assert nr._transient_poll_retry_after(_fault(429, "0")) is None
+    assert nr._transient_poll_retry_after(ValueError("plain")) is None
+
+
+async def test_a_retry_after_header_is_honoured_as_the_backoff():
+    """FAR-1141 FIX 4: the loop waits out the header instead of hammering the
+    rate limiter at the flat 1 ms interval (which burned the error budget in
+    seconds and turned a polite back-off window into an aborted wait)."""
+    request = httpx.Request("GET", "https://api.example.com/runs/1")
+    fault = httpx.HTTPStatusError(
+        "HTTP 429",
+        request=request,
+        response=httpx.Response(429, headers={"Retry-After": "0.25"}, request=request),
+    )
+    connector = _PollConnector([fault, CIRunStatus.SUCCESS])
+    with patch.object(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001):
+        started = asyncio.get_running_loop().time()
+        state = await nr._await_dispatch_terminal(connector, {"id": "job-1"}, wait_timeout=10)
+        elapsed = asyncio.get_running_loop().time() - started
+
+    assert state["status"] == "success"
+    assert len(connector.calls) == 2
+    # the flat interval is 1 ms: only the header can explain ~250 ms of back-off.
+    assert elapsed >= 0.25
+
+
 async def test_a_slow_poll_loses_the_race_to_the_typed_wait_timeout():
     """A poll slower than the remaining budget must be CUT OFF at the budget and
     terminalise as the typed ``dispatch.wait_timeout``, never as the node's

@@ -165,11 +165,55 @@ def test_dispatch_binding_to_a_non_ci_connector_type_is_rejected_by_the_model():
         PipelineGraphNode.model_validate(payload)
 
 
-@pytest.mark.parametrize("type_id", ["ci-runner", "circleci", "jenkins", "teamcity", "buildkite", "azure_pipelines"])
+@pytest.mark.parametrize(
+    "type_id",
+    [
+        # FAR-1141 FIX 3: the two ids _HUB_CI_RUNNER_TYPE_IDS exists for — they
+        # are NOT ConnectorType members, so the enum path below cannot reach
+        # them; without the set the accept path would reject a binding to the
+        # hub's own GitHub Actions / GitLab CI runners.
+        "github_actions_ci",
+        "gitlab_ci",
+        # the enum member, then every other enum type whose capability table
+        # carries the four CI-runner operations.
+        "ci-runner",
+        "circleci",
+        "jenkins",
+        "teamcity",
+        "buildkite",
+        "azure_pipelines",
+    ],
+    ids=[
+        "hub-github-actions-ci",
+        "hub-gitlab-ci",
+        "enum-ci-runner",
+        "circleci",
+        "jenkins",
+        "teamcity",
+        "buildkite",
+        "azure_pipelines",
+    ],
+)
 def test_dispatch_binding_accepts_every_ci_connector_type(type_id: str):
     payload = _dispatch_node_payload()
     payload["connector_binding"]["type"] = type_id
     assert PipelineGraphNode.model_validate(payload).connector_binding is not None
+
+
+def test_dispatch_binding_to_the_ci_runner_family_label_is_rejected():
+    """``ci_runner`` is the library's family label, not a hub-buildable type id.
+
+    ``connector_hub._build_connector`` has no ``case "ci_runner"`` arm, so a
+    dispatch binding persisted against it would raise ``Unknown connector type``
+    at run time. The accept path must fail CLOSED on it instead.
+    """
+    from modulo.connectors.base import connector_type_supports_dispatch
+
+    assert connector_type_supports_dispatch("ci_runner") is False
+    payload = _dispatch_node_payload()
+    payload["connector_binding"]["type"] = "ci_runner"
+    with pytest.raises(ValidationError, match="does not implement the CI-runner operations"):
+        PipelineGraphNode.model_validate(payload)
 
 
 def _session_returning(rows_by_fragment: dict[str, list[Any]]) -> AsyncMock:
@@ -243,3 +287,130 @@ async def test_graph_validator_ignores_dispatch_checks_when_no_binding_is_declar
     session = _session_returning({})
     result = await GraphValidator().validate_definition({"nodes": [{"id": str(uuid.uuid4())}], "edges": []}, session)
     assert not any(issue.code == "CONNECTOR_DISPATCH_UNSUPPORTED" for issue in result.issues)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 FIX 2 — a dispatch verb the engine cannot route is rejected
+# ---------------------------------------------------------------------------
+
+
+def _sandbox_dispatch_payload(operation: str = "dispatch") -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "sandbox_agent",
+        "position": {"x": 0, "y": 0},
+        "template_id": "opencode",
+        "agent_prompt": "do the thing",
+        "agent_commands": ["echo hi"],
+        "connector_binding": {
+            "type": _CI_TYPE,
+            "instance_id": str(uuid.uuid4()),
+            "operation": operation,
+            "dispatch_action": "trigger_run",
+        },
+    }
+    return payload
+
+
+def test_a_dispatch_verb_on_a_sandbox_agent_node_is_rejected():
+    """The engine routes a sandbox node through the sandbox factory, never its
+    binding — so the dispatch would never fire while the binding read as a
+    dispatch. REJECTED at save, not silently coerced to ``query``."""
+    with pytest.raises(ValidationError, match="do not route their connector_binding"):
+        PipelineGraphNode.model_validate(_sandbox_dispatch_payload())
+
+
+def test_an_agent_node_with_a_dispatch_binding_is_rejected():
+    """Same rule for the other non-routed shape (agent + agent_id), which the
+    agent validator already refuses with its own message."""
+    payload = _dispatch_node_payload()
+    payload["node_type"] = "agent"
+    payload["agent_id"] = str(uuid.uuid4())
+    with pytest.raises(ValidationError, match=r"cannot carry connector_binding\.operation='dispatch'"):
+        PipelineGraphNode.model_validate(payload)
+
+
+def test_a_query_verb_on_a_sandbox_agent_node_still_saves():
+    """The rejection is scoped to ``dispatch`` — a plain query binding on the
+    same shape stays valid (the convert-to-agent endpoint persists one)."""
+    node = PipelineGraphNode.model_validate(_sandbox_dispatch_payload(operation="query"))
+    assert node.connector_binding is not None
+    assert node.connector_binding.operation == "query"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 FIX 6 — the operation default is single-sourced
+# ---------------------------------------------------------------------------
+
+
+def _raw_dispatch_node() -> dict[str, Any]:
+    """A dispatch node exactly as a caller may send it: no ``operation`` key."""
+    return {
+        "id": str(uuid.uuid4()),
+        "node_type": "dispatch",
+        "position": {"x": 0, "y": 0},
+        "connector_binding": {
+            "type": _CI_TYPE,
+            "instance_id": str(uuid.uuid4()),
+        },
+    }
+
+
+def test_every_write_surface_defaults_the_dispatch_verb_to_the_engine_verdict():
+    """The API model and the ``modulo apply`` CLI model must persist EXACTLY the
+    verb ``connector_binding_operation`` (the declared single source of truth)
+    computes for the same raw node — one rule, one answer, on every surface."""
+    from modulo.cli.apply.models import ApplyGraphNode
+    from modulo.connectors.base import connector_binding_operation
+
+    raw = _raw_dispatch_node()
+    engine_verdict = connector_binding_operation(
+        {
+            "node_type": raw["node_type"],
+            "agent_id": None,
+            "connector_binding": dict(raw["connector_binding"]),
+        },
+    )
+    assert engine_verdict == "dispatch"
+
+    api_node = PipelineGraphNode.model_validate(raw)
+    assert api_node.connector_binding is not None
+    assert api_node.connector_binding.operation == engine_verdict
+
+    apply_node = ApplyGraphNode.model_validate(raw)
+    assert apply_node.connector_binding is not None
+    assert apply_node.connector_binding.operation == engine_verdict
+
+    # An EXPLICIT non-dispatch verb is never overwritten by the defaulting: the
+    # API REJECTS it (it is the single authority that refuses a dispatch node
+    # which queries) and the CLI leaves the declared value for the API to
+    # reject, so neither surface hard-codes a default over a stated value.
+    explicit = _raw_dispatch_node()
+    explicit["connector_binding"]["operation"] = "query"
+    with pytest.raises(ValidationError, match=r"require connector_binding\.operation='dispatch'"):
+        PipelineGraphNode.model_validate(explicit)
+
+    explicit_apply = ApplyGraphNode.model_validate(explicit)
+    assert explicit_apply.connector_binding is not None
+    assert explicit_apply.connector_binding.operation == "query"
+
+
+def test_each_write_surface_calls_the_shared_resolver_for_the_default():
+    """Structural: none of the three write surfaces may restate the
+    ``node_type == "dispatch" -> "dispatch"`` rule as its own literal — each
+    must DELEGATE to ``connectors.base.connector_binding_operation``. A surface
+    that hand-rolls the default again is exactly the drift FIX 6 removes."""
+    import inspect
+
+    from modulo.api import mcp_server
+    from modulo.cli.apply.models import ApplyGraphNode
+
+    surfaces = {
+        "api/routes/pipelines.py": inspect.getsource(PipelineGraphNode._validate_dispatch_node),
+        "cli/apply/models.py": inspect.getsource(ApplyGraphNode._default_dispatch_binding_operation),
+        "api/mcp_server.py": inspect.getsource(mcp_server._apply_node_connector_binding),
+    }
+    for path, source in surfaces.items():
+        assert "connector_binding_operation(" in source, (
+            f"{path} must derive the operation default from the shared resolver, not a local rule"
+        )

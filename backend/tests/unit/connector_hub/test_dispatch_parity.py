@@ -1037,3 +1037,38 @@ async def test_dispatch_op_acl_denied(
     # raise AllMockedAssertionError on an unmocked call, so reaching here means
     # the connector was never touched)
     assert not exporter.get_finished_spans()
+
+
+# ---------------------------------------------------------------------------
+# Parity 4: the dispatch-capability ACCEPT set must be buildable by the hub
+# ---------------------------------------------------------------------------
+
+
+def test_every_id_the_dispatch_accept_set_names_is_a_hub_buildable_type() -> None:
+    """FAR-1141 FIX 3: ``_HUB_CI_RUNNER_TYPE_IDS`` is authoritative only if
+    every id in it is one ``connector_hub._build_connector`` can actually build.
+
+    The set carries ids the ``ConnectorType`` enum does not contain, which is
+    exactly why a stale entry is dangerous: ``connector_type_supports_dispatch``
+    short-circuits to ``True`` on membership, so an id the hub has NO arm for
+    (the library's ``ci_runner`` family label) would be accepted at save time
+    and then raise ``Unknown connector type`` on the first run. This pins the
+    set to the hub's real ``case`` arms, in both directions.
+    """
+    from modulo.connectors.base import (
+        _HUB_CI_RUNNER_TYPE_IDS,
+        connector_type_supports_dispatch,
+    )
+    from modulo.core.connector_hub import _build_connector
+
+    assert frozenset({"github_actions_ci", "gitlab_ci"}) == _HUB_CI_RUNNER_TYPE_IDS
+    for type_id in sorted(_HUB_CI_RUNNER_TYPE_IDS):
+        built = _build_connector(type_id, {}, {"token": "test-token"})  # nosec - fake credential
+        assert isinstance(built, CIRunnerBase), f"{type_id!r} must build a CI runner"
+        assert connector_type_supports_dispatch(type_id) is True
+
+    # The library's family label has no hub arm: building it must fail, so the
+    # capability check must fail CLOSED rather than admit it.
+    with pytest.raises(ValueError, match="Unknown connector type"):
+        _build_connector("ci_runner", {}, {"token": "test-token"})
+    assert connector_type_supports_dispatch("ci_runner") is False
