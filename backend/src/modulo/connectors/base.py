@@ -336,6 +336,14 @@ class ConnectorACL:
     """Access-control list for connector operations.
 
     Enforces *visibility* restrictions and an optional white-list of allowed operations.
+
+    Operation-scope semantics (FAR-1564): ``None`` and an empty list BOTH mean
+    UNRESTRICTED — "nothing was configured to restrict". Connectors created
+    through REST/MCP/UI store ``allowed_operations=[]``, which is the unset
+    value, so treating it as deny-all locked every default-created connector
+    out of every operation. A NON-EMPTY list is an allowlist: any operation it
+    does not list is denied. There is no explicit deny-all state — removing the
+    connector is the lock.
     """
 
     _VALID_VISIBILITY = frozenset({"org", "team"})
@@ -349,16 +357,15 @@ class ConnectorACL:
         )
 
     def check(self, operation: str, *, request_visibility: str | None = None) -> None:
-        """Raise ConnectorPermissionError if the operation is not permitted."""
-        if self.allowed_operations is not None:
-            if not self.allowed_operations:
-                raise ConnectorPermissionError(
-                    "No operations allowed — the allowlist is empty. Operator must grant at least one operation.",
-                )
-            if operation not in self.allowed_operations:
-                raise ConnectorPermissionError(
-                    f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}",
-                )
+        """Raise ConnectorPermissionError if the operation is not permitted.
+
+        ``None`` and an empty allowlist are both unrestricted (FAR-1564); only a
+        NON-EMPTY allowlist restricts, and then only to the operations it lists.
+        """
+        if self.allowed_operations and operation not in self.allowed_operations:
+            raise ConnectorPermissionError(
+                f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}",
+            )
         if request_visibility == "team" and self.visibility == "org":
             raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")
 

@@ -502,6 +502,10 @@ class ConnectorHub:
                         redis_client=self._shared_redis_client(),
                         tenant_id=str(self._org_id) if self._org_id else None,
                     )
+                    # FAR-1564: the raw column is passed through unchanged —
+                    # ``None``/``[]`` mean UNRESTRICTED (the unset value every
+                    # REST/MCP/UI-created connector stores), a non-empty list is
+                    # the allowlist. ConnectorACL owns that interpretation.
                     acl = ConnectorACL(
                         visibility=ci.visibility,
                         allowed_operations=ci.allowed_operations,

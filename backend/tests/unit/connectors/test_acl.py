@@ -30,14 +30,23 @@ def test_acl_operation_matching_is_case_sensitive():
         acl.check("READ")
 
 
-def test_acl_empty_allowlist_denies_all_operations():
-    # An *explicit* empty allowlist is distinct from None — it must deny
-    # every operation, not fall back to the unrestricted default.
+def test_acl_empty_allowlist_is_unrestricted():
+    # FAR-1564: an *explicit* empty allowlist is the unset value every
+    # REST/MCP/UI-created connector stores. It means "nothing configured to
+    # restrict" — identical to None — never deny-all.
     acl = ConnectorACL(visibility="org", allowed_operations=[])
     assert acl.allowed_operations is not None
     assert not acl.allowed_operations
-    with pytest.raises(ConnectorPermissionError, match="No operations allowed"):
-        acl.check("read")
+    assert acl.check("read") is None
+    assert acl.check("write") is None
+    assert acl.check("trigger_run") is None
+
+
+def test_acl_empty_allowlist_still_enforces_visibility():
+    # Unrestricted operation scope does not bypass the visibility check.
+    acl = ConnectorACL(visibility="org", allowed_operations=[])
+    with pytest.raises(ConnectorPermissionError, match="team-scoped"):
+        acl.check("read", request_visibility="team")
 
 
 def test_acl_team_connector_allows_org_request():

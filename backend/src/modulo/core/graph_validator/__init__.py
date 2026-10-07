@@ -2552,14 +2552,18 @@ class GraphValidator:
                 )
 
             required_ops: list[str] = binding.get("required_operations", [])
+            # FAR-1564: None/[] means the connector is UNRESTRICTED, so only a
+            # NON-EMPTY allowlist restricts. An unset allowlist must never be
+            # read as "missing every required operation".
             allowed_ops: list[str] = instance.allowed_operations or []
-            missing = [op for op in required_ops if op not in allowed_ops]
-            if missing:
-                result.error(
-                    "CONNECTOR_MISSING_OPERATIONS",
-                    f"Connector {cid} missing operations: {missing}",
-                    node_id,
-                )
+            if allowed_ops:
+                missing = [op for op in required_ops if op not in allowed_ops]
+                if missing:
+                    result.error(
+                        "CONNECTOR_MISSING_OPERATIONS",
+                        f"Connector {cid} missing operations: {missing}",
+                        node_id,
+                    )
 
     # ------------------------------------------------------------------
     # Model backend health

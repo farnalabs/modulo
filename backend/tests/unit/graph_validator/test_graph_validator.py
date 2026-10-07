@@ -374,6 +374,48 @@ async def test_connector_missing_operations_is_error():
     assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
 
 
+async def test_connector_empty_allowlist_is_unrestricted():
+    """FAR-1564: an unset (``[]``) allowlist means unrestricted, so a binding
+    with required operations must NOT raise CONNECTOR_MISSING_OPERATIONS."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, status="active", allowed_operations=[])
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read", "write"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_connector_none_allowlist_is_unrestricted():
+    """FAR-1564: ``None`` (the other unset representation) is unrestricted too."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, status="active")
+    instance.allowed_operations = None
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read", "write"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
 async def test_connector_empty_bindings_skipped():
     snap = _snapshot(graph_json=_SINGLE_NODE, connector_bindings=[])
     session = _session_returning([])

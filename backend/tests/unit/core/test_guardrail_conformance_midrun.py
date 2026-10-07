@@ -14,9 +14,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from modulo.connectors.base import ConnectorType
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
+    _capabilities_for_connector,
     build_live_manifest,
     check_node_start,
     decide_conformance,
@@ -257,6 +259,51 @@ async def test_build_live_manifest_present_and_absent(monkeypatch: pytest.Monkey
         agent_id=None,
     )
     assert registered.get("github.read") is True
+
+
+async def test_build_live_manifest_empty_allowlist_yields_type_capabilities(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1564: an unset (``[]``) allowlist is UNRESTRICTED, so the manifest
+    must carry the connector TYPE's full capability set — not nothing."""
+    cid = uuid.uuid4()
+    row = _row_connector(cid, [])
+    row.connector_type_id = "github"
+    session = _manifest_session(connectors=[row])
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[cid],
+        environment_profile_id=None,
+        agent_id=None,
+    )
+    assert registered.get("read") is True
+    assert registered.get("write") is True
+    assert registered.get("git_push") is True
+    assert registered.get("create_pr") is True
+
+
+def test_capabilities_for_connector_none_allowlist_yields_type_capabilities():
+    """FAR-1564: ``None`` — the other unset representation — is unrestricted."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = None
+    row.connector_type_id = "github"
+    caps = _capabilities_for_connector(row)
+    assert caps == {str(c) for c in ConnectorType("github").capabilities}
+    assert "read" in caps
+
+
+def test_capabilities_for_connector_non_empty_allowlist_is_exact():
+    """A non-empty allowlist remains the exact declared scope."""
+    row = _row_connector(uuid.uuid4(), ["read"])
+    row.connector_type_id = "github"
+    assert _capabilities_for_connector(row) == {"read"}
+
+
+def test_capabilities_for_connector_unknown_type_certifies_nothing():
+    """Fail-closed: a type we cannot identify certifies no capability."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.connector_type_id = "not-a-real-type"
+    assert not _capabilities_for_connector(row)
 
 
 async def test_build_live_manifest_connector_missing_is_unknown(monkeypatch: pytest.MonkeyPatch):

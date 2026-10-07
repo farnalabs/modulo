@@ -40,6 +40,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.connectors.base import ConnectorType
 from modulo.core.guardrails import (
     ConformanceDerivation,
     ConformanceState,
@@ -76,16 +77,38 @@ class ConformanceRecheckResult:
 def _capabilities_for_connector(row: Any) -> set[str]:
     """Capability surface of a ConnectorInstance row (live).
 
-    The instance's ``allowed_operations`` is the authoritative declared scope;
-    when it is empty (unscoped) we cannot confirm any operation is granted, so
-    an empty set means "no confirmed capabilities from this surface". We never
-    read credential material here — only the declared operations and the
-    connector type id (a non-secret).
+    The instance's ``allowed_operations`` is the authoritative declared scope
+    when it is a NON-EMPTY list. ``None``/``[]`` means the connector is
+    UNRESTRICTED (FAR-1564) — the unset value every connector created through
+    REST/MCP/UI carries — so the surface is then the connector TYPE's full
+    capability set, never an empty set. We never read credential material here
+    — only the declared operations and the connector type id (a non-secret).
     """
     allowed = row.allowed_operations if hasattr(row, "allowed_operations") else None
-    if isinstance(allowed, list):
+    if isinstance(allowed, list) and allowed:
         return {str(c) for c in allowed if isinstance(c, str)}
-    return set()
+    return _type_capabilities(row)
+
+
+def _type_capabilities(row: Any) -> set[str]:
+    """Full capability set of the row's connector TYPE (FAR-1564 unrestricted).
+
+    An unknown/non-string type id contributes nothing (the claim then resolves
+    ``None``/absent and a block-action guardrail fails CLOSED) — we cannot
+    certify capabilities for a type we cannot identify.
+    """
+    type_id = row.connector_type_id if hasattr(row, "connector_type_id") else None
+    if not isinstance(type_id, str):
+        return set()
+    try:
+        connector_type = ConnectorType(type_id)
+    except ValueError:
+        _log.warning(
+            "guardrail.conformance.connector_type_unknown",
+            extra={"connector_type_id": type_id},
+        )
+        return set()
+    return {str(cap) for cap in connector_type.capabilities}
 
 
 def _capabilities_for_profile(row: Any) -> set[str]:

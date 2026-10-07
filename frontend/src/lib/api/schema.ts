@@ -4143,8 +4143,10 @@ export interface paths {
          *
          *     Builds the connector from the stored config/credentials and runs its
          *     ``health_check``. A missing connector (or one outside the caller's org) is
-         *     a 404. Build/decrypt failures are 502; a failing health check is reported
-         *     in-band as ``ok: false`` with the connector's detail.
+         *     a 404. An ACL denial (the connector's ``allowed_operations`` does not
+         *     permit the probe's ``read`` operation) is a 403 naming the denied
+         *     operation. Build/decrypt failures are 502; a failing health check is
+         *     reported in-band as ``ok: false`` with the connector's detail.
          */
         get: operations["connector_health_endpoint_api_v1_connectors__connector_id__health_get"];
         put?: never;
