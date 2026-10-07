@@ -458,6 +458,19 @@ describe('buildChartOption', () => {
       formatDateShortWithTime('2026-08-06T15:00:00Z'),
     ])
   })
+
+  it('applies the labeler to an execution_origin dimension', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'dispatched', count: 2 },
+      { date: '2026-08-01', key: 'direct', count: 1 },
+    ]
+    const option = buildChartOption(series, 'count', 'day', 'execution_origin', (key) =>
+      key === 'dispatched' ? 'Dispatched' : key,
+    ) as {
+      xAxis: { data: string[] }
+    }
+    expect(option.xAxis.data).toEqual(['Dispatched', 'direct'])
+  })
 })
 
 describe('aggregateByKey', () => {
@@ -956,6 +969,49 @@ describe('AnalyticsView', () => {
     expect(tableText).toContain('Worker failed')
     expect(tableText).not.toContain('agent.stall')
     expect(tableText).not.toContain('harness.worker_failed')
+  })
+
+  it('renders human-readable labels for execution_origin dimension keys in the table (FAR-1141)', async () => {
+    const response = {
+      group_by: 'day',
+      dimension: 'execution_origin',
+      date_from: '2026-07-30',
+      date_to: '2026-08-06',
+      buckets: [
+        { date: '2026-08-01', key: 'dispatched', count: 3 },
+        { date: '2026-08-02', key: 'dispatched', count: 2 },
+      ],
+    }
+    const previousResponse = {
+      group_by: 'day',
+      dimension: 'execution_origin',
+      date_from: '2026-07-23',
+      date_to: '2026-07-29',
+      buckets: [{ date: '2026-07-23', key: 'dispatched', count: 1 }],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({ data: queryCalls === 1 ? response : previousResponse, error: undefined })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    store.setFilters({ dimension: 'execution_origin' })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const tableText = wrapper.find('[data-testid="analytics-table"]').text()
+    expect(tableText).toContain('Dispatched')
+    // The raw backend machine key must never surface (I18N-1).
+    expect(tableText).not.toContain('dispatched')
   })
 
   it('pre-filters from a deep-link query on mount (e.g. Assistant /analytics link)', async () => {

@@ -1032,6 +1032,21 @@ async def test_dispatch_list_runs_normalises_status_forms():
     assert stub.calls[0][2] is None
 
 
+async def test_dispatch_trigger_run_rejects_non_dict_variables():
+    """A malformed ``variables`` fails loud — the fire-once path must never
+    drop caller input and fire the external job with silently altered inputs."""
+    stub = _DispatchVerbStub()
+    with pytest.raises(ValueError, match="'variables' must be an object"):
+        await nr._run_connector_dispatch(stub, "p", {}, {"variables": "oops"}, "trigger_run")
+    assert stub.calls == []
+
+
+async def test_dispatch_trigger_run_passes_dict_variables_through():
+    stub = _DispatchVerbStub()
+    await nr._run_connector_dispatch(stub, "p", {}, {"variables": {"BRANCH": "main"}}, "trigger_run")
+    assert stub.calls == [("trigger_run", "p", "", {"BRANCH": "main"})]
+
+
 def test_stamp_dispatch_provenance_without_status_omits_substrate_status():
     stamped = nr._stamp_dispatch_provenance({"id": "job-1"}, "inst-1")
     assert "substrate_status" not in stamped

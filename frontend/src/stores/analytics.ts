@@ -467,7 +467,9 @@ export function buildChartOption(
   const buckets = dimensioned ? aggregateByKey(series) : series;
   const labels = buckets.map((b) => {
     const raw = b.key ?? formatBucketDate(b.date);
-    return b.key != null && dimension === "error_code" && labelFormatter ? labelFormatter(b.key) : raw;
+    return b.key != null && (dimension === "error_code" || dimension === "execution_origin") && labelFormatter
+      ? labelFormatter(b.key)
+      : raw;
   });
   const values = buckets.map((b) => measureValue(b, measure));
   return {

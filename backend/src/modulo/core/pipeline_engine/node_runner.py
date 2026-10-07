@@ -6378,7 +6378,14 @@ async def _run_connector_dispatch(
         pipeline_id = str(_dispatch_arg(filters, data, "pipeline_id", resource))
         branch = str(_dispatch_arg(filters, data, "branch", "") or "")
         raw_variables = _dispatch_arg(filters, data, "variables")
-        variables = dict(raw_variables) if isinstance(raw_variables, dict) else None
+        if raw_variables is None:
+            variables: dict[str, Any] | None = None
+        elif isinstance(raw_variables, dict):
+            variables = dict(raw_variables)
+        else:
+            # Fire-once doctrine: a malformed dispatch input must fail loud,
+            # never fire the external job with silently dropped variables.
+            raise ValueError("dispatch trigger_run 'variables' must be an object")
         result = await connector.trigger_run(pipeline_id=pipeline_id, branch=branch, variables=variables)
     elif dispatch_action == "get_run_status":
         run_id = _dispatch_arg(filters, data, "run_id")

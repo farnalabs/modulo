@@ -208,6 +208,17 @@ export function errorCodeDescription(code: string | null | undefined, t: (key: s
   return translated === key ? errorCodeLabel(code, t) : translated
 }
 
+/** Human-readable label for an analytics `execution_origin` bucket key (e.g.
+ * `dispatched` → "Dispatched"), looked up under `common.execution_origin`.
+ * Mirrors `errorCodeLabel` so a dimensioned analytics table/chart never shows
+ * a raw machine key (I18N-1); an unmapped key falls back to the raw value. */
+export function executionOriginLabel(value: string | null | undefined, t: (key: string) => string): string {
+  if (!value) return '—'
+  const key = `common.execution_origin.${value}`
+  const translated = t(key)
+  return translated === key ? value : translated
+}
+
 export interface RunCapacity {
   active_runs: number
   concurrency_limit: number | null

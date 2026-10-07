@@ -238,8 +238,11 @@ class JenkinsConnector(ConnectorBase):
             crumb_headers = await self._fetch_crumb(client)
             client.headers.update(crumb_headers)
             if variables:
-                params = variables
-                r = await client.post(f"/job/{job_name}/buildWithParameters", params=params)
+                # FAR-1141 review: send parameters in the POST body, not the
+                # query string. Query strings are recorded by Jenkins access
+                # logs, reverse proxies and TLS-terminating hops, so a
+                # caller-supplied variable value (a token/API key) would leak.
+                r = await client.post(f"/job/{job_name}/buildWithParameters", data=variables)
             else:
                 r = await client.post(f"/job/{job_name}/build")
             r.raise_for_status()
@@ -427,7 +430,9 @@ class JenkinsConnector(ConnectorBase):
             crumb_headers = await self._fetch_crumb(client)
             client.headers.update(crumb_headers)
             if variables:
-                r = await client.post(f"/job/{job_name}/buildWithParameters", params=variables)
+                # FAR-1141 review: POST the parameters in the body, never the
+                # query string — see trigger_run for the leak rationale.
+                r = await client.post(f"/job/{job_name}/buildWithParameters", data=variables)
             else:
                 r = await client.post(f"/job/{job_name}/build")
             r.raise_for_status()
