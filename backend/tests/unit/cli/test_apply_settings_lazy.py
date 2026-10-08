@@ -20,10 +20,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from pydantic import ValidationError
 
+import modulo.cli as cli_package
 from modulo.settings import Settings
 
 #: Every variable that makes ``Settings`` constructible — all absent in the
@@ -114,3 +116,41 @@ def test_settings_validation_is_unchanged_without_db_or_secret(
     assert "database_url" in message
     assert "secret_key" in message
     assert "fernet_key" in message
+
+
+def _uncache_lazy_attr(name: str) -> ModuleType:
+    """Return ``modulo.cli`` with ``name`` un-cached.
+
+    PEP 562 only invokes ``__getattr__`` when normal attribute lookup misses,
+    so a name already cached in the package namespace would bypass the very
+    code path under test. Each test uncaches ONLY the name it exercises: the
+    ``main`` re-export deliberately collides with the ``modulo.cli.main``
+    submodule, so popping it would clobber that submodule attribute for later
+    tests.
+    """
+    cli_package.__dict__.pop(name, None)
+    return cli_package
+
+
+def test_lazy_getattr_imports_and_caches_on_first_access() -> None:
+    """A lazy re-export is imported on first access and then cached flat."""
+    from modulo.cli.migrate_org import build_parser as migrate_org_build_parser
+
+    package = _uncache_lazy_attr("build_parser")
+    assert package.build_parser is migrate_org_build_parser
+    # Subsequent lookups are served from the package namespace, not __getattr__.
+    assert vars(package)["build_parser"] is migrate_org_build_parser
+
+
+def test_lazy_getattr_raises_attribute_error_for_unknown_name() -> None:
+    """An unknown name is a genuine AttributeError, never a KeyError leak."""
+    unknown_name = "not_a_cli_symbol"
+    with pytest.raises(AttributeError, match=f"has no attribute '{unknown_name}'"):
+        getattr(cli_package, unknown_name)
+
+
+def test_dir_exposes_lazy_reexports() -> None:
+    """``__dir__`` advertises the lazy names before they are imported."""
+    names = dir(cli_package)
+    for expected in ("break_glass_cli", "build_parser", "cmd_export", "cmd_import", "main"):
+        assert expected in names
