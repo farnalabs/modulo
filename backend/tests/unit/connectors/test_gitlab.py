@@ -158,6 +158,86 @@ async def test_write_file_create_when_new(connector):
 
 
 @respx.mock
+async def test_write_file_create_conflict_falls_back_to_update(connector):
+    """A CREATE rejected with "already exists" is retried as an UPDATE.
+
+    The existence probe can miss a file that is really there (a 404 or a
+    transient error on the GET while the create endpoint sees the path).
+    Without the fallback the write is lost behind GitLab's 400 — the nightly
+    Tier 1b suite failed on exactly this for ``tier1b/marker.md``.
+    """
+    url = f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py"
+    respx.get(url).mock(
+        side_effect=[
+            httpx.Response(404, text='{"message":"404 File Not Found"}'),
+            httpx.Response(200, json={"sha": "abc123", "file_name": "main.py"}),
+        ],
+    )
+    respx.post(url).mock(return_value=httpx.Response(400, json={"message": "A file with this name already exists"}))
+    put_route = respx.put(url).mock(return_value=httpx.Response(200, json={"file_path": "src/main.py"}))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "src/main.py",
+                "content": "print('hello')",
+                "message": "Update file",
+            },
+        )
+    )
+    assert result["file_path"] == "src/main.py"
+    body = json.loads(put_route.calls.last.request.content)
+    assert body["sha"] == "abc123", "the re-probe SHA must be attached to the update"
+
+
+@respx.mock
+async def test_write_file_create_conflict_updates_without_sha_when_reprobe_fails(connector):
+    """The update fallback must not depend on a probe that keeps failing."""
+    url = f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py"
+    respx.get(url).mock(return_value=httpx.Response(404, text='{"message":"404 File Not Found"}'))
+    respx.post(url).mock(return_value=httpx.Response(400, json={"message": "A file with this name already exists"}))
+    put_route = respx.put(url).mock(return_value=httpx.Response(200, json={"file_path": "src/main.py"}))
+    result = await connector.write(
+        ConnectorPayload(
+            resource="file",
+            data={
+                "project": "group/project",
+                "path": "src/main.py",
+                "content": "print('hello')",
+                "message": "Update file",
+            },
+        )
+    )
+    assert result["file_path"] == "src/main.py"
+    body = json.loads(put_route.calls.last.request.content)
+    assert "sha" not in body, "`sha` is optional on the update endpoint and the re-probe found none"
+    assert body["branch"] == "main"
+
+
+@respx.mock
+async def test_write_file_unrelated_create_error_is_not_swallowed(connector):
+    """A create failure that is not a duplicate-path conflict still propagates."""
+    url = f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py"
+    respx.get(url).mock(return_value=httpx.Response(404, text='{"message":"404 File Not Found"}'))
+    respx.post(url).mock(return_value=httpx.Response(400, json={"message": "commit_message is empty"}))
+    put_route = respx.put(url).mock(return_value=httpx.Response(200, json={"file_path": "src/main.py"}))
+    with pytest.raises(ValueError, match="commit_message is empty"):
+        await connector.write(
+            ConnectorPayload(
+                resource="file",
+                data={
+                    "project": "group/project",
+                    "path": "src/main.py",
+                    "content": "print('hello')",
+                    "message": "Update file",
+                },
+            )
+        )
+    assert not put_route.called, "only a duplicate-path conflict may fall back to the update endpoint"
+
+
+@respx.mock
 async def test_write_file_honors_branch_key(connector):
     response_body = {"file_path": "src/main.py", "branch": "feature-branch"}
     respx.get(f"{_API}/projects/group%2Fproject/repository/files/src%2Fmain.py").mock(
