@@ -40,6 +40,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.connectors.base import ConnectorType, unrestricted_allowed_operations
 from modulo.core.guardrails import (
     ConformanceDerivation,
     ConformanceState,
@@ -76,16 +77,60 @@ class ConformanceRecheckResult:
 def _capabilities_for_connector(row: Any) -> set[str]:
     """Capability surface of a ConnectorInstance row (live).
 
-    The instance's ``allowed_operations`` is the authoritative declared scope;
-    when it is empty (unscoped) we cannot confirm any operation is granted, so
-    an empty set means "no confirmed capabilities from this surface". We never
-    read credential material here — only the declared operations and the
-    connector type id (a non-secret).
+    The instance's ``allowed_operations`` is the authoritative declared scope
+    when it is a NON-EMPTY list. ``None``/``[]`` means the connector is
+    UNRESTRICTED (FAR-1564) — the unset value every connector created through
+    REST/MCP/UI carries — so the surface is then whatever the connector TYPE
+    declares, which may legitimately be EMPTY (``custom`` and any type id with
+    no capability mapping contribute nothing; see :func:`_type_capabilities`).
+    A MALFORMED non-list value is RESTRICTED and certifies nothing (fail
+    closed, logged) — never the full type set, because ``ConnectorACL`` reads
+    the same value restrictively. We never read credential material here
+    — only the declared operations and the connector type id (a non-secret).
     """
     allowed = row.allowed_operations if hasattr(row, "allowed_operations") else None
+    if unrestricted_allowed_operations(allowed):
+        return _type_capabilities(row)
     if isinstance(allowed, list):
         return {str(c) for c in allowed if isinstance(c, str)}
+    # Malformed (dict/str/int/...): fail CLOSED — certify nothing rather than
+    # the connector's FULL capability set.
+    _log.warning(
+        "guardrail.conformance.allowed_operations_malformed",
+        extra={"allowed_operations_type": type(allowed).__name__},
+    )
     return set()
+
+
+def _type_capabilities(row: Any) -> set[str]:
+    """Capability set of the row's connector TYPE (FAR-1564 unrestricted).
+
+    An unknown/non-string type id contributes nothing (the claim then resolves
+    ``None``/absent and a block-action guardrail fails CLOSED) — we cannot
+    certify capabilities for a type we cannot identify. So does a KNOWN type
+    whose capability mapping is empty (``custom`` and any unmapped member):
+    the declared set is genuinely empty, and it is logged the same way an
+    unknown type id is so an empty surface is never silent.
+    """
+    type_id = row.connector_type_id if hasattr(row, "connector_type_id") else None
+    if not isinstance(type_id, str):
+        return set()
+    try:
+        connector_type = ConnectorType(type_id)
+    except ValueError:
+        _log.warning(
+            "guardrail.conformance.connector_type_unknown",
+            extra={"connector_type_id": type_id},
+        )
+        return set()
+    capabilities = connector_type.capabilities
+    if not capabilities:
+        _log.warning(
+            "guardrail.conformance.connector_type_no_capabilities",
+            extra={"connector_type_id": type_id},
+        )
+        return set()
+    return {str(cap) for cap in capabilities}
 
 
 def _capabilities_for_profile(row: Any) -> set[str]:

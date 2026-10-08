@@ -374,11 +374,81 @@ async def test_connector_missing_operations_is_error():
     assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
 
 
+async def test_connector_empty_allowlist_is_unrestricted():
+    """FAR-1564: an unset (``[]``) allowlist means unrestricted, so a binding
+    with required operations must NOT raise CONNECTOR_MISSING_OPERATIONS."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, status="active", allowed_operations=[])
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read", "write"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
+async def test_connector_none_allowlist_is_unrestricted():
+    """FAR-1564: ``None`` (the other unset representation) is unrestricted too."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, status="active")
+    instance.allowed_operations = None
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read", "write"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert result.is_valid
+    assert not any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
 async def test_connector_empty_bindings_skipped():
     snap = _snapshot(graph_json=_SINGLE_NODE, connector_bindings=[])
     session = _session_returning([])
     result = await GraphValidator().validate(snap, session)
     assert result.is_valid
+
+
+async def test_connector_malformed_allowlist_fails_closed():
+    """FAR-1564: a MALFORMED non-list ``allowed_operations`` is RESTRICTED.
+
+    Before the shared predicate the code read ``instance.allowed_operations or
+    []``, so a malformed dict was truthy and membership was tested against its
+    KEYS — a malformed value could pass a binding whose required operation
+    happens to be a key, while ``ConnectorACL`` read the same value
+    restrictively. Fail closed instead: every required op reads as missing.
+    """
+    cid = uuid.uuid4()
+    instance = _connector_instance(cid, status="active", allowed_operations=["read"])
+    instance.allowed_operations = {"read": 1}  # malformed: dict, not a list
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
 
 
 # ---------------------------------------------------------------------------

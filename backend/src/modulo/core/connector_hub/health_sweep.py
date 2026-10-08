@@ -31,21 +31,29 @@ Contract:
 * FAR-935 validation level — the sweep computes and writes the current
   validation level for each instance, mirroring the ``last_health_check_at``
   pattern: a failed canary degrades the level automatically.
+* FAR-1564 ACL denials are not health failures — a ``ConnectorPermissionError``
+  from ``health_check()`` (an allowlist without ``read``) is counted
+  ``skipped``: no health columns are written, because the probe never ran and
+  a permission answer is not a transport/upstream failure.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.connectors.base import ConnectorPermissionError
 from modulo.core.connector_hub import ConnectorHub
 from modulo.core.secrets_backend import create_secrets_backend
 from modulo.core.validation_level import connector_baseline_level, resolve_validation_level
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.rls import set_rls_org
+
+logger = logging.getLogger(__name__)
 
 _ERR_DETAIL_LIMIT = 2000
 
@@ -103,11 +111,20 @@ async def run_connector_health_checks(
     """Run one sweep across every active connector instance, cross-org.
 
     Returns a summary dict: ``checked`` / ``healthy`` / ``unhealthy`` /
-    ``last_run_at``. Never raises for a single bad instance — each failure is
-    recorded on that instance's row only.
+    ``skipped`` / ``last_run_at``. Never raises for a single bad instance —
+    each failure is recorded on that instance's row only.
+
+    An ACL denial (a non-empty ``allowed_operations`` allowlist without
+    ``read``, raised by ``_TracedConnector.health_check``) is NOT a health
+    failure: it is a PERMISSION answer about that connector's configuration,
+    the same reasoning the REST ``GET /connectors/{id}/health`` route uses to
+    answer 403 rather than 502. Such an instance is counted ``skipped``, its
+    health columns are left untouched (the probe never ran, so the sweep must
+    not claim a new health state), and the denial is logged.
     """
     checked = 0
     healthy = 0
+    skipped = 0
     checked_at = datetime.now(UTC)
 
     async with session_factory() as session, session.begin():
@@ -124,6 +141,19 @@ async def run_connector_health_checks(
                     healthy += 1
             except asyncio.CancelledError:
                 raise
+            except ConnectorPermissionError as exc:
+                # FAR-1564: an ACL denial is a PERMISSION answer about this
+                # connector's allowed_operations, not a transport/upstream
+                # failure — recording it as last_health_check_error would mark
+                # a perfectly healthy connector unhealthy and mask the real
+                # cause. Skip it distinctly (no health columns written).
+                skipped += 1
+                logger.warning(
+                    "connector_health_sweep.acl_denied connector_id=%s: %s",
+                    ci.id,
+                    exc,
+                )
+                continue
             except Exception as exc:
                 detail = _bound_detail(f"{type(exc).__name__}: {exc}")
             await write_session.execute(
@@ -143,6 +173,7 @@ async def run_connector_health_checks(
     return {
         "checked": checked,
         "healthy": healthy,
-        "unhealthy": checked - healthy,
+        "unhealthy": checked - healthy - skipped,
+        "skipped": skipped,
         "last_run_at": checked_at.isoformat(),
     }

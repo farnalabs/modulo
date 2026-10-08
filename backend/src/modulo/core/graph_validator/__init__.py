@@ -25,7 +25,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo import settings
-from modulo.connectors.base import connector_binding_operation, connector_type_supports_dispatch
+from modulo.connectors.base import (
+    connector_binding_operation,
+    connector_type_supports_dispatch,
+    unrestricted_allowed_operations,
+)
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -2569,14 +2573,32 @@ class GraphValidator:
                 )
 
             required_ops: list[str] = binding.get("required_operations", [])
-            allowed_ops: list[str] = instance.allowed_operations or []
-            missing = [op for op in required_ops if op not in allowed_ops]
-            if missing:
-                result.error(
-                    "CONNECTOR_MISSING_OPERATIONS",
-                    f"Connector {cid} missing operations: {missing}",
-                    node_id,
-                )
+            # FAR-1564: None/[] means the connector is UNRESTRICTED, so only a
+            # NON-EMPTY allowlist restricts. An unset allowlist must never be
+            # read as "missing every required operation". A MALFORMED non-list
+            # value is RESTRICTED (fail closed: every required op reads as
+            # missing) and is logged — the shared predicate keeps this decision
+            # identical to ConnectorACL's and the guardrail conformance reader's.
+            raw_allowed: object = instance.allowed_operations
+            if not unrestricted_allowed_operations(raw_allowed):
+                if isinstance(raw_allowed, list):
+                    allowed_ops: list[str] = raw_allowed
+                else:
+                    _log.warning(
+                        "graph_validator.connector_allowed_operations_malformed",
+                        extra={
+                            "connector_instance_id": str(cid),
+                            "allowed_operations_type": type(raw_allowed).__name__,
+                        },
+                    )
+                    allowed_ops = []
+                missing = [op for op in required_ops if op not in allowed_ops]
+                if missing:
+                    result.error(
+                        "CONNECTOR_MISSING_OPERATIONS",
+                        f"Connector {cid} missing operations: {missing}",
+                        node_id,
+                    )
 
     @staticmethod
     def _check_dispatch_binding_capabilities(

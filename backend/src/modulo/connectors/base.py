@@ -1,9 +1,12 @@
 """Connector base types, ABCs, and ACL enforcement."""
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # FAR-458 connector-write idempotency gate: the per-op ``on_unknown`` policy
 # modes and their default — the SINGLE source of truth for the mode set. Both
@@ -19,6 +22,25 @@ from typing import Any
 # create a cycle.
 ON_UNKNOWN_MODES = ("fail_open", "fail_closed", "off")
 DEFAULT_ON_UNKNOWN = "fail_open"
+
+
+def unrestricted_allowed_operations(value: object) -> bool:
+    """Does *value* mean the connector's operation scope is UNRESTRICTED? (FAR-1564)
+
+    Exactly two values mean unrestricted: ``None`` (the column's other unset
+    representation) and ``[]`` (the empty list every connector created through
+    REST/MCP/UI stores) — "nothing was configured to restrict". Everything
+    else is RESTRICTED: a NON-EMPTY list (the allowlist) and, critically, ANY
+    malformed non-list value (``dict``/``str``/``int``/...).
+
+    This is the SINGLE shared predicate for the "unrestricted vs restricted"
+    decision, used by every read path (``ConnectorACL``, the graph validator's
+    connector-binding check, and the guardrail conformance reader), so the same
+    stored value can never certify a full capability set on one path while
+    being read restrictively on another. Fail closed: malformed input RESTRICTS
+    — it never grants.
+    """
+    return value is None or value == []
 
 
 class Capability(StrEnum):
@@ -508,28 +530,62 @@ class ConnectorACL:
     """Access-control list for connector operations.
 
     Enforces *visibility* restrictions and an optional white-list of allowed operations.
+
+    Operation-scope semantics (FAR-1564): ``None`` and an empty list BOTH mean
+    UNRESTRICTED — "nothing was configured to restrict". Connectors created
+    through REST/MCP/UI store ``allowed_operations=[]``, which is the unset
+    value, so treating it as deny-all locked every default-created connector
+    out of every operation. A NON-EMPTY list is an allowlist: any operation it
+    does not list is denied. There is no explicit deny-all state — removing the
+    connector is the lock.
+
+    A MALFORMED value (any non-list other than ``None`` — a ``dict``, ``str``,
+    ``int`` read back out of the JSON column) is FAIL-CLOSED: it restricts to
+    the empty allowlist, so every operation is denied. Deciding this via
+    :func:`unrestricted_allowed_operations` keeps this class in step with the
+    graph validator and the guardrail conformance reader, which read the same
+    column.
     """
 
     _VALID_VISIBILITY = frozenset({"org", "team"})
 
-    def __init__(self, visibility: str, allowed_operations: list[str] | None = None) -> None:
+    def __init__(self, visibility: str, allowed_operations: object = None) -> None:
         if visibility not in self._VALID_VISIBILITY:
             raise ValueError(f"visibility must be 'org' or 'team', got {visibility!r}")
         self.visibility = visibility
-        self.allowed_operations: frozenset[str] | None = (
-            None if allowed_operations is None else frozenset(allowed_operations)
-        )
+        # Decided ONCE here from the shared predicate: only ``None``/``[]``
+        # are unrestricted. ``check`` reads this flag rather than re-testing
+        # truthiness, because an empty frozenset is BOTH the unrestricted-``[]``
+        # representation AND the fail-closed representation of a malformed
+        # value — truthiness alone cannot tell them apart.
+        self._unrestricted = unrestricted_allowed_operations(allowed_operations)
+        if self._unrestricted:
+            # ``None`` -> ``None``; ``[]`` -> empty frozenset, preserving the
+            # attribute's historic shape (an explicit empty allowlist is not
+            # ``None``) while meaning exactly the same thing: unrestricted.
+            self.allowed_operations: frozenset[str] | None = None if allowed_operations is None else frozenset()
+        elif isinstance(allowed_operations, list):
+            self.allowed_operations = frozenset(allowed_operations)
+        else:
+            logger.warning(
+                "connectors.acl.malformed_allowed_operations",
+                extra={"allowed_operations_type": type(allowed_operations).__name__},
+            )
+            # Restricted to the empty allowlist: every operation is denied.
+            self.allowed_operations = frozenset()
 
     def check(self, operation: str, *, request_visibility: str | None = None) -> None:
-        """Raise ConnectorPermissionError if the operation is not permitted."""
-        if self.allowed_operations is not None:
-            if not self.allowed_operations:
+        """Raise ConnectorPermissionError if the operation is not permitted.
+
+        ``None`` and an empty list are both unrestricted (FAR-1564); a
+        NON-EMPTY list restricts to the operations it lists, and a MALFORMED
+        value restricts to nothing (fail closed — see the class docstring).
+        """
+        if not self._unrestricted:
+            allowed = self.allowed_operations or frozenset()
+            if operation not in allowed:
                 raise ConnectorPermissionError(
-                    "No operations allowed — the allowlist is empty. Operator must grant at least one operation.",
-                )
-            if operation not in self.allowed_operations:
-                raise ConnectorPermissionError(
-                    f"Operation {operation!r} is not in allowed_operations: {sorted(self.allowed_operations)}",
+                    f"Operation {operation!r} is not in allowed_operations: {sorted(allowed)}",
                 )
         if request_visibility == "team" and self.visibility == "org":
             raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")

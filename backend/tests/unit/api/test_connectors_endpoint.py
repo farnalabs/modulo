@@ -26,6 +26,7 @@ from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.connectors.base import ConnectorACL
 from modulo.settings import Settings, get_settings
 
 _FERNET_KEY = Fernet.generate_key().decode()
@@ -585,6 +586,112 @@ def test_connector_health_check_unhealthy_reports_ok_false_in_band(client: TestC
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is False
     assert resp.json()["detail"] == "connection refused"
+
+
+class _AclProbeConnector:
+    """Mirrors ``_TracedConnector``: the ACL check runs before the probe.
+
+    Uses the REAL ``ConnectorACL`` so the route is exercised against the real
+    permission semantics (FAR-1564), not a stand-in exception.
+    """
+
+    def __init__(self, acl: ConnectorACL) -> None:
+        self._acl = acl
+
+    async def health_check(self) -> SimpleNamespace:
+        self._acl.check("read")
+        return SimpleNamespace(ok=True, detail="connected")
+
+
+def _acl_hub_factory(connector: object) -> Any:
+    """A ``_FakeHub`` replacement whose ``get()`` returns *connector*."""
+
+    class _FakeHub:
+        def __init__(self, secrets_backend: object, **kwargs: object) -> None:
+            self._connector = connector
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def initialise(self, instances: object, **kwargs: object) -> None:
+            return None
+
+        def get(self, connector_id: uuid.UUID) -> Any:
+            return self._connector
+
+    return _FakeHub
+
+
+def test_connector_health_check_empty_allowlist_permits_probe(client: TestClient) -> None:
+    """FAR-1564: an unset (``[]``) allowlist is UNRESTRICTED, so the probe's
+    ``read`` operation must pass the real ACL and reach the connector.
+
+    Before the fix ``ConnectorACL`` denied every operation on a default-created
+    (``allowed_operations=[]``) connector and the route's generic handler
+    masked that denial as a 502.
+    """
+    connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=[]))
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+
+def test_connector_health_check_acl_denial_is_403_not_502(client: TestClient) -> None:
+    """FAR-1564: an ACL denial must surface as a distinct 403 naming the
+    denied operation, never the generic 502 that masks a real connector
+    failure (the shape reported on prod for every ``[]`` connector)."""
+    connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=["write"]))
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 403, resp.text
+    detail = resp.json()["detail"]
+    assert "not permitted" in detail.lower()
+    assert "allowed_operations" in detail
+
+
+def test_connector_health_check_acl_denial_logs_traceback_and_connector_id(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1564 FIX C: the 403 arm logs like its ``ConnectorDecryptError``
+    sibling — full traceback (``logger.exception``) and the connector id — not
+    a bare warning with neither. The failing probe is then diagnosable from the
+    log alone, and the id ties the denial to the connector's allowlist."""
+    connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=["write"]))
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.connectors"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 403, resp.text
+    denied = [record for record in caplog.records if "denied" in record.getMessage()]
+    assert denied, [record.getMessage() for record in caplog.records]
+    record = denied[0]
+    assert record.exc_info is not None
+    assert str(_CONNECTOR_ID) in record.getMessage()
 
 
 class _ScopedSession:

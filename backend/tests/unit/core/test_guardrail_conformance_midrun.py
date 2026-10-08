@@ -8,15 +8,18 @@ with async mock sessions.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from modulo.connectors.base import ConnectorType
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
+    _capabilities_for_connector,
     build_live_manifest,
     check_node_start,
     decide_conformance,
@@ -257,6 +260,112 @@ async def test_build_live_manifest_present_and_absent(monkeypatch: pytest.Monkey
         agent_id=None,
     )
     assert registered.get("github.read") is True
+
+
+async def test_build_live_manifest_empty_allowlist_yields_type_capabilities(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1564: an unset (``[]``) allowlist is UNRESTRICTED, so the manifest
+    must carry the connector TYPE's full capability set — not nothing."""
+    cid = uuid.uuid4()
+    row = _row_connector(cid, [])
+    row.connector_type_id = "github"
+    session = _manifest_session(connectors=[row])
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[cid],
+        environment_profile_id=None,
+        agent_id=None,
+    )
+    assert registered.get("read") is True
+    assert registered.get("write") is True
+    assert registered.get("git_push") is True
+    assert registered.get("create_pr") is True
+
+
+def test_capabilities_for_connector_none_allowlist_yields_type_capabilities():
+    """FAR-1564: ``None`` — the other unset representation — is unrestricted."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = None
+    row.connector_type_id = "github"
+    caps = _capabilities_for_connector(row)
+    assert caps == {str(c) for c in ConnectorType("github").capabilities}
+    assert "read" in caps
+
+
+def test_capabilities_for_connector_non_empty_allowlist_is_exact():
+    """A non-empty allowlist remains the exact declared scope."""
+    row = _row_connector(uuid.uuid4(), ["read"])
+    row.connector_type_id = "github"
+    assert _capabilities_for_connector(row) == {"read"}
+
+
+def test_capabilities_for_connector_unknown_type_certifies_nothing():
+    """Fail-closed: a type we cannot identify certifies no capability."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.connector_type_id = "not-a-real-type"
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_non_string_type_id_certifies_nothing():
+    """FAR-1564 fail-closed: a NON-STRING ``connector_type_id`` certifies nothing.
+
+    ``_type_capabilities`` guards ``isinstance(type_id, str)`` before it builds
+    a ``ConnectorType``; a null/malformed type id (or a row lacking the
+    attribute) must contribute NO capability rather than raising or certifying
+    the connector TYPE's full set — the same fail-closed contract ``ConnectorACL``
+    applies to a malformed ``allowed_operations``.
+    """
+    row = _row_connector(uuid.uuid4(), [])
+    row.connector_type_id = None
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_allowlist_certifies_nothing():
+    """FAR-1564 fail-closed: a MALFORMED non-list ``allowed_operations`` is
+    RESTRICTED.
+
+    Before the shared predicate, ``isinstance(allowed, list) and allowed``
+    sent EVERY non-list value (dict/str/int/...) down the unrestricted branch,
+    so a malformed value certified the connector TYPE's full capability set
+    while ``ConnectorACL`` read the same value restrictively — the exact
+    contradiction the module's fail-closed contract forbids.
+    """
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = {"read": 1}  # malformed: dict, not a list
+    row.connector_type_id = "github"
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_string_certifies_nothing():
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = "read"  # malformed: str, not a list
+    row.connector_type_id = "github"
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_allowlist_is_logged(caplog):
+    """The malformed read is logged, not silently swallowed (fail closed loudly)."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = 7  # malformed: int, not a list
+    row.connector_type_id = "github"
+    with caplog.at_level(logging.WARNING):
+        assert not _capabilities_for_connector(row)
+    assert "guardrail.conformance.allowed_operations_malformed" in caplog.text
+
+
+def test_capabilities_for_connector_empty_capability_type_is_logged(caplog):
+    """FAR-1564 FIX D: a KNOWN type whose capability mapping is empty
+    (``custom``) certifies nothing — AND is logged the same way an unknown
+    type id is, so an empty-capability surface is never silent."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = []
+    row.connector_type_id = "custom"
+    assert not ConnectorType("custom").capabilities
+    with caplog.at_level(logging.WARNING):
+        assert not _capabilities_for_connector(row)
+    assert "guardrail.conformance.connector_type_no_capabilities" in caplog.text
+    assert "guardrail.conformance.connector_type_unknown" not in caplog.text
 
 
 async def test_build_live_manifest_connector_missing_is_unknown(monkeypatch: pytest.MonkeyPatch):

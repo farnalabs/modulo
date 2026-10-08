@@ -29,7 +29,7 @@ from modulo.api.models.team_visibility import TeamVisibilityMixin
 from modulo.api.team_scope import validate_owner_team_for_create, validate_team_transition_for_update
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
-from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorType
+from modulo.connectors.base import ON_UNKNOWN_MODES, ConnectorPermissionError, ConnectorType
 from modulo.connectors.github import REQUIRED_FINE_GRAINED_PERMISSIONS as GITHUB_REQUIRED_FINE_GRAINED_PERMISSIONS
 from modulo.connectors.github import REQUIRED_SCOPES as GITHUB_REQUIRED_SCOPES
 from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
@@ -671,8 +671,10 @@ async def connector_health_endpoint(
 
     Builds the connector from the stored config/credentials and runs its
     ``health_check``. A missing connector (or one outside the caller's org) is
-    a 404. Build/decrypt failures are 502; a failing health check is reported
-    in-band as ``ok: false`` with the connector's detail.
+    a 404. An ACL denial (the connector's ``allowed_operations`` does not
+    permit the probe's ``read`` operation) is a 403 naming the denied
+    operation. Build/decrypt failures are 502; a failing health check is
+    reported in-band as ``ok: false`` with the connector's detail.
     """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
@@ -691,6 +693,25 @@ async def connector_health_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to decrypt connector credentials.",
+            ) from None
+        except ConnectorPermissionError as exc:
+            # FAR-1564: an ACL denial is a PERMISSION answer about this
+            # connector's allowed_operations, not a transport/upstream failure.
+            # Report it distinctly (403) so it can never be mistaken for — or
+            # hidden behind — the generic 502 that masks a real connector
+            # failure. ConnectorPermissionError is a SHARED type: it is raised
+            # both by ``ConnectorACL.check`` (via the hub's traced wrapper) and
+            # by connectors' own guards (e.g. the shell connector), so this arm
+            # logs the full traceback + connector id rather than a bare
+            # warning, matching the sibling ``ConnectorDecryptError`` arm.
+            logger.exception(
+                "connectors.connector_health_endpoint.denied connector_id=%s: %s",
+                connector_id,
+                exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Operation not permitted: {exc}",
             ) from None
         except HTTPException:
             raise
