@@ -15,6 +15,7 @@ this being a lightweight module.
 
 from __future__ import annotations
 
+import ipaddress
 import posixpath
 import re as _re
 from typing import Any
@@ -477,11 +478,37 @@ def _validate_egress_allowlist_entry(entry: Any, index: int, node_id: str) -> No
     _validate_allowlist_port(entry.get("port"), index, node_id)
 
 
+_EGRESS_HOSTNAME_RE = _re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]*")
+
+
+def is_valid_egress_host(host: Any) -> bool:
+    """True only for a strict hostname or a numeric IPv4/IPv6 literal.
+
+    The host is later embedded in a root shell script (iptables rule), so
+    anything else (metacharacters, whitespace, newlines, a leading ``-`` that
+    iptables would parse as an option) is rejected. Fail-closed.
+    """
+    if not isinstance(host, str) or not host:
+        return False
+    if _EGRESS_HOSTNAME_RE.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_allowlist_host(host: Any, index: int, node_id: str) -> None:
     """Validate the ``host`` field of an egress allowlist entry."""
     if not isinstance(host, str) or not host.strip():
         raise ValueError(
             f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a non-empty string, got {host!r}"
+        )
+    if not is_valid_egress_host(host):
+        raise ValueError(
+            f"sandbox_agent node '{node_id}' egress_allowlist[{index}] 'host' must be a "
+            f"hostname (letters, digits, '.', '-') or an IP address literal, got {host!r}"
         )
 
 

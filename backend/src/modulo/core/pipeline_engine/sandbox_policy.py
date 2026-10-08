@@ -133,6 +133,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shlex
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
@@ -141,6 +142,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from modulo.core.pipeline_engine.sandbox_mode import _SANDBOX_GIT_CREDENTIAL_ALLOWED_HOST as _GIT_ALLOWED_HOST
+from modulo.core.pipeline_engine.sandbox_mode import is_valid_egress_host
 
 _log = logging.getLogger(__name__)
 
@@ -784,7 +786,13 @@ def build_egress_selected_script(egress_allowlist: list[dict[str, Any]]) -> str:
         ip = entry.get("_resolved_ip")
         if isinstance(host, str) and isinstance(port, int) and 1 <= port <= 65535:
             target = ip if isinstance(ip, str) and ip else host
-            lines.append(f"iptables -A OUTPUT -d {target} -p tcp --dport {port} -j ACCEPT 2>/dev/null || true\n")
+            # Defense-in-depth (#1175): even post-validation, never let an
+            # unvalidated string reach the root shell; quote it as well.
+            if not is_valid_egress_host(target):
+                raise ValueError(f"invalid egress allowlist target {target!r}")
+            lines.append(
+                f"iptables -A OUTPUT -d {shlex.quote(target)} -p tcp --dport {port} -j ACCEPT 2>/dev/null || true\n"
+            )
     lines.append("true\n")
     return "".join(lines)
 
