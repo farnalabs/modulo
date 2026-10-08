@@ -152,6 +152,9 @@ class _ParkConn:
     def __init__(self, engine: _ParkEngine) -> None:
         self._engine = engine
 
+    def get_bind(self) -> SimpleNamespace:
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
     async def __aenter__(self) -> Self:
         return self
 

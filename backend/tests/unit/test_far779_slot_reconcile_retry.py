@@ -96,6 +96,9 @@ class _RetryConn:
         self._orgs = orgs
         self.params_seen = params_seen
 
+    def get_bind(self) -> SimpleNamespace:
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
     async def __aenter__(self) -> Self:
         return self
 
