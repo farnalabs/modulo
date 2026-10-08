@@ -149,9 +149,14 @@ def test_every_graph_entry_reachable_from_index():
         )
 
 
-#: Section markers of the graph root's two indexes (see README.md).
-_REGISTRY_INDEX_START = "## Index — manifest feature registry"
-_REGISTRY_INDEX_END = "## Index — feature graph entries"
+#: Section markers of the graph root's two indexes (see README.md). The docs
+#: convention forbids em dashes (U+2014) and normalises them to en dashes
+#: (U+2013) or hyphens (U+002D), so the patterns accept any of the three rather
+#: than pinning one dash character (the docs-improvement pipeline rewrites the
+#: headings, which previously broke this guard while CI stayed otherwise green).
+_REGISTRY_INDEX_DASH = "[-\u2013\u2014]"
+_REGISTRY_INDEX_START_RE = re.compile(rf"^## Index\s+{_REGISTRY_INDEX_DASH}\s+manifest feature registry", re.MULTILINE)
+_REGISTRY_INDEX_END_RE = re.compile(rf"^## Index\s+{_REGISTRY_INDEX_DASH}\s+feature graph entries", re.MULTILINE)
 _REGISTRY_INDEX_TOKEN = "**{feature}**"
 
 #: A registry-index line: ``- **feat-<id>** - <description> - routes: `a`, `b```.
@@ -161,10 +166,24 @@ _REGISTRY_ROUTE_LINE = re.compile(
 )
 
 
+def _registry_index_section() -> str:
+    """Return the text between the graph root's two index headings.
+
+    The docs-improvement pipeline normalises the headings' dash to an en dash (or
+    hyphen), so match any dash form: this guard is about the section existing and
+    being complete, not the cosmetic character between "Index" and its subject.
+    """
+    index_text = GRAPH_INDEX.read_text(encoding="utf-8")
+    start = _REGISTRY_INDEX_START_RE.search(index_text)
+    assert start is not None, "graph root must declare the 'Index — manifest feature registry' section"
+    end = _REGISTRY_INDEX_END_RE.search(index_text, start.end())
+    assert end is not None, "graph root must declare the 'Index — feature graph entries' section"
+    return index_text[start.end() : end.start()]
+
+
 def _registry_index_routes() -> dict[str, list[str]]:
     """Map each graph-root registry feature to the routes listed on its line."""
-    index_text = GRAPH_INDEX.read_text(encoding="utf-8")
-    section = index_text.split(_REGISTRY_INDEX_START, 1)[1].split(_REGISTRY_INDEX_END, 1)[0]
+    section = _registry_index_section()
     return {
         match.group("feature"): re.findall(r"`([^`]+)`", match.group("routes"))
         for match in _REGISTRY_ROUTE_LINE.finditer(section)
@@ -199,12 +218,7 @@ def test_graph_root_registry_index_enumerates_every_manifest_feature():
     registry must be a strict subset of the index.
     """
     assert GRAPH_INDEX.is_file()
-    index_text = GRAPH_INDEX.read_text(encoding="utf-8")
-    assert _REGISTRY_INDEX_START in index_text, (
-        "graph root must declare the 'Index — manifest feature registry' section"
-    )
-    assert _REGISTRY_INDEX_END in index_text, "graph root must declare the 'Index — feature graph entries' section"
-    index_section = index_text.split(_REGISTRY_INDEX_START, 1)[1].split(_REGISTRY_INDEX_END, 1)[0]
+    index_section = _registry_index_section()
     missing = sorted(
         feature
         for feature in _manifest_features()
