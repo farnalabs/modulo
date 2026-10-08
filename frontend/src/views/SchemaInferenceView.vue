@@ -7,7 +7,20 @@
     ]" />
     <PageHeader :title="$t('views.SchemaInferenceView.schema_inference')" :subtitle="$t('views.SchemaInferenceView.infer_a_schema_from_a_connected_data_source')" />
 
-    <LoadingSpinner v-if="loadingConnectors" />
+    <div
+      v-if="loadingConnectors"
+      data-testid="schema-inference-loading-skeleton"
+      aria-busy="true"
+      class="space-y-4"
+    >
+      <section class="rounded-lg border bg-card p-6 shadow-sm">
+        <SkeletonBlock height-class="h-5 w-32" />
+        <SkeletonBlock class="mt-4" height-class="h-10 w-full" />
+        <SkeletonBlock class="mt-4" height-class="h-10 w-full" />
+        <SkeletonBlock class="mt-4" height-class="h-16 w-full" />
+        <SkeletonBlock class="mt-4" height-class="h-10 w-32" />
+      </section>
+    </div>
 
     <ErrorAlert v-else-if="connectorsError" :message="connectorsError" />
 
@@ -18,7 +31,7 @@
           <div>
             <label for="schemainferenceview-connector" class="mb-1 block text-sm font-medium">{{ $t('views.SchemaInferenceView.connector') }}</label>
             <Select
-  aria-label="Connector"
+  :aria-label="$t('views.SchemaInferenceView.connector')"
   v-model="selectedConnectorId"
   :placeholder="$t('views.SchemaInferenceView.select_a_connector')"
   data-testid="schema-inference-connector"
@@ -79,9 +92,9 @@
           <p class="text-sm">{{ draftSchema.name }}</p>
         </div>
 
-        <div v-if="draftSchema.description" class="mb-3">
+        <div class="mb-3">
           <span class="block text-sm font-medium text-muted-foreground">{{ $t('views.SchemaInferenceView.description_label') }}</span>
-          <p class="text-sm">{{ draftSchema.description }}</p>
+          <p class="text-sm">{{ draftSchema.description ?? '—' }}</p>
         </div>
 
         <div class="mb-4">
@@ -118,22 +131,20 @@
           <button type="button"
             data-testid="schema-inference-toggle-raw-json"
             class="flex items-center gap-1 text-sm text-primary hover:underline"
+            :aria-expanded="showRawJson"
+            aria-controls="schema-inference-raw-json"
             @click="showRawJson = !showRawJson"
           >
-            <svg
+            <ChevronRight
               class="h-4 w-4 transition-transform"
               :class="{ 'rotate-90': showRawJson }"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="m9 18 6-6-6-6" />
-            </svg>
-            {{ showRawJson ? $t('common.hide') : $t('common.show') }} raw JSON
+              aria-hidden="true"
+            />
+            {{ showRawJson ? $t('common.hide') : $t('common.show') }} {{ $t('views.SchemaInferenceView.raw_json') }}
           </button>
-          <JsonViewer v-if="showRawJson" :data="rawDefinitionJson ?? null" :show-toolbar="true" :max-height="'24rem'" />
+          <div id="schema-inference-raw-json">
+            <JsonViewer v-if="showRawJson" :data="rawDefinitionJson" :show-toolbar="true" :max-height="'24rem'" />
+          </div>
         </div>
 
         <div class="flex items-center gap-2">
@@ -158,10 +169,12 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
+import { ChevronRight } from '@lucide/vue'
 import { api } from '../lib/api/client'
 import type { components } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import JsonViewer from '../components/shared/JsonViewer.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -178,6 +191,7 @@ interface DraftSchema {
 }
 
 const router = useRouter()
+const { t } = useI18n()
 
 const connectors = ref<ConnectorItem[]>([])
 const loadingConnectors = ref(true)
@@ -204,12 +218,12 @@ async function loadConnectors() {
   try {
     const { data, error: err } = await api.GET('/api/v1/connectors')
     if (err) {
-      connectorsError.value = `Failed to load connectors: ${formatApiError(err)}`
+      connectorsError.value = t('views.SchemaInferenceView.failed_to_load_connectors', { error: formatApiError(err) })
     } else if (data) {
       connectors.value = data.items
     }
   } catch (e: unknown) {
-    connectorsError.value = `Failed to load connectors: ${formatApiError(e)}`
+    connectorsError.value = t('views.SchemaInferenceView.failed_to_load_connectors', { error: formatApiError(e) })
   } finally {
     loadingConnectors.value = false
   }
@@ -249,7 +263,7 @@ async function inferSchema() {
       },
     })
     if (err) {
-      inferError.value = `Schema inference failed: ${formatApiError(err)}`
+      inferError.value = t('views.SchemaInferenceView.schema_inference_failed', { error: formatApiError(err) })
     } else if (data) {
       rawDefinitionJson.value = data.definition_json
       draftSchema.value = {
@@ -259,7 +273,7 @@ async function inferSchema() {
       }
     }
   } catch (e: unknown) {
-    inferError.value = `Schema inference failed: ${formatApiError(e)}`
+    inferError.value = t('views.SchemaInferenceView.schema_inference_failed', { error: formatApiError(e) })
   } finally {
     inferring.value = false
   }
@@ -278,11 +292,11 @@ async function publishSchema() {
       },
     })
     if (schemaErr) {
-      publishError.value = `Publish failed: ${formatApiError(schemaErr)}`
+      publishError.value = t('views.SchemaInferenceView.publish_failed', { error: formatApiError(schemaErr) })
       return
     }
     if (!schemaData) {
-      publishError.value = 'Publish failed: no response'
+      publishError.value = t('views.SchemaInferenceView.publish_failed_no_response')
       return
     }
 
@@ -296,16 +310,16 @@ async function publishSchema() {
       },
     })
     if (versionErr) {
-      publishError.value = `Publish failed: ${formatApiError(versionErr)}`
+      publishError.value = t('views.SchemaInferenceView.publish_failed', { error: formatApiError(versionErr) })
       return
     }
 
-    publishSuccess.value = `Schema "${schemaData.name}" published.`
+    publishSuccess.value = t('views.SchemaInferenceView.schema_published', { name: schemaData.name })
     setTimeout(() => {
       router.push({ name: 'library' })
     }, 1500)
   } catch (e: unknown) {
-    publishError.value = `Publish failed: ${formatApiError(e)}`
+    publishError.value = t('views.SchemaInferenceView.publish_failed', { error: formatApiError(e) })
   } finally {
     publishing.value = false
   }
