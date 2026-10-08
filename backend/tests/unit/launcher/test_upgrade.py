@@ -2287,6 +2287,19 @@ class TestPerformUpgradeHappyPath:
 @pytest.mark.parametrize(
     "bad_version",
     ["../evil", "a/b", "a\b", "", ".", "..", "1.2.3\n", "1.2.3\nevil", "1 2", "bundle-v../x", "v"],
+    ids=[
+        "parent-dir-traversal",
+        "forward-slash",
+        "backspace",
+        "empty",
+        "dot",
+        "dot-dot",
+        "trailing-newline",
+        "embedded-newline",
+        "embedded-space",
+        "bundle-prefix-traversal",
+        "bare-v",
+    ],
 )
 def test_perform_upgrade_rejects_unsafe_version(tmp_path, bad_version):
     fetched: list[str] = []
