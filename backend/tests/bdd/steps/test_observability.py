@@ -476,6 +476,12 @@ def _make_active_run_fake(run_id: uuid.UUID, **kwargs: Any) -> MagicMock:
     run.trigger_id = None
     run.work_item_refs = kwargs.get("work_item_refs")
     run.input_payload = None
+    # FAR-1141 / ADR-042: execution provenance and the cancel audit pair are
+    # real, always-present columns (FAR-1566 removed the production coercion
+    # for a stand-in that omits them).
+    run.execution_origin = None
+    run.cancel_reason = None
+    run.cancelled_by = None
     return run
 
 
