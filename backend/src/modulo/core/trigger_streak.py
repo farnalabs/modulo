@@ -49,7 +49,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from redis.asyncio import Redis as AsyncRedis
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.pipeline_engine.classify import RunClassificationValue
@@ -1827,8 +1827,6 @@ async def _streak_mass_cascade_alerted_this_window(
     per audit stream (FAR-1387): a cron cascade alert never masks an ongoing
     one or vice versa.
     """
-    from sqlalchemy import func
-
     from modulo.db.models.audit_event import AuditEvent
 
     ch = _ch()
