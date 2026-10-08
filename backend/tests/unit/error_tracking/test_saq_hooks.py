@@ -6,8 +6,10 @@ action execution (run-failed marking, fire-error ingestion, DB-down safety).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from types import SimpleNamespace
+from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -517,3 +519,149 @@ class TestGetEnginePrepPing:
             assert kwargs == {"url": "sqlite+aiosqlite:///tmp/errorhooks.db"}
         finally:
             saq_hooks._ENGINE = saved
+
+
+# ---------------------------------------------------------------------------
+# FAR-1601 — `_mark_run_failed`'s hot `runs` UPDATE is bounded on EVERY path
+# ---------------------------------------------------------------------------
+# `_mark_run_failed` runs its guarded `UPDATE runs SET status='failed' ...`
+# inside the SAQ worker's after_process hook — a place where an unbounded
+# row-lock wait does not just hang one request, it wedges job-outcome
+# reconciliation for the whole worker. Until FAR-1601 the bound was applied
+# ONLY when a caller passed `lock_timeout_ms` (sole opt-in:
+# `run_outputs_dualwrite`, 2000 ms), so the primary caller — `after_process`
+# — ran the write with NO bound. These tests pin: (1) the bound is issued by
+# default, is `SET LOCAL` (transaction-local), and takes its value from
+# `Settings.mutation_row_lock_timeout_ms` — FAIL-FIRST, without FAR-1601 the
+# UPDATE is the first statement; (2) a 55P03 expiry is handled NON-SILENTLY —
+# a distinct WARNING naming the SQLSTATE and the bound, no exception escaping
+# `after_process`, and the run left exactly as any other after_process DB
+# failure leaves it (the module's documented "log + leave for
+# dispatcher_reconcile" contract).
+
+
+class _PgRecordingMarkSession:
+    """AsyncSession double reporting the postgresql dialect, recording SQL.
+
+    `_mark_run_failed` gates its bound on ``get_bind().dialect.name`` (SQLite
+    has no ``SET LOCAL lock_timeout``), so this double takes the LIVE branch
+    and records the bound alongside the UPDATE for ORDER/value assertions.
+    Plain ``AsyncMock`` doubles report neither dialect, which keeps every
+    pre-existing assertion over their ``execute.await_count`` unchanged.
+    """
+
+    def __init__(self, rowcount: int = 1) -> None:
+        self.statements: list[str] = []
+        self.params: list[dict[str, object] | None] = []
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        self._bind = bind
+        self._rowcount = rowcount
+        begin_cm = AsyncMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=None)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        self._begin_cm = begin_cm
+
+    def get_bind(self) -> MagicMock:
+        return self._bind
+
+    def begin(self) -> AsyncMock:
+        return self._begin_cm
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> MagicMock:
+        self.statements.append(str(stmt))
+        self.params.append(params)
+        result = MagicMock()
+        result.rowcount = self._rowcount
+        return result
+
+
+class TestMarkRunFailedLockBoundFAR1601:
+    """FAR-1601: the SAQ job-failure write is bounded even with no caller opt-in."""
+
+    @pytest.mark.asyncio
+    async def test_lock_bound_is_issued_by_default(self) -> None:
+        """THE fail-first pin: ``after_process`` calls ``_mark_run_failed``
+        with NO ``lock_timeout_ms`` — until FAR-1601 that path issued no bound
+        at all, so the guarded ``runs`` UPDATE could wait unbounded inside the
+        worker's after_process hook.
+
+        The bound is the FIRST statement, carries ``SET LOCAL``
+        (transaction-local, reverts on COMMIT/ROLLBACK — it can never leak
+        onto the pooled connection the hook opens), and its value comes from
+        ``Settings.mutation_row_lock_timeout_ms`` — never a literal. The
+        explicit ``lock_timeout_ms`` override still wins when a caller passes
+        one (``run_outputs_dualwrite`` keeps its 2000 ms).
+        """
+        session = _PgRecordingMarkSession()
+        with (
+            patch.object(saq_hooks, "_open_factory", return_value=MagicMock(return_value=session)),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
+        ):
+            rowcount = await saq_hooks._mark_run_failed(RUN_ID, ORG_ID)
+
+        assert rowcount == 1
+        assert session.statements, "the mark issued no statements"
+        assert session.statements[0] == "SET LOCAL lock_timeout = 4321", session.statements
+        update_at = [i for i, s in enumerate(session.statements) if "UPDATE runs SET status='failed'" in s]
+        assert update_at, f"the run-failed UPDATE never ran; statements={session.statements}"
+        assert update_at[0] > 0, "the bound must precede the UPDATE"
+
+    @pytest.mark.asyncio
+    async def test_explicit_caller_timeout_still_wins(self) -> None:
+        """The documented opt-in is unchanged: a caller that passes
+        ``lock_timeout_ms`` gets THAT value, not the settings default."""
+        session = _PgRecordingMarkSession()
+        with (
+            patch.object(saq_hooks, "_open_factory", return_value=MagicMock(return_value=session)),
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.settings.get_settings", return_value=MagicMock(mutation_row_lock_timeout_ms=4321)),
+        ):
+            await saq_hooks._mark_run_failed(RUN_ID, ORG_ID, lock_timeout_ms=2000)
+
+        assert session.statements[0] == "SET LOCAL lock_timeout = 2000", session.statements
+
+    @pytest.mark.asyncio
+    async def test_after_process_logs_a_bounded_lock_timeout_loudly(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """THE 55P03 contract: the bounded wait expired on the run-failed
+        UPDATE.
+
+        The transition is NOT written (the transaction rolled back), but the
+        condition is never silent: a distinct WARNING carries the SQLSTATE,
+        the knob and the recovery, ``after_process`` does not raise (a hook
+        that propagates would take the SAQ worker's job-completion path down
+        with it), and the run is left exactly as every other after_process DB
+        failure leaves it — the module's documented "log + leave for
+        dispatcher_reconcile" contract.
+        """
+        from asyncpg import exceptions as asyncpg_exceptions
+        from sqlalchemy.exc import OperationalError
+
+        ctx = {
+            "job": _job(
+                "modulo.core.saq_worker.execute_run", Status.FAILED, "boom", {"run_id": RUN_ID, "org_id": ORG_ID}
+            )
+        }
+        lock_timeout = OperationalError(
+            "UPDATE runs ...",
+            {},
+            asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout"),
+        )
+        with patch.object(saq_hooks, "_mark_run_failed", new_callable=AsyncMock, side_effect=lock_timeout):
+            caplog.set_level(logging.WARNING, logger="modulo.core.error_tracking.saq_hooks")
+            await saq_hooks.after_process(ctx)  # must NOT raise
+
+        messages = [r.message for r in caplog.records]
+        assert any("saq_hooks.task_failure_lock_timeout" in m for m in messages)
+        assert "55P03" in caplog.text
+        assert not any("saq_hooks.after_process_reconcile_failed" in m for m in messages)

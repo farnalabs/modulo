@@ -3303,6 +3303,21 @@ async def update_run_status(
     no guard. A new blobs-passing call site added without the guard aborts
     un-orchestrated (no terminalize, no event) — the
     ``test_run_outputs_gate`` architecture pin fails it.
+
+    LOCK BOUND — placed at the CALLER, deliberately (FAR-1601): both of this
+    function's row-locking statements (the unfenced ``SELECT ... FOR
+    UPDATE`` and ``_UPDATE_STATUS_FENCED_SQL``) wait on the hot ``runs``
+    row, and this is SHARED CRUD. Bounding them HERE would inject a 55P03
+    failure into every caller — including the many that wrap this call in a
+    broad ``except Exception``, which would swallow it into a SILENT lost
+    write (the exact failure mode the bound exists to prevent). Only the
+    caller knows what a 55P03 means for its own recovery, so the caller
+    issues ``db.crud.row_lock.set_mutation_row_lock_timeout(session)`` at the
+    TOP of its transaction, before any lock (FAR-1584 / FAR-1592 pattern).
+    Verified as of FAR-1601: the dispatch admission transaction
+    (``core.dispatch``) does issue it before calling in; the remaining
+    callers are caller-side follow-up on FAR-1601, not a change to this
+    shared function.
     """
     if status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {status!r}")
@@ -3532,6 +3547,17 @@ async def unpark_parked_run(session: AsyncSession, *, run_id: uuid.UUID, org_id:
     for every non-parked run and can never clobber a concurrent
     running/claimed transition. Parked runs resumed by the dispatcher
     reconcile instead go through ``resume_run`` (which claims the row).
+
+    LOCK BOUND — placed at the CALLER, deliberately (FAR-1601): this guarded
+    ``UPDATE`` takes the hot ``runs`` row lock, but it is SHARED CRUD, so the
+    bound belongs in the caller's transaction (``set_mutation_row_lock_timeout``
+    at the top, before any lock — FAR-1584 / FAR-1592): only a caller can
+    decide what a 55P03 failure means for its own flow, and injecting one
+    here would surface as a bare exception inside the HITL decide path.
+    Verified as of FAR-1601: neither caller issues the bound today
+    (``core.hitl_manager``'s decide path and
+    ``gate_coalescing.evaluate_gate_coalescing``) — caller-side follow-up on
+    FAR-1601.
     """
     await session.execute(
         update(Run)
@@ -3604,6 +3630,15 @@ async def transition_run(
 
     RLS org context must be set by the caller (all ``db.crud.run`` functions
     require it).
+
+    LOCK BOUND — placed at the CALLER, deliberately (FAR-1601): the
+    ``_TRANSITION_SQL`` ``UPDATE`` below waits on the hot ``runs`` row lock.
+    This is the SHARED fenced transition authority, so the bound is issued in
+    the caller's transaction (``set_mutation_row_lock_timeout`` at the top,
+    before any lock): bounding it here would make every caller's broad
+    ``except Exception`` swallow a 55P03 into a SILENT missed transition —
+    worse than the unbounded wait it replaces. Whether each caller issues it
+    is caller-side work tracked on FAR-1601.
     """
     if target_status not in RUN_STATUS_WHITELIST:
         raise ValueError(f"invalid run status: {target_status!r}")
@@ -3650,6 +3685,18 @@ async def request_cancellation(
     CANCEL-WINS transition (the fenced UPDATE's cancel branch, the executor's
     claim-time terminalisation, ``finalize._apply_cancel_wins``) lands on a row
     whose ``cancel_reason`` is already recorded.
+
+    LOCK BOUND — placed at the CALLER, deliberately (FAR-1601): the
+    ``SELECT ... FOR UPDATE`` below is a REQUEST path — an unbounded wait here
+    hangs an API/MCP call until HAProxy culls the session (the FAR-1524 O11
+    class). The bound still belongs in the caller's transaction
+    (``set_mutation_row_lock_timeout(session)`` at the top, before the lock):
+    this is SHARED CRUD, and only the caller can decide whether a 55P03 means
+    a visible 409/500 response or a retryable outcome. Verified as of
+    FAR-1601 neither caller issues it — ``api.routes.runs._cancel_run`` and
+    ``api.mcp_server._cancel_run_impl`` (the MCP server's bound at
+    ``mcp_server``'s graph-update path does NOT cover it) — caller-side
+    follow-up on FAR-1601.
     """
     if reason not in CANCEL_REASON_VALUES:
         raise ValueError(f"invalid cancel reason: {reason!r}")

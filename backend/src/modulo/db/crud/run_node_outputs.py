@@ -796,6 +796,20 @@ async def _read_run_markers_fenced_rows(
     runs row is fetched through the ORM (:class:`modulo.db.models.run.Run`),
     whose status/claim_token/organisation_id columns are ordinary
     non-blob columns.
+
+    LOCK BOUND (FAR-1601 — verified, nothing to bound HERE): there is exactly
+    ONE production caller passing ``for_update=True``
+    (``core.pipeline_engine.node_runner._read_connector_idempotency_gate_state``),
+    and it takes the run-row lock FIRST with its own raw ``SELECT ... FROM
+    runs ... FOR UPDATE`` in the SAME transaction — so this ``FOR UPDATE OF
+    runs`` re-lock of an already-held row acquires nothing and can wait for
+    nothing. The bound that matters belongs to the TRANSACTION OWNER, not to
+    a shared reader: this function does not own the transaction, so a
+    ``SET LOCAL`` issued here would silently govern the rest of the caller's
+    transaction too. (That owner's wait is itself bounded — see the FAR-1601
+    note on the gate read in ``node_runner``.) A future second caller that
+    reaches this leg WITHOUT holding the row lock must bound its own
+    transaction first.
     """
     from modulo.db.models.run import Run
 

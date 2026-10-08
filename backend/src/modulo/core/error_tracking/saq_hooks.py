@@ -203,12 +203,26 @@ async def _mark_run_failed(
     when the detail is falsy — never ``""`` (an empty-string detail flips the
     daily-watcher detail_available flag; NULL does not).
 
-    *lock_timeout_ms* (FAR-583): when set (Postgres only), a
-    ``SET LOCAL lock_timeout`` precedes the UPDATE so a lock collision with a
-    concurrent writer degrades to a bounded query-cancellation (rowcount 0)
-    instead of hanging the abort path. The caller opens its OWN session via
-    ``_open_factory``; the SET LOCAL is transaction-local and rolls back with
-    it.
+    *lock_timeout_ms* (FAR-583, made unconditional by FAR-1601): a
+    ``SET LOCAL lock_timeout`` precedes the UPDATE (Postgres only) so a lock
+    collision with a concurrent writer raises a BOUNDED statement failure
+    instead of hanging the abort path (the dual-write caller maps that
+    failure to its rowcount-0 degradation). Passing an explicit value
+    OVERRIDES the default — ``run_outputs_dualwrite`` keeps its 2000 ms.
+    Passing ``None`` (the default, and what ``after_process`` — the primary
+    caller — passes) now resolves to
+    ``Settings.mutation_row_lock_timeout_ms`` instead of disabling the bound:
+    this write runs INSIDE the SAQ worker's after_process hook, where an
+    unbounded row-lock wait would wedge job-outcome reconciliation for the
+    whole worker. The caller opens its OWN session via ``_open_factory``; the
+    SET LOCAL is transaction-local and rolls back with it.
+
+    A bounded wait that expires (SQLSTATE 55P03) is NOT swallowed here: it
+    propagates to :func:`after_process`, which logs it as a distinct
+    ``saq_hooks.task_failure_lock_timeout`` WARNING (SQLSTATE + knob + the
+    run's recovery) and leaves the run for ``dispatcher_reconcile`` — the
+    same contract as any other after_process DB failure, never a hang and
+    never a silent no-op.
 
     FAR-224 decision — SWEEP-ONLY, not inline: this raw-SQL write deliberately
     does NOT call the classification hook inline (unlike the fenced
@@ -225,7 +239,9 @@ async def _mark_run_failed(
     if a synchronous terminalization-time consumer appears.
 
     Returns the number of rows updated — 0 means the guards rejected the write
-    (superseded / already terminal / cancellation requested / lock timeout).
+    (superseded / already terminal / cancellation requested). A lock-timeout
+    expiry RAISES (see the *lock_timeout_ms* contract above) rather than
+    returning 0.
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
@@ -257,20 +273,30 @@ async def _mark_run_failed(
         from modulo.db.rls import set_rls_org
 
         await set_rls_org(session, uuid.UUID(org_id))
-        if lock_timeout_ms is not None:
-            bind = session.get_bind()
-            if asyncio.iscoroutine(bind):
-                bind = await bind
-            if bind.dialect.name == "postgresql":
-                # Utility commands do not accept bind parameters (asyncpg
-                # rewrites :lt to $1 → "syntax error at or near $1"), so the
-                # validated integer is inlined via the __PLACEHOLDER__ +
-                # str.replace pattern (see _SET_LOCK_TIMEOUT_SQL_TEMPLATE) —
-                # an f-stringed text() violates the raw-SQL architecture rule.
-                lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace(
-                    "__LOCK_TIMEOUT_MS__", str(int(lock_timeout_ms))
-                )
-                await session.execute(text(lock_timeout_statement))
+        bind = session.get_bind()
+        if asyncio.iscoroutine(bind):
+            bind = await bind
+        if bind.dialect.name == "postgresql":
+            # FAR-1601: ALWAYS bounded — ``None`` no longer disables the
+            # bound, it resolves to the house knob (an explicit
+            # ``lock_timeout_ms`` still overrides it). The primary caller
+            # (``after_process``) passes nothing, so until now the SAQ
+            # worker's own run-failed write waited UNBOUNDED on the hot
+            # ``runs`` row.
+            from modulo.settings import get_settings
+
+            effective_lock_timeout_ms = (
+                lock_timeout_ms if lock_timeout_ms is not None else get_settings().mutation_row_lock_timeout_ms
+            )
+            # Utility commands do not accept bind parameters (asyncpg
+            # rewrites :lt to $1 → "syntax error at or near $1"), so the
+            # validated integer is inlined via the __PLACEHOLDER__ +
+            # str.replace pattern (see _SET_LOCK_TIMEOUT_SQL_TEMPLATE) —
+            # an f-stringed text() violates the raw-SQL architecture rule.
+            lock_timeout_statement = _SET_LOCK_TIMEOUT_SQL_TEMPLATE.replace(
+                "__LOCK_TIMEOUT_MS__", str(int(effective_lock_timeout_ms))
+            )
+            await session.execute(text(lock_timeout_statement))
         result = await session.execute(
             text(statement),
             params,
@@ -393,6 +419,26 @@ async def after_process(ctx: dict[str, Any]) -> None:
             )
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1601: the BOUNDED (mutation_row_lock_timeout_ms) wait on the
+            # run-failed UPDATE expired. The transaction rolled back whole, so
+            # the run was NOT transitioned — it is left exactly as any other
+            # after_process DB failure leaves it (the contract in this
+            # module's header: log + leave for dispatcher_reconcile), but with
+            # a DISTINCT event so a persistent 55P03 is greppable instead of
+            # hiding behind the generic reconcile-failed key. Never silent,
+            # never raised: a hook that propagates would take the SAQ
+            # worker's job-completion path down with it.
+            _log.warning(
+                "saq_hooks.task_failure_lock_timeout run=%s (SQLSTATE 55P03 from the bounded "
+                "mutation_row_lock_timeout_ms wait) — the failed transition was NOT written; "
+                "the run is left for dispatcher_reconcile exactly as any after_process DB failure",
+                outcome.get("run_id"),
+                exc_info=True,
+            )
+            return
         # Safe if DB is down: log + leave for dispatcher_reconcile.
         _log.exception("saq_hooks.after_process_reconcile_failed function=%s", function)
