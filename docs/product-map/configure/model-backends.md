@@ -4,7 +4,9 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/model_backends.py
+  - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/core/model_backend_hub
+  - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/model_backends/base.py
   - backend/src/modulo/model_backends/openai
   - backend/src/modulo/model_backends/anthropic
@@ -17,6 +19,8 @@ unit-tests:
   - backend/tests/unit/model_backends/test_shared.py
   - backend/tests/unit/api/test_model_backends_endpoint.py
   - backend/tests/unit/api/test_model_backends_pipeline_refs.py
+  - backend/tests/unit/core/test_team_visibility.py
+  - backend/tests/unit/api/test_pipeline_team_visibility.py
 bdd:
   - backend/tests/bdd/features/model_backends/backend_crud.feature
   - backend/tests/bdd/features/model_backends/backend_selection.feature
@@ -74,6 +78,23 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
       clearing a sticky `last_health_check_error`; a cross-org caller is 404'd before any
       check, and the deterministic stub provider always reports `healthy`
       (`model_backends/health_check.feature`, steps in `test_alpha_model_backends.py`)
+- [x] A pipeline graph save that pins a model backend with `visibility: team`
+      from a pipeline owned by a DIFFERENT team is refused 409
+      `model_backend_team_mismatch` (FAR-1515): the model-backend mirror of the
+      connector team-scope rule, enforced at the shared graph-reference
+      resolver (`_enforce_model_backend_team_bindings` in
+      `api/routes/pipelines.py`, predicate + wire-code constants in
+      `core/team_visibility.py`) so a team-private backend is only usable by its
+      own team's pipeline. It is deliberately NOT extended to reject an org-only
+      backend on a team pipeline, unlike the connector rule, because
+      `ModelBackendHub` has no invocation-time visibility gate — a run resolves
+      a pin with `hub.get(backend_id)` and never consults `visibility` — so a
+      save-time rejection there would refuse a graph the run would happily
+      execute; closing that gap needs the invocation-side gate first
+      (`backend/src/modulo/api/routes/pipelines.py`,
+      `backend/src/modulo/core/team_visibility.py`,
+      `backend/tests/unit/core/test_team_visibility.py`,
+      `backend/tests/unit/api/test_pipeline_team_visibility.py`)
 
 ## Known Gaps
 
@@ -83,6 +104,16 @@ and provider adapters under `backend/src/modulo/model_backends/*` implement the
   registered backends is not modelled; each worker re-reads backend state via the hub.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1515 sub-surface (cross-team model-backend pin enforcement at graph save,
+  merged in PR #1377): the model-backend mirror of the connector team-scope
+  rule shipped while neither the manifest `feat-model-backends` registry nor
+  this tracker named it. Added the checked behaviour line (the 409
+  `model_backend_team_mismatch` refusal, the shared predicate, and the
+  deliberate non-extension to the org-only case because the hub has no
+  invocation-time visibility gate) plus the `core/team_visibility.py` /
+  `api/routes/pipelines.py` and unit-test citations. The connector half is
+  tracked under `feat-connectors`.
 - 2026-09-20: **product-map review pass** — closed the "no standalone
   model-backend health endpoint exists" `@awaiting-implementation` gap. The four
   `model_backends/health_check.feature` scenarios now execute against the REAL
