@@ -156,10 +156,7 @@
                       {{ $t('views.variantCompare.tokens', { count: s.tokenTotal.toLocaleString() }) }}
                     </div>
                     <div class="flex gap-2 text-muted-foreground">
-                      <span v-if="s.approved > 0" class="text-success">{{ $t('views.variantCompare.approved', { count: s.approved }) }}</span>
-                      <span v-if="s.rejected > 0" class="text-destructive">{{ $t('views.variantCompare.rejected', { count: s.rejected }) }}</span>
-                      <span v-if="s.pending > 0" class="text-warning-text">{{ $t('views.variantCompare.pending', { count: s.pending }) }}</span>
-                      <span v-if="s.approved === 0 && s.rejected === 0 && s.pending === 0" class="text-muted-foreground/60">{{ $t('views.variantCompare.noHitl') }}</span>
+                      <span class="text-muted-foreground/60">{{ $t('views.variantCompare.noHitl') }}</span>
                     </div>
                   </div>
                 </td>
