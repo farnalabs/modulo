@@ -41,7 +41,14 @@ interface ConnectorListItem {
 interface GraphNodeEcho {
   id: string
   node_type: string
-  connector_binding: { type: string; instance_id: string } | null
+  // FAR-1141: ConnectorBinding carries `operation` / `dispatch_action` on the
+  // wire (the API emits the model defaults), so the echo includes them too.
+  connector_binding: {
+    type: string
+    instance_id: string
+    operation: string
+    dispatch_action: string
+  } | null
 }
 
 test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, () => {
@@ -142,11 +149,18 @@ test.describe('Real-stack journeys: connector binding', { tag: '@regression' }, 
         },
       ])
 
-      // Persisted: a real re-read echoes the binding on the node.
+      // Persisted: a real re-read echoes the binding on the node. FAR-1141:
+      // the API emits the ConnectorBinding defaults (`operation`, `dispatch_action`)
+      // alongside the persisted type/instance, so the echo carries all four.
       const graphRes = await apiFetch<{ nodes: GraphNodeEcho[] }>(apiBase, token, 'GET', `/api/v1/pipelines/${created.pipeline.id}/graph`)
       expect(graphRes.status).toBe(200)
       const boundNode = graphRes.body?.nodes.find((n) => n.id === created.nodeId)
-      expect(boundNode?.connector_binding).toEqual({ type: 'filesystem', instance_id: connectorId })
+      expect(boundNode?.connector_binding).toEqual({
+        type: 'filesystem',
+        instance_id: connectorId,
+        operation: 'query',
+        dispatch_action: 'trigger_run',
+      })
 
       // Remove the connector and prove it is really gone from the backend.
       const del = await apiFetch(apiBase, token, 'DELETE', `/api/v1/connectors/${connectorId}`)
