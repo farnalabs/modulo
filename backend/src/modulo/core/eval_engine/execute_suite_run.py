@@ -748,62 +748,6 @@ async def build_suite_run(
     return run
 
 
-async def run_scheduled_suite(
-    session: AsyncSession,
-    *,
-    org_id: uuid.UUID,
-    suite_id: uuid.UUID,
-    dataset_id: uuid.UUID,
-    model_backend_id: uuid.UUID,
-    pipeline_id: uuid.UUID | None = None,
-    scenario_inputs: dict[str, Any] | None = None,
-    entity_thresholds: dict[str, Any] | None = None,
-    llm_judge_callable: Any = None,
-    eval_definition_version: int = 1,
-    cost_per_llm_case: Decimal = _DEFAULT_COST_PER_LLM_CASE,
-) -> SuiteRun:
-    """Build + execute a SuiteRun end-to-end (pending -> terminal).
-
-    Returns the terminal run; callers read ``run.state`` + the stats from
-    ``run.extra['execution']``.
-
-    NOT the SAQ path (FAR-1574): the SAQ ``execute_suite_run`` job calls
-    :func:`execute_suite_run` directly, on a run already built and committed
-    by ``cron_helpers.fire_suite_run_trigger``. This helper has NO production
-    caller today — no cron task, REST route or CLI command reaches it — so it
-    creates nothing at runtime and there is no post-commit seam on which to
-    record its SuiteRun lifecycle (the background ratchet classifies it
-    ``exempt:unwired_entry_point``). Whoever wires a caller MUST append
-    ``suite_run_created`` / ``suite_run_started`` at that caller's
-    post-commit seam through
-    ``core.audit_logger.background.record_suite_run_audit`` (re-select +
-    state guard), and re-classify the ratchet entry as ``audited``.
-    """
-    run = await build_suite_run(
-        session,
-        org_id=org_id,
-        suite_id=suite_id,
-        dataset_id=dataset_id,
-        model_backend_id=model_backend_id,
-        scenario_inputs=scenario_inputs,
-        pipeline_id=pipeline_id,
-    )
-    await _suite_run_transition(session, run, SuiteRunState.RUNNING)
-    await session.flush()
-    stats = await execute_suite_run(
-        session,
-        run,
-        llm_judge_callable=llm_judge_callable,
-        entity_thresholds=entity_thresholds,
-        scenario_inputs=scenario_inputs,
-        eval_definition_version=eval_definition_version,
-        cost_per_llm_case=cost_per_llm_case,
-    )
-    run.extra = dict(run.extra or {})
-    run.extra["execution"] = stats
-    return run
-
-
 def suite_run_daily_spend_exceeded(current_daily_used: Decimal, daily_limit: Decimal | None) -> bool:
     """True when the SuiteRun daily spend already meets a limit.
 
@@ -878,7 +822,6 @@ __all__ = [
     "load_model_backend",
     "load_suite",
     "load_suite_definitions",
-    "run_scheduled_suite",
     "suite_run_daily_spend_exceeded",
     "suite_run_daily_spend_exceeded_for_org",
     "suite_run_daily_spend_used",
