@@ -531,3 +531,41 @@ class TestReFireBatchHandler:
             with pytest.raises(HTTPException) as exc:
                 await re_fire_batch(uuid.uuid4(), session, principal)
             assert exc.value.status_code == 502
+
+    async def test_pipeline_state_refusal_returns_409(self) -> None:
+        """FAR-1552: ``re_fire_batch`` carries NO route-local
+        ``except PipelineNotRunnableError`` chain, so the shared
+        ``handle_db_errors`` translation is the only thing standing between
+        the ``create_run`` pipeline-state gate and a generic 500. Drive the
+        real refusal out of ``run_variant_batch`` and assert the 409 every
+        sibling route already answers.
+        """
+        from fastapi import HTTPException
+
+        from modulo.core.exceptions import PipelineNotRunnableError
+
+        org_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        principal = make_mock_principal(org_id=org_id)
+        session = make_session_mock()
+        state = MagicMock()
+        state.variant_group_id = uuid.uuid4()
+        state.input_payload = {"prompt": "hi"}
+        group = MagicMock()
+        group.organisation_id = org_id
+        refusal = PipelineNotRunnableError(pipeline_id=pipeline_id, state="archived")
+        with (
+            _patch_rls()[0],
+            _patch_rls()[1],
+            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch(
+                "modulo.api.routes.variant_batches.run_variant_batch",
+                new_callable=AsyncMock,
+                side_effect=refusal,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await re_fire_batch(uuid.uuid4(), session, principal)
+            assert exc.value.status_code == 409
+            assert exc.value.detail == f"Cannot create run: pipeline {pipeline_id} is archived"

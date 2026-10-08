@@ -759,7 +759,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 2
         paths = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+    except subprocess.TimeoutExpired as exc:
+        # A timeout fetching the diff means GitHub was slow, so eligibility
+        # cannot be determined right now. That is a DENY — the PR takes the
+        # standard lane — not a classifier error: every other check in this
+        # module (check_cap, check_suspension, check_no_test_weakening,
+        # check_sha_pinning) treats its own timeout as a fail-closed deny
+        # (rc=1, neutral), and a red check here blocks the PR and dispatches
+        # the Branch Fixer for a transient infra blip (observed 2026-10-07 on
+        # PR #1373: `gh pr diff` exceeded the 30s bound and painted a red
+        # `fast-lane-eligible`). Fail open to "ineligible" with a warning.
+        print(
+            f"::warning::fast-lane: could not fetch PR diff in time ({exc}); "
+            f"treating PR #{args.pr_number} as not fast-lane eligible (standard lane)",
+            file=sys.stderr,
+        )
+        return 1
+    except FileNotFoundError as exc:
+        # `gh` is missing from the runner image: a deterministic config error,
+        # not a transient blip, so it stays a genuine classifier error (red).
         print(f"::error::fast-lane: could not fetch PR diff: {exc}", file=sys.stderr)
         return 2
 

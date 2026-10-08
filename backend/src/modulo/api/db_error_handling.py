@@ -16,6 +16,7 @@ from sqlalchemy.exc import (
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
+from modulo.core.exceptions import PipelineNotRunnableError
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -67,10 +68,10 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     The except-class -> status mapping and its order are the contract this
     module exists to enforce (IntegrityError->409, ProgrammingError->501,
     PendingRollbackError->503, InvalidRequestError->500, SQLAlchemyError->503,
-    pydantic.ValidationError->422; passthrough re-raises for CancelledError /
-    StorageExhaustedError / HTTPException; Exception->500). The chain below
-    preserves the original except order - never reorder it (MRO: specific
-    classes before their bases).
+    pydantic.ValidationError->422, PipelineNotRunnableError->409; passthrough
+    re-raises for CancelledError / StorageExhaustedError / HTTPException;
+    Exception->500). The chain below preserves the original except order -
+    never reorder it (MRO: specific classes before their bases).
 
     Three within-class refinements sit on the arms below:
 
@@ -90,6 +91,20 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
       expiring) on the ``SQLAlchemyError`` arm maps to 409, not 503. It is a
       busy-row conflict rather than a database outage, so the class ordering
       above is unchanged - only the status for that one SQLSTATE differs.
+
+    One DOMAIN exception is mapped ahead of the ``Exception->500`` backstop:
+    ``PipelineNotRunnableError`` (FAR-1528/FAR-1552). The pipeline-state gate
+    lives in ``create_run``, so a route that reaches it WITHOUT its own
+    ``except PipelineNotRunnableError`` chain - ``variant_batches.re_fire_batch``
+    is the observed one - fell through to the backstop and answered a generic
+    500 for a refusal that is a client-visible 409 on every sibling route.
+    Mapping it here covers every chain-less route generically instead of one
+    patch per route. Routes that DO translate it themselves raise an
+    ``HTTPException``, which the passthrough arm below re-raises untouched, so
+    the explicit handlers keep their own mapping and are never double-handled.
+    The detail string is byte-identical to
+    ``modulo.api.routes.runs.pipeline_not_runnable_http``; the parity test in
+    ``tests/unit/api/test_db_error_handling.py`` fails if the two drift apart.
     """
     try:
         raise exc
@@ -175,6 +190,24 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         raise
     except HTTPException:
         raise
+    except PipelineNotRunnableError as exc:
+        # FAR-1528/FAR-1552: the create_run pipeline-state gate (archived /
+        # soft-deleted, Paused when FAR-1530 lands) refused the run. A domain
+        # refusal, NOT a server-side bug: 409 Conflict with the same detail
+        # shape every sibling route that translates it itself already answers
+        # (``pipeline_not_runnable_http``), so a chain-less route such as
+        # ``variant_batches.re_fire_batch`` reads identically instead of
+        # falling through to the generic 500 backstop below.
+        _log.warning(
+            "%s.pipeline_not_runnable pipeline=%s state=%s",
+            log_prefix,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+        ) from None
     except Exception:
         _log.exception("%s.unexpected_error", log_prefix)
         raise HTTPException(

@@ -15,6 +15,7 @@ emitted on the ``SQLAlchemyError`` path, and success-path value passthrough.
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable
 from typing import Any
 
@@ -31,6 +32,7 @@ from sqlalchemy.exc import (
 )
 
 from modulo.api.db_error_handling import handle_db_errors
+from modulo.core.exceptions import PipelineNotRunnableError
 
 
 def _integrity_error() -> IntegrityError:
@@ -491,3 +493,93 @@ class TestPendingRollbackErrorMapping:
 
         messages = [r.getMessage() for r in caplog.records]
         assert "test.endpoint.pending_rollback_error" in messages
+
+
+class TestPipelineNotRunnableMapping:
+    """``PipelineNotRunnableError`` -> 409, never the generic 500 (FAR-1552).
+
+    The pipeline-state gate (archived / soft-deleted today, Paused when
+    FAR-1530 lands) sits in ``create_run``. Routes that translate the refusal
+    themselves (runs, triggers, webhooks, slack, variants, feedback) raise
+    ``pipeline_not_runnable_http`` from their own ``except`` arm and reach
+    this module as an ``HTTPException`` — the passthrough arm below keeps
+    them byte-identical. A route WITHOUT such an arm, observed on
+    ``variant_batches.re_fire_batch``, fell through every arm to the
+    ``Exception->500`` backstop: a client-visible 409 reported as a generic
+    500. These tests pin the chain-less mapping and its parity with the
+    sibling routes' helper.
+    """
+
+    async def test_chain_less_refusal_maps_to_409_not_500(self) -> None:
+        pipeline_id = uuid.uuid4()
+
+        @handle_db_errors("test.pipeline_not_runnable")
+        async def fail() -> None:
+            raise PipelineNotRunnableError(pipeline_id=pipeline_id, state="archived")
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        assert excinfo.value.detail == f"Cannot create run: pipeline {pipeline_id} is archived"
+
+    async def test_detail_is_byte_identical_to_the_sibling_route_helper(self) -> None:
+        """The shared arm must read exactly like ``pipeline_not_runnable_http``."""
+        from modulo.api.routes.runs import pipeline_not_runnable_http
+
+        refusal = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="deleted")
+
+        @handle_db_errors("test.pipeline_not_runnable.parity")
+        async def fail() -> None:
+            raise refusal
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        sibling = pipeline_not_runnable_http(refusal)
+        assert excinfo.value.status_code == sibling.status_code
+        assert excinfo.value.detail == sibling.detail
+
+    async def test_route_that_translates_itself_is_not_double_handled(self) -> None:
+        """A route-local ``except`` arm already raises HTTPException; the
+        shared arm must leave it untouched (one conversion, never two)."""
+        from modulo.api.routes.runs import pipeline_not_runnable_http
+
+        refusal = PipelineNotRunnableError(pipeline_id=uuid.uuid4(), state="archived")
+
+        @handle_db_errors("test.pipeline_not_runnable.chain")
+        async def fail() -> None:
+            try:
+                raise refusal
+            except PipelineNotRunnableError as exc:
+                raise pipeline_not_runnable_http(exc) from None
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        assert excinfo.value.detail == pipeline_not_runnable_http(refusal).detail
+
+    async def test_refusal_logs_under_its_own_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        pipeline_id = uuid.uuid4()
+
+        @handle_db_errors("prefix.pipeline_not_runnable")
+        async def fail() -> None:
+            raise PipelineNotRunnableError(pipeline_id=pipeline_id, state="archived")
+
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            pytest.raises(HTTPException),
+        ):
+            await _run(fail())
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("prefix.pipeline_not_runnable.pipeline_not_runnable" in m for m in messages)
+
+    async def test_generic_exception_still_maps_to_500(self) -> None:
+        """The backstop is unchanged — only the domain refusal is lifted out of it."""
+
+        @handle_db_errors("test.generic_still_500")
+        async def fail() -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
