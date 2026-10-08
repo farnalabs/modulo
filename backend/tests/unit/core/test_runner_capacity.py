@@ -2607,6 +2607,43 @@ class TestHotRunsRowLockBoundFAR1601:
         assert "55P03" in caplog.text
         assert not any("runner.capacity.hitl_tombstone_failed" in m for m in messages)
 
+    async def test_hitl_tombstone_generic_failure_keeps_its_own_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The OTHER side of the SQLSTATE discriminator: an UPDATE that fails
+        for a reason OTHER than a bounded-wait expiry keeps the pre-existing
+        ``hitl_tombstone_failed`` event.
+
+        The 55P03 branch above exists precisely so a persistent lock timeout
+        is greppable and never hidden behind the generic failure key — the
+        inverse must hold too: an unexpected DB failure is not mislabelled as
+        a bounded-wait expiry. The tombstone is still best-effort, so no
+        exception escapes and the return stays False.
+        """
+        _patch_gate(monkeypatch, flag_on=True)
+        factory = _fake_session()
+        session = factory.return_value.__aenter__.return_value
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            if "UPDATE runs SET sandbox_dispatch_state" in str(stmt):
+                raise RuntimeError("connection reset by peer")
+            result = MagicMock()
+            result.fetchone.return_value = (uuid.uuid4(),)
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        session.get_bind = MagicMock(return_value=_pg_bind())
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+        tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
+
+        assert tombstoned is False, "a failed tombstone write must not report a tombstone"
+        messages = [r.message for r in caplog.records]
+        assert any("runner.capacity.hitl_tombstone_failed" in m for m in messages)
+        assert not any("runner.capacity.hitl_tombstone_lock_timeout" in m for m in messages)
+
 
 def _unused(*_a: Any, **_kw: Any) -> None:  # pragma: no cover
     _ = asyncio
