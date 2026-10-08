@@ -1,48 +1,15 @@
 """BDD step definitions: Cross-team isolation."""
 
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.db.crud.base import PageResult
-from modulo.settings import get_settings
-from tests.bdd.conftest import _make_mock_pipeline_full, make_mock_session, make_settings
+from tests.bdd.conftest import make_connector_row, make_pipeline_row, session_client
 
 scenarios("../features/teams/cross_team_isolation.feature")
-
-_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-_MISSING = object()
-
-
-class _AllFeatures:
-    """Plan context standing in for the shared ``client`` fixture's override."""
-
-    def feature_enabled(self, name: str) -> bool:
-        return True
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "team"
-
-    def has_license_key(self) -> bool:
-        return True
-
-
-async def _all_features_plan_context() -> _AllFeatures:
-    return _AllFeatures()
 
 
 @pytest.fixture
@@ -54,86 +21,6 @@ def ctx():
         "pipelines": {},
         "connectors": {},
     }
-
-
-@contextmanager
-def _session_client(role: str, shaper: Callable[[MagicMock], None] | None = None) -> Iterator[TestClient]:
-    """A TestClient driving the REAL routes with a stubbed session.
-
-    ``require_permission`` / ``require_team_membership_or_admin`` and the route
-    bodies run unpatched; only the DB seams with no RLS double behind them are
-    stubbed. Overrides installed here are snapshotted and restored so the
-    shared ``client`` fixture keeps working after the step.
-    """
-    mock_session: MagicMock = make_mock_session()  # type: ignore[assignment]
-    if shaper is not None:
-        shaper(mock_session)
-
-    async def override_session() -> AsyncMock:
-        yield mock_session
-
-    principal_kwargs = {
-        "username": role,
-        "organisation_id": _ORG_ID,
-        "account_id": uuid.uuid4(),
-        "org_role": role,
-    }
-    overrides = {
-        get_settings: make_settings,  # type: ignore[dict-item]
-        get_db_session: override_session,
-        _get_engine: lambda: MagicMock(),
-        get_current_user: lambda: AuthenticatedPrincipal(**principal_kwargs),
-        get_current_tenant_user: lambda: TenantPrincipal(**principal_kwargs),
-        get_plan_context: _all_features_plan_context,
-        get_anonymous_plan_context: _all_features_plan_context,
-    }
-    saved = {key: app.dependency_overrides.get(key, _MISSING) for key in overrides}
-    app.dependency_overrides.update(overrides)
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        for key, value in saved.items():
-            if value is _MISSING:
-                app.dependency_overrides.pop(key, None)
-            else:
-                app.dependency_overrides[key] = value
-
-
-def _pipeline_row(pdata: dict | None) -> MagicMock:
-    """A Pipeline ORM double matching PipelineResponse validation for a ctx entry."""
-    if pdata is None:
-        return None
-    row = _make_mock_pipeline_full(
-        name=pdata["name"],
-        visibility=pdata.get("visibility", "org"),
-    )
-    row.id = uuid.UUID(pdata["id"]) if pdata.get("id") else row.id
-    row.owner_team_id = uuid.UUID(pdata["owner_team_id"]) if pdata.get("owner_team_id") else None
-    row.graph_nodes_json = []
-    return row
-
-
-def _connector_row(pdata: dict | None, name: str) -> MagicMock:
-    """A ConnectorInstance ORM double matching ConnectorResponse validation."""
-    row = MagicMock()
-    row.id = uuid.UUID(pdata["id"]) if pdata and pdata.get("id") else uuid.uuid4()
-    row.organisation_id = _ORG_ID
-    row.name = name
-    row.connector_type_id = "rest"
-    row.credentials_ciphertext = b"gAAAAAB"
-    row.config_json = {}
-    row.allowed_operations = []
-    row.status = "active"
-    row.visibility = (pdata or {}).get("visibility", "org")
-    row.owner_team_id = uuid.UUID(pdata["owner_team_id"]) if pdata and pdata.get("owner_team_id") else None
-    row.tier = "native"
-    now = datetime.now(UTC)
-    row.created_at = now
-    row.updated_at = now
-    row.last_skip_error = None
-    row.validation_level = "standard"
-    row.degraded_at = None
-    return row
 
 
 @given(parsers.parse('a team "{name}" exists'))
@@ -206,7 +93,7 @@ def i_view_pipelines(request) -> None:
     session carries no visible rows (the stub read returns no rows for the
     caller's context)."""
     with (
-        _session_client("admin") as client,
+        session_client("admin") as client,
         patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
             "modulo.api.routes.pipelines.list_pipelines",
@@ -227,7 +114,7 @@ def user_requests_pipeline_list(username: str, request) -> None:
     seam - the assertion bodies then observe the real JSON contract.
     """
     with (
-        _session_client("viewer") as client,
+        session_client("viewer") as client,
         patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
             "modulo.api.routes.pipelines.list_pipelines",
@@ -252,10 +139,10 @@ def user_requests_connector(username: str, connector_name: str, request, ctx) ->
     pdata = ctx.get("connectors", {}).get(connector_name)
     user_team_id = ctx.get("memberships", {}).get(username, {}).get("team_id")
     hidden = pdata is not None and pdata.get("visibility") == "team" and pdata.get("owner_team_id") != user_team_id
-    ci = None if hidden else _connector_row(pdata, connector_name)
+    ci = None if hidden else make_connector_row(pdata, connector_name)
     fetched_id = uuid.uuid4() if ci is None else ci.id
     with (
-        _session_client("viewer") as client,
+        session_client("viewer") as client,
         patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
         patch(
@@ -288,17 +175,17 @@ def bind_cross_team_connector(connector_name: str, pipeline_name: str, request, 
         )
     connector_id = uuid.UUID(cpdata["id"])
     with (
-        _session_client("admin") as client,
+        session_client("admin") as client,
         patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
         patch(
             "modulo.api.routes.pipelines.get_pipeline",
             new_callable=AsyncMock,
-            return_value=_pipeline_row(ppdata),
+            return_value=make_pipeline_row(ppdata),
         ),
         patch(
             "modulo.core.team_visibility._select_candidate_rows",
             new_callable=AsyncMock,
-            return_value=[_connector_row(cpdata, connector_name)],
+            return_value=[make_connector_row(cpdata, connector_name)],
         ),
     ):
         resp = client.patch(

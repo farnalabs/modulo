@@ -2,88 +2,14 @@
 
 import contextlib
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from modulo.api.dependencies import _get_engine, get_anonymous_plan_context, get_db_session, get_plan_context
-from modulo.api.main import app
-from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
-from modulo.settings import get_settings
-from tests.bdd.conftest import make_mock_session, make_settings
-
-_BDD_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-_MISSING = object()
-
-
-class _AllFeatures:
-    """Plan context standing in for the shared ``client`` fixture's override."""
-
-    def feature_enabled(self, name: str) -> bool:
-        return True
-
-    def list_enabled_features(self) -> list:
-        return []
-
-    def tier(self) -> str:
-        return "team"
-
-    def has_license_key(self) -> bool:
-        return True
-
-
-async def _all_features_plan_context() -> _AllFeatures:
-    return _AllFeatures()
-
-
-@contextmanager
-def _client_with_session(shaper: Callable[[MagicMock], None] | None = None) -> Iterator[TestClient]:
-    """A TestClient driving the REAL routes with a stubbed session.
-
-    ``require_permission`` and the route bodies run unpatched; only the DB
-    seams are stubbed. Overrides installed here are snapshotted and restored
-    so the shared ``client`` fixture keeps working after the step.
-    """
-    mock_session: MagicMock = make_mock_session()  # type: ignore[assignment]
-    if shaper is not None:
-        shaper(mock_session)
-
-    async def override_session() -> AsyncMock:
-        yield mock_session
-
-    principal_kwargs = {
-        "username": "admin",
-        "organisation_id": _BDD_ORG_ID,
-        "account_id": uuid.uuid4(),
-        "org_role": "admin",
-    }
-    overrides = {
-        get_settings: make_settings,  # type: ignore[dict-item]
-        get_db_session: override_session,
-        _get_engine: lambda: MagicMock(),
-        get_current_user: lambda: AuthenticatedPrincipal(**principal_kwargs),
-        get_current_tenant_user: lambda: TenantPrincipal(**principal_kwargs),
-        get_plan_context: _all_features_plan_context,
-        get_anonymous_plan_context: _all_features_plan_context,
-    }
-    saved = {key: app.dependency_overrides.get(key, _MISSING) for key in overrides}
-    app.dependency_overrides.update(overrides)
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        for key, value in saved.items():
-            if value is _MISSING:
-                app.dependency_overrides.pop(key, None)
-            else:
-                app.dependency_overrides[key] = value
-
+from tests.bdd.conftest import session_client
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/error_tracking/error_ingestion.feature")
@@ -472,7 +398,7 @@ def get_nonexistent_group(ctx, request):
     with (
         patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
         patch("modulo.api.routes.errors.get_error_group", new_callable=AsyncMock, return_value=None),
-        _client_with_session() as client,
+        session_client() as client,
     ):
         resp = client.get(f"/api/v1/errors/{uuid.uuid4()}")
     request.node._resp = resp
@@ -703,7 +629,7 @@ def _shaper_rule_session(count: int) -> Callable[[MagicMock], None]:
 
 def _pose_notification_rule(count: int, request, ctx) -> None:
     with (
-        _client_with_session(shaper=_shaper_rule_session(count)) as client,
+        session_client(shaper=_shaper_rule_session(count)) as client,
         patch("modulo.api.routes.error_notification_rules.set_rls_org", new_callable=AsyncMock),
     ):
         resp = client.post(
