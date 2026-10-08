@@ -39,6 +39,7 @@ produces.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -383,6 +384,22 @@ class TestLockTimeoutHandling:
 
         conn.execute = _execute  # type: ignore[method-assign]
         with pytest.raises(RuntimeError, match="connection reset"):
+            await mark_complete(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
+
+    async def test_mark_complete_cancelled_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CancelledError (worker/job shutdown) is re-raised, never swallowed —
+        the FAR-1601 try/except must not convert a shutdown into a silent skip."""
+        conn = _PgRecordingConn()
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        original_execute = conn.execute
+
+        async def _execute(stmt: object, params: dict[str, Any] | None = None) -> _PgResult:
+            if "UPDATE runs SET status='complete'" in str(stmt):
+                raise asyncio.CancelledError
+            return await original_execute(stmt, params)
+
+        conn.execute = _execute  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
             await mark_complete(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
 
     async def test_fail_run_terminal_lock_timeout_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
