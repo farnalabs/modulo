@@ -196,6 +196,7 @@
           :key="f.id"
           class="flex w-full items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
           :class="moveToFolderId === f.id ? 'border-primary bg-accent' : 'border-border'"
+          :aria-pressed="moveToFolderId === f.id"
           :data-testid="`schema-move-folder-${f.id}`"
           @click="moveToFolderId = f.id"
         >
@@ -206,6 +207,7 @@
           type="button"
           class="flex w-full items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-accent transition-colors text-left"
           :class="moveToFolderId === null ? 'border-primary bg-accent' : ''"
+          :aria-pressed="moveToFolderId === null"
           data-testid="schema-move-nofolder"
           @click="moveToFolderId = null"
         >
