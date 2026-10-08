@@ -1,0 +1,144 @@
+# No-op pytest-BDD @then step baseline (pass-only verification steps).
+#
+# A @then step is the assertion half of a Gherkin scenario. When its body
+# is only a docstring/pass/ellipsis it observes nothing, so the scenario
+# reports green no matter how broken the product is - a silent false green
+# that no amount of @given/@when setup can rescue. These are PRE-EXISTING
+# no-op steps frozen so the guard blocks NEW ones immediately while the
+# backlog is rewritten file by file. Generated, never hand-edited. Regenerate:
+#
+#   cd backend && uv run python scripts/update_noop_bdd_then_baseline.py
+#
+# This list can only SHRINK:
+#   * test_no_noop_bdd_then_steps fails on any step NOT listed here (a NEW
+#     pass-only @then), and
+#   * test_noop_bdd_then_baseline_has_no_stale_entries fails when a listed
+#     step is implemented/removed but not deleted from the baseline.
+#
+# Entry format: <path relative to backend/tests>:<step text>
+bdd/conftest.py:the HITL gate enforcement uses a DB-live membership check
+bdd/conftest.py:the response respects the old role until token refresh
+bdd/conftest.py:this is a documented acceptable gap of up to 15 minutes
+bdd/steps/test_alpha_agents.py:the agent has no input schema
+bdd/steps/test_alpha_agents.py:the output is accepted
+bdd/steps/test_alpha_agents.py:the output is rejected with a validation error
+bdd/steps/test_alpha_agents.py:the run uses prompt "{prompt}"
+bdd/steps/test_alpha_audit.py:the event records the output hash
+bdd/steps/test_alpha_audit.py:the event records the run ID
+bdd/steps/test_alpha_connectors.py:the comment is posted successfully
+bdd/steps/test_alpha_connectors.py:the file "{filename}" exists with content "{content}"
+bdd/steps/test_alpha_connectors.py:the health check is not accessible
+bdd/steps/test_alpha_connectors.py:the issue is created successfully
+bdd/steps/test_alpha_connectors.py:the issue is updated successfully
+bdd/steps/test_alpha_connectors.py:the label is created successfully
+bdd/steps/test_alpha_connectors.py:the labels are added successfully
+bdd/steps/test_alpha_connectors.py:the milestone is created successfully
+bdd/steps/test_alpha_connectors.py:the operation returns a "not_found" error
+bdd/steps/test_alpha_connectors.py:the reaction is posted successfully
+bdd/steps/test_alpha_connectors.py:the result includes the files in the directory
+bdd/steps/test_alpha_errors.py:an audit event exists for run failure
+bdd/steps/test_alpha_errors.py:node {node:d} error is available
+bdd/steps/test_alpha_errors.py:node {node:d} has no output
+bdd/steps/test_alpha_errors.py:node {node:d} output is available
+bdd/steps/test_alpha_mcp.py:But invoking any tool returns 401
+bdd/steps/test_alpha_mcp.py:the "{tool}" tool description explains how to {action}
+bdd/steps/test_alpha_mcp.py:the client receives a tools/list response
+bdd/steps/test_alpha_model_backends.py:the API key is not stored in plaintext
+bdd/steps/test_alpha_model_backends.py:the health check result determines whether the backend is selected
+bdd/steps/test_alpha_model_backends.py:the run fails with "{error}"
+bdd/steps/test_alpha_model_backends.py:the run uses "{name}"
+bdd/steps/test_alpha_notifications.py:a webhook POST is sent to {url}
+bdd/steps/test_alpha_notifications.py:a webhook from org "{org}" uses "{secret}"
+bdd/steps/test_alpha_notifications.py:after {count:d} failures, the event is logged to the dead-letter queue
+bdd/steps/test_alpha_notifications.py:an alert is logged
+bdd/steps/test_alpha_notifications.py:the request includes header "X-Modulo-Timestamp"
+bdd/steps/test_alpha_notifications.py:the request includes header "{header}"
+bdd/steps/test_alpha_notifications.py:the timestamp is within 5 minutes of current time
+bdd/steps/test_alpha_notifications.py:the webhook body contains the run_id and error_detail
+bdd/steps/test_alpha_notifications.py:the webhook body contains the run_id and review_id
+bdd/steps/test_alpha_notifications.py:the webhook endpoint is disabled
+bdd/steps/test_alpha_notifications.py:the webhook is retried up to {count:d} times
+bdd/steps/test_alpha_notifications.py:the webhook is signed with the org's webhook secret
+bdd/steps/test_alpha_notifications.py:the webhook payload includes the error message
+bdd/steps/test_alpha_notifications.py:the webhook payload includes the failed node name
+bdd/steps/test_alpha_notifications.py:the webhook payload includes the node name
+bdd/steps/test_alpha_notifications.py:the webhook payload includes the pipeline name
+bdd/steps/test_alpha_organisation.py:every resource table has an RLS policy on organisation_id
+bdd/steps/test_alpha_organisation.py:org "{org}" can also acquire a lock for their pipeline
+bdd/steps/test_alpha_organisation.py:the pipeline belongs to org {org}
+bdd/steps/test_alpha_organisation.py:the query returns {count:d} pipelines
+bdd/steps/test_alpha_pipelines.py:a run in org "{org}" can still be created
+bdd/steps/test_alpha_pipelines.py:a run is created with status {status}
+bdd/steps/test_alpha_pipelines.py:the pipeline has a manual node
+bdd/steps/test_alpha_pipelines.py:the pipeline has run_context defaults
+bdd/steps/test_alpha_pipelines.py:the run has trigger_type "{trigger_type}"
+bdd/steps/test_alpha_schemas.py:the run uses schema version {version:d}
+bdd/steps/test_assistant.py:a summary of pruned messages is generated
+bdd/steps/test_assistant.py:all {count:d} messages are kept
+bdd/steps/test_assistant.py:no pruning occurs
+bdd/steps/test_assistant.py:the URL changes to "/admin/pipelines"
+bdd/steps/test_assistant.py:the budget is {expected:d} tokens
+bdd/steps/test_assistant.py:the context has only the system message and user message
+bdd/steps/test_assistant.py:the conversation has has_summary set to true
+bdd/steps/test_assistant.py:the frontend executes the navigate command
+bdd/steps/test_assistant.py:the frontend fills the input field
+bdd/steps/test_assistant.py:the frontend returns the element's text content
+bdd/steps/test_assistant.py:the frontend shows the approval card
+bdd/steps/test_assistant.py:the messages are ordered by created_at ascending
+bdd/steps/test_assistant.py:the newest user message is always preserved
+bdd/steps/test_assistant.py:the oldest messages are pruned
+bdd/steps/test_assistant.py:the results are fed back to the LLM for the next turn
+bdd/steps/test_assistant.py:the sessions are ordered by updated_at descending
+bdd/steps/test_assistant.py:the system prompt is always preserved
+bdd/steps/test_conditional_hitl.py:execution continues to the next node
+bdd/steps/test_conditional_hitl.py:the gate does not re-run evals
+bdd/steps/test_conditional_hitl.py:the run routes to "{target}"
+bdd/steps/test_conditional_hitl.py:the run transitions to "awaiting_human"
+bdd/steps/test_conditional_hitl.py:the run transitions to "eval_failed"
+bdd/steps/test_cron_triggers.py:a TriggerEvent is created with result "{result}"
+bdd/steps/test_cron_triggers.py:a TriggerEvent is created with type "{etype}"
+bdd/steps/test_cron_triggers.py:the TriggerEvent references the created run
+bdd/steps/test_in_app_notifications.py:only "{category}" category notifications are shown
+bdd/steps/test_in_app_notifications.py:only admin-scoped notifications are shown
+bdd/steps/test_in_app_notifications.py:only error-level notifications are shown
+bdd/steps/test_in_app_notifications.py:only non-dismissed notifications are shown
+bdd/steps/test_in_app_notifications.py:only org-wide warning notifications are shown
+bdd/steps/test_in_app_notifications.py:only self-dismissed notifications are shown
+bdd/steps/test_in_app_notifications.py:other users still see the notification
+bdd/steps/test_in_app_notifications.py:shows a "Clear filters" action
+bdd/steps/test_in_app_notifications.py:the dashboard notifications panel refreshes
+bdd/steps/test_in_app_notifications.py:the dialog shows "{text}" option
+bdd/steps/test_in_app_notifications.py:the dialog shows a scope dismiss option
+bdd/steps/test_in_app_notifications.py:the dialog shows only "{text}" option
+bdd/steps/test_in_app_notifications.py:the dismiss is logged in the audit trail
+bdd/steps/test_in_app_notifications.py:the link routes to /notifications
+bdd/steps/test_in_app_notifications.py:the new notification appears in the list
+bdd/steps/test_in_app_notifications.py:the notification bell badge shows "{count}"
+bdd/steps/test_in_app_notifications.py:the notification is hidden for all org members
+bdd/steps/test_in_app_notifications.py:the notification is hidden for this user
+bdd/steps/test_in_app_notifications.py:the notification is not visible on the notifications page
+bdd/steps/test_in_app_notifications.py:the notification is removed from the dashboard
+bdd/steps/test_in_app_notifications.py:the notification is removed from user B's dashboard
+bdd/steps/test_in_app_notifications.py:the notification is still visible on the notifications page
+bdd/steps/test_in_app_notifications.py:the notification remains visible
+bdd/steps/test_in_app_notifications.py:the notifications are ordered by most recent first
+bdd/steps/test_in_app_notifications.py:the notifications panel is still collapsed
+bdd/steps/test_in_app_notifications.py:the page shows "{text}"
+bdd/steps/test_in_app_notifications.py:the request is rejected with {code:d}
+bdd/steps/test_in_app_notifications.py:they see a "{text}" link
+bdd/steps/test_in_app_notifications.py:they see at most {count:d} notifications
+bdd/steps/test_in_app_notifications.py:they see notifications {start:d}-{end:d} matching the filters
+bdd/steps/test_in_app_notifications.py:they see only "{level1}" and "{level2}" notifications
+bdd/steps/test_in_app_notifications.py:user B still sees the notification
+bdd/steps/test_in_app_notifications.py:user B's dashboard refreshes
+bdd/steps/test_mcp_oauth.py:the client cannot be used for token exchange
+bdd/steps/test_pipelines.py:node {node:d} is not re-executed
+bdd/steps/test_run_context.py:no human interrupt is raised
+bdd/steps/test_run_retention.py:the pending run is preserved
+bdd/steps/test_run_retention.py:the running run is preserved
+bdd/steps/test_stale_jwt_revocation.py:the HITL review enforcement uses a DB-live membership check
+bdd/steps/test_stale_jwt_revocation.py:the response respects the old role until token refresh
+bdd/steps/test_stale_jwt_revocation.py:this is a documented acceptable gap of up to 15 minutes
+bdd/steps/test_team_membership.py:user "{username}" cannot access team "{team_name}" resources
+bdd/steps/test_view_as_team_non_admin_rejected.py:the view_as_team parameter is ignored
+bdd/steps/test_workflows.py:the signature verifies against the Modulo registry public key
