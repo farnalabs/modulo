@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import (
 from modulo.api.constants import MSG_DATABASE_TEMPORARILY_UNAVAILABLE
 from modulo.api.db_error_handling import raise_session_contract_error
 from modulo.api.models.problem import ProblemException, ProblemType
-from modulo.api.team_scope import TeamScopeProvider, team_membership_exists
+from modulo.api.team_scope import TeamGateDenial, TeamScopeProvider, evaluate_team_gate
 from modulo.auth.dependencies import (
     bind_principal_context,
     get_current_tenant_user,
@@ -580,17 +580,19 @@ def _team_membership_or_admin_dep(
                 await set_rls_org(session, principal.organisation_id)
                 await set_rls_user_context(session, principal.account_id, principal.org_role)
                 row = await resource_team_id_provider(request, session)
-                if row is not None and row.visibility not in ("org", None) and row.owner_team_id is not None:
-                    if key_team_id is not None:
-                        is_member = row.owner_team_id == key_team_id
-                    else:
-                        is_member = await team_membership_exists(
-                            session,
-                            account_id=principal.account_id,
-                            team_id=row.owner_team_id,
-                        )
-                else:
-                    is_member = True
+                # FAR-1513: the matrix itself is single-sourced in
+                # evaluate_team_gate — the MCP per-row trigger guards evaluate
+                # the SAME body against team-blind-resolved rows, so the two
+                # surfaces cannot drift.
+                denial: TeamGateDenial | None = await evaluate_team_gate(
+                    session,
+                    row_present=row is not None,
+                    owner_team_id=row.owner_team_id if row is not None else None,
+                    visibility=row.visibility if row is not None else None,
+                    account_id=principal.account_id,
+                    org_role=principal.org_role,
+                    team_key_id=key_team_id,
+                )
         except SQLAlchemyError as exc:
             raise_session_contract_error(exc, "dependencies._check")
             logger.exception("permission.team_scope_read_failed")
@@ -598,34 +600,19 @@ def _team_membership_or_admin_dep(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
             ) from None
-        if row is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found")
-        if row.visibility == "org" or row.visibility is None or row.owner_team_id is None:
+        if denial is None:
             return principal
-        if not is_member:
+        if denial.kind == "membership":
             logger.warning(
                 _CODE_PERMISSION_DENIED,
                 extra={
                     "permission": "team.membership_or_admin",
                     "required": "team_membership",
                     "actual": principal.org_role,
-                    "owner_team_id": str(row.owner_team_id),
+                    "owner_team_id": str(denial.owner_team_id) if denial.owner_team_id else None,
                 },
             )
-            if key_team_id is not None:
-                # Team-scoped key denied on the BOUNDARY (not membership).
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=(
-                        f"This API key is scoped to team {key_team_id} and cannot access "
-                        f"resources owned by team {row.owner_team_id}"
-                    ),
-                )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not a member of the team that owns this resource",
-            )
-        return principal
+        raise HTTPException(status_code=denial.status_code, detail=denial.detail)
 
     return _tagged_dep(
         Depends(_check),

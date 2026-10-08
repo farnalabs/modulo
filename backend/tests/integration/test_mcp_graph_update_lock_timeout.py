@@ -1,7 +1,7 @@
 """FAR-1361: a contended MCP graph write degrades within the bounded lock timeout.
 
 The REST mutation endpoints bound their row-lock wait
-(``_set_mutation_row_lock_timeout``, FAR-1313) and this test proves the MCP
+(``set_mutation_row_lock_timeout`` (db.crud.row_lock), FAR-1313) and this test proves the MCP
 graph-update transaction now does too - against REAL Postgres, with a real
 holder holding the real lock:
 

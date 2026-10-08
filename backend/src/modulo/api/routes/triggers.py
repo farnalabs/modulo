@@ -26,6 +26,7 @@ from modulo.api.constants import (
     MSG_DB_OPERATION_FAILED,
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_INTERNAL_SERVER_ERROR,
+    MSG_PIPELINE_NOT_FOUND,
     MSG_TRIGGER_NOT_FOUND,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
@@ -35,6 +36,8 @@ from modulo.api.dependencies import (
     get_db_session,
     require_permission,
     require_permission_any_credential,
+    require_team_membership_or_admin,
+    require_team_membership_or_admin_any_credential,
 )
 from modulo.api.middleware.sensitive_mask import (
     SENSITIVE_VALUE_MASK,
@@ -42,6 +45,11 @@ from modulo.api.middleware.sensitive_mask import (
     merge_masked_config_json,
 )
 from modulo.api.routes.runs import pipeline_not_runnable_http
+from modulo.api.team_scope import (
+    evaluate_team_gate,
+    resolve_pipeline_team_scope,
+    resolve_trigger_team_scope,
+)
 from modulo.auth.dependencies import get_current_tenant_user, get_current_tenant_user_or_api_key
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
@@ -62,6 +70,7 @@ from modulo.core.trigger_streak import (
 from modulo.core.trigger_validation import validate_ongoing_config
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import create_run
 from modulo.db.crud.trigger import apply_trigger_event_cursor
 from modulo.db.models.organisation import Organisation
@@ -301,6 +310,69 @@ async def _load_trigger_for_update(
     if trigger is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found")
     return trigger
+
+
+async def _require_team_gate_in_txn(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+) -> None:
+    """Re-verify the pipeline team gate INSIDE the endpoint's mutation txn (FAR-1513).
+
+    ``require_team_membership_or_admin`` runs its own transaction that COMMITS
+    before the endpoint's ``session.begin()`` opens, so the pipeline's
+    visibility / ``owner_team_id`` can change in between (TOCTOU). Mirrors
+    pipelines' ``_reapply_team_gate_inside_mutation_txn``: lock the pipeline
+    ``FOR UPDATE`` (bounded by ``set_mutation_row_lock_timeout``) and re-run
+    the SAME shared matrix via ``evaluate_team_gate`` — the dependency and the
+    in-txn guard cannot drift because the matrix is single-sourced.
+
+    The read is caller-facing (the endpoint transaction's RLS context is
+    already set), so a row the principal cannot see 404s here; combined with
+    the evaluator's own fail-closed branches the gate denies both ways.
+    """
+    # The RLS membership/admin arms of ``rls_team_isolation`` need BOTH
+    # ``app.organisation_id`` AND ``app.user_id``/``app.org_role``. The
+    # dependency sets both, but ``set_config(..., is_local => true)`` dies at
+    # transaction end - and ``set_rls_org`` alone runs in the callers'
+    # transactions - so the membership arm cannot see the caller at all and
+    # would 404 legitimate members/admins. Set the user half here, inside the
+    # same txn this gate runs in (set_rls_user_context is itself transaction-scoped,
+    # so this covers every caller of THIS helper without touching the sites
+    # that never run it).
+    await set_rls_user_context(session, principal.account_id, principal.org_role)
+    # Must run BEFORE the FOR UPDATE below to bound that wait.
+    await set_mutation_row_lock_timeout(session)
+    current = (
+        await session.execute(
+            select(Pipeline)
+            .where(
+                Pipeline.id == pipeline_id,
+                Pipeline.organisation_id == principal.organisation_id,
+                Pipeline.deleted_at.is_(None),
+            )
+            .with_for_update()
+            # populate_existing: a caller that pre-fetched the pipeline would
+            # otherwise get its stale instance back and the FOR UPDATE re-read
+            # would be a no-op (same rationale as the pipelines variant).
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if current is None:
+        # A gone-or-hidden pipeline denies the mutation; the caller's own
+        # downstream pipeline reads would 404 the same way.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    denial = await evaluate_team_gate(
+        session,
+        row_present=True,
+        owner_team_id=current.owner_team_id,
+        visibility=current.visibility,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+        team_key_id=getattr(principal, "team_id", None),
+    )
+    if denial is not None:
+        raise HTTPException(status_code=denial.status_code, detail=denial.detail)
 
 
 def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]) -> dict[str, Any]:
@@ -592,6 +664,8 @@ async def update_cron_config(
     req: CronConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — cron config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update cron configuration for a trigger.
 
@@ -603,6 +677,9 @@ async def update_cron_config(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
+            # FAR-1513: re-verify the team gate atomically with the mutation
+            # (the dependency committed its own txn before this one opened).
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
             prev_active = await _apply_cron_update(session, trigger, req)
             await session.flush()
     except ProgrammingError:
@@ -744,6 +821,8 @@ async def update_polling_config(
     req: PollingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — polling config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update polling configuration for a trigger.
 
@@ -755,6 +834,8 @@ async def update_polling_config(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
+            # FAR-1513: re-verify the team gate atomically with the mutation.
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _require_trigger_type(trigger, "polling", "Only polling triggers can have polling configuration")
 
@@ -846,6 +927,8 @@ async def update_ongoing_config(
     req: OngoingConfigUpdate,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — ongoing config is a trigger mutation (FAR-946 class).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Update the ongoing configuration for an ``ongoing`` trigger.
 
@@ -861,6 +944,8 @@ async def update_ongoing_config(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
+            # FAR-1513: re-verify the team gate atomically with the mutation.
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _require_trigger_type(trigger, "ongoing", "Only ongoing triggers can have ongoing configuration")
 
@@ -939,6 +1024,9 @@ async def test_polling_condition(
     req: PollingTestRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — testing runs the connector against the trigger's
+    # pipeline context, a read of team-private pipeline configuration.
+    team_gate: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Test a polling trigger's query and condition expression without firing a run.
 
@@ -958,6 +1046,9 @@ async def test_polling_condition(
             trigger = result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
+            # FAR-1513: re-verify the team gate atomically with this read of
+            # team-private pipeline configuration.
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _require_trigger_type(trigger, "polling", "Only polling triggers can be tested")
     except ProgrammingError:
@@ -1031,6 +1122,9 @@ async def create_trigger(
     # any_credential: declarative apply (FAR-681) creates triggers with mk_
     # org API keys; roles are clamped to the key's live membership.
     principal: TenantPrincipal = require_permission_any_credential("trigger.create"),
+    # FAR-1513: the automation leg must not bypass the pipeline team gate —
+    # same resolver the JWT leg uses, any-credential principal variant.
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_pipeline_team_scope),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Create a new trigger for a pipeline."""
@@ -1038,6 +1132,10 @@ async def create_trigger(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+            # FAR-1513: re-verify the pipeline team gate atomically with the
+            # insert (no trigger row exists yet — the gate targets the
+            # pipeline directly).
+            await _require_team_gate_in_txn(session, principal, pipeline_id)
             # FAR-681: (pipeline, name) is the declarative-apply identity, so a
             # live duplicate name is a 409 CONFLICT (the 0201 partial unique
             # index enforces the same rule at the DB level; this check gives a
@@ -1204,6 +1302,9 @@ async def update_trigger(
     # any_credential: declarative apply (FAR-681) updates triggers with mk_
     # org API keys; roles are clamped to the key's live membership.
     principal: TenantPrincipal = require_permission_any_credential(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: same automation-leg team gate as create (resolved via the
+    # trigger's owning pipeline).
+    _: TenantPrincipal = require_team_membership_or_admin_any_credential(resolve_trigger_team_scope),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     """Update a trigger's general configuration."""
@@ -1213,6 +1314,8 @@ async def update_trigger(
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
+            # FAR-1513: re-verify the team gate atomically with the mutation.
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _ongoing_changed, prev_active = await _apply_trigger_update(session, settings, trigger, req)
 
@@ -1261,6 +1364,8 @@ async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.delete"),
+    # FAR-1513: team gate — deletion must not bypass the pipeline team boundary.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> None:
     """Soft-delete a trigger."""
     try:
@@ -1268,6 +1373,11 @@ async def delete_trigger(
             await set_rls_org(session, principal.organisation_id)
             from modulo.db.crud.trigger import soft_delete_trigger
 
+            # FAR-1513: read the trigger first so the team gate runs against
+            # its owning pipeline BEFORE the delete, atomically (the crud call
+            # would otherwise mutate before any in-txn verification).
+            trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
             deleted = await soft_delete_trigger(session, trigger_id)
             if deleted is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
@@ -1307,13 +1417,34 @@ async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — restore resolves the soft-deleted trigger's
+    # pipeline (the resolver deliberately does not filter trigger.deleted_at).
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Restore a soft-deleted trigger."""
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             from modulo.db.crud.trigger import restore_trigger as _restore_trigger
+            from modulo.db.soft_delete import include_soft_deleted
 
+            # FAR-1513: the target row is soft-deLETED, so the plain read is
+            # empty; read the deleted row (SoftDeleteMixin listener skipped
+            # via include_soft_deleted) to obtain the owning pipeline for the
+            # in-txn team gate BEFORE the restore mutates it.
+            deleted_trigger = (
+                await session.execute(
+                    include_soft_deleted(
+                        select(Trigger).where(
+                            Trigger.id == trigger_id,
+                            Trigger.organisation_id == principal.organisation_id,
+                        )
+                    )
+                )
+            ).scalar_one_or_none()
+            if deleted_trigger is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
+            await _require_team_gate_in_txn(session, principal, deleted_trigger.pipeline_id)
             trigger = await _restore_trigger(session, trigger_id)
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
@@ -1369,6 +1500,8 @@ async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — toggling fires/stops a trigger on a team's pipeline.
+    _: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Toggle a trigger's active state."""
     try:
@@ -1384,6 +1517,8 @@ async def toggle_trigger(
             trigger = result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
+            # FAR-1513: re-verify the team gate atomically with the mutation.
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             trigger.active = not trigger.active
             # An ongoing trigger being turned back ON must fire on the next
@@ -1477,6 +1612,8 @@ async def test_trigger(
     req: TestTriggerRequest,
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_TRIGGER_UPDATE),
+    # FAR-1513: team gate — a test event creates a Run on the pipeline.
+    team_gate: TenantPrincipal = require_team_membership_or_admin(resolve_trigger_team_scope),
 ) -> dict[str, Any]:
     """Fire a test event for a trigger.
 
@@ -1497,6 +1634,9 @@ async def test_trigger(
             trigger = result.scalar_one_or_none()
             if trigger is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
+            # FAR-1513: re-verify the team gate atomically with this mutation
+            # (a test event / Run writes against the pipeline).
+            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             raw_body = json.dumps(req.payload, sort_keys=True).encode()
             payload_hash = hashlib.sha256(raw_body).hexdigest()
