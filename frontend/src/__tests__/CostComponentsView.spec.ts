@@ -291,6 +291,19 @@ describe('CostComponentsView', () => {
     expect(wrapper.find('[data-testid="cost-components-delete-confirm"]').exists()).toBe(false)
   })
 
+  it('styles the delete panel with the warning-text token for a self_reported component', async () => {
+    const wrapper = await mountView()
+    const vm = wrapper.vm as unknown as {
+      confirmDeleteRequest: (c: { id: string; name: string; display_name: string; kind: string }) => void
+    }
+
+    vm.confirmDeleteRequest({ id: 'comp-2', name: 'model_tokens', display_name: 'Model Tokens', kind: 'self_reported' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="cost-components-delete-confirm"]').exists()).toBe(true)
+    expect(wrapper.findAll('p.text-warning-text')).toHaveLength(2)
+  })
+
   it('shows formError when DELETE returns an error', async () => {
     mockDelete.mockResolvedValueOnce({ response: { status: 500 }, data: null, error: { detail: 'Cannot delete' } })
     const wrapper = await mountView()

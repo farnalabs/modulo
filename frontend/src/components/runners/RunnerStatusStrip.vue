@@ -89,7 +89,7 @@ const STATE_TONE: Record<StripState | 'loading' | 'not_enabled' | 'fetch_failed'
   healthy: { strip: 'border-success/40 bg-success/10 text-success', dot: 'bg-success' },
   not_enabled: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },
   engine_unreachable: { strip: 'border-destructive/40 bg-destructive/10 text-destructive', dot: 'bg-destructive' },
-  image_not_pulled: { strip: 'border-warning/40 bg-warning/10 text-warning', dot: 'bg-warning' },
+  image_not_pulled: { strip: 'border-warning/40 bg-warning/10 text-warning-text', dot: 'bg-warning' },
   stale: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground' },
   loading: { strip: 'border-border bg-muted/40 text-muted-foreground', dot: 'bg-muted-foreground animate-pulse' },
   fetch_failed: { strip: 'border-destructive/40 bg-destructive/10 text-destructive', dot: 'bg-destructive' },

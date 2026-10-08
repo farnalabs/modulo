@@ -152,7 +152,7 @@ function badgeClass(variant?: 'primary' | 'warning' | 'destructive'): string {
 
 .badge-warning {
   background-color: hsla(var(--warning) / 0.12);
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text));
 }
 
 .badge-destructive {

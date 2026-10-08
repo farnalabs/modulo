@@ -78,7 +78,7 @@
       >
         <div
           v-if="installWarnings.length > 0"
-          class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning"
+          class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning-text"
           data-testid="collection-install-warnings"
         >
           <h3 class="text-sm font-medium">

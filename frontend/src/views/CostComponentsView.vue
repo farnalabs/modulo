@@ -199,10 +199,10 @@
         </FormDialog>
 
         <div v-if="deleteTarget" class="rounded-lg border p-4" :class="deleteTarget.kind === 'self_reported' ? 'border-warning/50 bg-warning/5' : 'border-destructive/50 bg-destructive/10'">
-          <p class="text-sm font-medium" :class="deleteTarget.kind === 'self_reported' ? 'text-warning' : 'text-destructive'">
+          <p class="text-sm font-medium" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive'">
             {{ $t('views.CostComponentsView.delete_component', { name: deleteTarget.display_name }) }}
           </p>
-          <p class="mt-1 text-sm" :class="deleteTarget.kind === 'self_reported' ? 'text-warning/80' : 'text-destructive/80'">
+          <p class="mt-1 text-sm" :class="deleteTarget.kind === 'self_reported' ? 'text-warning-text' : 'text-destructive/80'">
             {{ deleteTarget.kind === 'self_reported' ? $t('views.CostComponentsView.delete_self_reported_warning') : $t('views.CostComponentsView.this_action_cannot_be_undone') }}
           </p>
           <div class="mt-3 flex items-center gap-2">

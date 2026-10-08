@@ -5,7 +5,7 @@
     <FeatureGate feature-name="runtime_config" required-tier="team" show-disabled>
 
     <div class="flex items-center gap-3">
-      <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning">
+      <div v-if="hasDrift" class="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning-text">
         <span>⚠</span>
         <span>{{ $t('views.SettingsRuntimeConfigView.some_values_differ_from_environment_restart_to_sync') }}</span>
       </div>
@@ -45,7 +45,7 @@
             >
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
-                  <span v-if="entryHasDrift(entry)" class="text-warning" :title="$t('views.SettingsRuntimeConfigView.value_differs_from_environment')">⚠</span>
+                  <span v-if="entryHasDrift(entry)" class="text-warning-text" :title="$t('views.SettingsRuntimeConfigView.value_differs_from_environment')">⚠</span>
                 <code class="text-sm font-mono">{{ entry.key }}</code>
                   <span
                     v-if="entry.hot_reloadable"

@@ -183,6 +183,26 @@ describe('PipelineSnapshotTimeline', () => {
     expect(result.text()).toContain('Input port removed')
   })
 
+  it('renders a non-block breaking change with the warning-text token', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        semantic: {
+          impacted_nodes: [],
+          breaking_changes: [{ severity: 'warn', reason: 'Port type widened' }],
+        },
+      },
+      error: undefined,
+    })
+    const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])
+    await rowFor(wrapper, 'snap-1').trigger('click')
+    await wrapper.find('[data-testid="mock-select"]').setValue('1')
+    await wrapper.find('[data-testid="snapshot-timeline-diff"]').trigger('click')
+    await flushPromises()
+    const result = wrapper.find('[data-testid="snapshot-timeline-diff-result"]')
+    expect(result.text()).toContain('warn')
+    expect(result.html()).toContain('text-warning-text')
+  })
+
   it('lists no impacted nodes and no breaking changes for a clean diff', async () => {
     apiPost.mockResolvedValue({ data: { semantic: { impacted_nodes: [], breaking_changes: [] } }, error: undefined })
     const wrapper = await flushMount([makeSnapshot(), makeSnapshot({ id: 'snap-2', snapshot_version: 2, version_kind: 'run', tag: null })])

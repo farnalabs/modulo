@@ -16,7 +16,7 @@
             <button type="button" :class="btnToolbarIcon" :aria-label="$t('views.PipelineEditorView.rename_pipeline')" :title="$t('views.PipelineEditorView.rename_pipeline')" data-testid="pipeline-editor-rename" @click="openRenameDialog">
               <PencilIcon class="h-3 w-3" aria-hidden="true" />
             </button>
-            <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.archived') }}</span>
+            <span v-if="pipeline?.archived_at" class="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.archived') }}</span>
             <span v-if="folderPath.length > 0" class="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
               <span v-for="(f, i) in folderPath" :key="f.id" class="truncate">
                 <template v-if="i > 0"><span class="text-muted-foreground/50">/</span></template>
@@ -374,7 +374,7 @@
                 </p>
                 <div
                   v-if="retryPolicyScheduleWarning"
-                  class="mt-2 text-xs text-warning"
+                  class="mt-2 text-xs text-warning-text"
                   role="alert"
                   data-testid="pipeline-editor-retry-policy-schedule-warning"
                 >
@@ -382,7 +382,7 @@
                 </div>
                 <div
                   v-if="retryPolicyNoRetriesWarning"
-                  class="mt-2 text-xs text-warning"
+                  class="mt-2 text-xs text-warning-text"
                   role="alert"
                   data-testid="pipeline-editor-retry-policy-warning"
                 >
@@ -583,7 +583,7 @@
             <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
               {{ runError }}
             </div>
-            <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning">
+            <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text">
               {{ emptyRunWarning }}
             </div>
             <div class="flex justify-end gap-2 pt-2">
@@ -622,7 +622,7 @@
           <Background :gap="20" :size="1" />
           <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps"><div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
-                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
+                    <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.PipelineEditorView.node_manual_badge') }}</div>
                     <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
                   </div></template>
           <template #node-agent="nodeProps"><div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm" v-tooltip.top="nodeProps.data.description">
@@ -647,7 +647,7 @@
                   </div></template>
           <template #edge-default="edgeProps">
             <div v-if="edgeProps.data?.hitl_review_config" class="absolute -translate-y-4 translate-x-2">
-              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
+              <span class="rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.PipelineEditorView.node_hitl_badge') }}</span>
             </div>
             <div v-if="edgeProps.data?.edge_type === 'loop'" class="absolute translate-y-4 translate-x-2">
               <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:bg-blue-900 dark:text-blue-300">
@@ -866,7 +866,7 @@
                     <span>{{ connectorName({ type: c.connector_type_id, instance_id: c.id }) }}</span>
                   </label>
                 </div>
-                <div v-if="outOfScopeConnectors.length > 0" class="mt-1 text-[11px] text-warning" role="alert" data-testid="pipeline-editor-scope-widen-warning">
+                <div v-if="outOfScopeConnectors.length > 0" class="mt-1 text-[11px] text-warning-text" role="alert" data-testid="pipeline-editor-scope-widen-warning">
                   {{ $t('views.PipelineEditorView.capability_scope_widen_warning') }}{{ outOfScopeConnectors.join(', ') }}
                 </div>
               </div>

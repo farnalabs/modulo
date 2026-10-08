@@ -399,6 +399,45 @@ describe('RunDetailView', () => {
     wrapper.unmount()
   })
 
+  it('shows the waiting-for-capacity banner without a detail line when error_detail is absent', async () => {
+    const { api } = await import('../lib/api/client')
+    ;(api.GET as any).mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}') {
+        return Promise.resolve({
+          data: {
+            run_id: 'test-run-id',
+            pipeline_id: 'test-pipeline',
+            status: 'pending',
+            error_code: 'capacity.pipeline',
+            error_detail: null,
+            total_cost_usd: null,
+            token_consumption: null,
+            node_token_usage: null,
+            trace_id: null,
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/runs/{run_id}/io') {
+        return Promise.resolve({ data: { outputs_json: null }, error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    const banner = wrapper.find('[data-testid="run-detail-waiting-for-capacity"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('Waiting for capacity')
+    expect(banner.findAll('p')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   it('shows an error-code badge on the failed-run diagnostics panel', async () => {
     const { api } = await import('../lib/api/client')
     ;(api.GET as any).mockImplementation((url: string) => {

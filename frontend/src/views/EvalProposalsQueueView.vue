@@ -163,7 +163,7 @@ const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 function statusBadgeClass(status: string): string {
   const classMap: Record<string, string> = {
     pending: 'bg-pending/10 text-pending',
-    routing: 'bg-warning/10 text-warning',
+    routing: 'bg-warning/10 text-warning-text',
     correcting: 'bg-purple-100 text-purple-700',
     resolved: 'bg-success/10 text-success',
     escalated: 'bg-destructive/10 text-destructive',
