@@ -23,6 +23,15 @@ os.environ.setdefault("MODULO_CSRF_ENABLED", "false")
 # by the webhook/slack endpoint test modules.
 DEFAULT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
+# FAR-1597: the provisioned-system-engine fixture moved to tests/unit/conftest.py
+# so it holds at a stable collection scope (a directory-level Package node can
+# drop conftest autouse fixtures when an argv section detours out of this
+# directory). Keep the settings stub importable from HERE for compatibility —
+# the in-flight FAR-1569 Slack-isolation fix imports it as
+# ``from tests.unit.api.conftest import _ProvisionedSystemSettings`` — until
+# that branch's import is retargeted.
+from tests.unit.conftest import _ProvisionedSystemSettings  # noqa: E402, F401
+
 
 def make_system_session_mock(
     *,
@@ -105,36 +114,6 @@ def make_system_session_mock(
     session.scalar = AsyncMock(return_value=0)
     session.scalar_one = AsyncMock(return_value=0)
     return session
-
-
-class _ProvisionedSystemSettings:
-    """Settings stub presenting a provisioned system database URL.
-
-    ``modulo.api.dependencies`` resolves its settings via the module-level
-    ``get_settings`` name, so tests can present a provisioned reading without
-    touching the lru-cached real :class:`Settings`.
-    """
-
-    modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-unit-test"
-    # FAR-1524: get_or_create_system_engine passes this to create_async_engine
-    # as pool_recycle; the stub must expose it just like the real Settings.
-    db_pool_recycle_seconds = 1500
-
-
-@pytest.fixture(autouse=True)
-def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Present a PROVISIONED system engine to the API unit-test suite.
-
-    Unit tests mock the system SESSION but run in an environment without
-    ``MODULO_SYSTEM_DATABASE_URL``. The (now robust) fallback predicate
-    initialises the engine factory itself, so an un-provisioned reading would
-    503 every trigger delivery here. With a provisioned URL the flag reads
-    False exactly as in production; the created engine is lazy and never
-    connects (every system session is overridden per test).
-    """
-    from modulo.api import dependencies as _deps
-
-    monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
 
 @pytest.fixture(autouse=True)

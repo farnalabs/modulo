@@ -14542,6 +14542,26 @@ def _duplicate_test_body_baseline_keys() -> set[str]:
     return keys
 
 
+def _duplicate_test_body_baseline_candidates() -> set[str]:
+    """Baseline entries the stale check may judge under the active scan.
+
+    Unscoped: every entry (the tree-wide ratchet). Under
+    ``MODULO_TEST_STYLE_SCOPE`` only entries whose module is IN scope: the
+    scoped ``--changed-files`` run never re-checked the others, so an
+    un-scanned module cannot be judged stale — without this filter every
+    scoped run whose changed set excluded those duplicate pairs reported all
+    the tree-wide baseline entries as phantom-stale and failed a gate that had
+    nothing to do with the change under review. Mirrors
+    ``_self_asserting_bdd_baseline_candidates``. Tree-wide staleness stays
+    owned by the unscoped pass (CI's architecture run).
+    """
+    baseline = _read_duplicate_test_body_baseline()
+    scope = _resolve_scope_paths()
+    if scope is None:
+        return baseline
+    return {key for key in baseline if (TESTS / key.split(":", 1)[0]).resolve() in scope}
+
+
 def _read_duplicate_test_body_baseline() -> set[str]:
     """Baseline entries (comments and blank lines stripped)."""
     return {
@@ -14596,7 +14616,7 @@ def test_duplicate_test_body_baseline_has_no_stale_entries():
     """A pair listed in the baseline but no longer a duplicate (because it was
     untangled or removed) must leave the baseline: the ratchet only shrinks, so
     a completed sweep is recorded and never silently re-opens."""
-    stale = _read_duplicate_test_body_baseline() - _duplicate_test_body_baseline_keys()
+    stale = _duplicate_test_body_baseline_candidates() - _duplicate_test_body_baseline_keys()
     assert not stale, (
         f"{len(stale)} duplicate-test-body baseline entries are no longer duplicates - regenerate\n"
         "the baseline with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`:\n  "
