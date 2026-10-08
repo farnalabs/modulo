@@ -80,8 +80,8 @@
     </div>
 
     <div v-if="filteredWouldActivate.length > 0" class="card p-4 border-warning/30">
-      <h2 class="mb-2 text-sm font-semibold text-warning">{{ $t('views.AdminFeatureFlagsView.would_activate') }}</h2>
-      <p class="mb-3 text-sm text-warning/80">
+      <h2 class="mb-2 text-sm font-semibold text-warning-text">{{ $t('views.AdminFeatureFlagsView.would_activate') }}</h2>
+      <p class="mb-3 text-sm text-warning-text">
         {{ $t('views.AdminFeatureFlagsView.would_activate_features', { count: filteredWouldActivate.length }) }}
       </p>
       <div class="flex flex-wrap gap-2">

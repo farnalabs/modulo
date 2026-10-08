@@ -134,7 +134,7 @@ const bannerClass = computed<BannerClass>(() => {
   return {
     border: 'border-l-[hsl(var(--warning))]',
     background: 'bg-[hsl(var(--warning)/0.08)]',
-    text: 'text-[hsl(var(--warning))]',
+    text: 'text-[hsl(var(--warning-text))]',
   }
 })
 

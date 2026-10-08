@@ -76,7 +76,7 @@
                 </template>
                 <template #cell-annotations="{ row }">
                   <div class="text-xs">
-                    <p v-if="(row as TeamTableRow).refused_total_usd != null" class="text-warning" data-testid="cost-annotation-refused">
+                    <p v-if="(row as TeamTableRow).refused_total_usd != null" class="text-warning-text" data-testid="cost-annotation-refused">
                       {{ $t('views.AdminCostBreakdownView.refused_limit_line', { amount: (row as TeamTableRow).refused_total_usd!.toFixed(2) }) }}
                     </p>
                     <p v-if="(row as TeamTableRow).clamped_total_usd != null" class="text-muted-foreground" data-testid="cost-annotation-clamped">

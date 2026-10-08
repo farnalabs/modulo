@@ -915,7 +915,7 @@ function renderMarkdown(text: string): string {
 }
 .assistant-permission-header {
   @apply flex items-center gap-2 font-medium;
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text));
 }
 .assistant-permission-tools {
   @apply space-y-1;

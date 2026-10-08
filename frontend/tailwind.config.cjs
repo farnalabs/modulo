@@ -37,6 +37,14 @@ module.exports = {
         'destructive-foreground': 'hsl(var(--destructive-foreground))',
         success: 'hsl(var(--success))',
         warning: 'hsl(var(--warning))',
+        // FAR-1530/FAR-1587: text-safe counterpart of `warning`. `--warning` is
+        // tuned as a FILL/accent hue (50% lightness), so amber text on white or
+        // on a bg-warning/* tint is only ~1.8-2.1:1 in light mode (WCAG AA needs
+        // 4.5:1). `--warning-text` keeps the hue, darkens light mode to 30%
+        // lightness, and is identical to `--warning` in the dark and agent
+        // themes. Use `text-warning-text` - never `text-warning` - for warning
+        // COLOURED TEXT (see style.css for the measured ratios).
+        'warning-text': 'hsl(var(--warning-text))',
         pending: 'hsl(var(--pending))',
         preview: 'hsl(var(--preview))',
         border: 'hsl(var(--border))',

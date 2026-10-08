@@ -14,7 +14,7 @@
         <div
           class="mx-4 rounded-lg border border-warning/30 bg-background/95 p-4 text-center shadow-lg backdrop-blur-sm"
         >
-          <p class="text-sm font-medium text-warning" data-testid="feature-gate-title">
+          <p class="text-sm font-medium text-warning-text" data-testid="feature-gate-title">
             {{ gateTitle }}
           </p>
           <p class="mt-1 text-xs text-muted-foreground">{{ tooltipText }}</p>

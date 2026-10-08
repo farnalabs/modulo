@@ -70,7 +70,7 @@ const iconBgClass = computed(() => {
   const map: Record<string, string> = {
     primary: "bg-primary/10 text-primary",
     success: "bg-success/10 text-success",
-    warning: "bg-warning/10 text-warning",
+    warning: "bg-warning/10 text-warning-text",
     destructive: "bg-destructive/10 text-destructive",
     muted: "bg-muted text-muted-foreground",
   };
@@ -80,7 +80,7 @@ const iconBgClass = computed(() => {
 const valueClass = computed(() => {
   const map: Record<string, string> = {
     success: "text-success",
-    warning: "text-warning",
+    warning: "text-warning-text",
     destructive: "text-destructive",
   };
   return map[props.color ?? "primary"] ?? "";

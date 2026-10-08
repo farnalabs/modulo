@@ -289,7 +289,7 @@
                                   <td class="table-cell">
                                     <span
                                       class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning'"
+                                      :class="ref.reference_type === 'direct_node' ? 'bg-primary/10 text-primary' : 'bg-warning/10 text-warning-text'"
                                     >
                                       {{ ref.reference_type === 'direct_node' ? $t('views.AdminModelBackendsView.ref_type_direct') : $t('views.AdminModelBackendsView.ref_type_agent') }}
                                     </span>

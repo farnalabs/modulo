@@ -16,14 +16,14 @@ const { t } = useI18n()
 const CLASS_STYLES: Record<string, string> = {
   agent: 'bg-destructive/10 text-destructive',
   harness: 'bg-muted text-muted-foreground',
-  sandbox: 'bg-warning/10 text-warning',
-  node: 'bg-warning/10 text-warning',
-  connector: 'bg-warning/10 text-warning',
+  sandbox: 'bg-warning/10 text-warning-text',
+  node: 'bg-warning/10 text-warning-text',
+  connector: 'bg-warning/10 text-warning-text',
   capacity: 'bg-primary/10 text-primary',
-  provider: 'bg-warning/10 text-warning',
+  provider: 'bg-warning/10 text-warning-text',
   eval: 'bg-destructive/10 text-destructive',
-  config: 'bg-warning/10 text-warning',
-  contract: 'bg-warning/10 text-warning',
+  config: 'bg-warning/10 text-warning-text',
+  contract: 'bg-warning/10 text-warning-text',
   run: 'bg-muted text-muted-foreground',
 }
 

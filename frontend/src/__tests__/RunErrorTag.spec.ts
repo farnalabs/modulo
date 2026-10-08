@@ -39,7 +39,7 @@ describe('RunErrorTag', () => {
   it('renders provider codes with a warning-style pill and their i18n label', () => {
     const wrapper = mount(RunErrorTag, { props: { code: 'provider.rate_limited' } })
     expect(wrapper.text()).toBe('Provider rate limited')
-    expect(wrapper.classes()).toContain('text-warning')
+    expect(wrapper.classes()).toContain('text-warning-text')
     const auth = mount(RunErrorTag, { props: { code: 'provider.authentication' } })
     expect(auth.text()).toBe('Authentication failed')
   })

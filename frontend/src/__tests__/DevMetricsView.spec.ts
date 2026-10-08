@@ -218,8 +218,8 @@ describe('DevMetricsView', () => {
     const cards = wrapper.findAll('.card')
     // LCP card should have text-success
     expect(cards[0].find('.text-success').exists()).toBe(true)
-    // FCP card should have text-warning
-    expect(cards[1].find('.text-warning').exists()).toBe(true)
+    // FCP card should have the AA-safe warning text token (FAR-1587)
+    expect(cards[1].find('.text-warning-text').exists()).toBe(true)
     // INP card should have text-destructive
     expect(cards[2].find('.text-destructive').exists()).toBe(true)
   })
