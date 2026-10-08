@@ -1093,7 +1093,7 @@ async def _advance_refresh_sequence(
                 _log.info(
                     "auth.refresh_reuse_replay",
                     extra={
-                        "family_id": claims.family_id,
+                        "family_id": claims.family_id[:8],
                         "account_id": claims.account_id,
                         "expected_sequence": claims.sequence,
                         "max_sequence": new_sequence,
@@ -1103,7 +1103,7 @@ async def _advance_refresh_sequence(
                 _log.warning(
                     "auth.refresh_theft_blacklist",
                     extra={
-                        "family_id": claims.family_id,
+                        "family_id": claims.family_id[:8],
                         "account_id": claims.account_id,
                         "expected_sequence": claims.sequence,
                         "max_sequence": new_sequence,
@@ -1253,7 +1253,7 @@ async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, obj
             async with session.begin():
                 blacklisted = await blacklist_family(session, family_uuid, account_uuid)
                 if not blacklisted:
-                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val})
+                    _log.warning("logout.family_not_found", extra={"family_id": family_id_val[:8]})
         except IntegrityError:
             _log.exception(_CODE_AUTH_LOGOUT)
             raise HTTPException(
@@ -1286,7 +1286,7 @@ async def _blacklist_refresh_family(session: AsyncSession, claims: dict[str, obj
                 detail=MSG_INTERNAL_SERVER_ERROR,
             ) from None
     except ValueError:
-        _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val})
+        _log.warning("logout.invalid_token_family", extra={"token_family": family_id_val[:8]})
 
 
 def _clear_account_session_approvals(claims: dict[str, object]) -> None:

@@ -285,7 +285,7 @@ async def change_password(
                     logger.exception("me.change_password.blacklist_failed")
                     logger.warning(
                         "Failed to blacklist token family %s for account %s — aborting password change",
-                        family.family_id,
+                        str(family.family_id)[:8],
                         current_user.account_id,
                     )
                     raise
