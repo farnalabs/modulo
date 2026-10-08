@@ -11,6 +11,13 @@ dispatch THROUGH the frozen snapshot — ``create_snapshot_from_live_graph``
 copies ``pipelines.environment_profile_id`` onto
 ``PipelineSnapshot.environment_profile_id``, and that snapshot value is what
 route resolution queries with.
+
+And FAR-1598: the dispatch-time team-scope backstop — a team-private
+profile not owned by the pipeline's effective owner team is refused with
+the typed error (shared FAR-1558 predicate + named code) BEFORE any
+provider is selected — plus the REAL run-path chain test (snapshot freeze
+-> executor ctx seeding -> the production node_runner seam -> route
+resolution) that fails if the enforcement is removed.
 """
 
 import json
@@ -35,6 +42,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     resolve_sandbox_dispatch_route,
     validate_e2b_dispatch_timeout,
 )
+from modulo.core.pipeline_engine import node_runner
 from modulo.core.pipeline_engine.node_runner import SandboxTierRefusedError
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.util import WorkspaceNetworkValidationError
@@ -47,6 +55,22 @@ from tests.unit.db.test_pipeline_snapshot import (
 
 _ORG = uuid.uuid4()
 _PROFILE_ID = uuid.uuid4()
+_PIPELINE_ID = uuid.uuid4()
+
+
+class _NullTransaction:
+    """Async CM standing in for ``session.begin()`` on a session double.
+
+    The dispatch reads own their transaction (the ``set_rls_*`` helpers
+    require an active one), so a double only has to provide the context
+    manager; ``in_transaction()`` already reports True.
+    """
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
 
 
 def _profile(provider_type: str, **kwargs: object) -> SimpleNamespace:
@@ -78,6 +102,7 @@ class _SessionCM:
     def __init__(self, profile: object) -> None:
         self._session = SimpleNamespace(
             execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: profile)),
+            begin=lambda: _NullTransaction(),
             in_transaction=lambda: True,
             get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
             info={},
@@ -583,6 +608,7 @@ class _MatchingProfileSessionCM:
         self._profile = profile
         self._session = SimpleNamespace(
             execute=AsyncMock(side_effect=self._execute),
+            begin=lambda: _NullTransaction(),
             in_transaction=lambda: True,
             get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
             info={},
@@ -675,3 +701,268 @@ async def test_null_snapshot_binding_keeps_the_default_route() -> None:
     route = await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("e2b")), _ORG, None)
     assert route.provider_type == "none"
     assert route.profile is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1598: dispatch-time team-scope backstop (+ the real run-path chain)
+# ---------------------------------------------------------------------------
+
+
+class _TeamScopeSessionCM:
+    """Session double serving BOTH reads of the FAR-1598 backstop.
+
+    Serves the profile row only when the same-org SELECT asks for
+    ``expected_profile_id``, and the pipeline owner team only when the
+    owner-team SELECT asks for ``expected_pipeline_id`` — so the run-path
+    chain cannot pass by accident: the profile id must come from the frozen
+    snapshot and the pipeline id from the executor-seeded conformance ctx.
+    ``info`` is asserted afterwards for the team-blind (execution-context)
+    widening of the load read.
+    """
+
+    def __init__(
+        self,
+        profile: object,
+        *,
+        expected_profile_id: uuid.UUID,
+        pipeline_owner_team: uuid.UUID | None,
+        expected_pipeline_id: uuid.UUID | None,
+    ) -> None:
+        self._profile = profile
+        self._expected_profile_id = expected_profile_id
+        self._pipeline_owner_team = pipeline_owner_team
+        self._expected_pipeline_id = expected_pipeline_id
+        self.profile_queries = 0
+        self.owner_team_queries = 0
+        self._session = SimpleNamespace(
+            execute=AsyncMock(side_effect=self._execute),
+            begin=lambda: _NullTransaction(),
+            in_transaction=lambda: True,
+            get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
+            info={},
+        )
+
+    @property
+    def session(self) -> SimpleNamespace:
+        return self._session
+
+    def _execute(self, stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        try:
+            sql = str(stmt)
+            params = {str(value) for value in stmt.compile().params.values()}
+        except (AttributeError, TypeError, ValueError):
+            sql, params = "", set()
+        if "environment_profiles" in sql:
+            self.profile_queries += 1
+            found = self._profile if str(self._expected_profile_id) in params else None
+            return SimpleNamespace(scalar_one_or_none=lambda: found)
+        if "pipelines" in sql:
+            self.owner_team_queries += 1
+            found = (
+                self._pipeline_owner_team
+                if self._expected_pipeline_id is not None and str(self._expected_pipeline_id) in params
+                else None
+            )
+            return SimpleNamespace(scalar_one_or_none=lambda: found)
+        return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    async def __aenter__(self) -> SimpleNamespace:
+        return self._session
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+async def _freeze_snapshot_with_bound_profile(
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    bound_profile_id: uuid.UUID,
+) -> Any:
+    """REAL ``create_snapshot_from_live_graph`` freeze of a live pipeline
+    (two-node graph) whose environment-profile binding is set."""
+    source_id = uuid.uuid4()
+    target_id = uuid.uuid4()
+
+    pipeline = MagicMock()
+    pipeline.id = pipeline_id
+    pipeline.organisation_id = org_id
+    pipeline.environment_profile_id = bound_profile_id
+    pipeline.graph_nodes_json = [
+        {"id": str(source_id), "agent_id": None, "connector_binding": None},
+        {"id": str(target_id), "agent_id": None, "connector_binding": None},
+    ]
+    pipeline.run_context_defaults = {}
+
+    edge = MagicMock()
+    edge.id = uuid.uuid4()
+    edge.source_node_id = source_id
+    edge.target_node_id = target_id
+    edge.edge_type = "normal"
+    edge.hitl_review_config = None
+    edge.condition_expression = None
+
+    snapshot_session = AsyncMock(spec=AsyncSession)
+    snapshot_session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        _scalar_result(1),
+        _scalars_result([]),
+        _scalars_result([]),
+    ]
+    with _bind_lock_connection(snapshot_session, _lock_attempt_result(True)):
+        snapshot = await create_snapshot_from_live_graph(snapshot_session, pipeline_id=pipeline_id)
+    assert snapshot is not None
+    assert snapshot.environment_profile_id == bound_profile_id
+    return snapshot
+
+
+async def test_team_private_profile_cross_team_binding_refused_at_dispatch() -> None:
+    """Backstop shape: a team-private profile owned by ANOTHER team is refused
+    with the typed error carrying the shared named code — no route, no provider."""
+    cm = _TeamScopeSessionCM(
+        _profile("e2b", visibility="team", owner_team_id=uuid.uuid4()),
+        expected_profile_id=_PROFILE_ID,
+        pipeline_owner_team=uuid.uuid4(),
+        expected_pipeline_id=_PIPELINE_ID,
+    )
+    with pytest.raises(SandboxDispatchUnboundError, match="environment_profile_team_mismatch"):
+        await resolve_sandbox_dispatch_route(lambda: cm, _ORG, _PROFILE_ID, pipeline_id=_PIPELINE_ID)
+
+
+async def test_team_private_profile_without_a_pipeline_id_fails_closed() -> None:
+    """Unknown pipeline team (no id threaded) must REFUSE a team-private
+    profile — fail closed, never dispatch it unjudged."""
+    cm = _TeamScopeSessionCM(
+        _profile("e2b", visibility="team", owner_team_id=uuid.uuid4()),
+        expected_profile_id=_PROFILE_ID,
+        pipeline_owner_team=None,
+        expected_pipeline_id=None,
+    )
+    with pytest.raises(SandboxDispatchUnboundError, match="environment_profile_team_mismatch"):
+        await resolve_sandbox_dispatch_route(lambda: cm, _ORG, _PROFILE_ID, pipeline_id=None)
+    # No pipeline id -> no owner-team query was even attempted.
+    assert cm.owner_team_queries == 0
+
+
+async def test_org_visible_profile_dispatch_is_unchanged() -> None:
+    """Org-visible profiles never mismatch: the backstop neither refuses nor
+    issues the owner-team read, and the load read is team-BLIND (execution
+    context) so a team-owned profile row would be visible to dispatch."""
+    cm = _TeamScopeSessionCM(
+        _profile("e2b", visibility="org", owner_team_id=uuid.uuid4()),
+        expected_profile_id=_PROFILE_ID,
+        pipeline_owner_team=uuid.uuid4(),
+        expected_pipeline_id=_PIPELINE_ID,
+    )
+    route = await resolve_sandbox_dispatch_route(lambda: cm, _ORG, _PROFILE_ID, pipeline_id=_PIPELINE_ID)
+    assert route.provider_type == "e2b"
+    assert route.profile is not None
+    assert cm.owner_team_queries == 0
+    assert cm.session.info.get("execution_context") is True
+
+
+async def test_run_dispatch_refuses_a_drifted_team_mismatched_binding() -> None:
+    """FAR-1598 acceptance: the PRODUCTION consumption chain refuses a drifted
+    team-mismatched binding — typed error, no provider selected.
+
+    Every step is real: ``create_snapshot_from_live_graph`` freezes the
+    binding -> ``set_conformance_ctx`` (the executor's own call shape) seeds
+    the run ctx -> ``_resolve_sandbox_dispatch_route_for_run`` (the seam
+    ``_sandbox_agent_impl`` itself calls) reads the ctx ->
+    ``resolve_sandbox_dispatch_route`` loads the profile and applies the
+    shared FAR-1558 predicate. Only the DB rows are faked, and the double
+    answers ONLY for the frozen profile id / ctx pipeline id.
+
+    Prove-the-fix: delete the backstop from route resolution and this test
+    fails — the mismatched binding resolves a route and builds a hub instead
+    of raising (the ``pytest.raises`` sees no exception, and
+    ``build_hub`` is called).
+    """
+    from modulo.core.bundled_runner import runner_dispatch
+    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    bound_profile_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+    team_b = uuid.uuid4()
+
+    snapshot = await _freeze_snapshot_with_bound_profile(
+        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
+    )
+
+    # DRIFT: the profile is now team-private and owned by team_b while the
+    # pipeline belongs to team_a — a binding no REST writer would accept
+    # (e.g. a direct DB write), exactly the FAR-1598 backstop case.
+    profile = _profile("runner_docker", id=bound_profile_id, visibility="team", owner_team_id=team_b)
+    cm = _TeamScopeSessionCM(
+        profile,
+        expected_profile_id=bound_profile_id,
+        pipeline_owner_team=team_a,
+        expected_pipeline_id=pipeline_id,
+    )
+
+    def session_factory() -> object:
+        return cm
+
+    set_conformance_ctx(session_factory, org_id, snapshot.environment_profile_id, pipeline_id, [], False)
+    state = {"_org_id": str(org_id), "_pipeline_id": str(pipeline_id)}
+    try:
+        with (
+            patch.object(runner_dispatch, "build_hub") as build_hub_mock,
+            pytest.raises(SandboxDispatchUnboundError, match="environment_profile_team_mismatch"),
+        ):
+            await node_runner._resolve_sandbox_dispatch_route_for_run(state, session_factory)
+        # No provider was selected: the refusal precedes hub resolution.
+        build_hub_mock.assert_not_called()
+        # Both halves of the chain really ran, against the frozen ids.
+        assert cm.profile_queries == 1
+        assert cm.owner_team_queries == 1
+    finally:
+        node_runner._conformance_ctx_cv.set(None)
+
+
+async def test_run_dispatch_same_team_binding_resolves_through_the_real_chain() -> None:
+    """The mirror: a LEGAL same-team binding dispatches through the same chain.
+
+    Two wiring facts the refusal test depends on, pinned here: the owner-team
+    read actually happens (the ctx's pipeline id reaches it — absent that,
+    the unknown team would fail-closed and THIS test would refuse), and the
+    profile load is team-BLIND (``app.execution_context`` set — without the
+    widening, Postgres RLS would hide the row and this binding would silently
+    resolve the DEFAULT route).
+    """
+    from modulo.core.pipeline_engine.node_runner import set_conformance_ctx
+
+    org_id = uuid.uuid4()
+    pipeline_id = uuid.uuid4()
+    bound_profile_id = uuid.uuid4()
+    team_a = uuid.uuid4()
+
+    snapshot = await _freeze_snapshot_with_bound_profile(
+        org_id=org_id, pipeline_id=pipeline_id, bound_profile_id=bound_profile_id
+    )
+    profile = _profile("e2b", id=bound_profile_id, visibility="team", owner_team_id=team_a)
+    cm = _TeamScopeSessionCM(
+        profile,
+        expected_profile_id=bound_profile_id,
+        pipeline_owner_team=team_a,
+        expected_pipeline_id=pipeline_id,
+    )
+
+    def session_factory() -> object:
+        return cm
+
+    set_conformance_ctx(session_factory, org_id, snapshot.environment_profile_id, pipeline_id, [], False)
+    state = {"_org_id": str(org_id), "_pipeline_id": str(pipeline_id)}
+    try:
+        route = await node_runner._resolve_sandbox_dispatch_route_for_run(state, session_factory)
+    finally:
+        node_runner._conformance_ctx_cv.set(None)
+
+    assert route.provider_type == "e2b"
+    assert route.profile is not None
+    assert route.profile.id == snapshot.environment_profile_id
+    assert cm.owner_team_queries == 1
+    assert cm.session.info.get("execution_context") is True
