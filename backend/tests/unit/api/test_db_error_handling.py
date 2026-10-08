@@ -17,6 +17,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable
+from pathlib import Path
 from typing import Any
 
 import pydantic
@@ -32,7 +33,7 @@ from sqlalchemy.exc import (
 )
 
 from modulo.api.db_error_handling import handle_db_errors
-from modulo.core.exceptions import PipelineNotRunnableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, TriggersPausedError
 
 
 def _integrity_error() -> IntegrityError:
@@ -583,3 +584,166 @@ class TestPipelineNotRunnableMapping:
         with pytest.raises(HTTPException) as excinfo:
             await _run(fail())
         assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+class TestTriggersPausedMapping:
+    """``TriggersPausedError`` -> 409, never the generic 500 (FAR-1589).
+
+    The org-wide ``triggers_paused`` kill-switch gate lives in
+    ``ensure_triggers_resumable``, reached from ``create_run`` and from the
+    webhook/slack pre-flights. It is a domain refusal an admin can lift, never
+    a server-side bug. The webhook/slack routes swallow it inside their own
+    endpoint body and answer a ``{"status": "paused"}`` payload, so they never
+    reach the classifier with the type; a route WITHOUT such a chain falls
+    through every arm to the ``Exception->500`` backstop. These tests pin the
+    chain-less mapping and prove a handler that resolves pause itself is not
+    double-handled.
+    """
+
+    _ORG = uuid.UUID("00000000-0000-0000-0000-00000000f158")
+
+    async def test_chain_less_refusal_maps_to_409_not_500(self) -> None:
+        @handle_db_errors("test.triggers_paused")
+        async def fail() -> None:
+            raise TriggersPausedError(org_id=self._ORG, trigger_type="webhook")
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        detail = excinfo.value.detail
+        assert detail == f"Cannot create run: triggers are paused for organisation {self._ORG}", detail
+        assert detail != "An unexpected error occurred.", detail
+
+    async def test_handler_that_resolves_pause_itself_is_not_double_handled(self) -> None:
+        """The webhook/slack shape: catch in the body, answer the own payload.
+
+        The shared arm must never see the exception, so the endpoint's own
+        result passes through untouched.
+        """
+
+        @handle_db_errors("test.triggers_paused.chain")
+        async def endpoint() -> dict[str, str]:
+            try:
+                raise TriggersPausedError(org_id=self._ORG, trigger_type="webhook")
+            except TriggersPausedError:
+                return {"status": "paused"}
+
+        assert await _run(endpoint()) == {"status": "paused"}
+
+    async def test_refusal_logs_under_its_own_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        @handle_db_errors("prefix.triggers_paused")
+        async def fail() -> None:
+            raise TriggersPausedError(org_id=self._ORG, trigger_type="cron")
+
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            pytest.raises(HTTPException),
+        ):
+            await _run(fail())
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("prefix.triggers_paused.triggers_paused" in m for m in messages)
+
+    async def test_generic_exception_still_maps_to_500(self) -> None:
+        """The backstop is unchanged — only the pause refusal is lifted out of it."""
+
+        @handle_db_errors("test.triggers_paused.generic")
+        async def fail() -> None:
+            raise RuntimeError("boom")
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+class TestOrgDeletedMapping:
+    """``OrgDeletedError`` -> 409 (deleted) / 404 (missing), never 500 (FAR-1589).
+
+    ``_ensure_org_not_deleted`` sits in ``create_run`` and fires for EVERY run
+    origin — manual included — so a chain-less route such as
+    ``variant_batches.re_fire_batch`` answered a generic 500 for a refusal the
+    sibling routes (``routes/runs.py`` trigger + rerun, ``routes/triggers.py``
+    test trigger) translate to a typed 4xx. The statuses and detail strings
+    here are byte-identical to those route-local arms.
+    """
+
+    _ORG = uuid.UUID("00000000-0000-0000-0000-00000000f159")
+
+    async def test_deleted_org_chain_less_refusal_maps_to_409_not_500(self) -> None:
+        @handle_db_errors("test.org_deleted")
+        async def fail() -> None:
+            raise OrgDeletedError(org_id=self._ORG, deleted=True)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        detail = excinfo.value.detail
+        assert detail == f"Cannot create run: organisation {self._ORG} is deleted", detail
+        assert detail != "An unexpected error occurred.", detail
+
+    async def test_missing_org_chain_less_refusal_maps_to_404_not_500(self) -> None:
+        @handle_db_errors("test.org_missing")
+        async def fail() -> None:
+            raise OrgDeletedError(org_id=self._ORG, deleted=False)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+        assert excinfo.value.detail == f"Cannot create run: organisation {self._ORG} not found"
+
+    def test_details_match_the_sibling_route_arms(self) -> None:
+        """Byte-parity with the route-local ``except OrgDeletedError`` arms.
+
+        There is no importable helper for this mapping (unlike
+        ``pipeline_not_runnable_http``), so parity is asserted against the
+        detail templates the sibling routes actually contain: if a route
+        rewords its detail, this fails and the shared arm must be updated with
+        it — the two must never drift apart.
+        """
+        import modulo.api.routes.runs as runs_route
+        import modulo.api.routes.triggers as triggers_route
+
+        deleted_template = 'detail=f"Cannot create run: organisation {exc.org_id} is deleted"'
+        missing_template = 'detail=f"Cannot create run: organisation {exc.org_id} not found"'
+
+        runs_src = Path(runs_route.__file__).read_text(encoding="utf-8")
+        triggers_src = Path(triggers_route.__file__).read_text(encoding="utf-8")
+        assert deleted_template in runs_src, "routes/runs.py no longer answers this detail — update the shared arm"
+        assert missing_template in runs_src, "routes/runs.py no longer answers this detail — update the shared arm"
+        assert deleted_template in triggers_src, "routes/triggers.py no longer answers this detail"
+        assert missing_template in triggers_src, "routes/triggers.py no longer answers this detail"
+
+    async def test_route_that_translates_itself_is_not_double_handled(self) -> None:
+        """A route-local ``except`` arm already raises HTTPException; the
+        shared arm must leave it untouched (one conversion, never two)."""
+        org_id = self._ORG
+        refusal = OrgDeletedError(org_id=org_id, deleted=True)
+
+        @handle_db_errors("test.org_deleted.chain")
+        async def fail() -> None:
+            try:
+                raise refusal
+            except OrgDeletedError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+                ) from None
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _run(fail())
+        assert excinfo.value.status_code == status.HTTP_409_CONFLICT
+        assert excinfo.value.detail == f"Cannot create run: organisation {org_id} is deleted"
+
+    async def test_refusal_logs_under_its_own_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        @handle_db_errors("prefix.org_deleted")
+        async def fail() -> None:
+            raise OrgDeletedError(org_id=self._ORG, deleted=True)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.api.db_error_handling"),
+            pytest.raises(HTTPException),
+        ):
+            await _run(fail())
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("prefix.org_deleted.org_deleted" in m for m in messages)
