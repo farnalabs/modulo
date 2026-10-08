@@ -1443,6 +1443,7 @@ export default {
       "dimension": "Break down by",
       "dimension_none": "Overall",
       "dimension_trigger_type": "Trigger type",
+      "dimension_trigger_id": "Trigger ID",
       "dimension_status": "Status",
       "dimension_pipeline": "Pipeline",
       "dimension_folder": "Folder",

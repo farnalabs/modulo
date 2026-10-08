@@ -4,7 +4,7 @@ import { createI18n } from 'vue-i18n'
 
 import AnalyticsFilterBar from '../components/analytics/AnalyticsFilterBar.vue'
 import enUS from '../locales/en-US.js'
-import type { AnalyticsFilters, AnalyticsMeasure } from '../stores/analytics'
+import { applyQueryParamsToFilters, type AnalyticsFilters, type AnalyticsMeasure } from '../stores/analytics'
 
 // FAR-1141: the backend's AnalyticsDimension vocabulary now includes
 // execution_origin, so the dimension picker must offer it — otherwise the
@@ -69,5 +69,50 @@ describe('AnalyticsFilterBar dimension picker (FAR-1141)', () => {
     expect(emitted).toBeTruthy()
     const last = emitted![emitted!.length - 1][0] as { dimension?: string | null }
     expect(last.dimension).toBe('execution_origin')
+  })
+})
+
+describe('AnalyticsFilterBar dimension picker (FAR-1567: trigger_id)', () => {
+  it('offers trigger_id as a selectable dimension', () => {
+    const values = dimensionOptions(mountBar()).map((o) => o.attributes('value'))
+
+    expect(values).toContain('trigger_id')
+    expect(values).toContain('trigger_type')
+  })
+
+  it('labels trigger_id from i18n, never hardcoded English', () => {
+    const options = dimensionOptions(mountBar())
+    const triggerId = options.find((o) => o.attributes('value') === 'trigger_id')
+
+    expect(triggerId).toBeDefined()
+    const label = triggerId!.text()
+    const messages = enUS as Record<string, any>
+    expect(label).toBe(messages.views.AnalyticsView.dimension_trigger_id)
+    expect(label).not.toContain('dimension_trigger_id')
+  })
+
+  it('emits trigger_id when it is chosen', async () => {
+    const wrapper = mountBar()
+    await wrapper.find('[data-testid="analytics-filter-dimension"]').setValue('trigger_id')
+
+    const emitted = wrapper.emitted('update:filters')
+    expect(emitted).toBeTruthy()
+    const last = emitted![emitted!.length - 1][0] as { dimension?: string | null }
+    expect(last.dimension).toBe('trigger_id')
+  })
+
+  it('shows a ?dimension=trigger_id deep link as the selected option', () => {
+    // Deep link -> store filters (the store keeps trigger_id) -> rendered
+    // select. Before FAR-1567 the option was missing, so the select silently
+    // fell back to the empty "Overall" value despite the store holding it.
+    const { filters, applied } = applyQueryParamsToFilters(
+      { dimension: 'trigger_id' },
+      { timespan: '7d', groupBy: 'day' },
+    )
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('trigger_id')
+
+    const select = mountBar(filters).find('[data-testid="analytics-filter-dimension"]')
+    expect((select.element as HTMLSelectElement).value).toBe('trigger_id')
   })
 })
