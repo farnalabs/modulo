@@ -60,6 +60,11 @@ from modulo.core.cron_helpers import (
     validate_cron_expression,
 )
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
+from modulo.core.team_visibility import (
+    ConnectorBindingMissingError,
+    connector_team_mismatch_detail,
+    find_connector_team_mismatches,
+)
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.trigger_streak import (
     _streak_config,
@@ -316,7 +321,7 @@ async def _require_team_gate_in_txn(
     session: AsyncSession,
     principal: TenantPrincipal,
     pipeline_id: uuid.UUID,
-) -> None:
+) -> Pipeline:
     """Re-verify the pipeline team gate INSIDE the endpoint's mutation txn (FAR-1513).
 
     ``require_team_membership_or_admin`` runs its own transaction that COMMITS
@@ -373,6 +378,77 @@ async def _require_team_gate_in_txn(
     )
     if denial is not None:
         raise HTTPException(status_code=denial.status_code, detail=denial.detail)
+    # Returned so callers that must judge a TEAM boundary against this
+    # pipeline's owner team (FAR-1595's connector-instance gate) do not need a
+    # second read of the row they already hold a lock on.
+    return current
+
+
+async def _validate_connector_instance_team_scope(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_owner_team_id: uuid.UUID | None,
+    config: dict[str, Any] | None,
+    previous_connector_instance_id: Any = None,
+) -> None:
+    """Refuse a NEW trigger reference to a connector outside the pipeline's team (FAR-1595).
+
+    A trigger's ``config_json.connector_instance_id`` was merged in with no
+    ``ConnectorInstance`` lookup at all, and the fire job then reads that row
+    TEAM-BLIND (``cron_helpers._set_rls_org`` sets ``app.execution_context``)
+    with no team predicate — so a team-A trigger could name a team-B connector
+    and poll it (reading team-private credentials). This is the SAVE-time half
+    of the fix; the defence-in-depth half is
+    ``trigger_engine.polling.enforce_polling_team_scope``.
+
+    Uses the SHARED graph-save machinery — ``find_connector_team_mismatches``'s
+    team-blind org-scoped read (FAR-1515 CRITICAL 1) — so a hidden cross-team
+    row is judged rather than skipped, and the refusal is the same named
+    ``connector_team_mismatch`` detail every other binding surface returns. A
+    reference the widened read cannot resolve raises the same named 409
+    (``ConnectorBindingMissingError``) rather than riding through the gate.
+
+    Only the TEAM-PRIVATE direction is refused here: an ORG-visible connector
+    is usable by any team's pipeline (polling carries no caller visibility
+    scope — see ``polling.enforce_polling_team_scope``), while the reverse
+    direction (a team pipeline pinning an org-only connector) is a RUN-time
+    rule enforced at graph save and is not a polling concern.
+
+    *previous_connector_instance_id* makes this a NEW-binding check: an
+    unchanged reference is not re-judged, so an unrelated edit to a trigger
+    that already carries one can never be blocked by this gate.
+    """
+    raw = (config or {}).get("connector_instance_id")
+    if raw is None or raw == "":
+        return
+    if previous_connector_instance_id is not None and str(raw) == str(previous_connector_instance_id):
+        return
+    try:
+        connector_id = uuid.UUID(str(raw))
+    except ValueError:
+        # Not a UUID: it can never resolve to a connector row, so it can never
+        # read one's credentials — the fire job's own parse fails loudly.
+        _log.warning(
+            "triggers.connector_instance_id_not_a_uuid",
+            extra={"value": str(raw)[:100]},
+        )
+        return
+    try:
+        mismatches = await find_connector_team_mismatches(
+            session,
+            org_id=org_id,
+            pipeline_owner_team_id=pipeline_owner_team_id,
+            connector_bindings=[{"node_id": None, "connector_instance_id": str(connector_id)}],
+        )
+    except ConnectorBindingMissingError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    blocking = [m for m in mismatches if (m.connector_visibility or "org") == "team"]
+    if blocking:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=connector_team_mismatch_detail(blocking),
+        )
 
 
 def _merge_trigger_config(current: dict[str, Any] | None, update: dict[str, Any]) -> dict[str, Any]:
@@ -835,7 +911,7 @@ async def update_polling_config(
             await set_rls_org(session, principal.organisation_id)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
             # FAR-1513: re-verify the team gate atomically with the mutation.
-            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
+            pipeline_row = await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _require_trigger_type(trigger, "polling", "Only polling triggers can have polling configuration")
 
@@ -844,12 +920,23 @@ async def update_polling_config(
                 trigger.daily_spend_limit = req.daily_spend_limit
 
             config = dict(trigger.config_json or {})
+            previous_connector_instance_id = config.get("connector_instance_id")
 
             _merge_if_set(config, "connector_instance_id", req.connector_instance_id)
             _merge_if_set(config, "poll_query", req.poll_query)
             _merge_if_set(config, "condition_expression", req.condition_expression)
             _merge_if_set(config, "poll_interval_seconds", req.poll_interval_seconds)
             _merge_if_set(config, "snapshot_id", req.snapshot_id)
+
+            # FAR-1595: a NEW connector reference is team-validated against the
+            # pipeline before it can ever be polled.
+            await _validate_connector_instance_team_scope(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_owner_team_id=pipeline_row.owner_team_id,
+                config=config,
+                previous_connector_instance_id=previous_connector_instance_id,
+            )
 
             trigger.config_json = config
 
@@ -1135,7 +1222,7 @@ async def create_trigger(
             # FAR-1513: re-verify the pipeline team gate atomically with the
             # insert (no trigger row exists yet — the gate targets the
             # pipeline directly).
-            await _require_team_gate_in_txn(session, principal, pipeline_id)
+            pipeline_row = await _require_team_gate_in_txn(session, principal, pipeline_id)
             # FAR-681: (pipeline, name) is the declarative-apply identity, so a
             # live duplicate name is a 409 CONFLICT (the 0201 partial unique
             # index enforces the same rule at the DB level; this check gives a
@@ -1157,6 +1244,15 @@ async def create_trigger(
                         ),
                     )
             _validate_trigger_config_keys(req.config_json)
+            # FAR-1595: a connector reference named at create time is
+            # team-validated against the owning pipeline before the trigger can
+            # ever poll it (the fire job reads the row team-blind).
+            await _validate_connector_instance_team_scope(
+                session,
+                org_id=principal.organisation_id,
+                pipeline_owner_team_id=pipeline_row.owner_team_id,
+                config=req.config_json,
+            )
             next_fire_at = _resolve_cron_next_fire(req.trigger_type, req.cron_expression, req.cron_timezone)
             if req.trigger_type == "ongoing":
                 # FAR-158 ongoing guard: validated BEFORE creating (the shared
@@ -1315,9 +1411,20 @@ async def update_trigger(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             trigger = await _load_trigger_for_update(session, principal.organisation_id, trigger_id)
             # FAR-1513: re-verify the team gate atomically with the mutation.
-            await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
+            pipeline_row = await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
+            previous_connector_instance_id = (trigger.config_json or {}).get("connector_instance_id")
             _ongoing_changed, prev_active = await _apply_trigger_update(session, settings, trigger, req)
+            if req.config_json is not None:
+                # FAR-1595: a NEW connector reference written through the
+                # general update path is team-validated too.
+                await _validate_connector_instance_team_scope(
+                    session,
+                    org_id=principal.organisation_id,
+                    pipeline_owner_team_id=pipeline_row.owner_team_id,
+                    config=trigger.config_json,
+                    previous_connector_instance_id=previous_connector_instance_id,
+                )
 
             await session.flush()
             updated_in_flight = await _ongoing_in_flight(session, trigger)

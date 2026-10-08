@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +31,7 @@ from modulo.api.team_scope import TeamGateDenial
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
+from modulo.core.team_visibility import ConnectorBindingMissingError, ConnectorTeamMismatch
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -109,6 +111,11 @@ def _happy_patches() -> list:
         # integration team-gate suite, so stub it here to keep these route
         # coverage tests focused on the DB error conventions.
         patch(f"{_PREFIX}_require_team_gate_in_txn", new_callable=AsyncMock),
+        # FAR-1595: the connector-instance team gate runs a team-blind
+        # org-scoped read the mocked sessions do not model either; its
+        # allow/deny matrix is exercised directly by the dedicated
+        # cross-team tests below and by the polling team-scope tests.
+        patch(f"{_PREFIX}find_connector_team_mismatches", new_callable=AsyncMock, return_value=[]),
     ]
 
 
@@ -424,6 +431,229 @@ def test_update_polling_config_happy_path_schedules_and_merges(client: tuple[Tes
     assert body["config_json"]["existing"] == "keep"
     engine.schedule_polling_trigger.assert_awaited_once()
     clear_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Connector-instance team scope (FAR-1595) — save-time validation
+# ---------------------------------------------------------------------------
+
+
+_TEAM_A = uuid.UUID("7f000000-0000-0000-0000-00000000000a")
+_TEAM_B = uuid.UUID("7f000000-0000-0000-0000-00000000000b")
+
+
+def _with_patches(ctxs: list, call: Any) -> Any:
+    """Enter *ctxs* as nested patches, run *call*, restore in reverse."""
+    for c in ctxs:
+        c.__enter__()
+    try:
+        return call()
+    finally:
+        for c in reversed(ctxs):
+            c.__exit__(None, None, None)
+
+
+def _cross_team_mismatch(connector_id: uuid.UUID, *, visibility: str = "team") -> ConnectorTeamMismatch:
+    return ConnectorTeamMismatch(
+        connector_id=connector_id,
+        connector_name="other-teams-connector",
+        connector_owner_team_id=_TEAM_B,
+        pipeline_owner_team_id=_TEAM_A,
+        connector_visibility=visibility,
+    )
+
+
+def test_update_polling_config_cross_team_connector_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
+    """A team-A trigger naming a team-B connector is REFUSED at save (FAR-1595).
+
+    Before the gate the id was merged into ``config_json`` with no
+    ``ConnectorInstance`` lookup at all, and the fire job then read the row
+    team-blind — polling another team's private credentials.
+    """
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    connector_id = uuid.uuid4()
+    ctxs = list(_happy_patches())
+    ctxs.append(
+        patch(
+            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
+        ),
+    )
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"connector_instance_id": str(connector_id)},
+        ),
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "connector_team_mismatch" in resp.json()["detail"]
+
+
+def test_create_trigger_cross_team_connector_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
+    """The same refusal at CREATE time — a new cross-team reference never lands."""
+    http, _session = client
+    connector_id = uuid.uuid4()
+    ctxs = list(_happy_patches())
+    ctxs.append(
+        patch(
+            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
+        ),
+    )
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.post(
+            f"/api/v1/pipelines/{_PIPELINE_ID}/triggers",
+            json={
+                "trigger_type": "polling",
+                "config_json": {"connector_instance_id": str(connector_id)},
+            },
+        ),
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "connector_team_mismatch" in resp.json()["detail"]
+
+
+def test_update_trigger_cross_team_connector_returns_409(client: tuple[TestClient, AsyncMock]) -> None:
+    """The general update path (config_json merge) is gated the same way."""
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    connector_id = uuid.uuid4()
+    ctxs = list(_happy_patches())
+    ctxs.append(
+        patch(
+            f"{_PREFIX}find_connector_team_mismatches", new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)])
+        ),
+    )
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.put(
+            f"/api/v1/triggers/{_TRIGGER_ID}",
+            json={"config_json": {"connector_instance_id": str(connector_id)}},
+        ),
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "connector_team_mismatch" in resp.json()["detail"]
+
+
+def test_update_polling_config_same_team_connector_is_accepted(client: tuple[TestClient, AsyncMock]) -> None:
+    """Control: a same-team reference resolves to no mismatch and SAVES."""
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    engine = MagicMock()
+    engine.schedule_polling_trigger = AsyncMock()
+    ctxs = list(_happy_patches())
+    # find_connector_team_mismatches (from _happy_patches) returns [] here.
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+    ctxs.append(patch(f"{_PREFIX}TriggerEngine", return_value=engine))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"connector_instance_id": str(uuid.uuid4())},
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_polling_config_org_connector_on_team_pipeline_is_accepted(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Scoping pin: only the TEAM-PRIVATE direction is refused at save.
+
+    An org-wide connector is usable by any team's pipeline (a poll carries no
+    caller visibility scope); the reverse direction — a team pipeline pinning
+    an org-only connector — is a RUN-time rule enforced at graph save.
+    """
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    engine = MagicMock()
+    engine.schedule_polling_trigger = AsyncMock()
+    ctxs = list(_happy_patches())
+    ctxs.append(
+        patch(
+            f"{_PREFIX}find_connector_team_mismatches",
+            new=AsyncMock(return_value=[_cross_team_mismatch(uuid.uuid4(), visibility="org")]),
+        ),
+    )
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+    ctxs.append(patch(f"{_PREFIX}TriggerEngine", return_value=engine))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"connector_instance_id": str(uuid.uuid4())},
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+
+
+def test_update_polling_config_unchanged_connector_is_not_revalidated(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Only a NEW binding is judged — an unrelated edit never trips the gate."""
+    http, _session = client
+    existing_id = str(uuid.uuid4())
+    trigger = _make_trigger(trigger_type="polling", config_json={"connector_instance_id": existing_id})
+    find = AsyncMock(return_value=[_cross_team_mismatch(uuid.uuid4())])
+    ctxs = list(_happy_patches())
+    ctxs.append(patch(f"{_PREFIX}find_connector_team_mismatches", new=find))
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"poll_interval_seconds": 300},
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+    find.assert_not_awaited()
+
+
+def test_update_polling_config_unresolvable_connector_returns_409(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A reference the team-blind read cannot resolve is the SAME named 409.
+
+    Parity with graph save (``_enforce_connector_team_bindings``): a binding
+    the gate cannot validate never rides through it (FAR-1515 CRITICAL 1).
+    """
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    missing_id = uuid.uuid4()
+    ctxs = list(_happy_patches())
+    ctxs.append(
+        patch(
+            f"{_PREFIX}find_connector_team_mismatches",
+            new=AsyncMock(side_effect=ConnectorBindingMissingError([(missing_id, None)])),
+        ),
+    )
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"connector_instance_id": str(missing_id)},
+        ),
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "connector_team_mismatch" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

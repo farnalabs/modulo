@@ -15,11 +15,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from modulo.connectors.base import ConnectorType
+from modulo.connectors.base import (
+    ConnectorACL,
+    ConnectorPermissionError,
+    ConnectorType,
+    canonical_capability_set,
+)
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
-    _canonical_capability_list,
     _capabilities_for_connector,
     build_live_manifest,
     canonical_capability,
@@ -493,29 +497,54 @@ def test_canonical_capability_vocabulary(spelling: str, expected: str | None) ->
 def test_canonical_capability_list_non_list_is_empty() -> None:
     """A non-list is not a capability list, so it certifies nothing.
 
-    Guards the defensive arm of ``_canonical_capability_list``: the caller
-    routes only ``isinstance(allowed, list)`` here, but the helper must still
-    handle a malformed value fail-closed rather than raise.
+    Guards the defensive arm of the SHARED ``canonical_capability_set`` (moved
+    to ``connectors.base`` in FAR-1594 so ``ConnectorACL`` reads a stored
+    allowlist the same way): the caller routes only ``isinstance(allowed, list)``
+    here, but the helper must still handle a malformed value fail-closed rather
+    than raise.
     """
-    assert not _canonical_capability_list("read")
-    assert not _canonical_capability_list(None)
+    assert not canonical_capability_set("read")
+    assert not canonical_capability_set(None)
 
 
 def test_canonical_capability_list_drops_non_string_and_non_capability(caplog) -> None:
     """Non-string entries are skipped; a string that is not a capability in any
     accepted spelling is DROPPED (and logged) — it grants nothing."""
     with caplog.at_level(logging.WARNING):
-        result = _canonical_capability_list(["read", 123, "junk", "github.write"])
+        result = canonical_capability_set(["read", 123, "junk", "github.write"])
     assert result == {"read", "write"}
-    assert "guardrail.conformance.operation_not_a_capability" in caplog.text
+    assert "connectors.capability.operation_not_a_capability" in caplog.text
 
 
 def test_decide_conformance_dedupes_canonical_claims() -> None:
-    """Claims naming the same capability in different spellings collapse to ONE
-    canonical claim before derivation (no duplicate positions)."""
-    d = decide_conformance(["github.read", "read"], {"read": True})
+    """Two SPELLINGS of one qualified claim collapse to ONE position.
+
+    FAR-1594(b): a type-qualified claim is a binding position of its own (it is
+    never merged with the bare ``read`` position — see the test below), so the
+    dedupe that matters is between spellings of THAT claim: ``github.read`` and
+    ``github:read`` are one position, matched against the qualified alias the
+    manifest stamps for a github-typed surface.
+    """
+    d = decide_conformance(["github.read", "github:read"], {"github.read": True})
     assert d.state == "present"
     assert d.claimed is True
+    assert not d.missing
+
+
+def test_decide_conformance_qualified_claim_is_not_the_bare_position() -> None:
+    """FAR-1594(b): ``github.read`` and ``read`` are DIFFERENT positions.
+
+    Before FAR-1594 both canonicalised to ``read``, so a claim requiring
+    ``github.read`` was satisfied by any surface declaring bare ``read`` (or by
+    a manifest key of either spelling). The qualified position now needs the
+    manifest's qualified alias — a hand-built ``{"read": True}`` carries none,
+    so it fails CLOSED (unknown) while the bare claim is present.
+    """
+    qualified = decide_conformance(["github.read"], {"read": True})
+    bare = decide_conformance(["read"], {"read": True})
+
+    assert qualified.state == "unknown"
+    assert bare.state == "present"
 
 
 def test_decide_conformance_merges_multiple_spellings_of_one_capability() -> None:
@@ -540,7 +569,11 @@ async def test_parity_canonical_claim_matches_unrestricted_and_allowlisted(
     """
     unrestricted = _row_connector(uuid.uuid4(), [])
     unrestricted.connector_type_id = "github"
+    # FAR-1594(b): a type-qualified claim binds to the surface's TYPE, so the
+    # allowlisted half must be a github-typed surface too — the claim names
+    # github, and the manifest stamps its qualified alias from this id.
     allowlisted = _row_connector(uuid.uuid4(), ["read"])
+    allowlisted.connector_type_id = "github"
 
     unrestricted_manifest = await _manifest_for(monkeypatch, unrestricted)
     allowlisted_manifest = await _manifest_for(monkeypatch, allowlisted)
@@ -642,7 +675,11 @@ async def test_check_node_start_block_absent(monkeypatch: pytest.MonkeyPatch):
 async def test_check_node_start_present_continues(monkeypatch: pytest.MonkeyPatch):
     _patch_orchestration(monkeypatch, [_gr("g_block", "block", ["github.write"])])
     cid = uuid.uuid4()
-    session = _manifest_session(connectors=[_row_connector(cid, ["github.write"])])
+    row = _row_connector(cid, ["github.write"])
+    # FAR-1594(b): the claim is type-qualified, so the surface it certifies
+    # must be github-typed for the manifest to stamp the binding alias.
+    row.connector_type_id = "github"
+    session = _manifest_session(connectors=[row])
     _patch_select(monkeypatch, session)
     session.begin = MagicMock(return_value=session)
     factory = MagicMock()
@@ -1399,3 +1436,67 @@ async def test_check_node_start_round_trip_api_validated_node_certifies(monkeypa
     )
     assert egress_ok.blocked is False
     assert egress_ok.state == "present"
+
+
+# ---------------------------------------------------------------------------
+# ONE vocabulary across certification AND enforcement (FAR-1594)
+# ---------------------------------------------------------------------------
+
+
+async def test_acl_and_conformance_agree_for_legacy_qualified_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SAME stored value gets the SAME answer from both sides (defect (a)).
+
+    ``ConnectorACL`` builds its allowlist from the SHARED
+    ``canonical_capability_set`` the manifest reader uses, so a stored
+    ``["github.read"]`` grants ``read`` at enforcement time exactly as it is
+    certified at conformance time — before FAR-1594 conformance certified
+    ``read`` while the ACL (and the polling read gate) denied it.
+    """
+    granted = _row_connector(uuid.uuid4(), ["github.read"])
+    granted.connector_type_id = "github"
+    granted_manifest = await _manifest_for(monkeypatch, granted)
+
+    assert decide_conformance(["read"], granted_manifest).state == "present"
+    assert ConnectorACL(visibility="org", allowed_operations=["github.read"]).check("read") is None
+
+    # The DENY side agrees too: a write-only allowlist certifies no read and
+    # the ACL denies the read — no half of the system can disagree.
+    denied = _row_connector(uuid.uuid4(), ["github.write"])
+    denied.connector_type_id = "github"
+    denied_manifest = await _manifest_for(monkeypatch, denied)
+
+    assert decide_conformance(["read"], denied_manifest).state == "unknown"
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        ConnectorACL(visibility="org", allowed_operations=["github.write"]).check("read")
+
+
+async def test_type_qualified_claim_binds_to_its_surface_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``github.read`` claim is satisfied ONLY by a github surface (defect (b)).
+
+    The manifest carries each connector surface's type, so a type-qualified
+    claim is a BINDING request: before FAR-1594 the qualifier was dropped and
+    the claim was satisfied by ANY bound surface declaring bare ``read`` (an
+    unrestricted rest/filesystem connector, or a linear connector allowlisted
+    to ``read``).
+    """
+    github = _row_connector(uuid.uuid4(), [])
+    github.connector_type_id = "github"
+    rest = _row_connector(uuid.uuid4(), [])
+    rest.connector_type_id = "rest"
+    linear = _row_connector(uuid.uuid4(), ["read"])
+    linear.connector_type_id = "linear"
+
+    github_manifest = await _manifest_for(monkeypatch, github)
+    rest_manifest = await _manifest_for(monkeypatch, rest)
+    linear_manifest = await _manifest_for(monkeypatch, linear)
+
+    # A BARE claim keeps its "any surface declares it" semantics.
+    assert decide_conformance(["read"], rest_manifest).state == "present"
+
+    # The qualified claim binds to the github-typed surface ...
+    assert decide_conformance(["github.read"], github_manifest).state == "present"
+    # ... and is NOT satisfied by a non-github surface declaring bare ``read``.
+    assert decide_conformance(["github.read"], rest_manifest).state == "unknown"
+    assert decide_conformance(["github.read"], linear_manifest).state == "unknown"

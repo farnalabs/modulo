@@ -16,6 +16,12 @@ decrypted. These tests prove:
 * a ``["read"]`` / unrestricted (``None`` / ``[]``) instance still READS;
 * a malformed ``allowed_operations`` fails closed;
 * BOTH read sites are blocked — no second unwrapped path.
+
+FAR-1595 adds the TEAM-scope half in the same builder: a team-private
+connector polled by a trigger whose pipeline is owned by a different team (or
+by no team at all) is blocked before credential decryption too — the fire job
+reads the connector row team-blind, so the allowlist gate alone never caught
+a cross-team reference.
 """
 
 from __future__ import annotations
@@ -214,3 +220,165 @@ def test_polling_read_proceeds_for_unrestricted_and_read_granted(allowed_operati
 
     assert result["status"] == "condition_met"
     assert stub.queried_resources == ["SELECT 1"]
+
+
+# ---------------------------------------------------------------------------
+# Team scope (FAR-1595) — the fire job reads the connector row team-blind
+# ---------------------------------------------------------------------------
+
+TEAM_A = uuid.UUID("7f000000-0000-0000-0000-00000000000a")
+TEAM_B = uuid.UUID("7f000000-0000-0000-0000-00000000000b")
+PIPELINE_ID = uuid.UUID("7f000000-0000-0000-0000-00000000000c")
+
+
+def _team_instance(owner_team_id: Any, *, allowed_operations: Any = None, visibility: str = "team") -> Any:
+    instance = _instance(allowed_operations, visibility=visibility)
+    instance.owner_team_id = owner_team_id
+    return instance
+
+
+class _PipelineResult:
+    def __init__(self, row: Any) -> None:
+        self._row = row
+
+    def scalar_one_or_none(self) -> Any:
+        return self._row
+
+
+def _session_with_pipeline(owner_team_id: Any) -> Any:
+    """Session double whose pipeline read resolves to *owner_team_id*.
+
+    ``pipeline_row=None`` (a pipeline the org cannot resolve) is passed as a
+    sentinel to model the fail-closed branch.
+    """
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=_PipelineResult(SimpleNamespace(owner_team_id=owner_team_id)))
+    return session
+
+
+def _build_team_gated(instance: Any, session: Any, pipeline_id: Any = PIPELINE_ID) -> tuple[Any, Any]:
+    """Run the real builder with everything BELOW both gates stubbed out."""
+    with (
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("modulo.core.secrets_backend.create_secrets_backend", return_value=_FakeSecretsBackend()),
+        patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+        patch("modulo.core.trigger_engine.polling._build_polling_connector", return_value=_SENTINEL),
+    ):
+        return asyncio.run(
+            _build_polling_connector_from_instance(session, instance, ORG, pipeline_id=pipeline_id),
+        )
+
+
+def test_cross_team_connector_denied_before_credential_decryption() -> None:
+    """A team-B connector polled by a team-A pipeline's trigger is refused.
+
+    The fire job reads the connector row TEAM-BLIND, so without this gate the
+    allowlist check was the only thing between a trigger and another team's
+    credentials (FAR-1595). No credential may be decrypted for a denial.
+    """
+    session = _session_with_pipeline(TEAM_A)
+    with (
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("modulo.core.trigger_engine.polling._build_polling_connector") as build,
+        pytest.raises(ConnectorPermissionError, match="Team-private connector"),
+    ):
+        asyncio.run(
+            _build_polling_connector_from_instance(
+                session,
+                _team_instance(TEAM_B),
+                ORG,
+                pipeline_id=PIPELINE_ID,
+            ),
+        )
+
+    create_backend.assert_not_called()
+    build.assert_not_called()
+
+
+def test_same_team_connector_still_polls() -> None:
+    """Control: a team-private connector owned by the pipeline's OWN team reads."""
+    connector, redis_client = _build_team_gated(
+        _team_instance(TEAM_A),
+        _session_with_pipeline(TEAM_A),
+    )
+
+    assert connector is _SENTINEL
+    assert redis_client is None
+
+
+def test_team_private_connector_on_an_org_pipeline_is_denied() -> None:
+    """An org pipeline (no owner team) cannot poll a team-private connector."""
+    with pytest.raises(ConnectorPermissionError, match="Team-private connector"):
+        _build_team_gated(_team_instance(TEAM_B), _session_with_pipeline(None))
+
+
+def test_org_visible_connector_needs_no_team_context() -> None:
+    """An org-wide connector is usable by any team's pipeline — no pipeline read at all."""
+    session = _session_with_pipeline(TEAM_A)
+    connector, _redis_client = _build_team_gated(
+        _team_instance(None, visibility="org"),
+        session,
+    )
+
+    assert connector is _SENTINEL
+    session.execute.assert_not_awaited()
+
+
+def test_unresolvable_pipeline_fails_closed() -> None:
+    """A pipeline id that does not resolve in the org is a DENIAL, not a pass."""
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=_PipelineResult(None))
+
+    with pytest.raises(ConnectorPermissionError, match="does not resolve"):
+        _build_team_gated(_team_instance(TEAM_B), session)
+
+
+def test_no_supplied_pipeline_context_skips_the_team_gate() -> None:
+    """A caller without team context cannot be judged — and must not be blocked.
+
+    The gate is defence-in-depth on top of the save-time validation
+    (``api/routes/triggers.py``) and the request session's team RLS; the SAQ
+    fire path ALWAYS supplies ``pipeline_id`` (proven below).
+    """
+    connector, _redis_client = _build_team_gated(
+        _team_instance(TEAM_B),
+        MagicMock(),
+        pipeline_id=None,
+    )
+
+    assert connector is _SENTINEL
+
+
+def test_cron_fire_path_supplies_the_pipeline_team_context() -> None:
+    """The production fire path hands the gate the trigger's pipeline (the wiring).
+
+    Without this argument the team gate would silently never run on the one
+    path that reads the connector row team-blind — the defect FAR-1595 names.
+    """
+    from modulo.core import cron_helpers
+
+    session = _session_with_pipeline(TEAM_A)
+    trigger = SimpleNamespace(id=uuid.uuid4(), pipeline_id=PIPELINE_ID)
+
+    with (
+        patch.object(cron_helpers, "_log_poll_event", new_callable=AsyncMock) as log_event,
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
+    ):
+        result = asyncio.run(
+            cron_helpers._build_polling_connector(
+                session,
+                _team_instance(TEAM_B),
+                trigger,
+                ORG,
+                uuid.uuid4(),
+            ),
+        )
+
+    assert result == (None, None)
+    create_backend.assert_not_called()
+    log_event.assert_awaited_once()
+    logged = log_event.await_args.kwargs
+    assert logged["result"] == "poll_error"
+    assert "Team-private connector" in logged["error_detail"]

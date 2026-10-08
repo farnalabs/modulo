@@ -1199,7 +1199,18 @@ async def _build_polling_connector(
     )
 
     try:
-        connector, redis_client = await _build_polling_connector_from_instance(session, connector_instance, org_id)
+        # FAR-1595: hand the builder the owning pipeline so the team-scope gate
+        # can judge a TEAM-PRIVATE connector against the trigger's pipeline
+        # team. The fire job reads the connector row TEAM-BLIND (execution
+        # context), so without this the allowlist gate was the only check.
+        # ``getattr`` keeps the legacy no-pipeline test doubles working; a real
+        # Trigger always carries ``pipeline_id``.
+        connector, redis_client = await _build_polling_connector_from_instance(
+            session,
+            connector_instance,
+            org_id,
+            pipeline_id=getattr(trigger, "pipeline_id", None),
+        )
         return connector, redis_client
     except asyncio.CancelledError:
         raise
