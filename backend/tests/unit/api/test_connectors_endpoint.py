@@ -667,6 +667,33 @@ def test_connector_health_check_acl_denial_is_403_not_502(client: TestClient) ->
     assert "allowed_operations" in detail
 
 
+def test_connector_health_check_acl_denial_logs_traceback_and_connector_id(
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAR-1564 FIX C: the 403 arm logs like its ``ConnectorDecryptError``
+    sibling — full traceback (``logger.exception``) and the connector id — not
+    a bare warning with neither. The failing probe is then diagnosable from the
+    log alone, and the id ties the denial to the connector's allowlist."""
+    connector = _AclProbeConnector(ConnectorACL(visibility="org", allowed_operations=["write"]))
+
+    with (
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", _acl_hub_factory(connector)),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        caplog.at_level(logging.WARNING, logger="modulo.api.routes.connectors"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 403, resp.text
+    denied = [record for record in caplog.records if "denied" in record.getMessage()]
+    assert denied, [record.getMessage() for record in caplog.records]
+    record = denied[0]
+    assert record.exc_info is not None
+    assert str(_CONNECTOR_ID) in record.getMessage()
+
+
 class _ScopedSession:
     """Fake session that mimics asyncpg ``SET LOCAL`` (``set_config(... is_local=true)``)
     semantics: the organisation context is ONLY visible inside an
