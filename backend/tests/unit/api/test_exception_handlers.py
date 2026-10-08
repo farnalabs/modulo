@@ -16,16 +16,20 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
 
 from modulo.api.exception_handlers import (
     http_exception_handler,
     unhandled_exception_handler,
+    union_allow_header,
     validation_exception_handler,
 )
 from modulo.api.models.problem import ProblemDetail, ProblemException, ProblemType
@@ -230,3 +234,131 @@ class TestUnhandledExceptionHandler:
         body = _body(resp)
         assert body["type"] == "urn:problem:modulo:internal_error"
         assert resp.headers.get("x-request-id") == "rid-fallback"
+
+
+def _scope_request(
+    paths: dict[str, Any],
+    path: str = "/api/v1/libraries",
+    route: Any = None,
+    app: Any = None,
+) -> Request:
+    """A real ``Request`` whose scope carries a fake FastAPI app + the routed path."""
+    if app is None:
+        app = SimpleNamespace(openapi=lambda: {"paths": paths})
+    scope: dict[str, Any] = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "OPTIONS",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "app": app,
+        "route": route,
+        "path_params": {},
+    }
+    return Request(scope)
+
+
+class TestUnionAllowHeader:
+    def test_stub_request_without_scope_yields_none(self) -> None:
+        """The handler must stay crash-free for the bare stubs used above."""
+        assert union_allow_header(_Request("rid-s")) is None  # type: ignore[arg-type]
+
+    def test_path_absent_from_the_document_yields_none(self) -> None:
+        request = _scope_request({"/other": {"get": {}}}, path="/missing")
+        assert union_allow_header(request) is None
+
+    def test_non_fastapi_app_yields_none(self) -> None:
+        """A plain ASGI app (no ``openapi``) keeps whatever header it produced."""
+        request = _scope_request({}, app=SimpleNamespace(routes=[]))
+        assert union_allow_header(request) is None
+
+    def test_advertises_every_documented_method_for_the_template(self) -> None:
+        """GET-then-POST registration must advertise BOTH methods (RFC 9110 §15.5.6)."""
+        paths = {
+            "/api/v1/libraries": {"get": {}, "post": {}, "parameters": []},
+            "/api/v1/libraries/{primitive_id}": {"get": {}, "delete": {}},
+        }
+        request = _scope_request(paths)
+        assert union_allow_header(request) == "GET, POST"
+
+    def test_undocumented_verbs_are_not_advertised(self) -> None:
+        """Only what the document declares — hidden routes can never widen ``Allow``."""
+        request = _scope_request({"/api/v1/libraries": {"get": {}}})
+        assert union_allow_header(request) == "GET"
+
+    def test_path_parameter_template_resolves_through_the_matched_route(self) -> None:
+        """The template of the route that matched — not the literal request path."""
+        paths = {"/api/v1/libraries/{primitive_id}": {"get": {}, "delete": {}}}
+        templated_route = SimpleNamespace(path="/api/v1/libraries/{primitive_id}")
+        request = _scope_request(paths, path="/api/v1/libraries/abc", route=templated_route)
+        assert union_allow_header(request) == "DELETE, GET"
+
+    def test_schema_generation_failure_yields_none(self) -> None:
+        """A document that cannot be built must not mask the original response."""
+
+        def _boom() -> dict[str, Any]:
+            raise RuntimeError("schema unavailable")
+
+        request = _scope_request({}, app=SimpleNamespace(openapi=_boom))
+        assert union_allow_header(request) is None
+
+    def test_405_response_advertises_the_union(self) -> None:
+        """The handler rewrites ``Allow`` on 405; other statuses stay untouched."""
+        request = _scope_request({"/api/v1/libraries": {"get": {}, "post": {}}})
+        exc = StarletteHTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "GET"})
+        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        assert resp.status_code == 405
+        assert resp.headers["allow"] == "GET, POST"
+
+    def test_405_without_a_resolvable_document_keeps_the_original_header(self) -> None:
+        request = _Request()  # type: ignore[arg-type]
+        exc = StarletteHTTPException(status_code=405, detail="Method Not Allowed", headers={"Allow": "HEAD"})
+        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        assert resp.headers["allow"] == "HEAD"
+
+    def test_non_405_headers_are_untouched(self) -> None:
+        request = _scope_request({"/test": {"get": {}}}, path="/test")
+        exc = StarletteHTTPException(status_code=429, detail="slow", headers={"Retry-After": "5"})
+        resp = _asyncio_run(http_exception_handler(request, exc))  # type: ignore[arg-type]
+        assert resp.headers.get("retry-after") == "5"
+        assert "allow" not in resp.headers
+
+
+@pytest.fixture
+def client() -> TestClient:
+    from modulo.api.main import app
+
+    return TestClient(app)
+
+
+class TestAllowHeaderOnLiveApp:
+    """End-to-end: an unsupported method on a multi-verb resource advertises all verbs.
+
+    Locks the regression the nightly ``Schemathesis API Fuzz`` gate caught:
+    ``OPTIONS /api/v1/libraries`` returned ``Allow: GET`` while the
+    OpenAPI document declares ``GET`` and ``POST`` for that path, so the
+    ``allow_header_conformance`` check failed on all five fuzz groups.
+    """
+
+    @pytest.mark.parametrize("path", ["/api/v1/libraries", "/api/v1/pipelines"])
+    def test_options_405_advertises_every_documented_method(self, client: TestClient, path: str) -> None:
+        from modulo.api.main import app
+
+        response = client.request("OPTIONS", path)
+        assert response.status_code == 405
+        assert response.json()["type"] == "urn:problem:modulo:method_not_allowed"
+        advertised = {method.strip().upper() for method in response.headers["allow"].split(",") if method.strip()}
+        declared = {
+            method.upper()
+            for method in app.openapi()["paths"][path]
+            if method.upper() in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+        }
+        # HEAD/OPTIONS are framework-implied and absent from the document.
+        assert declared - {"HEAD", "OPTIONS"} <= advertised
+        assert advertised - declared <= {"HEAD", "OPTIONS"}
