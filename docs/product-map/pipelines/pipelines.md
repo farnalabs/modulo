@@ -11,6 +11,8 @@ code:
   - backend/src/modulo/db/models/pipeline.py
   - backend/src/modulo/db/migrations/versions/0286_pipeline_run_state.py
   - backend/src/modulo/core/pipeline_engine
+  - backend/src/modulo/connectors/base.py
+  - backend/src/modulo/connectors/ci_runner/base.py
 unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
   - backend/tests/unit/api/test_pipelines_routes_coverage.py
@@ -27,6 +29,9 @@ unit-tests:
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator
   - backend/tests/unit/pipeline_engine
+  - backend/tests/unit/pipeline_engine/test_dispatch_guards.py
+  - backend/tests/unit/pipeline_engine/test_dispatch_composed_e2e.py
+  - backend/tests/unit/connectors/test_ci_runner.py
 bdd:
   - backend/tests/bdd/features/pipelines/create.feature
   - backend/tests/bdd/features/pipelines/crud.feature
@@ -137,6 +142,33 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       node is rejected (`TOPOLOGY_UNKNOWN_TARGET`), and a minimal single-node
       graph is accepted (`validation.feature`,
       `steps/test_pipeline_graph_validation.py`)
+- [x] Governed CI-runner dispatch (FAR-1141, ADR-042): the `dispatch` node
+      type and any binding that routes the `dispatch` verb fire a connector
+      operation on a CI-runner connector (`trigger_run` / `get_run_status` /
+      `get_run_logs` / `list_runs`), gated at graph save by
+      `connector_type_supports_dispatch` (the CI-runner capability contract,
+      fail-closed on an unproven type) and at dispatch by the same
+      ACL/guardrail/conformance write path. The external job is OBSERVED, not
+      driven: `await_completion` polls `get_run_status` on a monotonic
+      `wait_timeout` deadline (default 300, hard cap 3600) and expiry is the
+      typed, structurally NON-RETRYABLE `dispatch.wait_timeout` terminal – a
+      retry would fire a second external job. Run-id round-trip parity is
+      enforced per provider (including Jenkins `job_name/build_number` with the
+      queue-resolving queue form, and Jenkins parameters in the request BODY
+      so values never leak into access logs). The alone-standing "dispatched"
+      stamp only ever names a run whose frozen graph really dispatches
+      (`connector_binding_operation` / `node_fires_dispatch_job` exclude the
+      inert agent/sandbox shapes). Execution-origin provenance rides `feat-runs`.
+      (`backend/src/modulo/core/graph_validator/__init__.py
+      _check_dispatch_binding_capabilities`,
+      `backend/src/modulo/core/pipeline_engine/node_runner.py
+      _run_connector_dispatch` / `_await_dispatch_terminal`,
+      `backend/src/modulo/connectors/base.py`,
+      `backend/src/modulo/connectors/ci_runner/base.py`;
+      `unit_test: backend/tests/unit/pipeline_engine/test_dispatch_guards.py,
+      backend/tests/unit/pipeline_engine/test_dispatch_composed_e2e.py,
+      backend/tests/unit/connectors/test_ci_runner.py,
+      backend/tests/unit/graph_validator/test_graph_validator.py`)
 
 ## Known Gaps
 
@@ -156,6 +188,18 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1141 sub-surface (dispatch CI-runner operations to pipeline nodes, merged
+  in PR #1370): the `dispatch` node type, the governed connector dispatch verb
+  routing, the wait/`dispatch.wait_timeout` semantics and the per-provider
+  run-id round-trip contract shipped with NO product-map coverage in either
+  layer (the PR itself only registered a `run-detail-dispatched` testid). Added
+  the behaviour line to the manifest `feat-pipelines` registry and this tracker,
+  citing the graph-validator capability gate, the node_runner dispatch/wait
+  helpers, and the connector capability contract; the run-side
+  `execution_origin` provenance half is tracked under `feat-runs`, and the
+  manifest `feat-runs` entry carries it too. `_ORPHANED_BDD_FEATURES` stays
+  empty.
 - 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
   `feat-pipelines` sub-surface for FAR-1530 (per-pipeline Paused execution state),
   which shipped in PR #1367 but was described by neither product-map layer (the same

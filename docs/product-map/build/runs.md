@@ -5,14 +5,21 @@ adr: []
 code:
   - backend/src/modulo/api/routes/runs.py
   - backend/src/modulo/api/routes/run_ws.py
+  - backend/src/modulo/api/routes/viewmodel.py
+  - backend/src/modulo/api/routes/dashboard.py
+  - backend/src/modulo/api/routes/lifecycle_maps.py
+  - backend/src/modulo/api/routes/analytics.py
   - backend/src/modulo/db/crud/run.py
   - backend/src/modulo/core/pipeline_engine/classify.py
   - backend/src/modulo/core/pipeline_execution.py
   - backend/src/modulo/core/exceptions.py
   - backend/src/modulo/db/models/run.py
   - backend/src/modulo/db/migrations/versions/0280_runs_node_deadline_watchdog_fired_count.py
+  - backend/src/modulo/db/migrations/versions/0288_runs_execution_origin.py
   - backend/src/modulo/core/line_diff.py
   - backend/src/modulo/core/cost_controller
+  - frontend/src/utils/runUtils.ts
+  - frontend/src/lib/api/runs.ts
 unit-tests:
   - backend/tests/unit/api/test_runs_endpoint.py
   - backend/tests/unit/api/test_runs_rerun_endpoint.py
@@ -201,6 +208,20 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       `db/crud/run.py` state classifier, `core/exceptions.py`,
       `test_runs_endpoint.py`, `test_runs_rerun_endpoint.py`,
       `test_pipeline_state_gate.py`, `test_pipeline_state_gate_rls.py`)
+- [x] Every run carries WHERE its work was executed (FAR-1141, ADR-042):
+      `runs.execution_origin` (migration `0288_runs_execution_origin`)
+      is stamped `dispatched` by `create_run` when the run's frozen snapshot
+      graph contains at least one `dispatch` node — part of the work ran
+      OUTSIDE Modulo and was only witnessed/triggered by it (`db/models/run.py`
+      single-sources the closed `EXECUTION_ORIGIN_DISPATCHED` vocabulary);
+      `NULL` means Modulo-executed or legacy (never backfilled). The provenance
+      rides every run-rendering surface — RunResponse, the `/api/v1/viewmodel`
+      runs, the dashboard and lifecycle-map rows, the runs-list detail, and the
+      analytics `execution_origin` dimension whose label utility keeps the raw
+      key out of the table/chart — and the run-detail page renders a
+      "Dispatched" badge (`frontend/src/utils/runUtils.ts`,
+      `frontend/src/lib/api/runs.ts`, `api/routes/{runs,viewmodel,dashboard,
+      lifecycle_maps,analytics}.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -215,6 +236,15 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1141 run-provenance half: `runs.execution_origin` (ADR-042) and the
+  `dispatched` stamp shipped in PR #1370 with only a testid in the product map,
+  nowhere in the feature registry or this tracker. Added the checked behaviour
+  line (closed vocabulary, frozen-graph derivation, legacy-never-backfilled,
+  the run-rendering surfaces and the analytics dimension) plus the
+  `db/models/run.py` / migration `0288_runs_execution_origin` /
+  `frontend/src/utils/runUtils.ts` citations already in the frontmatter.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-07: **Improve Architecture product-map walk (follow-up)** – closed the
   `feat-runs` tracker gap for FAR-1530: the manifest `feat-runs` registry entry
   was extended to name the `paused` state (`run_enabled=false`), but this

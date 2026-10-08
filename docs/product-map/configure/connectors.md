@@ -195,6 +195,24 @@ and per-destination rate limiting.
       fresh credentials (200), DELETE removes the instance (204), and a
       foreign-org connector resolves to 404 before any read/update/delete
       (`connector_crud.feature`, `steps/test_connector_crud.py`)
+- [x] A connector's operation scope is UNRESTRICTED unless a non-empty
+      allowlist restrains it (FAR-1564): the single shared
+      `unrestricted_allowed_operations` predicate — used by `ConnectorACL`, the
+      graph validator's connector-binding check and the guardrail conformance
+      reader so one stored value is never read restrictively on one path and
+      permissively on another — treats `None` AND the `[]` that every
+      REST/MCP/UI-created connector stores as unrestricted (a default-created
+      connector is never locked out of every operation), a NON-EMPTY list is an
+      allowlist (there is no explicit deny-all; removing the connector is the
+      lock), and any MALFORMED non-list value fails CLOSED to the empty
+      allowlist so every operation is denied — malformed input restricts, never
+      grants (`backend/src/modulo/connectors/base.py`,
+      `backend/src/modulo/core/graph_validator/__init__.py`,
+      `backend/src/modulo/core/guardrails/conformance.py`;
+      `backend/src/modulo/core/connector_hub/health_sweep.py` references the
+      ACL-denial semantics in comments only and does not read the predicate;
+      `unit-tests: test_acl.py, test_connectors_endpoint.py,
+      test_guardrail_conformance_midrun.py`)
 
 ## Known Gaps
 
@@ -202,6 +220,15 @@ and per-destination rate limiting.
   OTel spans shipped in v1).
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1564 sub-surface (empty `allowed_operations` means unrestricted, not
+  deny-all, merged in PR #1399): the operation-scope semantics shipped with NO
+  coverage in either product-map layer. The manifest `feat-connectors` registry
+  had no scope-semantics line and this tracker none either, after the FAR-935
+  validation-level additions. Added the checked behaviour line (the shared
+  `unrestricted_allowed_operations` predicate, `None` ↔ `[]`, fail-closed
+  malformed, no deny-all) plus the connector/graph-validator/conformance code
+  and unit-test citations.
 - 2026-09-20: **product-map review pass** – closed the last
   `feat-connectors` BDD gap, "No BDD for connector CRUD lifecycle
   (create/update/delete via admin API)". Registered the new

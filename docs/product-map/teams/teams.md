@@ -9,6 +9,7 @@ code:
   - backend/src/modulo/core/capability_scope.py
   - backend/src/modulo/api/routes/me.py
   - backend/src/modulo/db/models/team.py
+  - backend/src/modulo/db/migrations/versions/0287_team_rls_lifecycle_evals.py
 unit-tests:
   - backend/tests/unit/api/test_teams.py
   - backend/tests/unit/auth/test_team_rbac.py
@@ -16,6 +17,9 @@ unit-tests:
   - backend/tests/unit/core/test_team_visibility.py
   - backend/tests/unit/db/crud/test_team.py
   - backend/tests/unit/db/crud/test_team_membership.py
+  - backend/tests/integration/test_rls_isolation.py
+  - backend/tests/unit/db/test_migration_team_visibility_rls.py
+  - backend/tests/architecture/test_team_scope_wiring.py
 bdd:
   - backend/tests/bdd/features/teams/team_create.feature
   - backend/tests/bdd/features/teams/team_crud.feature
@@ -71,6 +75,27 @@ org profile, and is the product-map home for user roles.
       (`team_pipeline_visibility.feature`, `view_as_team.feature`)
 - [x] RBAC roles (`admin | operator | runner | viewer`) gate team surfaces
       (`users/roles.feature`, `auth/team_rbac.py`, `test_team_rbac.py`)
+- [x] DB team RLS covers every team-scoped table (FAR-1514):
+      `lifecycle_maps`, `eval_datasets` and `eval_suites` joined the five 0124
+      tables — migration `0287_team_rls_lifecycle_evals` drops their org-only
+      `rls_org_isolation` policy and creates the shared `rls_team_isolation`
+      policy carrying the full visibility matrix (org AND — `visibility='org'`
+      / NULL / no owner team / `owner_team_id IN my team_memberships` /
+      org admin / `app.execution_context='true'`). Postgres ORs permissive
+      policies, so a lone org policy beside a team policy made the team policy
+      dead weight (the 0124 cross-team leak); the org check stays an AND gate,
+      so the execution-context escape hatch only widens the team clause WITHIN
+      the org. Background machinery (executor, cron, SAQ suite-run dispatch,
+      housekeeping, seed) sets `app.execution_context` and keeps reading
+      team-private rows; user-facing sessions never set it, so isolation holds.
+      The four core-table resolvers (connectors / model_backends /
+      environment_profiles / library_primitives) stay INTENTIONALLY unwired from
+      route dependencies — their DB RLS alone 404s a non-member before handler
+      code runs, so extra request-time gates would be redundant transactions.
+      Policy-DDL only, existence-guarded (idempotent), Postgres-only
+      (`tests/integration/test_rls_isolation.py`,
+      `tests/unit/db/test_migration_team_visibility_rls.py`,
+      `tests/architecture/test_team_scope_wiring.py`)
 
 ## Known Gaps
 
@@ -82,6 +107,13 @@ org profile, and is the product-map home for user roles.
   (they belong to the auth/JWT feature edges).
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1514 sub-surface (DB team RLS for `lifecycle_maps`, `eval_datasets` and
+  `eval_suites`, merged in PR #1378): the last neither-layer tables gained the
+  `rls_team_isolation` policy while the manifest `feat-teams` registry and this
+  tracker still described only the application-layer isolation. Added the
+  checked behaviour line plus the migration / integration / architecture-test
+  citations.
 - 2026-09-25: **Improve Architecture product-map walk** — reconciled the
   manifest `feat-teams` registry entry with this tracker (both now
   `status: covered`): the "team-level resource scoping partially wired" unchecked
