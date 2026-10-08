@@ -27,6 +27,7 @@ from modulo.core.pipeline_engine.sandbox_mode import (
     _validate_sandbox_git_credentials_config,
     _validate_sandbox_read_only_config,
     derive_sandbox_capabilities,
+    is_valid_egress_host,
 )
 from modulo.core.pipeline_engine.sandbox_policy import (
     _GH_PR_GUARD_CLAIM_RECEIPT,
@@ -114,6 +115,25 @@ def test_validate_allowlist_host_rejects_metacharacters(host: str) -> None:
 @pytest.mark.parametrize("host", ["api.github.com", "localhost", "10.0.0.5", "2001:db8::1"])
 def test_validate_allowlist_host_accepts_hostnames_and_ips(host: str) -> None:
     assert _validate_allowlist_host(host, 0, "n1") is None
+
+
+@pytest.mark.parametrize("host", [None, 123, 1.5, ["a.com"], {"host": "a.com"}, b"a.com"])
+def test_is_valid_egress_host_rejects_non_strings(host: object) -> None:
+    assert is_valid_egress_host(host) is False
+
+
+def test_is_valid_egress_host_rejects_empty_string() -> None:
+    assert is_valid_egress_host("") is False
+
+
+@pytest.mark.parametrize("host", _HOSTILE_HOSTS[:-1])
+def test_is_valid_egress_host_rejects_metacharacters(host: str) -> None:
+    assert is_valid_egress_host(host) is False
+
+
+@pytest.mark.parametrize("host", ["api.github.com", "localhost", "10.0.0.5", "2001:db8::1"])
+def test_is_valid_egress_host_accepts_hostnames_and_ips(host: str) -> None:
+    assert is_valid_egress_host(host) is True
 
 
 @pytest.mark.parametrize("host", _HOSTILE_HOSTS[:-1])
