@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   pipeline: {} as Record<string, unknown>,
   profiles: [] as Array<{ id: string; name: string; provider_type: string }>,
   profileListFetches: 0,
+  profileListError: false,
+  pipelineLoadFails: false,
 }))
 
 vi.mock('../composables/useApi', () => ({
@@ -20,6 +22,7 @@ vi.mock('../composables/useApi', () => ({
     get: vi.fn((url: string) => {
       if (url.includes('/api/v1/environment-profiles')) {
         state.profileListFetches += 1
+        if (state.profileListError) return Promise.reject(new Error('profiles unavailable'))
         return Promise.resolve({ items: state.profiles })
       }
       return Promise.resolve({ items: [] })
@@ -48,6 +51,9 @@ vi.mock('../lib/api/client', () => {
       return Promise.resolve({ data: { nodes: [], edges: [] }, error: undefined })
     }
     if (url.includes('/pipelines/{pipeline_id}')) {
+      if (state.pipelineLoadFails) {
+        return Promise.resolve({ data: undefined, error: { detail: 'not found' } })
+      }
       return Promise.resolve({ data: { ...state.pipeline }, error: undefined })
     }
     return Promise.resolve({ data: { items: [] }, error: undefined })
@@ -137,6 +143,8 @@ beforeEach(async () => {
   state.pipeline = defaultPipeline()
   state.profiles = []
   state.profileListFetches = 0
+  state.profileListError = false
+  state.pipelineLoadFails = false
   const { useRoute } = await import('vue-router')
   const route = (useRoute as unknown as () => { params: Record<string, string> })()
   route.params = { id: 'test-pipeline-id' }
@@ -266,6 +274,76 @@ describe('PipelineEditorView - environment profile selector', () => {
     )
     expect(foreign).toBeDefined()
     expect(foreign?.text()).toBe(MESSAGES.views.PipelineEditorView.environment_profile_unavailable)
+    wrapper.unmount()
+  })
+
+  it('renders a profile with no resolvable tier by its name alone (no dangling separator)', async () => {
+    state.profiles = [{ id: 'prof-plain', name: 'Plain Profile', provider_type: 'mystery_provider' }]
+    const wrapper = await mountEditor({ featureEnabled: true })
+
+    const plain = optionsOf(wrapper).find(
+      (o) => (o.element as HTMLOptionElement).value === 'prof-plain',
+    )
+    expect(plain).toBeDefined()
+    expect(plain?.text()).toBe('Plain Profile')
+    wrapper.unmount()
+  })
+
+  it('surfaces a profile-list load failure as an alert instead of a silent empty menu', async () => {
+    state.profileListError = true
+    const wrapper = await mountEditor({ featureEnabled: true })
+
+    const error = wrapper.find(ERROR)
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toContain('profiles unavailable')
+    wrapper.unmount()
+  })
+
+  it('falls back to the raw id in the bound status when the profile is not in the list', async () => {
+    state.pipeline = { ...defaultPipeline(), environment_profile_id: 'prof-foreign' }
+    state.profiles = PROFILES
+    const wrapper = await mountEditor({ featureEnabled: true })
+
+    await wrapper.find(SELECT).setValue('prof-foreign')
+    await flushPromises()
+
+    expect(environmentProfilePatchBodies()).toEqual([{ environment_profile_id: 'prof-foreign' }])
+    const status = wrapper.find(STATUS)
+    expect(status.exists()).toBe(true)
+    expect(status.text()).toContain('prof-foreign')
+    wrapper.unmount()
+  })
+
+  it('binds successfully even when the pipeline record is not loaded (null-safe assignment)', async () => {
+    state.pipelineLoadFails = true
+    state.profiles = PROFILES
+    const wrapper = await mountEditor({ featureEnabled: true })
+
+    await wrapper.find(SELECT).setValue('prof-docker')
+    await flushPromises()
+
+    expect(environmentProfilePatchBodies()).toEqual([{ environment_profile_id: 'prof-docker' }])
+    const status = wrapper.find(STATUS)
+    expect(status.exists()).toBe(true)
+    expect(status.text()).toContain('Staging Docker')
+    wrapper.unmount()
+  })
+
+  it('reverts and alerts when the bind write throws (timeout/network)', async () => {
+    state.pipeline = { ...defaultPipeline(), environment_profile_id: 'prof-docker' }
+    state.profiles = PROFILES
+    vi.mocked(api.PATCH).mockImplementationOnce(() => Promise.reject(new Error('network down')))
+    const wrapper = await mountEditor({ featureEnabled: true })
+
+    await wrapper.find(SELECT).setValue('prof-e2b')
+    await flushPromises()
+
+    const error = wrapper.find(ERROR)
+    expect(error.exists()).toBe(true)
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toContain('network down')
+    expect((wrapper.find(SELECT).element as HTMLSelectElement).value).toBe('prof-docker')
     wrapper.unmount()
   })
 })
