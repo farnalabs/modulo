@@ -1,4 +1,4 @@
-# FAR-1511 — prod worker event-loop stalls and `dispatcher_reconcile` 95s timeouts
+# FAR-1511 – prod worker event-loop stalls and `dispatcher_reconcile` 95s timeouts
 
 Investigation record for the report that the production worker machine still
 shows residual 0.6–1.2 s event-loop stalls and `dispatcher_reconcile` inner
@@ -47,9 +47,9 @@ dispatcher_reconcile fresh but status=timeout
   scanned=3, repaired=0, skipped=2, ... rows_deferred=0
 ```
 
-Two things follow. The tick never leaves `reconcile_org:<org>` — it does not
+Two things follow. The tick never leaves `reconcile_org:<org>` – it does not
 reach `record_facts`, `compensating_sweeps`, or the stats write before the
-deadline — and the counters (`scanned=3, repaired=0, skipped=2`) are identical
+deadline – and the counters (`scanned=3, repaired=0, skipped=2`) are identical
 across all seven samples, so the tick makes the same amount of progress each
 time and then stops at the same place. The budget is not spread across work; it
 is consumed by one await inside one organisation's pass.
@@ -60,7 +60,7 @@ skipped=3, status=ok`), so the pass itself is normally fast.
 ### 2. The database and Redis are fast throughout, from the app machine
 
 While a reconcile tick was in its 95 s window, `healthz/ready` was polled every
-5 seconds for 4 minutes from the app machine — 50 samples spanning a full
+5 seconds for 4 minutes from the app machine – 50 samples spanning a full
 timeout:
 
 ```
@@ -115,17 +115,17 @@ public endpoint runs, inside the system worker process. It logged:
 `pg_database` through the pooled engine, with a 1-second budget. The same check
 takes 247 ms on the app machine (Fly's own check output) and the app's
 `event_loop_lag` check reports 5–18 ms. So the check is neither expensive nor
-slow on the server — it is slow *in the system worker process*.
+slow on the server – it is slow *in the system worker process*.
 
 ### 5. The failures track run execution, not the clock
 
 - 17:53–17:58 (no pipeline-run activity in the worker log): every system cron
-  held its exact cadence — `dispatcher_reconcile` completed at 17:53:36,
-  17:54:37, 17:55:37, 17:56:37 — and no deadline fired.
+  held its exact cadence – `dispatcher_reconcile` completed at 17:53:36,
+  17:54:37, 17:55:37, 17:56:37 – and no deadline fired.
 - 17:30–17:35, 17:59–18:04, 18:10–18:16 and 18:20–18:24 (runs actively
   executing): `dispatch_phase.write_timeout` fires continuously, the
   `event-loop stall detected` warnings appear, and `dispatcher_reconcile`
-  misses ticks — including one gap where no tick completed for 242 seconds.
+  misses ticks – including one gap where no tick completed for 242 seconds.
 
 ### 6. What could NOT be measured
 
@@ -157,7 +157,7 @@ hourly when healthy, so its silence is not proof.
   parse is already off the loop (threaded) and process-cached.
 - **Database or Redis latency.** Sample 2 above: 24–65 ms to the same Postgres
   from the app machine for the whole duration of a worker-side 95 s stall.
-- **A memory alarm.** None fired during the capture (weak evidence — see §6).
+- **A memory alarm.** None fired during the capture (weak evidence – see §6).
 
 ## What remains open
 
@@ -171,11 +171,11 @@ separate them:
 2. **Worker → Postgres connection loss.** Connections are closed mid-operation
    and reset during establishment (sample 3) while the app's connections to the
    same database stay healthy. That points at connection churn, a per-source
-   connection cap, or a proxy/pooler limit on the database path — none of which
+   connection cap, or a proxy/pooler limit on the database path – none of which
    is visible from read-only Fly tooling.
 
 Distinguishing them needs either a Fly metrics token (CPU/memory series) or
-`pg_stat_activity` / connection-count history on the database — both outside
+`pg_stat_activity` / connection-count history on the database – both outside
 this investigation's access. Note that they are not mutually exclusive: a
 process that is both starved of CPU and losing its connections produces exactly
 the observed mix.
@@ -193,11 +193,11 @@ repository instead of living only on the machine.
 `[[vm]]` applies to new machines only, so the declared size reached the live
 machine only when a later deploy recreated it: the started worker is now live at
 **2 shared CPU** (deploy run 37414967179), so no resize step is outstanding for
-it. The stopped cold standby is an existing machine too — starting it does not
+it. The stopped cold standby is an existing machine too – starting it does not
 apply the declared size, so it keeps its recorded 1-CPU config until it is
 updated (`flyctl machine update <standby-machine-id> -a app-modulo --vm-size
 shared-cpu-2x`, safe while stopped) or recreated by a deploy. The app machine
-needed no such step — it was observed at 4 shared vCPU on 2026-10-05.
+needed no such step – it was observed at 4 shared vCPU on 2026-10-05.
 
 The cadence gap described above (no per-organisation **time** bound, only a row
 budget) was closed by FAR-1525 (PR #1342): each org's reconcile pass now runs
@@ -205,14 +205,14 @@ under its own timeout at `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30,
 min 1, max 119), clamped to the tick's remaining budget minus a 15 s tail
 reserve for facts/sweeps. On expiry the org's transaction rolls back, a truthful
 `status='timeout'` / `org_timeouts` marker names the org, and the loop
-continues — one hung org can no longer consume the whole inner deadline.
+continues – one hung org can no longer consume the whole inner deadline.
 
 ## Follow-ups
 
 - **Done (FAR-1525, PR #1342):** a per-organisation **time** bound inside
   `dispatcher_reconcile`. The row budget from FAR-1425 caps *how much* work one
   organisation can do, but a single hung await could still eat the whole
-  95-second deadline (the seven timeout ticks above) — now each pass is cut at
+  95-second deadline (the seven timeout ticks above) – now each pass is cut at
   `DISPATCHER_RECONCILE_ORG_BUDGET_SECONDS` (default 30 s), clamped to the
   tick's remaining budget minus a tail reserve for facts/sweeps, and the tick
   records a truthful timeout marker and continues.

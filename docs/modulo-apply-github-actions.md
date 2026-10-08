@@ -1,34 +1,34 @@
 # `modulo apply` in GitHub Actions (Terraform-style CI)
 
 A copy-paste GitHub Actions workflow that gives the [`modulo apply` CLI](./product-map/configure/apply.md)
-a Terraform-style CI loop: every pull request posts a **plan** — the upsert diff
-the CLI would write — as a comment on the PR, and merging to `main` runs the
+a Terraform-style CI loop: every pull request posts a **plan** – the upsert diff
+the CLI would write – as a comment on the PR, and merging to `main` runs the
 **apply** against each environment. Save the YAML below as
 `.github/workflows/modulo-apply.yml` in the repo that holds your apply config.
 
 ## Prerequisites
 
-- **`MODULO_URL`** — the deployment the CLI talks to. Store it as a repository
+- **`MODULO_URL`** – the deployment the CLI talks to. Store it as a repository
   Variable (`vars.MODULO_URL`), or set it per GitHub Environment when staging
   and production point at different deployments. The CLI hard-requires it.
-- **`MODULO_API_KEY`** — an org API key (`mk_...` with the `operator` role)
+- **`MODULO_API_KEY`** – an org API key (`mk_...` with the `operator` role)
   stored as a GitHub **secret**, scoped per Environment so staging and
   production hold different keys. The CLI refuses to run without both
   `MODULO_URL` and `MODULO_API_KEY`; GitHub does not export variables or
   secrets into a job automatically, so the workflow wires them into every
   job with a job-level `env:` block (environment-scoped values win when a
   job names `environment:`).
-- **GitHub Environments** — create `staging` and `production`
+- **GitHub Environments** – create `staging` and `production`
   (*Settings → Environments → New environment*). Repo-level secrets and
   variables live under *Settings → Secrets and variables → Actions*;
   environment-scoped ones are added on each environment's page, and when a
   job names `environment:` they override the repo-level values. The example
   binds one job per environment. If you add protection rules (e.g. required
-  reviewers) to an environment, every job that names it — plan jobs included —
+  reviewers) to an environment, every job that names it – plan jobs included –
   pauses until the rules pass, so keep rules only where you want a hold.
-- **The apply config** — the YAML file `modulo apply -f` consumes, committed to
+- **The apply config** – the YAML file `modulo apply -f` consumes, committed to
   this repo (the example uses `modulo.yaml`).
-- **CLI installation in CI** — `pip install farnalabs-modulo`, the PyPI package
+- **CLI installation in CI** – `pip install farnalabs-modulo`, the PyPI package
   that provides the `modulo` console script.
 
 ## Workflow
@@ -173,8 +173,8 @@ jobs:
 **Merging to `main` IS the approval.** The apply jobs run on push to `main`,
 so whoever can merge the PR has approved the change. Modulo owns no approval
 step: the CLI has no confirm/approve prompt in CI, and nothing in this
-workflow asks Modulo for permission to write. Any extra gate — required
-reviewers, protected branches, an approval queue before production deploys —
+workflow asks Modulo for permission to write. Any extra gate – required
+reviewers, protected branches, an approval queue before production deploys –
 comes from GitHub branch protection or GitHub Environments protection rules
 configured in the repo, never from a Modulo-owned approval.
 
@@ -182,9 +182,9 @@ configured in the repo, never from a Modulo-owned approval.
 
 | Command | Exit code |
 |---|---|
-| `modulo apply --plan -f <file>` (alias `--dry-run`) | `0` once the plan is computed — a pending change never fails the job |
-| `modulo apply -f <file>` (real apply) | `1` if any entity was blocked or failed, else `0` — the apply jobs go red instead of silently diverging |
-| `modulo apply --diff -f <file>` (read-only drift check) | `0` when the org matches the config, `1` on drift (`created` / `updated` / `blocked`) — usable as a separate CI gate |
+| `modulo apply --plan -f <file>` (alias `--dry-run`) | `0` once the plan is computed – a pending change never fails the job |
+| `modulo apply -f <file>` (real apply) | `1` if any entity was blocked or failed, else `0` – the apply jobs go red instead of silently diverging |
+| `modulo apply --diff -f <file>` (read-only drift check) | `0` when the org matches the config, `1` on drift (`created` / `updated` / `blocked`) – usable as a separate CI gate |
 
 Config-load, auth and network errors exit `1` on every command (the CLI
 fails before producing a report), so a broken config or missing
@@ -204,5 +204,5 @@ fails before producing a report), so a broken config or missing
   `MODULO_API_KEY`) and could not comment anyway. The plan jobs therefore
   gate on `github.event.pull_request.head.repo.full_name == github.repository`
   so fork PRs skip them instead of failing. Drop that gate if you deliberately
-  want forks to plan — they will then need their own `MODULO_URL` and
+  want forks to plan – they will then need their own `MODULO_URL` and
   `MODULO_API_KEY`.

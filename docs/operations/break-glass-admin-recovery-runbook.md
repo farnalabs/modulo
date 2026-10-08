@@ -5,10 +5,10 @@ break-glass operator secrets. This is the operational procedure for
 recovering an organisation whose only admin cannot authenticate.
 
 **Prerequisite reading:**
-- ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) — the auth architecture and the ONE deliberate login-route hook deviation
-- `docs/configuration-reference.md` §Break-glass Admin Recovery — env settings
-- `docs/deployment-security.md` — deployment security baseline
-- `docs/security/secret-management.md` — secret handling / vault
+- ADR 047 (centralized-authorization), ADR 018 (centralized-authorization) – the auth architecture and the ONE deliberate login-route hook deviation
+- `docs/configuration-reference.md` §Break-glass Admin Recovery – env settings
+- `docs/deployment-security.md` – deployment security baseline
+- `docs/security/secret-management.md` – secret handling / vault
 
 ---
 
@@ -23,14 +23,14 @@ authenticate and no normal recovery path exists.
 | SCIM deactivated / demoted the last admin (no last-admin check fired) | Yes |
 | Role demotion locked out the last admin | Yes |
 | Lost env secrets (e.g. `SECRET_KEY` / `FERNET_KEY` rotated away) | Yes |
-| An active, non-break-glass admin can still log in | **No** — use the normal admin path |
-| Password-reset / admin-reactivation flow works | **No** — use the normal flow |
-| The outage is transient (network, DB, deploy) rather than an access problem | **No** — fix the outage first |
-| The requester cannot be verified out-of-band | **No** — abort; break-glass requires the verification protocol (§5) |
-| You merely want a second permanent admin | **No** — break-glass credentials are single-use and time-boxed; provision a real admin instead |
+| An active, non-break-glass admin can still log in | **No** – use the normal admin path |
+| Password-reset / admin-reactivation flow works | **No** – use the normal flow |
+| The outage is transient (network, DB, deploy) rather than an access problem | **No** – fix the outage first |
+| The requester cannot be verified out-of-band | **No** – abort; break-glass requires the verification protocol (§5) |
+| You merely want a second permanent admin | **No** – break-glass credentials are single-use and time-boxed; provision a real admin instead |
 
 **Don't break glass when a normal admin path exists.** Break-glass is an
-emergency, single-use, TTL-bounded credential — it is never a permanent seat
+emergency, single-use, time-to-live (TTL)-bounded credential – it is never a permanent seat
 and never a substitute for proper provisioning.
 
 ---
@@ -39,22 +39,22 @@ and never a substitute for proper provisioning.
 
 Before an incident, confirm all of the following hold:
 
-1. **Secrets configured** — `MODULO_BREAK_GLASS_ENABLED` is on (or defaults
+1. **Secrets configured** – `MODULO_BREAK_GLASS_ENABLED` is on (or defaults
    from primary/standby secret presence), `MODULO_BREAK_GLASS_SECRET` and
    `MODULO_BREAK_GLASS_STANDBY_SECRET` are set and differ, and
    `MODULO_BREAK_GLASS_DATABASE_URL` is populated. `MODULO_BREAK_GLASS_ENABLED=true`
    with both secrets empty is a startup error; `TTL < 1` or `MAX_TTL < MIN_TTL`
    is a startup error regardless of `ENABLED`.
-2. **`modulo_breakglass` role provisioned** — created idempotently by
+2. **`modulo_breakglass` role provisioned** – created idempotently by
    `bootstrap_role.py` on every boot (LOGIN, BYPASSRLS, dedicated credential
    from `MODULO_BREAK_GLASS_DATABASE_URL`). Bootstrap failure is FATAL when
-   `ENABLED=true`. The role requires a superuser to grant BYPASSRLS — a
+   `ENABLED=true`. The role requires a superuser to grant BYPASSRLS – a
    managed-Postgres platform without superuser is a hard platform constraint
    (see ADR-047/018).
-3. **CLI installed** — `modulo-break-glass` (registered console script, mirrors
+3. **CLI installed** – `modulo-break-glass` (registered console script, mirrors
    `modulo-migrate`'s `asyncio.run` wrapper). Connects as `modulo_breakglass`
-   via a dedicated lazy engine — never the app `database_url`.
-4. **Operator holds the secret** — the operator running the CLI must possess
+   via a dedicated lazy engine – never the app `database_url`.
+4. **Operator holds the secret** – the operator running the CLI must possess
    `MODULO_BREAK_GLASS_SECRET` / `_STANDBY_SECRET` (actor derived from which
    secret matched) and the DB URL. Secrets live in the KeePassXC vault.
 
@@ -76,7 +76,7 @@ secrets + URL are present.
 
 1. **Confirm the lockout.** Verify out-of-band that the org admin genuinely
    cannot authenticate and no normal recovery path exists (§1). Open a ticket
-   or incident and record its reference — every activation must be traceable
+   or incident and record its reference – every activation must be traceable
    to it (`--reason` is REQUIRED).
 
 2. **Check existing live rows first:**
@@ -96,8 +96,8 @@ secrets + URL are present.
      --reason "<ticket-ref>" --ttl-minutes 1440
    ```
 
-   - `--reason` REQUIRED (non-empty) — the ticket/incident reference.
-   - `--ttl-minutes` default 1440 (24h), min 1, hard cap 4320 (72h) — the 72h
+   - `--reason` REQUIRED (non-empty) – the ticket/incident reference.
+   - `--ttl-minutes` default 1440 (24h), min 1, hard cap 4320 (72h) – the 72h
      cap is the compensating bound for the out-of-band protocol.
    - Interactive TTY shells prompt for confirmation; use `--yes` for scripted
      operation. The org is resolved to exactly one org; refusal unless `--yes`
@@ -140,7 +140,7 @@ secrets + URL are present.
    modulo-break-glass status --all
    ```
 
-   Exit 5 while any live row exists — resolve before closing the incident.
+   Exit 5 while any live row exists – resolve before closing the incident.
    The runbook mandates `deactivate` of prior live rows unless one is
    deliberately retained.
 
@@ -166,10 +166,10 @@ modulo-break-glass force-last-admin <org> --reason "<ticket-ref>"
   `activate` (§5).
 - Appends a `last_admin_forcibly_removed` audit row in the same transaction.
 - The `force` parameter is honoured ONLY for the `modulo_breakglass` session
-  (`session_user` gate in the SECURITY DEFINER) — an org admin cannot invoke it.
+  (`session_user` gate in the SECURITY DEFINER) – an org admin cannot invoke it.
 - **Distinct from `deactivate --force`:** `deactivate --force` overrides the
   refuse-while-live-activation-exists guard; `force-last-admin` overrides the
-  last-admin invariant. Semantics are pinned — do not confuse the two.
+  last-admin invariant. Semantics are pinned – do not confuse the two.
 
 ---
 
@@ -183,7 +183,7 @@ modulo-break-glass force-last-admin <org> --reason "<ticket-ref>"
   once to stdout. Use only when the output channel is secure and not retained.
 
 Either way the credential is printed **once**, as a raw write bypassing the
-logger. Copy it into the delivery channel immediately — it cannot be
+logger. Copy it into the delivery channel immediately – it cannot be
 re-printed.
 
 ### The SPECIFIED out-of-band verification protocol
@@ -193,7 +193,7 @@ re-printed.
    vault with an owner.
 2. The requester must state a **unique, non-public, single-use ticket reference**
    that only a legitimate requester would know.
-3. **Refuse to hand over the credential on first contact** — time-box the
+3. **Refuse to hand over the credential on first contact** – time-box the
    call-back so there is a deliberate pause before the credential changes
    hands.
 4. The operator **independently confirms the org slug/domain** against the
@@ -201,7 +201,7 @@ re-printed.
 
 ### If the credential print fails after commit (exit 9)
 
-The activation transaction committed but the credential was not displayed —
+The activation transaction committed but the credential was not displayed –
 the credential's value is unknown and must be treated as compromised:
 
 1. `modulo-break-glass deactivate <org> --force --reason "<ticket-ref>"` to
@@ -220,7 +220,7 @@ hands and the live row count is zero after deactivation.
 
 | Code | Meaning | Operator action |
 |---|---|---|
-| `0` | Success | — |
+| `0` | Success | – |
 | `1` | Unexpected error | Read the traceback / host log; escalate if it recurs |
 | `2` | Usage (missing/empty `--reason`, bad `--account-id`) | Fix the invocation and retry |
 | `3` | Org not found (incl. deactivate `M2040` target-does-not-exist) | Verify org id/slug spelling; check the org still exists |
@@ -231,7 +231,7 @@ hands and the live row count is zero after deactivation.
 | `8` | Deactivate atomicity failure | Investigate; the transaction aborts atomically so no partial state remains |
 | `9` | Credential-print failure after commit | Treat credential as unknown → deactivate `--force` then activate again (§5) |
 
-`status --all --json` exits non-zero (`5`) when any live row exists — this is
+`status --all --json` exits non-zero (`5`) when any live row exists – this is
 the daily-sweep signal wired to alerting (§8).
 
 ---
@@ -243,7 +243,7 @@ the daily-sweep signal wired to alerting (§8).
   `modulo-break-glass status --all` and `deactivate --force` any row not tied
   to a verified ticket.
 - **Rotation never invalidates already-delivered credentials.** Credentials are
-  bound to the account's `password_hash`, not to the role password — a
+  bound to the account's `password_hash`, not to the role password – a
   delivered credential keeps logging in and `deactivate`/`status` remain
   operable across a secret rotation. Only NEW `activate` invocations require
   the rotated secret.
@@ -253,7 +253,7 @@ the daily-sweep signal wired to alerting (§8).
 - **Both-lost recovery:** if primary AND standby secrets are lost, set fresh
   secrets via `fly secrets set`, restart the app, then run
   `modulo-break-glass status --all` and `deactivate --force` every live row.
-  A credential already delivered to an org admin remains valid — verify each
+  A credential already delivered to an org admin remains valid – verify each
   live row against its ticket and deactivate the rest.
 
 ---
@@ -271,10 +271,10 @@ consumer is a scheduled follow-up task, tracked in Linear):
 - **Evidence artifact:** committed with 90-day retention.
 - **Forgery detector:** the sweep also verifies the last 24h of audit rows for
   `last_admin_forcibly_removed` / `break_glass_activated` and flags live rows
-  without a matching `break_glass_activated` audit — the raw-INSERT forgery
+  without a matching `break_glass_activated` audit – the raw-INSERT forgery
   detector (a forged live row has no matching activation audit).
 
-**A non-zero exit from the sweep means a live break-glass row exists** — treat
+**A non-zero exit from the sweep means a live break-glass row exists** – treat
 it as an incident until it is matched to a verified ticket or deactivated.
 Break-glass audit rows are never purged by retention/housekeeping; the
 `status --all` sweep and the immutable audit rows together are the (A)
@@ -288,7 +288,7 @@ procedure current.
 ## 9. SCIM 409 IdP-retry note
 
 The SCIM deactivate path returns **409** (RFC 7644 body) when no replacement
-admin exists — the IdP must provision one first. The two IdPs behave
+admin exists – the IdP must provision one first. The two IdPs behave
 differently:
 
 | IdP | Behaviour on 409 | Consequence |
@@ -301,7 +301,7 @@ The IdP-side user stays provisioned/active, **diverging from the DB state**
 authoritative for access, and the divergence is the IdP's signal that a
 replacement is needed.
 
-**Resolution:** provision a replacement admin first — via the IdP for
+**Resolution:** provision a replacement admin first – via the IdP for
 SCIM-managed orgs, or via the admin API otherwise. A retried SCIM `DELETE` /
 `PATCH` on 409 is idempotent (no state churn), so the retries are harmless.
 
@@ -346,10 +346,10 @@ consumption + SQL-predicate deny.
 
 - **Zero live break-glass rows before the (B) deploy.** Run
   `modulo-break-glass status --all` as a one-time ship gate. A non-zero exit
-  means a live row exists — resolve it (`deactivate` / `deactivate --force`,
+  means a live row exists – resolve it (`deactivate` / `deactivate --force`,
   §3/§10) before deploying (B).
 - **Expired rows are deny-covered and MUST NOT block deploys.** A row past
-  `break_glass_expires_at` is already denied by the enforcement code itself —
+  `break_glass_expires_at` is already denied by the enforcement code itself –
   it is a hygiene item for the daily sweep, not a deploy blocker.
 
 This is a one-time (B)-ship gate, not a recurring precondition. The `alembic
@@ -363,17 +363,17 @@ daily sweep (§8) is the ongoing monitoring surface.
 | Symptom | Meaning | Action |
 |---|---|---|
 | `smoke` exits `7` | Connectivity or posture failure | Check `MODULO_BREAK_GLASS_DATABASE_URL`, role provisioning (`bootstrap_role.py`), BYPASSRLS grant |
-| REST returns `403` | `M2010` — caller not authorized (e.g. `force` param via `modulo_app`) | Use the operator CLI (`modulo_breakglass` session) for operator-only operations |
-| REST returns `422` | `M2020` — deactivation would orphan the org (last-admin invariant) | Provision a replacement admin first, or use `force-last-admin` deliberately |
-| REST returns `404` | `M2040` — target account does not exist | Verify the `--account-id` / target |
-| SCIM returns `409` | `M2010`/`M2020` on the SCIM surface — no replacement admin / caller not authorized | Provision a replacement admin via the IdP (§9); retries are idempotent |
-| Login returns `401` | Credential consumed (one-shot CAS), expired, deactivated, or wrong password — byte-identical by design | Mint a fresh credential only if the incident justifies it; otherwise confirm the admin's access was restored (§3) |
+| REST returns `403` | `M2010` – caller not authorized (e.g. `force` param via `modulo_app`) | Use the operator CLI (`modulo_breakglass` session) for operator-only operations |
+| REST returns `422` | `M2020` – deactivation would orphan the org (last-admin invariant) | Provision a replacement admin first, or use `force-last-admin` deliberately |
+| REST returns `404` | `M2040` – target account does not exist | Verify the `--account-id` / target |
+| SCIM returns `409` | `M2010`/`M2020` on the SCIM surface – no replacement admin / caller not authorized | Provision a replacement admin via the IdP (§9); retries are idempotent |
+| Login returns `401` | Credential consumed (one-shot CAS), expired, deactivated, or wrong password – byte-identical by design | Mint a fresh credential only if the incident justifies it; otherwise confirm the admin's access was restored (§3) |
 | `status --all` exits `5` | At least one live break-glass row | Match each row to a verified ticket or `deactivate --force` (§10) |
 
 **Audit trail location:** org-scoped `AuditEvent` rows with event types
 `break_glass_activated`, `break_glass_deactivated`, and
 `last_admin_forcibly_removed`, written in the same transaction as the
-operation. Audit rows are immutable via the 0005 append-only triggers — every
+operation. Audit rows are immutable via the 0005 append-only triggers – every
 role (including BYPASSRLS) can INSERT but never UPDATE/DELETE them, so the
 host log is the authoritative signal and INSERT-only forgery is the documented
 residual. The CLI writes these via the existing Python `append_audit_event` on
