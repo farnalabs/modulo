@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -271,8 +272,15 @@ class TeamCityConnector(ConnectorBase):
                 raise ValueError(f"Unsupported write resource: {payload.resource!r}")
 
 
-class _TeamCityTestDouble(TeamCityConnector):
-    """Minimal test double that does not make HTTP calls."""
+class _TeamCityTestDouble(CITestDoubleMixin, TeamCityConnector):
+    """Minimal test double that does not make HTTP calls.
+
+    TeamCity run ids are BARE by contract (the build id), so ``trigger_run`` /
+    ``list_runs`` scaffolding comes from :class:`CITestDoubleMixin` with the
+    ``_double_*`` hooks below supplying the unqualified id shape.
+    """
+
+    _double_default_pipeline_id = "my-build-type"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -290,20 +298,14 @@ class _TeamCityTestDouble(TeamCityConnector):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        run = CIRun(
-            id=f"{self._uuid.uuid4()}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
         self._builds.append({"run": run, "variables": variables or {}})
-        return run
+
+    def _double_trigger_id(self, pipeline_id: str) -> str:
+        return f"{self._uuid.uuid4()}"
+
+    def _double_listed_id(self, resolved: str) -> str:
+        return f"{self._uuid.uuid4()}"
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -314,17 +316,3 @@ class _TeamCityTestDouble(TeamCityConnector):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=["line1", "line2"])
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        return [
-            CIRun(
-                id=f"{self._uuid.uuid4()}",
-                pipeline_id=pipeline_id or "my-build-type",
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]

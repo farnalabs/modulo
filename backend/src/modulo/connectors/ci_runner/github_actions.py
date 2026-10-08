@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
@@ -370,8 +371,16 @@ class GitHubActionsCIRunner(CIRunnerBase):
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
 
-class _GitHubActionsTestDouble(GitHubActionsCIRunner):
-    """Minimal test double that does not make HTTP calls."""
+class _GitHubActionsTestDouble(CITestDoubleMixin, GitHubActionsCIRunner):
+    """Minimal test double that does not make HTTP calls.
+
+    ``trigger_run`` / ``list_runs`` scaffolding comes from
+    :class:`CITestDoubleMixin`; the ``owner/repo/run_id`` id shape is supplied
+    by the ``_double_*`` hooks below (derived the same way the real producer
+    derives it).
+    """
+
+    _double_default_pipeline_id = "test/workflow.yml"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -388,21 +397,16 @@ class _GitHubActionsTestDouble(GitHubActionsCIRunner):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        run = CIRun(
-            id=f"{self._uuid.uuid4()}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
         self._triggered.append({"run": run, "variables": variables or {}})
-        self._status = CIRunStatus.QUEUED
-        return run
+
+    def _double_trigger_id(self, pipeline_id: str) -> str:
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required")
+        return f"{self._split_pipeline_id(pipeline_id)[0]}/{self._uuid.uuid4()}"
+
+    def _double_listed_id(self, resolved: str) -> str:
+        return f"{self._split_pipeline_id(resolved)[0]}/run-1"
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -413,17 +417,3 @@ class _GitHubActionsTestDouble(GitHubActionsCIRunner):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        return [
-            CIRun(
-                id="run-1",
-                pipeline_id=pipeline_id or "test/workflow.yml",
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
@@ -255,8 +256,15 @@ class GitLabCIRunner(CIRunnerBase):
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
 
-class _GitLabCITestDouble(GitLabCIRunner):
-    """Minimal test double that does not make HTTP calls."""
+class _GitLabCITestDouble(CITestDoubleMixin, GitLabCIRunner):
+    """Minimal test double that does not make HTTP calls.
+
+    ``trigger_run`` / ``list_runs`` (and the ``project_id/pipeline_id`` shape of
+    the ids they emit) come from :class:`CITestDoubleMixin`.
+    """
+
+    _double_default_pipeline_id = "12345"
+    _double_listed_suffix = "pipeline-1"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -274,21 +282,8 @@ class _GitLabCITestDouble(GitLabCIRunner):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        run = CIRun(
-            id=f"{self._uuid.uuid4()}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
         self._triggered.append({"run": run, "variables": variables or {}})
-        self._status = CIRunStatus.QUEUED
-        return run
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -299,17 +294,3 @@ class _GitLabCITestDouble(GitLabCIRunner):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        return [
-            CIRun(
-                id="pipeline-1",
-                pipeline_id=pipeline_id or "12345",
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]
