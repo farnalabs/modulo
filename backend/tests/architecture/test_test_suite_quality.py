@@ -1046,6 +1046,17 @@ regression that silently weakens the suite:
   ``duplicate_test_body_baseline.txt`` under the same shrink-only ratchet as
   the audit-coverage baseline, so the guard blocks NEW duplicates immediately
   while the backlog is untangled file by file
+- a pytest-BDD ``@then`` step whose body is only a docstring/``pass``/``...`` —
+  the assertion half of a Gherkin scenario that observes nothing, so the
+  scenario reports green no matter how broken the route, response, or side
+  effect the step names. This is the BDD-step twin of the no-op ``test_*``
+  lens, which only recognises ``test_*`` names and pytest marks; ``@given``/
+  ``@when`` setup/action steps are deliberately left alone, and a step that
+  delegates its assertion to a helper has a non-empty body and is not flagged.
+  The pre-existing offenders are frozen in ``noop_bdd_then_baseline.txt`` under
+  the same shrink-only ratchet as the self-asserting-BDD baseline, so the guard
+  blocks NEW no-op ``@then`` steps immediately while the backlog is rewritten
+  file by file
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -14660,3 +14671,241 @@ def test_duplicate_test_body_lens_flags_copies():
         ("test_a", "test_b"),
         ("test_a", "test_c"),
     ], f"triple-run pairs wrong: {found}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: no-op pytest-BDD @then steps (silent false green)
+# ---------------------------------------------------------------------------
+def _pass_only_bdd_step_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True when *node*'s body is only a docstring and/or ``pass``/``...``.
+
+    Such a function executes no statement that can observe or verify anything:
+    the body is byte-for-byte equivalent to an empty implementation. This is a
+    purely syntactic test — it never needs to know what a same-module helper
+    might assert, because a body with no call at all cannot invoke one."""
+    body = list(node.body)
+    if body and _docstring_value(body[0]) is not None:
+        body = body[1:]
+    return all(
+        isinstance(stmt, ast.Pass)
+        or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis)
+        for stmt in body
+    )
+
+
+def _then_step_text(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
+    """Return the Gherkin step text of the first ``@then(...)`` decorator.
+
+    Handles both the plain-string form (``@then("the response is 200")``) and
+    the parser form (``@then(parsers.parse("the {thing} is ..."))``); only the
+    first positional argument is inspected, so a keyword string such as
+    ``target_fixture="page"`` can never be mistaken for the step text. The step
+    text is a stable, unique identity for the step (pytest-bdd rejects two
+    definitions of the same step in one module) — unlike the function name,
+    which is frequently the throwaway ``_`` for anonymous steps."""
+    for dec in node.decorator_list:
+        if not isinstance(dec, ast.Call) or _callable_name(dec) != "then":
+            continue
+        if not dec.args:
+            continue
+        for inner in ast.walk(dec.args[0]):
+            if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
+                return inner.value
+    return None
+
+
+def _noop_bdd_then_violation_functions(tree: ast.AST) -> list[tuple[str, int]]:
+    """Return ``(step_text, lineno)`` for every ``@then`` step whose body is a
+    no-op (docstring, ``pass``, or ``...`` only).
+
+    Only ``@then`` is targeted: ``@given``/``@when`` steps are setup and action,
+    and a side-effect-free (or empty) implementation there is a legitimate
+    no-op if the scenario never needed the precondition. A ``@then`` step is
+    the assertion half of the scenario, so a body that only ``pass``es certifies
+    nothing — the scenario reports green no matter how broken the product is.
+    A step that delegates its assertion to a helper has a call in its body and
+    is deliberately not flagged, so no interprocedural reasoning is needed."""
+    found: list[tuple[str, int]] = []
+    for node in _all_nodes(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if "then" not in _bdd_step_decorator_names(node):
+            continue
+        if not _pass_only_bdd_step_body(node):
+            continue
+        text = _then_step_text(node)
+        if text is None:
+            continue
+        found.append((text, node.lineno))
+    return found
+
+
+#: Pre-existing pass-only ``@then`` steps, frozen so the whole-tree guard blocks
+#: only NEW offenders while the backlog is rewritten file by file. Mirrors the
+#: FAR-1578 self-asserting-BDD ratchet (``self_asserting_bdd_baseline.txt``):
+#: new violations fail, and a fixed entry must leave the baseline so the list
+#: can only shrink.
+_NOOP_BDD_THEN_BASELINE_PATH = Path(__file__).resolve().parent / "noop_bdd_then_baseline.txt"
+_NOOP_BDD_THEN_BASELINE_HEADER = (
+    "# No-op pytest-BDD @then step baseline (pass-only verification steps).\n"
+    "#\n"
+    "# A @then step is the assertion half of a Gherkin scenario. When its body\n"
+    "# is only a docstring/pass/ellipsis it observes nothing, so the scenario\n"
+    "# reports green no matter how broken the product is - a silent false green\n"
+    "# that no amount of @given/@when setup can rescue. These are PRE-EXISTING\n"
+    "# no-op steps frozen so the guard blocks NEW ones immediately while the\n"
+    "# backlog is rewritten file by file. Generated, never hand-edited. Regenerate:\n"
+    "#\n"
+    "#   cd backend && uv run python scripts/update_noop_bdd_then_baseline.py\n"
+    "#\n"
+    "# This list can only SHRINK:\n"
+    "#   * test_no_noop_bdd_then_steps fails on any step NOT listed here (a NEW\n"
+    "#     pass-only @then), and\n"
+    "#   * test_noop_bdd_then_baseline_has_no_stale_entries fails when a listed\n"
+    "#     step is implemented/removed but not deleted from the baseline.\n"
+    "#\n"
+    "# Entry format: <path relative to backend/tests>:<step text>\n"
+)
+
+
+def _noop_bdd_then_baseline_key(rel: str, step_text: str) -> str:
+    return f"{rel}:{step_text}"
+
+
+def _noop_bdd_then_baseline_keys() -> set[str]:
+    """Every current violation key (``<relpath>:<step text>``), tree-wide."""
+    keys: set[str] = set()
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS).as_posix()
+        for step_text, _lineno in _noop_bdd_then_violation_functions(tree):
+            keys.add(_noop_bdd_then_baseline_key(rel, step_text))
+    return keys
+
+
+def _read_noop_bdd_then_baseline() -> set[str]:
+    """Baseline entries (comments and blank lines stripped)."""
+    return {
+        stripped
+        for raw in _NOOP_BDD_THEN_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
+        if (stripped := raw.strip()) and not stripped.startswith("#")
+    }
+
+
+def _render_noop_bdd_then_baseline(keys: set[str]) -> str:
+    """Canonical baseline text: fixed header + one sorted entry per line."""
+    return _NOOP_BDD_THEN_BASELINE_HEADER + "".join(f"{key}\n" for key in sorted(keys))
+
+
+def _noop_bdd_then_baseline_candidates() -> set[str]:
+    """Baseline entries the stale check may judge under the active scan.
+
+    Under ``MODULO_TEST_STYLE_SCOPE`` only entries whose module is in scope: the
+    scoped ``--changed-files`` run never re-checked the others, so an un-scanned
+    module cannot be judged stale (the same phantom-stale filter the
+    self-asserting-BDD ratchet needs). Tree-wide staleness stays owned by the
+    unscoped CI run.
+    """
+    baseline = _read_noop_bdd_then_baseline()
+    scope = _resolve_scope_paths()
+    if scope is None:
+        return baseline
+    return {key for key in baseline if (TESTS / key.split(":", 1)[0]).resolve() in scope}
+
+
+def test_no_noop_bdd_then_steps():
+    """A pytest-BDD ``@then`` step whose body is only a docstring/``pass``/
+    ``...`` verifies nothing: the Gherkin scenario that reaches it reports green
+    even when the route, response, or side effect it names is completely broken.
+    This is the BDD-step twin of ``test_no_noop_test_functions`` — the no-op
+    test lens only recognises ``test_*`` names and pytest marks, so a
+    ``@then``-decorated pass-only function slips through it. ``@given``/``@when``
+    steps are setup/action and are deliberately left alone, and a step that
+    delegates to a helper is not flagged because its body is non-empty.
+    Implement the assertion the step text promises (or delete a step nothing
+    uses). The pre-existing offenders are frozen in
+    ``noop_bdd_then_baseline.txt`` so the guard blocks NEW no-op ``@then`` steps
+    immediately while the backlog is rewritten; the stale-entry test keeps the
+    sweep honest."""
+    baseline = _read_noop_bdd_then_baseline()
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS).as_posix()
+        for step_text, lineno in _noop_bdd_then_violation_functions(tree):
+            if _noop_bdd_then_baseline_key(rel, step_text) in baseline:
+                continue
+            violations.append(f'  {rel}:{lineno}  @then("{step_text}") — body is a no-op')
+    assert not violations, (
+        f"Found {len(violations)} no-op @then step(s) outside the\n"
+        "noop_bdd_then_baseline.txt ratchet.\n"
+        "A @then step is the assertion half of the scenario; a pass-only body certifies nothing.\n"
+        "Implement the assertion the step text promises (or delete an unused step).\n" + "\n".join(violations)
+    )
+
+
+def test_noop_bdd_then_baseline_has_no_stale_entries():
+    """A step listed in the baseline but no longer a no-op (because it was
+    implemented or removed) must leave the baseline: the ratchet only shrinks,
+    so a completed sweep is recorded and never silently re-opens."""
+    stale = _noop_bdd_then_baseline_candidates() - _noop_bdd_then_baseline_keys()
+    assert not stale, (
+        f"{len(stale)} no-op-@then baseline entries are no longer no-op steps - regenerate\n"
+        "the baseline with `cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`:\n  "
+        + "\n  ".join(sorted(stale))
+    )
+
+
+def test_noop_bdd_then_baseline_is_sorted_and_regenerable():
+    """The baseline must be byte-stable (fixed header + sorted entries) so
+    regeneration is idempotent and review diffs stay minimal."""
+    current = _NOOP_BDD_THEN_BASELINE_PATH.read_text(encoding="utf-8")
+    assert current == _render_noop_bdd_then_baseline(_read_noop_bdd_then_baseline()), (
+        "no-op-@then baseline is not in canonical form - regenerate it with "
+        "`cd backend && uv run python scripts/update_noop_bdd_then_baseline.py`"
+    )
+
+
+def test_noop_bdd_then_lens_flags_pass_only_steps():
+    """Synthetic positive/negative control for the no-op-@then lens: it must
+    flag a ``@then`` step whose body is a docstring/``pass``/``...`` (plain,
+    parsed, async, docstring-only, and with a keyword argument), and ignore
+    ``@given``/``@when`` setup/action steps, ``@then`` steps that assert or
+    delegate to a helper, steps that raise, and non-BDD functions."""
+    positive_sources = [
+        '@then("the response is 200")\ndef check_status():\n    pass\n',
+        "@then(parsers.parse('the {thing} is 200'))\ndef check_thing(thing):\n    pass\n",
+        '@then("the run is created")\nasync def check_run():\n    pass\n',
+        '@then("a summary is generated")\ndef summary():\n    """docs only"""\n',
+        '@then("the widget is gone")\ndef gone():\n    ...\n',
+        '@then("the page shows it", target_fixture="page")\ndef shows():\n    pass\n',
+        '@then("the row is mapped to {name}")\ndef mapped(name):\n    """doc"""\n    pass\n',
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _noop_bdd_then_violation_functions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        '@then("the response is 200")\ndef check_status(resp):\n    assert resp.status_code == 200\n',
+        '@then("the response is 200")\ndef check_status(resp):\n    check_status_code(resp, 200)\n',
+        '@when("I request the list")\ndef request_list(client):\n    pass\n',
+        '@given("an admin client")\ndef admin() -> None:\n    pass\n',
+        '@then("it fails")\ndef fail():\n    raise AssertionError\n',
+        '@then("it is valid")\ndef valid(resp):\n    with pytest.raises(ValueError):\n        parse(resp)\n',
+        "def helper():\n    pass\n",
+        '@then("the value is set")\ndef value(state):\n    state["seen"] = True\n',
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _noop_bdd_then_violation_functions(tree), f"lens should NOT flag:\n{source}"
+
+    text_source = (
+        "@then(parsers.parse('the {thing} appears'), target_fixture=\"page\")\ndef f(thing, page):\n    pass\n"
+    )
+    found = _noop_bdd_then_violation_functions(ast.parse(text_source))
+    assert found, f"step text extraction found nothing: {text_source}"
+    assert found[0][0] == "the {thing} appears", f"step text extraction wrong: {found}"
