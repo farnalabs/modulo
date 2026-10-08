@@ -16,7 +16,7 @@ from sqlalchemy.exc import (
 
 from modulo.api.constants import MSG_UNEXPECTED_ERROR
 from modulo.api.db_error_reporting import log_service_unavailable
-from modulo.core.exceptions import PipelineNotRunnableError
+from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, TriggersPausedError
 from modulo.db.capacity import StorageExhaustedError
 from modulo.db.crud.pipeline import ManualNodeOutputSchemaError
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -68,7 +68,8 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
     The except-class -> status mapping and its order are the contract this
     module exists to enforce (IntegrityError->409, ProgrammingError->501,
     PendingRollbackError->503, InvalidRequestError->500, SQLAlchemyError->503,
-    pydantic.ValidationError->422, PipelineNotRunnableError->409; passthrough
+    pydantic.ValidationError->422, PipelineNotRunnableError->409,
+    TriggersPausedError->409, OrgDeletedError->409/404; passthrough
     re-raises for CancelledError / StorageExhaustedError / HTTPException;
     Exception->500). The chain below preserves the original except order -
     never reorder it (MRO: specific classes before their bases).
@@ -92,19 +93,31 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
       busy-row conflict rather than a database outage, so the class ordering
       above is unchanged - only the status for that one SQLSTATE differs.
 
-    One DOMAIN exception is mapped ahead of the ``Exception->500`` backstop:
-    ``PipelineNotRunnableError`` (FAR-1528/FAR-1552). The pipeline-state gate
-    lives in ``create_run``, so a route that reaches it WITHOUT its own
-    ``except PipelineNotRunnableError`` chain - ``variant_batches.re_fire_batch``
-    is the observed one - fell through to the backstop and answered a generic
-    500 for a refusal that is a client-visible 409 on every sibling route.
-    Mapping it here covers every chain-less route generically instead of one
-    patch per route. Routes that DO translate it themselves raise an
-    ``HTTPException``, which the passthrough arm below re-raises untouched, so
-    the explicit handlers keep their own mapping and are never double-handled.
-    The detail string is byte-identical to
-    ``modulo.api.routes.runs.pipeline_not_runnable_http``; the parity test in
-    ``tests/unit/api/test_db_error_handling.py`` fails if the two drift apart.
+    Three DOMAIN exceptions are mapped ahead of the ``Exception->500``
+    backstop (FAR-1528/FAR-1552/FAR-1589). Each gate lives in ``create_run``
+    (or its pre-flight helpers), so a route that reaches one WITHOUT its own
+    ``except`` chain - ``variant_batches.re_fire_batch`` is the observed one -
+    fell through to the backstop and answered a generic 500 for a refusal that
+    is a typed 4xx everywhere a sibling route translates it. Mapping them here
+    covers every chain-less route generically instead of one patch per route.
+    Routes that DO translate them themselves raise an ``HTTPException`` (or
+    swallow the error into their own payload, as the webhook/slack paused
+    paths do), so the explicit handlers keep their own mapping and are never
+    double-handled:
+
+    * ``PipelineNotRunnableError`` -> 409, detail byte-identical to
+      ``modulo.api.routes.runs.pipeline_not_runnable_http``.
+    * ``OrgDeletedError`` -> 409 when the org is soft-deleted, 404 when it is
+      missing; both details byte-identical to the ``except OrgDeletedError``
+      arms in ``routes/runs.py`` (trigger + rerun) and ``routes/triggers.py``
+      (test trigger).
+    * ``TriggersPausedError`` -> 409. No REST route answers it today (the
+      webhook/slack pre-flights swallow it into a 200 ``{"status": "paused"}``
+      event write), so the status follows the ``create_run``-gate family it
+      belongs to: a refusal an admin can lift, never a server-side bug.
+
+    The parity tests in ``tests/unit/api/test_db_error_handling.py`` fail if
+    any of these detail strings drift from their sibling routes.
     """
     try:
         raise exc
@@ -207,6 +220,50 @@ def _translate_wrapped_exception(exc: Exception, log_prefix: str) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot create run: pipeline {exc.pipeline_id} is {exc.state}",
+        ) from None
+    except TriggersPausedError as exc:
+        # FAR-1589: the org-wide ``triggers_paused`` kill-switch gate
+        # (``ensure_triggers_resumable``, reached via ``create_run``). A domain
+        # refusal an admin can lift, NOT a server-side bug: 409 Conflict, the
+        # same status family as the sibling ``create_run``-gate refusals above
+        # and below. The routes that handle pause themselves (webhooks/slack)
+        # swallow it into their own ``{"status": "paused"}`` payload inside the
+        # endpoint body, so they never reach this arm with the exception type;
+        # a route that converts it to an ``HTTPException`` would pass through
+        # the passthrough arm untouched regardless.
+        _log.warning(
+            "%s.triggers_paused org=%s trigger=%s",
+            log_prefix,
+            exc.org_id,
+            exc.trigger_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot create run: triggers are paused for organisation {exc.org_id}",
+        ) from None
+    except OrgDeletedError as exc:
+        # FAR-1589: the soft-deleted / missing-org guard in ``create_run``
+        # fires for EVERY run origin (manual included - it is deliberately not
+        # pause-exempt), and ``variant_batches.re_fire_batch`` carries no
+        # route-local chain, so this fell through to the generic 500 backstop.
+        # Statuses and detail strings are byte-identical to the sibling
+        # ``except OrgDeletedError`` arms in routes/runs.py (trigger + rerun)
+        # and routes/triggers.py (test trigger): 409 for a soft-deleted org,
+        # 404 when the org row is gone entirely.
+        _log.warning(
+            "%s.org_deleted org=%s deleted=%s",
+            log_prefix,
+            exc.org_id,
+            exc.deleted,
+        )
+        if exc.deleted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot create run: organisation {exc.org_id} is deleted",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cannot create run: organisation {exc.org_id} not found",
         ) from None
     except Exception:
         _log.exception("%s.unexpected_error", log_prefix)
