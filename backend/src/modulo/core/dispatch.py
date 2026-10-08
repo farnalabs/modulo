@@ -16,6 +16,7 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -74,6 +75,27 @@ def _open_session() -> AsyncSession:
 def _new_claim_token() -> str:
     """DISTINCT per-claim token — never identical to the deterministic SAQ job id."""
     return uuid.uuid4().hex
+
+
+def _is_row_lock_timeout(exc: BaseException) -> bool:
+    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
+
+    FAR-1584: every dispatch-path write on the hot ``runs`` row runs under a
+    transaction-scoped ``lock_timeout`` (``db.crud.row_lock.
+    set_mutation_row_lock_timeout``), so a contended row lock can wait at most
+    ``Settings.mutation_row_lock_timeout_ms`` — never silently past the Fly
+    HAProxy 30-minute session window (the unbounded wait that got prod
+    connections culled mid-operation; FAR-1524 O11).
+
+    When the bound fires, Postgres raises ``lock_not_available``, surfacing as
+    a SQLAlchemy ``OperationalError`` wrapping asyncpg's
+    ``LockNotAvailableError``. :func:`modulo.db.sqlstates.sqlstate_of` walks
+    the whole chain (``.orig``/``__cause__``/``__context__``, incl. savepoint
+    rollback wrappers), so both the driver-error and wrapped shapes are
+    recognised — dialect-tolerant, no exception-class import here. Any OTHER
+    failure is not a lock timeout and must keep propagating.
+    """
+    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
 
 
 async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
@@ -256,7 +278,22 @@ async def _org_capacity_deferred(
 
 
 async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """Write dispatched_at BEFORE enqueue (F3e)."""
+    """Write dispatched_at BEFORE enqueue (F3e).
+
+    The UPDATE is the statement observed blocked on a ``runs`` row lock in
+    prod (FAR-1524 O11), so it runs under the transaction-scoped
+    ``lock_timeout`` bound (FAR-1584): a contended row lock waits at most
+    ``Settings.mutation_row_lock_timeout_ms`` (default 5 s), never the
+    unbounded wait that let a silent session reach the HAProxy 30-minute
+    cull window. The bound is issued as this transaction's FIRST statement,
+    before the row lock is taken. On expiry the caller sees SQLSTATE 55P03
+    and handles it (``dispatch_run`` logs it and leaves the run pending for
+    the next ``dispatcher_reconcile`` tick); this writer stays a dumb
+    statement — no swallowing here.
+    """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     await session.execute(
         text("UPDATE runs SET dispatched_at=now() WHERE id=:rid"),
         {"rid": run_id},
@@ -278,7 +315,16 @@ async def _record_saq_job(session: AsyncSession, run_id: uuid.UUID, job_id: str,
     column ships in a parallel migration): a run that previously failed to
     enqueue and was left ``pending`` with the marker is admitted once its
     retry dispatch lands.
+
+    Same hot ``runs`` row as ``_record_dispatched``, so the write runs under
+    the transaction-scoped ``lock_timeout`` bound (FAR-1584); the caller
+    (``_record_saq_job_session``) handles a 55P03 expiry — the SAQ job is
+    already enqueued at that point, so the bookkeeping skip must never fail
+    the dispatch.
     """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     await session.execute(
         text(
             "UPDATE runs SET dispatcher='saq', saq_job_id=:jid, enqueue_failed_at=NULL, "
@@ -299,7 +345,17 @@ async def _mark_enqueue_failed(session: AsyncSession, run_id: uuid.UUID) -> None
     migration). ``dispatcher_reconcile`` re-dispatches it on a bounded interval
     with a per-tick cap, and terminal-fails it (``dispatch_failed``) only when
     Redis is verifiably reachable AND the marker is older than the TTL backstop.
+
+    Same hot ``runs`` row, so the marker write runs under the transaction-scoped
+    ``lock_timeout`` bound (FAR-1584); a 55P03 expiry (marker AND the
+    same-transaction webhook-dedup expiry both roll back) is handled by the
+    caller (``_mark_enqueue_failed_session``) — the enqueue itself already
+    failed, so the outcome stays ``enqueue_failed`` and the run is left
+    ``pending`` for the next reconcile tick either way.
     """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
     await session.execute(
         text("UPDATE runs SET enqueue_failed_at=now() WHERE id=:rid AND status NOT IN ('complete', 'cancelled')"),
         {"rid": run_id},
@@ -381,7 +437,18 @@ async def _enqueue_saq(
 
 
 async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
-    """Non-terminal enqueue-failure marker + webhook-dedup expiry in one session."""
+    """Non-terminal enqueue-failure marker + webhook-dedup expiry in one session.
+
+    FAR-1584: a 55P03 row-lock expiry here (marker write and the
+    same-transaction dedup expiry both roll back) is LOGGED, never swallowed
+    silently and never re-raised — the enqueue it reports has already failed,
+    so the caller still returns ``enqueue_failed`` and the run stays
+    ``pending``. Without the marker the row matches the reconcile zombie
+    branch (``pending`` + ``dispatched_at`` set + ``dispatcher`` NULL +
+    ``enqueue_failed_at IS NULL``) instead of the heartbeat-gated
+    ``enqueue_failed_stale`` branch, so it is re-dispatched a tick sooner —
+    recovery either way, no lost run. Any NON-lock failure still raises.
+    """
     session = _open_session()
     try:
         async with session.begin():
@@ -391,12 +458,35 @@ async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> 
             await set_rls_execution_context(session)
             await _mark_enqueue_failed(session, run_id)
             await _expire_webhook_dedup(session, run_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not _is_row_lock_timeout(exc):
+            raise
+        _log.warning(
+            "dispatch_run: row-lock timeout (SQLSTATE 55P03) stamping "
+            "enqueue_failed_at for run %s — marker write and webhook-dedup expiry "
+            "rolled back; the enqueue already failed and the run is left pending "
+            "for the next dispatcher_reconcile tick",
+            run_id,
+            exc_info=True,
+        )
     finally:
         await session.close()
 
 
 async def _record_saq_job_session(run_id: uuid.UUID, org_id: uuid.UUID, job_id: str) -> None:
-    """Record dispatched='saq' + job id + fresh claim token in one session."""
+    """Record dispatched='saq' + job id + fresh claim token in one session.
+
+    FAR-1584: a 55P03 row-lock expiry here is LOGGED and the dispatch still
+    succeeds — by this point the SAQ job is ENQUEUED and ``dispatched_at`` is
+    already written, so failing the whole dispatch would report an error for
+    a run that will execute (commit-then-log). The skipped bookkeeping
+    (``dispatcher``/``saq_job_id``) leaves the row on dispatcher_reconcile's
+    zombie branch (``pending`` + ``dispatched_at`` set + ``dispatcher`` NULL),
+    and execution stays at-most-once via the atomic claim regardless of how
+    many jobs exist. Any NON-lock failure still raises.
+    """
     session = _open_session()
     try:
         async with session.begin():
@@ -405,6 +495,20 @@ async def _record_saq_job_session(run_id: uuid.UUID, org_id: uuid.UUID, job_id: 
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
             await _record_saq_job(session, run_id, job_id, _new_claim_token())
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not _is_row_lock_timeout(exc):
+            raise
+        _log.warning(
+            "dispatch_run: row-lock timeout (SQLSTATE 55P03) recording "
+            "dispatcher='saq' for run %s (job %s already enqueued) — bookkeeping "
+            "skipped; dispatcher_reconcile's zombie branch re-covers the row and "
+            "the atomic claim keeps execution at-most-once",
+            run_id,
+            job_id,
+            exc_info=True,
+        )
     finally:
         await session.close()
 
@@ -498,10 +602,17 @@ async def dispatch_run(
 
       * ``('enqueued', job_id)``     — job is on the SAQ queue.
       * ``('deduped', job_id)``      — a SAQ job with the same key already exists.
-      * ``('deferred', None)``       — capacity-blocked (no enqueue, no
-        dispatched_at). Either the run's pipeline is at
-        ``max_concurrent_runs`` or — NEW org-level admission control — the
-        org is at its ``run_concurrency_limit``. A currently-``pending`` run
+      * ``('deferred', None)``       — not dispatched, run left ``pending``.
+        Either the run's pipeline is at
+        ``max_concurrent_runs``, the org is at
+        ``run_concurrency_limit``, or — FAR-1584 — the bounded ``runs``
+        row-lock timeout fired while stamping ``dispatched_at`` (or the
+        admission transaction's org-cap write): the transaction rolled back
+        with NOTHING enqueued and NO ``dispatched_at`` written, so
+        ``dispatcher_reconcile``'s ``pending + dispatched_at IS NULL``
+        branch re-dispatches it on its next tick. The lock-timeout case is
+        logged as a WARNING with the full chain (never silent). A
+        currently-``pending`` run
         is also demoted with the ``org_capacity_limited`` reason marker so the
         stale-run sweep recovers it as stranded-capacity; a non-pending run
         (``running``/``awaiting_human``/``claimed`` resume) is deferred without
@@ -530,10 +641,17 @@ async def dispatch_run(
     session = _open_session()
     try:
         async with session.begin():
+            from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
             from modulo.db.crud.run import get_run
             from modulo.db.models.run import TERMINAL_STATUSES
             from modulo.db.rls import set_rls_execution_context, set_rls_org
 
+            # FAR-1584: bound this transaction's row-lock waits FIRST (takes
+            # no lock itself) — the org-cap demote below is a writer on the
+            # same hot runs row, so it must never wait past
+            # Settings.mutation_row_lock_timeout_ms (never the unbounded,
+            # >=30-min silent wait HAProxy culls mid-operation; FAR-1524 O11).
+            await set_mutation_row_lock_timeout(session)
             await set_rls_org(session, oid)
             await set_rls_execution_context(session)
             run = await get_run(session, rid)
@@ -560,6 +678,26 @@ async def dispatch_run(
             if await _slot_saturated(session, rid):
                 _log.info("dispatch_run: run %s slot-saturated (no enqueue)", rid)
                 return ("deferred", None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not _is_row_lock_timeout(exc):
+            raise
+        # FAR-1584: the bounded lock_timeout fired (e.g. on the org-cap demote
+        # write). The transaction rolled back — nothing was enqueued, nothing
+        # was half-written — so the run is left exactly ``pending`` with
+        # ``dispatched_at`` unset, the state dispatcher_reconcile's
+        # capacity_deferred branch re-dispatches on its next 60s tick. Never
+        # silent: WARNING + full chain, and every dispatch_run caller already
+        # treats ``deferred`` as "not dispatched, recovered by reconcile".
+        _log.warning(
+            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) during the "
+            "dispatch admission transaction — bounded by mutation_row_lock_timeout_ms; "
+            "left pending with no enqueue for the next dispatcher_reconcile tick",
+            rid,
+            exc_info=True,
+        )
+        return ("deferred", None)
     finally:
         await session.close()
 
@@ -572,6 +710,27 @@ async def dispatch_run(
             await set_rls_org(session, oid)
             await set_rls_execution_context(session)
             await _record_dispatched(session, rid)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if not _is_row_lock_timeout(exc):
+            raise
+        # FAR-1584: the O11 statement's own bounded wait expired. The UPDATE
+        # rolled back, so the run stays ``pending`` + ``dispatched_at IS NULL``
+        # — dispatcher_reconcile's capacity_deferred branch re-dispatches it on
+        # the next tick (enqueue never happened, so there is nothing to dedupe
+        # and nothing lost). WARNING + full chain: observable, never a silent
+        # no-op; ``deferred`` is the truthful outcome every caller already
+        # handles as "not dispatched, recovered by reconcile".
+        _log.warning(
+            "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) writing "
+            "dispatched_at — bounded by mutation_row_lock_timeout_ms; dispatched_at "
+            "NOT written (transaction rolled back), run left pending for the next "
+            "dispatcher_reconcile tick",
+            rid,
+            exc_info=True,
+        )
+        return ("deferred", None)
     finally:
         await session.close()
 

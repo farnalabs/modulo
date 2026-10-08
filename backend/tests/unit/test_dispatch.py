@@ -15,6 +15,7 @@ Mock/fake based — no Postgres, no Redis. Covers:
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import OperationalError
 
 from modulo.api.models.error import ErrorEventInput
 from modulo.core import dispatch
@@ -56,6 +58,17 @@ class _MockSession:
 
     def begin(self) -> _MockBegin:
         return self.begin_cm
+
+    def get_bind(self) -> SimpleNamespace:
+        """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1584).
+
+        The dispatch writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
+        whose shared ``get_dialect_name`` reads ``session.get_bind()``. A
+        non-postgres double takes the helper's documented safe no-op branch
+        (SQLite/MySQL take no ``lock_timeout``), exactly like the SQLite unit
+        fixtures — tests that need the LIVE bound use ``_PgRecordingSession``.
+        """
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
     async def close(self) -> None:
         return None
@@ -1579,3 +1592,400 @@ class TestReconcileF6aRecovery:
         assert "awaiting_human" in rendered
         assert "claimed" in rendered
         assert "heartbeat_at" in rendered
+
+
+# ---------------------------------------------------------------------------
+# FAR-1584 — bounded row-lock wait on the dispatch-path `runs` writers
+# ---------------------------------------------------------------------------
+# The dispatch-path UPDATEs on the hot `runs` row (dispatched_at,
+# dispatcher='saq', enqueue_failed_at, the admission transaction's org-cap
+# demote) used to wait UNBOUNDED on a row lock — the exact statement observed
+# blocked in prod (FAR-1524 O11: `UPDATE runs SET dispatched_at=now() WHERE
+# id=$1 ... while locking tuple in relation "runs"`). A silent wait past the
+# Fly HAProxy 30-minute session window is what the proxy culls
+# mid-operation. These tests pin: (1) every writer issues the
+# transaction-scoped `set_config('lock_timeout', ..., true)` bound BEFORE its
+# row lock, value from Settings.mutation_row_lock_timeout_ms; (2) the value
+# AND the operator ceiling stay far below that 1800s window; (3) a 55P03
+# expiry is handled NON-SILENTLY with a truthful outcome — the run is never
+# lost, never double-dispatched, never a swallowed error; (4) non-lock
+# failures still propagate. The real-Postgres contention behaviour (a held
+# row lock actually timing out) is an integration concern — the unit seam
+# here drives the same 55P03 the bound produces.
+
+
+class _PgRecordingSession:
+    """AsyncSession double reporting the postgresql dialect, recording SQL.
+
+    Takes the LIVE branch of ``set_mutation_row_lock_timeout``'s dialect gate
+    (``get_bind().dialect.name == "postgresql"``), so the real bound statement
+    is recorded alongside each writer's UPDATE for ORDER/value assertions.
+    """
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.params: list[dict[str, Any] | None] = []
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        self._bind = bind
+        self.begin_cm = _MockBegin()
+
+    def get_bind(self) -> MagicMock:
+        return self._bind
+
+    def begin(self) -> _MockBegin:
+        return self.begin_cm
+
+    async def close(self) -> None:
+        return None
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        self.statements.append(str(stmt))
+        self.params.append(params)
+        return MagicMock()
+
+
+def _lock_timeout_error(statement: str) -> OperationalError:
+    """Simulated row-lock contention: asyncpg's real ``LockNotAvailableError``
+    (SQLSTATE 55P03) wrapped exactly the way SQLAlchemy surfaces it."""
+    from asyncpg import exceptions as asyncpg_exceptions
+
+    driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+    return OperationalError(statement, {}, driver_error)
+
+
+def _non_lock_db_error() -> OperationalError:
+    """A different SQLSTATE (serialization failure) — NOT a lock timeout."""
+    return OperationalError("UPDATE runs ...", {}, SimpleNamespace(sqlstate="40001"))
+
+
+class TestWritersBoundTheirRowLockWait:
+    """WIRING + ORDER: every dispatch-path runs writer sets the bound first."""
+
+    @pytest.mark.parametrize(
+        ("writer", "args", "update_marker"),
+        [
+            (dispatch._record_dispatched, (uuid.UUID(RUN_ID),), "dispatched_at=now()"),
+            (dispatch._record_saq_job, (uuid.UUID(RUN_ID), JOB_ID, "claim-abc"), "dispatcher='saq'"),
+            (dispatch._mark_enqueue_failed, (uuid.UUID(RUN_ID),), "enqueue_failed_at=now()"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_transaction_local_lock_bound_precedes_the_update(
+        self,
+        writer: Any,
+        args: tuple[Any, ...],
+        update_marker: str,
+    ) -> None:
+        session = _PgRecordingSession()
+        with patch(
+            "modulo.db.crud.row_lock.get_settings",
+            return_value=_make_settings(mutation_row_lock_timeout_ms=5000),
+        ):
+            await writer(session, *args)
+
+        bound_at = [i for i, sql in enumerate(session.statements) if "set_config('lock_timeout'" in sql]
+        update_at = [i for i, sql in enumerate(session.statements) if update_marker in sql]
+        assert bound_at, f"no transaction-local lock_timeout bound issued; statements={session.statements}"
+        assert update_at, f"the writer's UPDATE never ran; statements={session.statements}"
+        assert bound_at[0] < update_at[0], (
+            f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
+        )
+        # SET LOCAL semantics: set_config(..., is_local => true) — the bound is
+        # transaction-scoped and reverts on COMMIT/ROLLBACK, so it can never
+        # leak onto a pooled connection's later statements.
+        assert ", true)" in session.statements[bound_at[0]]
+        # The value comes from the operator knob, not a hardcoded literal.
+        bound_params = session.params[bound_at[0]]
+        assert bound_params is not None
+        assert bound_params["val"] == "5000ms"
+
+    @pytest.mark.asyncio
+    async def test_admission_transaction_sets_the_bound_as_its_first_statement(self) -> None:
+        """The admission transaction bounds itself FIRST: its org-cap demote
+        (``update_run_status``) is a writer on the same hot ``runs`` row."""
+        session = _PgRecordingSession()
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            patch.object(dispatch, "_open_session", return_value=session),
+            _rls_patch(),
+            patch(
+                "modulo.db.crud.run.get_run",
+                new_callable=AsyncMock,
+                return_value=SimpleNamespace(status="pending"),
+            ),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=True),
+            patch(
+                "modulo.db.crud.row_lock.get_settings",
+                return_value=_make_settings(mutation_row_lock_timeout_ms=5000),
+            ),
+        ):
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "deferred"
+        assert job_id is None
+        assert session.statements, "the admission transaction executed no statements"
+        assert "set_config('lock_timeout'" in session.statements[0]
+        first_params = session.params[0]
+        assert first_params is not None
+        assert first_params["val"] == "5000ms"
+
+
+class TestLockBoundBelowHaproxyWindow:
+    """Pin the FAR-1524 relationship: the bound is well below the Fly HAProxy
+    30-minute session window (``timeout client/server 30m`` = 1800s), so a
+    lock wait can never survive long enough to be culled mid-operation."""
+
+    _HAPROXY_SESSION_WINDOW_SECONDS = 1800
+
+    def test_default_value_is_well_below_the_window(self) -> None:
+        from modulo.settings import Settings
+
+        default_ms = Settings.model_fields["mutation_row_lock_timeout_ms"].default
+        assert default_ms == 5000
+        assert default_ms < self._HAPROXY_SESSION_WINDOW_SECONDS * 1000
+
+    def test_operator_ceiling_is_well_below_the_window(self) -> None:
+        from modulo.settings import Settings
+
+        field = Settings.model_fields["mutation_row_lock_timeout_ms"]
+        ceilings = [m.le for m in field.metadata if getattr(m, "le", None) is not None]
+        assert ceilings, f"no le() ceiling on mutation_row_lock_timeout_ms: {field.metadata}"
+        ceiling_ms = max(ceilings)
+        # Even the MAXIMUM operator-configured value (30s) stays far below the
+        # window — no configuration of this knob can reach the cull threshold.
+        assert ceiling_ms < self._HAPROXY_SESSION_WINDOW_SECONDS * 1000
+
+
+class TestLockTimeoutHandling:
+    """A 55P03 expiry of the bounded wait: logged, truthful outcome, run never lost."""
+
+    @pytest.mark.asyncio
+    async def test_dispatched_write_lock_timeout_defers_without_enqueue(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """THE FAR-1524-O11 case: the dispatched_at UPDATE meets a held runs
+        row lock and the BOUND fires (55P03).
+
+        The write rolled back, so the run stays ``pending`` +
+        ``dispatched_at IS NULL`` — the state ``dispatcher_reconcile``'s
+        capacity_deferred branch re-dispatches on its next tick. The outcome
+        is ``deferred`` (every dispatch_run caller already treats that as "not
+        dispatched, recovered by reconcile"), the enqueue never happens (no
+        double-dispatch), and the condition is logged at WARNING with the full
+        exception chain — never a silent no-op, never a lost run.
+        """
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_dispatched",
+                new_callable=AsyncMock,
+                side_effect=_lock_timeout_error("UPDATE runs SET dispatched_at=now()"),
+            ),
+            _enqueue_patch() as enqueue,
+        ):
+            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "deferred"
+        assert job_id is None
+        enqueue.assert_not_awaited()
+        assert "55P03" in caplog.text
+        assert RUN_ID in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_admission_write_lock_timeout_defers_without_enqueue(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A 55P03 on the admission transaction's org-cap demote write (same
+        hot row): rolled back, deferred, nothing enqueued, logged."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(
+                dispatch,
+                "_org_capacity_deferred",
+                new_callable=AsyncMock,
+                side_effect=_lock_timeout_error("UPDATE runs SET error_code"),
+            ),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            _enqueue_patch() as enqueue,
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock) as dispatched,
+        ):
+            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "deferred"
+        assert job_id is None
+        enqueue.assert_not_awaited()
+        dispatched.assert_not_awaited()
+        assert "55P03" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_saq_job_record_lock_timeout_still_reports_enqueued(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Commit-then-log: by the time dispatcher='saq' is recorded the job
+        is ALREADY on the queue, so a 55P03 there must not fail the dispatch
+        (that would report an error for a run that will execute). The skipped
+        bookkeeping lands the row on the reconcile zombie branch; the atomic
+        claim keeps execution at-most-once."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(return_value=(JOB_ID, False)),
+            patch.object(
+                dispatch,
+                "_record_saq_job",
+                new_callable=AsyncMock,
+                side_effect=_lock_timeout_error("UPDATE runs SET dispatcher='saq'"),
+            ),
+        ):
+            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "enqueued"
+        assert job_id == JOB_ID
+        assert "55P03" in caplog.text
+        assert RUN_ID in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_enqueue_failed_marker_lock_timeout_still_reports_enqueue_failed(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The enqueue itself failed (that part stays TRUE — outcome
+        ``enqueue_failed``), but the marker write's 55P03 must not stack an
+        unhandled exception on top of it. The row then matches the reconcile
+        zombie branch (no marker) instead of the heartbeat-gated
+        enqueue_failed branch — re-dispatched either way."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(dispatch, "_record_dispatched", new_callable=AsyncMock),
+            _enqueue_patch(side_effect=RuntimeError("redis down")),
+            patch.object(dispatch.asyncio, "sleep", new_callable=AsyncMock),
+            patch.object(
+                dispatch,
+                "_mark_enqueue_failed",
+                new_callable=AsyncMock,
+                side_effect=_lock_timeout_error("UPDATE runs SET enqueue_failed_at"),
+            ),
+            patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock),
+        ):
+            caplog.set_level(logging.WARNING, logger="modulo.core.dispatch")
+            outcome, job_id = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert outcome == "enqueue_failed"
+        assert job_id is None
+        assert "55P03" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_lock_timed_out_dispatch_recovers_on_the_next_attempt(self) -> None:
+        """Retried, not lost, not double-dispatched.
+
+        Attempt 1 hits the bounded 55P03 -> ``deferred`` with NO enqueue and
+        NO ``dispatched_at`` written (the pending/dispatched_at-NULL state
+        reconcile re-dispatches). Attempt 2 (the next tick, lock released)
+        writes and enqueues exactly ONCE.
+        """
+        first_attempt_error = _lock_timeout_error("UPDATE runs SET dispatched_at=now()")
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_dispatched",
+                new_callable=AsyncMock,
+                side_effect=[first_attempt_error, None],
+            ),
+            _enqueue_patch(return_value=(JOB_ID, False)) as enqueue,
+            patch.object(dispatch, "_record_saq_job", new_callable=AsyncMock),
+        ):
+            first_outcome, first_job = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+            second_outcome, second_job = await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+        assert first_outcome == "deferred"
+        assert first_job is None
+        assert second_outcome == "enqueued"
+        assert second_job == JOB_ID
+        # Only the successful attempt enqueued — the lock-timed-out attempt
+        # never reached the queue, so there is exactly one job.
+        assert enqueue.await_count == 1
+
+    def test_deferred_lock_timeout_state_matches_the_reconcile_redispatch_branch(self) -> None:
+        """Structural link: ``deferred`` after a 55P03 leaves the run ``pending``
+        + ``dispatched_at IS NULL``, and that IS the predicate branch
+        dispatcher_reconcile re-dispatches every tick — 'retried on the next
+        dispatch tick' is enforced by the existing recovery query, not assumed.
+        """
+        from modulo.core import cron_helpers as ch
+
+        pred = ch._build_re_dispatch_predicate(
+            reenqueue_window=600,
+            stale_window=600,
+            capacity_redispatch_seconds=ch.CAPACITY_REDISPATCH_SECONDS,
+        )
+        rendered = str(pred.compile(compile_kwargs={"literal_binds": True}))
+        assert "dispatched_at IS NULL" in rendered
+        assert "status" in rendered
+
+    @pytest.mark.asyncio
+    async def test_non_lock_db_error_still_propagates(self) -> None:
+        """The handler is targeted at 55P03 ONLY: a serialization failure
+        (40001) from the same statement keeps its loud failure path — no
+        over-broad swallow of every DB error."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_dispatched",
+                new_callable=AsyncMock,
+                side_effect=_non_lock_db_error(),
+            ),
+            pytest.raises(OperationalError),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+    @pytest.mark.asyncio
+    async def test_unrelated_exception_still_propagates(self) -> None:
+        """A non-SQL failure (connection lost) is not a lock timeout and must
+        keep propagating to the caller's own error handling."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_dispatched",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("connection lost"),
+            ),
+            pytest.raises(RuntimeError, match="connection lost"),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
