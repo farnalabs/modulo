@@ -152,6 +152,41 @@ imagePullSecrets:
 The secret is rendered into both the ServiceAccount and every pod spec.
 Public images would remove the need for this.
 
+### Kubernetes Runtime Provider (service-account token)
+
+By default every pod renders `automountServiceAccountToken: false`: with the
+Kubernetes runtime provider off, nothing in the stack calls the Kubernetes
+API, and an unmounted token keeps the blast radius of a compromised pod small
+(`kubernetes:S6865`).
+
+When you enable the Kubernetes runtime provider (`MODULO_KUBERNETES_ENABLED`)
+so agent workspaces run as pods in your cluster, the control-plane workloads
+need a namespaced credential to create, exec into and read logs from those
+pods. Declare it in values instead of patching the Deployments — a `kubectl
+patch` is silently reverted by the next `helm upgrade`:
+
+```yaml
+serviceAccount:
+  automountServiceAccountToken: true
+```
+
+| Workload | Renders | Why |
+|---|---|---|
+| `backend` | `serviceAccount.automountServiceAccountToken` (default `false`) | profile tests / workspace API calls against the cluster |
+| `saq-runner` | `serviceAccount.automountServiceAccountToken` (default `false`) | dispatches workspace pods — create/exec/log |
+| `saq-system` | `serviceAccount.automountServiceAccountToken` (default `false`) | workspace sweep + reconciler |
+| `frontend` | always `false` | static nginx SPA — never calls the API, knob does not apply |
+
+**Security trade-off:** enabling it hands every backend/SAQ pod a bearer token
+whose power is whatever RBAC is bound to the chart ServiceAccount. Keep that
+grant a namespaced `Role` scoped to the workspace namespace (pods,
+`pods/exec`, `pods/log`) — never a `ClusterRole`. Leave the value `false`
+when the provider is off; the default is deliberately the safe one.
+
+The full setup — provider env vars, the least-privilege Role/RoleBinding, and
+the workspace-pod ServiceAccount — is in the
+[Kubernetes guide](https://modulo.run/docs/kubernetes).
+
 ## EKS Deployment
 
 See `values.eks.example.yaml` for a validated EKS configuration using AWS managed services (RDS, ElastiCache, ALB).
@@ -219,6 +254,7 @@ kubectl delete namespace modulo  # If namespace.create=true
 - **Security Context:** `runAsNonRoot`, `allowPrivilegeEscalation: false`, `capabilities.drop: ALL`
 - **seccompProfile:** `RuntimeDefault` on all pods
 - **readOnlyRootFilesystem:** Enabled on all containers. Frontend nginx uses `command: ["nginx", "-g", "daemon off;"]` to skip the docker-entrypoint (which writes into `/etc/nginx/conf.d/`); the nginx config is provided via a ConfigMap mount. Backend/SAQ runners use writable `/tmp` emptyDir mounts.
+- **Service-account token:** `automountServiceAccountToken: false` on every pod by default; opt in per the *Kubernetes Runtime Provider* section above when the Kubernetes runtime provider is enabled.
 
 ### Resource Management
 

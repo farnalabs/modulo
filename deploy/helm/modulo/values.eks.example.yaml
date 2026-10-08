@@ -49,6 +49,29 @@ limitRange:
     memory: "256Mi"
     ephemeral-storage: 512Mi
 
+# -- Kubernetes runtime provider (optional) ---------------------------------
+# This validated example leaves token mounting OFF (the default): nothing in
+# the stack calls the Kubernetes API unless you enable the Kubernetes runtime
+# provider. Enable both halves together when you run agent workspaces as pods
+# on this cluster — backend, saq-runner and saq-system then need a mounted
+# token to create/exec/log those pods (the frontend stays unmounted). This is
+# declarative, so it survives `helm upgrade`; the old `kubectl patch` workaround
+# did not. Bind only a namespaced Role to the ServiceAccount — see the chart
+# README, "Kubernetes Runtime Provider".
+#
+# serviceAccount:
+#   automountServiceAccountToken: true
+#
+# backend:
+#   env:
+#     MODULO_KUBERNETES_ENABLED: "1"
+# saqRunner:
+#   env:
+#     MODULO_KUBERNETES_ENABLED: "1"
+# saqSystem:
+#   env:
+#     MODULO_KUBERNETES_ENABLED: "1"
+
 # -- External Postgres (Amazon RDS) -----------------------------------------
 postgres:
   host: modulo-db.cluster-xxxxxx.us-east-1.rds.amazonaws.com

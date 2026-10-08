@@ -25,6 +25,10 @@ spec:
         app.kubernetes.io/component: redis
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
+      # Redis never calls the Kubernetes API, so its token stays unmounted
+      # unconditionally (kubernetes:S6865) — Kubernetes would otherwise
+      # default this to true and mount a bearer token into the queue backend.
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
