@@ -686,11 +686,13 @@ async def dispatch_run(
             raise
         # FAR-1584: the bounded lock_timeout fired (e.g. on the org-cap demote
         # write). The transaction rolled back — nothing was enqueued, nothing
-        # was half-written — so the run is left exactly ``pending`` with
-        # ``dispatched_at`` unset, the state dispatcher_reconcile's
-        # capacity_deferred branch re-dispatches on its next 60s tick. Never
-        # silent: WARNING + full chain, and every dispatch_run caller already
-        # treats ``deferred`` as "not dispatched, recovered by reconcile".
+        # was half-written — so the run is left ``pending``: ``dispatched_at``
+        # unset on a first dispatch (the capacity_deferred branch) or in the
+        # zombie state on a re-dispatch (dispatched_at already set, dispatcher
+        # NULL). Either way dispatcher_reconcile re-dispatches it on its next
+        # 60s tick. Never silent: WARNING + full chain, and every dispatch_run
+        # caller already treats ``deferred`` as "not dispatched, recovered by
+        # reconcile".
         _log.warning(
             "dispatch_run: run %s row-lock timeout (SQLSTATE 55P03) during the "
             "dispatch admission transaction — bounded by mutation_row_lock_timeout_ms; "
