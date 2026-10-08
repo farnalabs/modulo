@@ -27,7 +27,7 @@
 
         <div
           v-if="!publicUrlConfigured"
-          class="rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+          class="rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning-text"
           data-testid="settings-mcp-oauth-public-url-warning"
           aria-live="polite"
         >

@@ -712,6 +712,15 @@ class TestTriggerEngineEvaluateCondition:
 
     @staticmethod
     def _session(instance: Any) -> AsyncMock:
+        if instance is not None:
+            # FAR-1583: evaluate_condition now enforces the connector read ACL,
+            # and a bare MagicMock double carries auto-generated
+            # `allowed_operations` / `visibility` attributes that ConnectorACL
+            # rejects as malformed (fail-closed deny). Give the double a real
+            # connector instance's values: unset allowlist = UNRESTRICTED
+            # (FAR-1564) + org visibility.
+            instance.allowed_operations = None
+            instance.visibility = "org"
         session = AsyncMock()
         conn_result = MagicMock()
         conn_result.scalar_one_or_none.return_value = instance

@@ -28,7 +28,7 @@ function openRunWarnings() {
   <button
     v-if="count > 0"
     type="button"
-    class="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning transition-colors hover:bg-warning/25"
+    class="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning-text transition-colors hover:bg-warning/25"
     :data-testid="`runs-list-warnings-${runId}`"
     :aria-label="label"
     v-tooltip.top="{ value: label, showDelay: 300 }"

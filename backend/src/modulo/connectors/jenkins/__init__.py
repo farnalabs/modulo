@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -120,6 +121,16 @@ class JenkinsConnector(ConnectorBase):
 
     Uses Basic auth (username + API token or password).
     Optionally fetches a crumb for write operations.
+
+    **An empty or missing job name fails loud, it is never requested.**
+    ``trigger_run`` and ``list_runs`` (whose ``pipeline_id`` is the job path),
+    ``query`` with ``resource="builds"`` (whose ``job_name`` filter), and
+    ``write`` (whose ``job_name`` payload field) raise :class:`ValueError` on
+    an empty or otherwise unsafe job name, BEFORE any request is built - so a
+    missing job name can never issue ``/job//...`` with this connector's Basic
+    credentials attached. Each of those four entry points validates through
+    :func:`_reject_unsafe_job_name`; ``get_run_status``/``get_run_logs``
+    validate the job path extracted from a run id the same way.
     """
 
     def __init__(self, username: str, token: str, base_url: str = "http://localhost:8080") -> None:
@@ -440,8 +451,16 @@ class JenkinsConnector(ConnectorBase):
             return {"location": location, "job_name": job_name}
 
 
-class _JenkinsTestDouble(JenkinsConnector):
-    """Minimal test double that does not make HTTP calls."""
+class _JenkinsTestDouble(CITestDoubleMixin, JenkinsConnector):
+    """Minimal test double that does not make HTTP calls.
+
+    ``trigger_run`` / ``list_runs`` scaffolding comes from
+    :class:`CITestDoubleMixin`; the ``job_name/build_number`` id shape (with the
+    job-name validation the real producer applies) is supplied by the
+    ``_double_*`` hooks below.
+    """
+
+    _double_default_pipeline_id = "my-job"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -453,6 +472,10 @@ class _JenkinsTestDouble(JenkinsConnector):
         self._builds: list[dict[str, Any]] = []
         self._jobs: list[dict[str, Any]] = []
         self._nodes: list[dict[str, Any]] = []
+        #: Monotonic build number so each id is `job_name/build_number` (FAR-1141 run-id contract).
+        self._build_seq = 0
+        self._status: CIRunStatus = CIRunStatus.QUEUED
+        self._run_logs: list[str] = []
 
     def _client(self) -> httpx.AsyncClient:
         raise RuntimeError("Test double has no HTTP client")
@@ -460,20 +483,17 @@ class _JenkinsTestDouble(JenkinsConnector):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        run = CIRun(
-            id=f"{self._uuid.uuid4()}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
         self._builds.append({"run": run, "variables": variables or {}})
-        return run
+
+    def _double_trigger_id(self, pipeline_id: str) -> str:
+        _reject_unsafe_job_name(pipeline_id, f"pipeline_id {pipeline_id!r}")
+        self._build_seq += 1
+        return f"{pipeline_id}/{self._build_seq}"
+
+    def _double_listed_id(self, resolved: str) -> str:
+        self._build_seq += 1
+        return f"{resolved}/{self._build_seq}"
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -484,17 +504,3 @@ class _JenkinsTestDouble(JenkinsConnector):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=["line1", "line2"])
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        return [
-            CIRun(
-                id=f"{self._uuid.uuid4()}",
-                pipeline_id=pipeline_id or "my-job",
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]

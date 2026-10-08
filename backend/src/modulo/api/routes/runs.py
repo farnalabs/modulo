@@ -73,6 +73,7 @@ from modulo.core.pipeline_engine.recovery import (
 )
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
 from modulo.core.work_item_enrichment import derive_pr_targets, enrich_pr_targets
@@ -501,9 +502,9 @@ def _build_list_item(run: Run, ctx: _ListPageContext) -> dict[str, Any]:
         "trigger_type": run.trigger_type,
         # FAR-1141 / ADR-042: run-level execution origin — 'dispatched' when
         # the run's graph contains at least one dispatch node, NULL for
-        # executed-by-Modulo / pre-column runs. _optional_str degrades a
-        # MagicMock run stand-in (unset attribute) to None, like cancel_reason.
-        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
+        # executed-by-Modulo / pre-column runs. The value composes the shared
+        # serializer (FAR-1565) so this surface can never hand-roll its own copy.
+        **run_provenance_fields(run),
         "run_number": run.run_number,
         # FAR-490: snapshot the run executes (None only for legacy/pre-FK rows)
         # so run→snapshot verification is one GET, not pagination archaeology.
@@ -906,17 +907,6 @@ def _resolve_token_consumption(run: Any) -> dict[str, Any] | None:
     return {"total_tokens": run.total_tokens}
 
 
-def _optional_str(value: Any) -> str | None:
-    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1233).
-
-    The run row is a plain ORM entity in production, but unit tests pass
-    ``MagicMock`` run stand-ins whose unset attributes resolve to a mock —
-    which must degrade to ``None`` (reason not recorded) instead of failing
-    response validation.
-    """
-    return value if isinstance(value, str) else None
-
-
 def _resolve_trace_display(run: Any, otlp_endpoint: str | None) -> tuple[str | None, str | None]:
     """Return ``(trace_id, trace_url)`` — the OTLP deep-link pair for a run.
 
@@ -1000,8 +990,11 @@ def _build_run_response(
         snapshot_id=snapshot_id,
         error_detail=error_detail,
         error_code=error_code,
-        cancel_reason=_optional_str(getattr(run, "cancel_reason", None)),
-        cancelled_by=_optional_str(getattr(run, "cancelled_by", None)),
+        # FAR-1233: both columns are genuinely ``str | None`` on the row, so the
+        # value is read directly (FAR-1566 removed the MagicMock-tolerance
+        # coercion that used to sit here).
+        cancel_reason=run.cancel_reason,
+        cancelled_by=run.cancelled_by,
         known_fixes=known_fixes,
         total_cost_usd=run.total_cost_usd,
         token_consumption=token_consumption,
@@ -1021,9 +1014,10 @@ def _build_run_response(
         guardrail_summary=_guardrail_summary_from_run(run),
         trigger_actor=ctx.trigger_actor,
         trigger_type=getattr(run, "trigger_type", None),
-        # FAR-1141: _optional_str degrades an unset MagicMock attribute (unit
-        # test stand-ins) to None, the same defensive rule cancel_reason uses.
-        execution_origin=_optional_str(getattr(run, "execution_origin", None)),
+        # FAR-1141 / ADR-042: run execution provenance, composed from the ONE
+        # shared serializer (FAR-1565) so this surface can never hand-roll its
+        # own copy or drift from the others.
+        **run_provenance_fields(run),
         trigger_id=ctx.trigger_id if ctx.trigger_id is not None else getattr(run, "trigger_id", None),
         heartbeat_at=ctx.heartbeat_at if ctx.heartbeat_at is not None else getattr(run, "heartbeat_at", None),
         work_item_refs=ctx.work_item_refs,

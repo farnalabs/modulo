@@ -134,7 +134,9 @@ def _setup_session(
 def _given_polling_config(org: str, name: str, request: Any) -> None:
     ctx = _ctx(request)
     ctx["trigger"] = _make_trigger(org_id=_org_id(org))
-    ctx["connector_instance"] = MagicMock()
+    connector_instance = MagicMock()
+    connector_instance.allowed_operations = []
+    ctx["connector_instance"] = connector_instance
     ctx["connector_records"] = [{"status": "open"}]
 
 

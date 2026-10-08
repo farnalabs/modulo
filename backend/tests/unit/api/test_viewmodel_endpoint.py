@@ -51,6 +51,10 @@ def _make_run() -> MagicMock:
     r.status = "complete"
     r.trigger_type = "manual"
     r.created_at = _NOW
+    # FAR-1141 / ADR-042: execution provenance is a real, always-present column
+    # (FAR-1566 removed the RunSummary before-validator that used to coerce an
+    # unset mock attribute to None, so the stand-in must set it explicitly).
+    r.execution_origin = None
     return r
 
 

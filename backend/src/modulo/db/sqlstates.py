@@ -5,7 +5,11 @@ decision), ``core.pipeline_engine.node_runner`` (the marker-savepoint
 failure classification) and ``api.db_error_handling`` (the ``55P03`` lock
 timeout -> 409 mapping) all consume :func:`sqlstate_of` and the vocabularies
 below — previously two forked copies existed (``crud.run._sqlstate_of`` and
-``node_runner._MARKER_TXN_ABORTING_SQLSTATES``). Deliberately leaf (imports
+``node_runner._MARKER_TXN_ABORTING_SQLSTATES``). :func:`is_row_lock_timeout`
+(``55P03``) is here for the same reason: ``core.dispatch`` and
+``core.run_admission`` both gate the hot ``runs`` row's lock bound on it, and
+two byte-identical private copies is exactly the drift this module prevents.
+Deliberately leaf (imports
 nothing from modulo) so both consumers import it without a cycle; the model
 module (:mod:`modulo.db.models.run_node_outputs`) hosts other shared
 constants, but this is DB-layer, not schema — a sibling leaf keeps the
@@ -159,21 +163,24 @@ def sqlstate_of(exc: BaseException) -> str | None:
 def is_row_lock_timeout(exc: BaseException) -> bool:
     """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
 
-    Shared by every write path that bounds its hot ``runs`` row lock with a
-    transaction-scoped ``lock_timeout`` issued via ``db.crud.row_lock.
-    set_mutation_row_lock_timeout`` (value ``Settings.
-    mutation_row_lock_timeout_ms``): the dispatch path (FAR-1584) and the
-    periodic-sweep reconcile path (FAR-1601). So a contended row lock waits at
-    most that long — never silently past the Fly HAProxy 30-minute session
-    window (the unbounded wait that got prod connections culled mid-operation;
-    FAR-1524 O11).
+    The single definition shared by every write path that bounds the hot
+    ``runs`` row lock with a transaction-scoped ``lock_timeout`` set by
+    ``db.crud.row_lock.set_mutation_row_lock_timeout`` (value
+    ``Settings.mutation_row_lock_timeout_ms``): the dispatch path
+    (``core.dispatch``, FAR-1584), the slot + park reconciliation sweeps
+    (``core.run_admission``, FAR-1592) and the periodic-sweep reconcile path
+    (``core.cron_helpers``, FAR-1601). So a contended row lock can wait at most
+    that long — never silently past the Fly HAProxy 30-minute session window
+    (the unbounded wait that got prod connections culled mid-operation;
+    FAR-1524 O11). Deliberately one predicate: a forked copy in each sweep is
+    how a future bound change would drift out of sync.
 
     When the bound fires, Postgres raises ``lock_not_available``, surfacing as
     a raw asyncpg ``LockNotAvailableError`` or a SQLAlchemy ``OperationalError``
     wrapping it. :func:`sqlstate_of` walks the whole chain
     (``.orig``/``__cause__``/``__context__``, incl. savepoint-rollback
     wrappers), so both shapes are recognised — dialect-tolerant, no
-    exception-class import. Any OTHER failure is not a lock timeout and keeps
-    its own contract.
+    exception-class import. Any OTHER failure is not a lock timeout and must
+    keep propagating.
     """
     return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE

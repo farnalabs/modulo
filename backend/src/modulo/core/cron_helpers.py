@@ -46,6 +46,7 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+from modulo.connectors.base import ConnectorPermissionError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
@@ -1203,6 +1204,21 @@ async def _build_polling_connector(
         return connector, redis_client
     except asyncio.CancelledError:
         raise
+    except ConnectorPermissionError as exc:
+        # FAR-1583 fail-closed: the instance's allowlist excludes ``read`` (or
+        # its allowed_operations is malformed). No credential was decrypted and
+        # no query will run. Record the denial as a poll_error event so the
+        # trigger shows WHY it stopped polling — swallowing it as a generic
+        # init failure would hide an ACL decision behind a build error.
+        _log.warning("Polling read denied by connector ACL for trigger %s: %s", trigger_id, exc)
+        await _log_poll_event(
+            session,
+            trigger=trigger,
+            org_id=org_id,
+            result="poll_error",
+            error_detail=f"Connector ACL denied read: {str(exc)[:200]}",
+        )
+        return None, None
     except SharedBudgetUnavailableError:
         # Fail-closed: a configured-but-unresolvable shared budget must NOT be
         # downgraded to the per-process local bucket. Propagate so the fire job

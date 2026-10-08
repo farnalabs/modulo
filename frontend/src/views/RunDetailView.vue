@@ -64,7 +64,7 @@
         id="warnings"
         data-testid="run-detail-warnings-strip"
         aria-live="polite"
-        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning"
+        class="mb-4 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning-text"
       >
         <h2 class="mb-2 flex items-center gap-2 text-sm font-semibold tracking-tight">
           <AlertTriangle aria-hidden="true" class="h-4 w-4 shrink-0" />
@@ -76,7 +76,7 @@
               type="button"
               :data-testid="`run-detail-warnings-strip-${warning.id}`"
               :aria-label="$t(warning.labelKey)"
-              class="w-full rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-left text-xs font-medium text-warning transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              class="w-full rounded-md border border-warning/50 bg-warning/10 px-3 py-1.5 text-left text-xs font-medium text-warning-text transition-colors hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               @click="scrollToWarning(warning.targetId)"
             >
               {{ $t(warning.labelKey) }}
@@ -91,7 +91,7 @@
         data-testid="run-detail-queue-banner"
         aria-live="polite"
         :aria-label="queuedCapacityReason(run.capacity, t)"
-        class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning"
+        class="mb-4 block rounded-lg border border-warning/50 bg-warning/10 px-4 py-2 text-sm text-warning-text"
       >
         {{ queuedCapacityReason(run.capacity, t) }}
       </output>
@@ -147,7 +147,7 @@
         <div><span class="font-medium text-foreground">{{ $t('views.RunDetailView.completed') }}</span> {{ runTimestamps.completed }}</div>
         <div data-testid="run-detail-trigger-actor"><span class="font-medium text-foreground">{{ $t('views.RunDetailView.triggered_by') }}</span> {{ run.trigger_actor || triggerTypeLabel(run.trigger_type, t) }}</div>
         <div data-testid="run-detail-heartbeat" id="run-detail-heartbeat-anchor">
-          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>{{ ' ' }}<span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
+          <span class="font-medium text-foreground">{{ $t('views.RunDetailView.last_heartbeat') }}</span>{{ ' ' }}<span :class="isHeartbeatStale(heartbeatAge) ? 'font-medium text-warning-text' : ''">{{ formatHeartbeatAge(heartbeatAge, t) }}<span v-if="isHeartbeatStale(heartbeatAge)"> ({{ $t('views.RunDetailView.stale') }})</span></span>
         </div>
       </div>
 
@@ -280,7 +280,7 @@
           <RotateCcw v-else class="h-4 w-4" aria-hidden="true" />
           {{ rerunning ? $t('views.RunDetailView.rerunning') : (rerunConfirming ? $t('views.RunDetailView.rerun_confirm') : $t('views.RunDetailView.rerun')) }}
         </button>
-        <span v-if="rerunConfirming" role="alert" class="ml-3 text-xs text-warning">{{ $t('views.RunDetailView.rerun_confirm_warning') }}</span>
+        <span v-if="rerunConfirming" role="alert" class="ml-3 text-xs text-warning-text">{{ $t('views.RunDetailView.rerun_confirm_warning') }}</span>
         <span v-if="rerunError" role="alert" class="ml-3 text-xs text-destructive">{{ rerunError }}</span>
       </div>
 
@@ -330,8 +330,8 @@
 
       <!-- Capacity-blocked pending run (queued on sandbox concurrency limit) -->
       <div v-if="run.status === 'pending' && (run.error_code === 'capacity.org' || run.error_code === 'capacity.pipeline')" data-testid="run-detail-waiting-for-capacity" class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4">
-        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailView.waiting_for_capacity') }}</h3>
-        <p v-if="run.error_detail" class="text-xs whitespace-pre-wrap text-warning/80">{{ run.error_detail }}</p>
+        <h3 class="text-sm font-semibold text-warning-text mb-1">{{ $t('views.RunDetailView.waiting_for_capacity') }}</h3>
+        <p v-if="run.error_detail" class="text-xs whitespace-pre-wrap text-warning-text">{{ run.error_detail }}</p>
       </div>
 
       <!-- Failed Run Diagnostics -->
@@ -398,8 +398,8 @@
         data-testid="run-detail-guardrail-override-panel"
         class="rounded-lg border border-warning/50 bg-warning/10 p-4 mb-4"
       >
-        <h3 class="text-sm font-semibold text-warning mb-1">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</h3>
-        <p class="text-xs text-warning/80 mb-3">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
+        <h3 class="text-sm font-semibold text-warning-text mb-1">{{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}</h3>
+        <p class="text-xs text-warning-text mb-3">{{ $t('views.RunDetailGuardrailSummary.override_disclosure') }}</p>
         <Button v-if="isOrgOperator" data-testid="run-detail-override-guardrail" @click="openOverrideDialog">
           {{ $t('views.RunDetailGuardrailSummary.override_guardrail') }}
         </Button>
@@ -465,7 +465,7 @@
                 <span
                   v-if="node.stallReason"
                   data-testid="run-detail-node-stalled"
-                  class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                  class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning-text"
                   :title="node.stallReason"
                 >
                   {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
@@ -573,7 +573,7 @@
                     <span
                       v-if="node.stallReason"
                       data-testid="run-detail-node-stall-telemetry"
-                      class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+                      class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning-text"
                       :title="node.stallReason"
                     >
                       {{ $t('views.RunDetailView.agent_stalled', { reason: node.stallReason }) }}
@@ -725,7 +725,7 @@
         </div>
 
         <template v-if="breakdownPresent">
-          <p v-if="breakdownTotalClamped" class="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning" data-testid="run-detail-cost-clamped">
+          <p v-if="breakdownTotalClamped" class="mt-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning-text" data-testid="run-detail-cost-clamped">
             {{ $t('views.RunDetailView.total_clamped_to_column_capacity') }}
           </p>
           <div v-if="breakdownEntries.length > 0" class="mt-4 overflow-x-auto">
@@ -742,7 +742,7 @@
                 <tr v-for="entry in breakdownEntries" :key="entry.component" class="border-b last:border-b-0">
                   <td class="py-2 pr-4 font-medium">
                     {{ entry.display_name || entry.component }}
-                    <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
+                    <span v-if="entry.error" class="ml-1 inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning-text">{{ $t('views.RunDetailView.eval_error_badge') }}</span>
                   </td>
                   <td class="py-2 pr-4 tabular-nums">{{ entry.missing_self_report ? '—' : formatMoney(Number(entry.amountUsd), currencyCode, 6) }}</td>
                   <td class="py-2 pr-4">
@@ -752,12 +752,12 @@
                            report. Each state gets its own truthful chip. -->
                       <span
                         v-if="entry.missing_self_report_reason === 'zero_report_unproven'"
-                        class="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning"
+                        class="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning-text"
                         data-testid="run-detail-zero-rejected"
                       >{{ $t('views.RunDetailView.zero_report_unproven') }}</span>
                       <span
                         v-else-if="entry.missing_self_report_reason === 'sub_floor_rejected'"
-                        class="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning"
+                        class="inline-flex items-center rounded-full bg-warning/10 px-1.5 py-0.5 text-xs text-warning-text"
                         data-testid="run-detail-sub-floor-rejected"
                       >{{ $t('views.RunDetailView.sub_floor_rejected') }}</span>
                       <span
@@ -1043,7 +1043,7 @@ function bucketClass(key: string): string {
     evaluated: 'bg-muted text-muted-foreground',
     passed: 'bg-success/10 text-success',
     violated: 'bg-destructive/10 text-destructive',
-    observed: 'bg-warning/10 text-warning',
+    observed: 'bg-warning/10 text-warning-text',
     errored: 'bg-destructive/10 text-destructive',
     redacted: 'bg-purple-500/10 text-purple-600',
     skipped: 'bg-muted text-muted-foreground',
@@ -2034,7 +2034,7 @@ function nodeStateLabel(state: NodeProgressState): string {
 function chipClass(state: NodeProgressState): string {
   const map: Record<NodeProgressState, string> = {
     completed: 'bg-success/10 text-success border border-success/30',
-    running: 'bg-warning/10 text-warning border border-warning/30',
+    running: 'bg-warning/10 text-warning-text border border-warning/30',
     failed: 'bg-destructive/10 text-destructive border border-destructive/30',
     pending: 'bg-muted text-muted-foreground border border-border',
   }

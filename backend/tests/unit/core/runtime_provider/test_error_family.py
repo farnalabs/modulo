@@ -254,13 +254,26 @@ def _runner_docker_profile() -> SimpleNamespace:
     )
 
 
+class _NullTransaction:
+    """Async CM standing in for ``session.begin()`` on a session double."""
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
 class _SessionCM:
     """Async context manager standing in for ``session_factory()`` (same
     shape as the dispatch-route test's fake session)."""
 
     def __init__(self, profile: object) -> None:
+        # ``begin``: the dispatch reads own their transaction (set_rls_* needs
+        # an active one) — the double only has to provide the CM.
         self._session = SimpleNamespace(
             execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: profile)),
+            begin=lambda: _NullTransaction(),
             in_transaction=lambda: True,
             get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="sqlite")),
             info={},

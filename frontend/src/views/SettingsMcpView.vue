@@ -36,7 +36,7 @@
         <div class="space-y-4">
           <div
             v-if="!publicUrlConfigured"
-            class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning"
+            class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning-text"
           >
             <p class="font-medium">{{ $t('views.SettingsMcpView.modulo_public_url_not_set') }}</p>
             <p class="mt-1">

@@ -37,7 +37,7 @@
             </span>
             <span
               v-if="s.channel && s.channel !== 'none'"
-              class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+              class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning-text"
             >
               {{ s.channel }}
             </span>
@@ -82,7 +82,7 @@
             :key="i"
             class="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-[10px]"
           >
-            <span :class="b.severity === 'block' ? 'font-medium text-destructive' : 'text-warning'">
+            <span :class="b.severity === 'block' ? 'font-medium text-destructive' : 'text-warning-text'">
               {{ b.severity }}
             </span>
             — {{ b.reason }}

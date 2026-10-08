@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,20 +102,6 @@ class RunSummary(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-    @field_validator("execution_origin", mode="before")
-    @classmethod
-    def _coerce_execution_origin(cls, value: Any) -> str | None:
-        """Degrade a non-string stand-in to ``None`` (FAR-1141).
-
-        Mirrors ``api.routes.runs._optional_str``: unit tests hand this model a
-        ``MagicMock`` run whose unset attribute resolves to a mock, which must
-        validate as NULL instead of failing response validation. A deferred
-        import keeps the route->route edge out of module import order.
-        """
-        from modulo.api.routes.runs import _optional_str
-
-        return _optional_str(value)
 
 
 class PendingHitlReview(BaseModel):

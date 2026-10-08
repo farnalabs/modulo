@@ -283,6 +283,15 @@ def _setup_session_for_polling(
     lock_result = MagicMock()
     lock_result.scalar_one.return_value = lock_acquired
 
+    if connector_instance is not None:
+        # FAR-1583: the polling read path now enforces the connector ACL, and a
+        # bare MagicMock double carries auto-generated `allowed_operations` /
+        # `visibility` attributes that ConnectorACL rejects as malformed
+        # (fail-closed deny). Give the double a real connector instance's
+        # values: unset allowlist = UNRESTRICTED (FAR-1564) + org visibility.
+        connector_instance.allowed_operations = None
+        connector_instance.visibility = "org"
+
     trigger_result = MagicMock()
     trigger_result.scalar_one_or_none.return_value = None if trigger_missing else trigger
 

@@ -309,7 +309,7 @@
 
   .badge-status-warning {
     background-color: hsla(var(--warning) / 0.1);
-    color: hsl(var(--warning));
+    color: hsl(var(--warning-text));
   }
 
   .badge-status-warning::before {
@@ -390,7 +390,7 @@
 
   .badge-context-amber {
     background-color: hsla(var(--warning) / 0.1);
-    color: hsl(var(--warning));
+    color: hsl(var(--warning-text));
   }
 
   .badge-context-teal {
@@ -408,19 +408,22 @@
     color: hsl(var(--preview));
   }
 
-  /* FAR-1530: text-safe counterpart of --warning. --warning is tuned as a
-     FILL/accent hue: at 50% lightness it is only ~2.1:1 on white (and ~1.8:1
-     at /80 over the bg-warning/10 tint), so amber BODY text fails WCAG AA in
-     light mode. --warning-text keeps the hue and the lightness for dark
-     themes (already ~7.9:1 on --background) but darkens light mode to 30%
-     lightness, which clears AA against every amber tint it sits on:
-       white           ~5.4:1
-       bg-warning/10   ~5.0:1
-       bg-warning/20   ~4.6:1
-     Use this class - never text-warning - for warning COLOURED TEXT. */
-  .text-warning-text {
-    color: hsl(var(--warning-text));
-  }
+  /* FAR-1530 / FAR-1587: text-safe counterpart of --warning. --warning is tuned
+     as a FILL/accent hue: at 50% lightness it is only ~2.1:1 on white (and
+     ~1.7-1.8:1 at /80 over a bg-warning/10 tint), so amber BODY text fails
+     WCAG AA in light mode. --warning-text keeps the hue and the lightness for
+     dark themes (already ~7.9:1 on --background) but darkens light mode to 30%
+     lightness, which clears AA against every amber surface it sits on
+     (measured, light mode):
+       white            5.40:1
+       bg-warning/5     5.20:1
+       bg-warning/10    5.01:1
+       bg-warning/20    4.64:1
+     The `text-warning-text` utility is registered on this token in
+     tailwind.config.cjs, so use `text-warning-text` - never `text-warning`,
+     never `text-warning/80` (an 80% alpha of the same hue drops to ~3.4:1 and
+     fails AA) - for warning COLOURED TEXT. The dark and agent themes define
+     --warning-text as an exact copy of --warning, so they are unchanged. */
 
 @media (prefers-reduced-motion: reduce) {
   html {
@@ -522,7 +525,7 @@
 .light .badge-context-orange { color: hsl(25 90% 38%); background-color: hsla(25 90% 38% / 0.1); }
 .light .badge-context-pink { color: hsl(340 80% 35%); background-color: hsla(340 80% 35% / 0.1); }
 .light .badge-context-rose { color: hsl(350 80% 35%); background-color: hsla(350 80% 35% / 0.1); }
-.light .badge-context-amber { color: hsl(38 92% 35%); background-color: hsla(38 92% 35% / 0.1); }
+.light .badge-context-amber { color: hsl(var(--warning-text)); background-color: hsla(38 92% 35% / 0.1); }
 .light .badge-context-green { color: hsl(142 71% 28%); background-color: hsla(142 71% 28% / 0.1); }
 
 [data-theme="agent"] {

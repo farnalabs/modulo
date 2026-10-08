@@ -45,7 +45,7 @@
           </div>
         </div>
 
-        <output v-if="hasPartialResults" data-testid="variant-batch-partial" aria-labelledby="variant-batch-partial-label" class="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+        <output v-if="hasPartialResults" data-testid="variant-batch-partial" aria-labelledby="variant-batch-partial-label" class="rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning-text">
           <span class="sr-only" id="variant-batch-partial-label">{{ $t('views.variantBatch.aria_partial_results') }}</span>
           {{ $t('views.variantBatch.partialResults') }}
         </output>

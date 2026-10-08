@@ -4,6 +4,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -285,8 +286,16 @@ class CircleCIConnector(CIRunnerBase):
             return cast("dict[str, Any]", r.json())
 
 
-class _CircleCITestDouble(CircleCIConnector):
-    """Minimal test double that does not make HTTP calls."""
+class _CircleCITestDouble(CITestDoubleMixin, CircleCIConnector):
+    """Minimal test double that does not make HTTP calls.
+
+    CircleCI run ids are BARE by contract (the pipeline UUID), so
+    ``trigger_run`` / ``list_runs`` scaffolding comes from
+    :class:`CITestDoubleMixin` with the ``_double_*`` hooks below supplying the
+    unqualified id shape.
+    """
+
+    _double_default_pipeline_id = "gh/owner/repo"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -303,21 +312,14 @@ class _CircleCITestDouble(CircleCIConnector):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        run = CIRun(
-            id=f"{self._uuid.uuid4()}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
         self._triggered.append({"run": run, "variables": variables or {}})
-        self._status = CIRunStatus.QUEUED
-        return run
+
+    def _double_trigger_id(self, pipeline_id: str) -> str:
+        return f"{self._uuid.uuid4()}"
+
+    def _double_listed_id(self, resolved: str) -> str:
+        return "pipeline-uuid-1"
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -328,17 +330,3 @@ class _CircleCITestDouble(CircleCIConnector):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        return [
-            CIRun(
-                id="pipeline-uuid-1",
-                pipeline_id=pipeline_id or "gh/owner/repo",
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]

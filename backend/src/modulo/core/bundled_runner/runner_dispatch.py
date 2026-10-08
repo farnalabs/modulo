@@ -16,6 +16,20 @@ providers that were NEVER dispatch-relevant — ``local`` always, and
 raised only at dispatch (never silently activated as dispatch reality);
 the operator re-binds the profile deliberately.
 
+FAR-1598 team-scope backstop: the three REST writers FAR-1558 closed
+(bind time, pipeline scope change, profile scope change) can all be
+bypassed by a path that writes the binding without going through a route
+(a direct DB write, a race). Dispatch therefore re-validates the loaded
+profile with the SAME shared predicate
+(``core.team_visibility.environment_profile_team_mismatch``): a
+team-private profile not owned by the pipeline's effective owner team
+raises the typed :class:`SandboxDispatchUnboundError` (detail prefixed
+with the named ``environment_profile_team_mismatch`` code) BEFORE any
+provider is selected — never a silent fallback to another provider or to
+the default route. The profile read is team-BLIND but org-scoped for the
+same reason (see :func:`load_environment_profile`); org-visible profiles
+and NULL bindings resolve exactly as before.
+
 E2B keeps its existing path; the adapter only LOUDLY validates legacy
 timeout values for it (:func:`validate_e2b_dispatch_timeout`, GraphValidator
 parity at <=3300, no silent clamp).
@@ -93,16 +107,39 @@ async def load_environment_profile(
     org_id: uuid.UUID | None,
     environment_profile_id: uuid.UUID | None,
 ) -> Any:
-    """Load the pipeline-level bound EnvironmentProfile row (same-org enforced)."""
+    """Load the pipeline-level bound EnvironmentProfile row (same-org enforced).
+
+    FAR-1598: the read is team-BLIND but org-scoped — dispatch is background
+    machinery, so it runs with ``set_rls_execution_context`` (the documented
+    ``db.rls`` seam for executor/cron/dispatch reads). Without that widened
+    context ``rls_team_isolation`` hides a team-owned profile row from this
+    org-only session, the lookup would return ``None`` for a binding that
+    demonstrably exists, and the dispatch would silently resolve the DEFAULT
+    route — precisely the silent fallback the FAR-1598 backstop exists to
+    prevent. A genuinely absent / cross-organisation id still resolves to
+    ``None`` (org scope unchanged), i.e. the historical default route.
+
+    The read runs in its OWN transaction (``session.begin()``): the
+    ``set_rls_*`` helpers require an active transaction, and a bare
+    ``async with session_factory() as session`` leaves none — with every
+    real session factory (the executor's is ``autobegin=False``) the missing
+    ``begin()`` raised ``RuntimeError: set_rls_* requires an active
+    transaction`` on the first dispatch that carried a bound profile id
+    (latent since FAR-1558 made the snapshot carry one; every unit double
+    hid it by reporting ``in_transaction() == True``). This is the same
+    ``async with session_factory() as session, session.begin():`` shape the
+    13 node_runner readers use.
+    """
     from sqlalchemy import select
 
     from modulo.db.models.environment_profile import EnvironmentProfile
-    from modulo.db.rls import set_rls_org
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     if session_factory is None or org_id is None or environment_profile_id is None:
         return None
-    async with session_factory() as session:
+    async with session_factory() as session, session.begin():
         await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
         result = await session.execute(
             select(EnvironmentProfile).where(
                 EnvironmentProfile.id == environment_profile_id,
@@ -111,6 +148,120 @@ async def load_environment_profile(
             )
         )
         return result.scalar_one_or_none()
+
+
+async def _pipeline_owner_team_for_dispatch(
+    session_factory: Callable[..., Any] | None,
+    org_id: uuid.UUID | None,
+    pipeline_id: Any,
+) -> uuid.UUID | None:
+    """Resolve the pipeline's EFFECTIVE owner team for the FAR-1598 backstop.
+
+    Source of truth — documented per FAR-1598 ("documenting your source is
+    part of the task"):
+
+    * ``PipelineSnapshot`` carries NO owner team of its own (verified: the
+      model has ``pipeline_id`` and ``environment_profile_id`` only), so the
+      frozen snapshot cannot answer the question;
+    * ``runs.owner_team_id`` is stamped FROM this same pipeline row at run
+      create (``db.crud.run._resolve_owner_team_id``), and the REST layer
+      blocks a team transfer while a non-terminal run exists
+      (``PipelineHasActiveRunsError``) — so for an in-flight run the live
+      pipeline row and the run's frozen team agree;
+    * the three FAR-1558 writers all validate against
+      ``pipelines.owner_team_id`` — this read re-validates a possibly
+      DRIFTED binding against exactly the quantity they enforce, live at
+      dispatch time.
+
+    The row is read team-BLIND (``set_rls_execution_context``) because
+    ``rls_team_isolation`` would otherwise hide a team-private pipeline from
+    this org-only session and turn a legal same-team binding into a refusal;
+    ``include_soft_deleted`` matches the executor's in-flight-run posture
+    (a soft-deleted pipeline's runs still dispatch).
+
+    Returns ``None`` when the id is absent/unparseable, no session factory
+    is available, or no row resolves — a value the shared predicate treats
+    as "no owner team", so a team-private profile then mismatches every
+    pipeline (fail closed, never fail open).
+    """
+    from sqlalchemy import select
+
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.soft_delete import include_soft_deleted
+
+    pipeline_uuid = _parse_uuid(pipeline_id)
+    if session_factory is None or org_id is None or pipeline_uuid is None:
+        return None
+    # Own transaction — the ``set_rls_*`` contract (see load_environment_profile).
+    async with session_factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+        result = await session.execute(
+            include_soft_deleted(
+                select(Pipeline.owner_team_id).where(
+                    Pipeline.id == pipeline_uuid,
+                    Pipeline.organisation_id == org_id,
+                )
+            )
+        )
+        owner_team: Any = result.scalar_one_or_none()
+        # Anything that is not a UUID (a hidden row -> None, or a malformed
+        # value from a stand-in session) is treated as "no owner team", which
+        # the shared predicate then refuses for a team-private profile —
+        # fail closed, never fail open.
+        return owner_team if isinstance(owner_team, uuid.UUID) else None
+
+
+def _assert_profile_team_scope_for_dispatch(
+    profile: Any,
+    *,
+    pipeline_owner_team_id: uuid.UUID | None,
+) -> None:
+    """FAR-1598: refuse a team-private profile the pipeline's team does not own.
+
+    Verdict comes from the SHARED ``environment_profile_team_mismatch``
+    predicate and the named ``environment_profile_team_mismatch`` code in
+    ``core.team_visibility`` — the same rule the three FAR-1558 REST writers
+    apply — so write-time and dispatch-time can never drift. The refusal is
+    the existing typed :class:`SandboxDispatchUnboundError` family (no new
+    exception type): the caller invokes this BEFORE any provider/hub
+    resolution, so a refused binding selects no provider and never falls
+    back to the default route.
+
+    ``pipeline_owner_team_id`` is the effective owner team resolved by
+    :func:`_pipeline_owner_team_for_dispatch`; ``None`` (unknown/unresolvable)
+    is a fail-closed input — a team-private profile then mismatches every
+    pipeline.
+
+    Detail is generic on purpose (FAR-1558 F3 parity): the run's error may be
+    readable by a caller who is NOT a member of the profile's owner team, so
+    it must not leak the profile's name, id or owning team — clients branch
+    on the named code, and the identifying detail is logged server-side only.
+    """
+    from modulo.core.team_visibility import (
+        ENVIRONMENT_PROFILE_TEAM_MISMATCH,
+        environment_profile_team_mismatch,
+    )
+
+    visibility = getattr(profile, "visibility", None)
+    owner_team_id = getattr(profile, "owner_team_id", None)
+    if not environment_profile_team_mismatch(visibility, owner_team_id, pipeline_owner_team_id):
+        return
+    _log.warning(
+        "runner_dispatch.team_scope_refused",
+        extra={
+            "profile_id": str(getattr(profile, "id", "")),
+            "profile_owner_team_id": str(owner_team_id),
+            "pipeline_owner_team_id": str(pipeline_owner_team_id),
+        },
+    )
+    raise SandboxDispatchUnboundError(
+        f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the bound environment profile is team-private "
+        "and is not owned by this pipeline's owner team. Dispatch refuses the binding and "
+        "selects no provider — re-bind the pipeline to a profile its owner team owns, or "
+        "re-scope the profile."
+    )
 
 
 def validate_persistence_for_provider(profile: Any) -> None:
@@ -129,6 +280,7 @@ async def resolve_sandbox_dispatch_route(
     session_factory: Callable[..., Any] | None,
     org_id_raw: Any,
     environment_profile_id_raw: Any,
+    pipeline_id: Any = None,
 ) -> RunnerDispatchRoute:
     """Resolve the dispatch route for a sandbox_agent node (D4 dispatch adapter).
 
@@ -147,12 +299,35 @@ async def resolve_sandbox_dispatch_route(
       as the dispatch provider and disposes the hub in its finally.
     - ``local`` / ``local_docker`` -> dispatch-unbound: typed config error
       (the D4 upgrade rule — never silently activated).
+
+    FAR-1598 team-scope backstop: right after the profile loads — and BEFORE
+    any provider branch — a team-private profile is validated against
+    ``pipeline_id``'s effective owner team with the shared FAR-1558
+    predicate; a mismatch raises the typed
+    :class:`SandboxDispatchUnboundError` (named
+    ``environment_profile_team_mismatch`` detail) so no provider is selected
+    and there is no fallback to another provider or to the default route.
+    ``pipeline_id`` is the run's pipeline (the caller threads it from the
+    conformance ctx the executor froze); absent it, the owner team resolves
+    to ``None`` and a team-private profile is refused (fail closed).
+    Org-visible profiles and NULL bindings are unaffected.
     """
     org_uuid = _parse_uuid(org_id_raw)
     profile_uuid = _parse_uuid(environment_profile_id_raw)
     profile = await load_environment_profile(session_factory, org_uuid, profile_uuid)
     if profile is None:
         return RunnerDispatchRoute(provider_type="none", profile=None)
+    # FAR-1598: the backstop runs FIRST, before any provider branch, so a
+    # drifted/forged cross-team binding can never select a provider or reach
+    # the default route. The owner-team read is skipped unless the profile is
+    # team-private — the shared predicate can only return False for an
+    # org-visible one, so the org/NULL path issues no extra query and behaves
+    # exactly as before.
+    if (getattr(profile, "visibility", None) or "org") == "team":
+        _assert_profile_team_scope_for_dispatch(
+            profile,
+            pipeline_owner_team_id=await _pipeline_owner_team_for_dispatch(session_factory, org_uuid, pipeline_id),
+        )
     provider_type = (getattr(profile, "provider_type", "") or "").strip().lower()
     if provider_type in ("local", "local_docker"):
         raise SandboxDispatchUnboundError(

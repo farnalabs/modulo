@@ -74,7 +74,7 @@
             class="rounded-lg border border-warning/40 bg-warning/10 p-3"
             data-testid="runner-profile-drift"
           >
-            <p class="text-xs font-medium text-warning">{{ $t('views.RunnersProfilesTab.template_updated') }}</p>
+            <p class="text-xs font-medium text-warning-text">{{ $t('views.RunnersProfilesTab.template_updated') }}</p>
             <p class="mt-0.5 text-xs text-muted-foreground">{{ $t('views.RunnersProfilesTab.template_updated_hint') }}</p>
             <Button
               class="mt-2"
@@ -318,7 +318,7 @@ function healthBadgeClass(row: ProfileRow): string {
     case 'engine_unreachable':
       return 'bg-destructive/10 text-destructive'
     case 'image_not_pulled':
-      return 'bg-warning/10 text-warning'
+      return 'bg-warning/10 text-warning-text'
     default:
       return 'bg-muted text-muted-foreground'
   }

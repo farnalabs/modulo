@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER, _input_hash, get_run
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.pipeline import Pipeline
@@ -25,19 +26,6 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 
 _log = logging.getLogger(__name__)
-
-
-def _optional_run_str(value: Any) -> str | None:
-    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1141).
-
-    Core-local twin of ``api.routes.runs._optional_str`` — the import-linter
-    ``core-does-not-import-api`` contract forbids importing the API layer here
-    (and importing ``pipeline_engine.executor`` for one line would drag
-    LangGraph into this module). A ``MagicMock``/partial run stand-in whose
-    attribute is not a plain string degrades to ``None``, never a repr, so an
-    immutable audit payload can always serialise.
-    """
-    return value if isinstance(value, str) else None
 
 
 class RecoveryNotAllowedError(RuntimeError):
@@ -181,9 +169,9 @@ async def recover_node(
         node_type,
         input_data,
         actor_id,
-        # FAR-1141: resolved from the run row this function already holds —
-        # the coercion degrades a MagicMock/partial stand-in to NULL.
-        execution_origin=_optional_run_str(getattr(run, "execution_origin", None)),
+        # FAR-1141 / ADR-042: the helper derives provenance from the run row
+        # this function already holds, so the audit adds no extra read.
+        run=run,
     )
 
     return run
@@ -358,17 +346,17 @@ async def _record_recovery_audit(
     node_type: str,
     input_data: dict[str, Any] | None,
     actor_id: uuid.UUID | None,
-    execution_origin: str | None = None,
+    run: Run,
 ) -> None:
     """Emit the ``node.recovery`` audit event and the applied-log line.
 
     Audit recording failures are non-fatal — they are logged and swallowed so a
     recovery is never blocked by a transient audit write error.
 
-    ``execution_origin`` (FAR-1141 / ADR-042) is the run's execution provenance
-    ('dispatched' / NULL), resolved by the caller from the run row it already
-    holds so this helper never adds a read; ``None`` degrades to a NULL payload
-    key rather than being omitted.
+    ``run`` (FAR-1141 / ADR-042, composed via FAR-1565's shared serializer) is
+    the row the caller already holds, so this helper never adds a read; the
+    provenance key is ALWAYS present in the payload ('dispatched' / NULL),
+    never omitted.
     """
     action = "skip" if input_data is None else "replay"
     payload: dict[str, Any] = {
@@ -377,8 +365,8 @@ async def _record_recovery_audit(
         "recovery_action": action,
         # FAR-1141 / ADR-042: run-keyed audit payloads carry the run's
         # execution origin so a recovery on a dispatched run is distinguishable
-        # from one on a run Modulo executed itself.
-        "execution_origin": execution_origin,
+        # from one on a run Modulo executed itself — from the ONE serializer.
+        **run_provenance_fields(run),
         "summary": f'{action.capitalize()} recovery applied to node "{node_id}"',
     }
     if actor_id is None:

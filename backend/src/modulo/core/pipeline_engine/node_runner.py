@@ -8930,6 +8930,35 @@ def _runner_binding_env_profile_id() -> uuid.UUID | None:
     return _parse_uuid_opt(environment_profile_id)
 
 
+async def _resolve_sandbox_dispatch_route_for_run(state: dict[str, Any], session_factory: Any) -> Any:
+    """FAR-1598: the production seam from the run's conformance ctx to dispatch.
+
+    Route resolution needs TWO values the executor froze from the snapshot
+    into the conformance ctx: the bound ``environment_profile_id`` (slot 2,
+    the FAR-1558 snapshot copy) and the ``pipeline_id`` (slot 3) that the
+    FAR-1598 team-scope backstop resolves the pipeline's effective owner team
+    from. Reading both here — the seam ``_sandbox_agent_impl`` itself calls —
+    is what makes the dispatch chain testable end-to-end without re-wiring
+    the ctx read in the test.
+
+    Absent/short ctx (direct dispatch, unit tests) yields ``None`` for both:
+    no bound profile resolves the default route, and a bound team-private
+    profile with no pipeline id fails CLOSED at the backstop (owner team
+    unknown) rather than dispatching unjudged.
+    """
+    from modulo.core.bundled_runner.runner_dispatch import resolve_sandbox_dispatch_route
+
+    ctx = get_conformance_ctx()
+    environment_profile_id = ctx[2] if ctx is not None and len(ctx) > 2 else None
+    pipeline_id = ctx[3] if ctx is not None and len(ctx) > 3 else None
+    return await resolve_sandbox_dispatch_route(
+        session_factory,
+        state.get("_org_id"),
+        environment_profile_id,
+        pipeline_id=pipeline_id,
+    )
+
+
 async def _finalize_artifact_writer(
     writer: "ArtifactWriter | None",
     *,
@@ -9275,6 +9304,11 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     #    typed ProviderNotConfiguredError naming MODULO_KUBERNETES_ENABLED
     #    (no silent fallback to E2B or local).
     #  - none -> the historical E2B default route, unchanged.
+    #  FAR-1598: BEFORE any of those branches, a bound TEAM-PRIVATE profile
+    #  is re-validated against the pipeline's effective owner team with the
+    #  shared FAR-1558 predicate — a drifted/forged cross-team binding raises
+    #  the typed dispatch-unbound error (named environment_profile_team_mismatch)
+    #  and selects NO provider, never a silent fallback.
     #
     # FAR-1051: the route below may carry a HUB-RESOLVED provider
     # (kubernetes). Pre-bound at function scope — BEFORE route resolution
@@ -9294,14 +9328,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # legacy / non-kubernetes paths keep using the node's E2B template_id.
     _route_image_ref: str | None = None
     if session_factory is not None:
-        from modulo.core.bundled_runner.runner_dispatch import (
-            resolve_sandbox_dispatch_route,
-            validate_e2b_dispatch_timeout,
-        )
+        from modulo.core.bundled_runner.runner_dispatch import validate_e2b_dispatch_timeout
 
-        _ctx = get_conformance_ctx()
-        _env_profile_id = _ctx[2] if _ctx else None
-        _route = await resolve_sandbox_dispatch_route(session_factory, state.get("_org_id"), _env_profile_id)
+        # FAR-1598: the ctx -> route seam (profile id AND pipeline id both
+        # read from the executor-frozen conformance ctx) — the backstop inside
+        # route resolution refuses a drifted team-mismatched binding here,
+        # before any provider is selected.
+        _route = await _resolve_sandbox_dispatch_route_for_run(state, session_factory)
         if _route.profile is not None:
             _profile_net_policy = getattr(_route.profile, "network_policy", None)
         if _route.provider_type == "runner_docker":

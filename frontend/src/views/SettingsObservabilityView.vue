@@ -4,7 +4,7 @@
 
     <FeatureGate feature-name="observability" required-tier="team" show-disabled>
 
-      <div v-if="envOverrideActive" data-testid="settings-observability-env-override" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning">
+      <div v-if="envOverrideActive" data-testid="settings-observability-env-override" class="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning-text">
         <p class="font-medium">{{ $t('views.SettingsObservabilityView.env_override_active') }}</p>
         <p class="mt-1">
           {{ $t('views.SettingsObservabilityView.env_override_description_prefix') }}

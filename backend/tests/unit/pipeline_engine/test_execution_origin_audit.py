@@ -19,9 +19,10 @@ scope. ``node.recovery`` is covered alongside its own harness in
 The ``node.recovery`` / HITL denial sites are covered in their own modules.
 
 Both sides of the line are asserted for every payload: a dispatched run reads
-``"dispatched"``, and a ``MagicMock`` run stand-in whose unset attribute
-resolves to a mock degrades to ``None`` — audit payloads are immutable and
-hash-linked, so a repr must never reach them.
+``"dispatched"``, a Modulo-executed run reads ``None`` — and, since FAR-1566
+removed the test-double coercion from production, a stand-in that never set the
+column surfaces as itself instead of being silently rewritten to ``None``
+(a real row can only ever be ``str | None``).
 
 No DB: the session and run rows are in-memory stand-ins.
 """
@@ -115,11 +116,13 @@ class TestRunStartedExecutionOrigin:
         payload = await _run_started_payload(_run(execution_origin=None))
         assert payload["execution_origin"] is None
 
-    async def test_mock_run_stand_in_degrades_to_null(self) -> None:
-        """The stand-in's unset attribute is a MagicMock — an audit payload is
-        immutable, so it must serialise as NULL, never as a repr."""
-        payload = await _run_started_payload(_run())
-        assert payload["execution_origin"] is None
+    async def test_no_test_double_coercion_in_the_payload(self) -> None:
+        """FAR-1566: the audit payload reads the row VERBATIM — a stand-in that
+        never set the column surfaces as itself instead of being silently
+        rewritten to ``None`` (production rows are ``str | None``)."""
+        run = _run()
+        payload = await _run_started_payload(run)
+        assert payload["execution_origin"] is run.execution_origin
 
     async def test_the_other_payload_keys_are_untouched(self) -> None:
         """Additive only: the FAR-728 summary/actor contract must not shift."""
@@ -168,9 +171,12 @@ class TestEvalBlockedExecutionOrigin:
         payload = await _eval_blocked_payload(_run(execution_origin=None))
         assert payload["execution_origin"] is None
 
-    async def test_mock_run_stand_in_degrades_to_null(self) -> None:
-        payload = await _eval_blocked_payload(_run())
-        assert payload["execution_origin"] is None
+    async def test_no_test_double_coercion_in_the_payload(self) -> None:
+        """FAR-1566: same pass-through contract on the eval.blocked payload —
+        the serializer never rewrites a value it did not write."""
+        run = _run()
+        payload = await _eval_blocked_payload(run)
+        assert payload["execution_origin"] is run.execution_origin
 
     async def test_sanitized_error_detail_contract_is_untouched(self) -> None:
         """Additive only: the write-site redaction the immutability tests pin

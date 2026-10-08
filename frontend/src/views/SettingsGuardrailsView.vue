@@ -60,7 +60,7 @@
                     v-if="isObserveMode(g)"
                     data-testid="settings-guardrails-observe-badge"
                     aria-live="polite"
-                    class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning"
+                    class="ml-2 inline-flex items-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning-text"
                     :title="$t('views.SettingsGuardrailsView.observe_badge_title')"
                   >
                     {{ $t('views.SettingsGuardrailsView.observe_badge') }}

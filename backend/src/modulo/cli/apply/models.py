@@ -513,6 +513,16 @@ class PipelineEntity(BaseModel):
     ``'circuit_breaker'`` only from the breaker itself), never
     config-expressible.
 
+    ``environment_profile_id`` (FAR-1558/FAR-1599, per-pipeline sandbox
+    dispatch binding) follows the ``circuit_breaker_threshold`` opt-in rule:
+    managed ONLY when declared — an explicit ``null`` CLEARS a UI/API-set
+    binding back to the default route, while omitting the key leaves the live
+    binding untouched (never hashed, never written). It references the profile
+    by UUID (the same id-space the API returns, like the graph's connector
+    ``instance_id``); validity is enforced SERVER-SIDE on write by the shared
+    FAR-1558 predicate, so an ineligible id fails the entity at apply time
+    with the API's validation error rather than being re-checked in the CLI.
+
     Accountability owners (FAR-1161): ``business_owner_email`` /
     ``reliability_owner_email`` reference a member of the target org by
     EMAIL (users are not apply-managed entities, so the human-writable email
@@ -612,6 +622,19 @@ class PipelineEntity(BaseModel):
             "config load. The disable REASON is system-owned: the server stamps "
             "'operator' when a config-driven pause lands, and 'circuit_breaker' "
             "is written only by the breaker itself."
+        ),
+    )
+    environment_profile_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Environment profile the pipeline's sandbox nodes dispatch on "
+            "(FAR-1558/FAR-1599), referenced by the profile's UUID. Managed ONLY "
+            "when declared (FAR-1182/FAR-1221 opt-in precedent): omit the key to "
+            "leave the live binding untouched, declare the id to bind, or declare "
+            "an explicit null to clear the binding and restore the default route. "
+            "The server validates the binding on write (same-org existence + "
+            "team-visibility via the shared FAR-1558 predicate); an ineligible id "
+            "fails the entity at apply time with the API's validation error."
         ),
     )
     max_duration_seconds: int | None = Field(
@@ -729,6 +752,18 @@ class PipelineEntity(BaseModel):
         """True when the config declares max_duration_seconds (FAR-1294)."""
         return "max_duration_seconds" in self.model_fields_set
 
+    @property
+    def manages_environment_profile(self) -> bool:
+        """True when the config declares environment_profile_id (FAR-1599).
+
+        Managed ONLY when declared: an omitted key is neither hashed nor
+        written, so a UI/API-set binding never shows as drift against a config
+        that does not mention it. A DECLARED null IS managed (it clears the
+        binding), which ``model_fields_set`` distinguishes from omission — the
+        same test ``manages_circuit_breaker`` / ``manages_max_autonomy`` use.
+        """
+        return "environment_profile_id" in self.model_fields_set
+
     @field_validator("name")
     @classmethod
     def _name_must_not_contain_separator(cls, value: str) -> str:
@@ -822,6 +857,17 @@ class PipelineEntity(BaseModel):
         # executor converges by POSTing /pause.
         if self.manages_run_enabled:
             view["run_enabled"] = self.run_enabled
+        # FAR-1599: the environment-profile binding is managed ONLY when
+        # declared — an omitted key is neither compared nor written (a
+        # UI/API-set binding survives a config that never mentions it), while
+        # a declared id (or an explicit null, which clears) IS hashed so
+        # ``--diff`` reports drift and the executor writes it. Both sides hash
+        # as UUID STRINGS (or null) so a UUID object and its text form are
+        # equal — the same id-space treatment the accountability owners get.
+        if self.manages_environment_profile:
+            view["environment_profile_id"] = (
+                None if self.environment_profile_id is None else str(self.environment_profile_id)
+            )
         if self.graph is not None:
             # FAR-1232: the DRIFT hash must compare the declared graph as the
             # server will DISPLAY it — the API read path masks credential-

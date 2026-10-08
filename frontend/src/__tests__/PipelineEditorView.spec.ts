@@ -2365,6 +2365,33 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     wrapper.unmount()
   })
 
+  it('warns with the warning-text token when the capability scope names an out-of-scope connector', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.rawNodes = [
+      {
+        id: 'node-1',
+        node_type: 'agent',
+        label: 'Agent',
+        description: '',
+        position: { x: 0, y: 0 },
+        agent_id: 'agent-1',
+        capability_scope: { allowed_connectors: ['conn-out-of-scope'] },
+      },
+    ]
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'Agent', description: '' } }]
+    vm.onNodeClick({ node: { id: 'node-1' } })
+    await nextTick()
+
+    const warning = wrapper.find('[data-testid="pipeline-editor-scope-widen-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.classes()).toContain('text-warning-text')
+    wrapper.unmount()
+  })
+
   it('convertBackendEdge applies loop style for loop edges and llm style for llm edges', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()

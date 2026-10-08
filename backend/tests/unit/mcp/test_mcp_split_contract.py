@@ -87,6 +87,9 @@ def _make_mock_run(
     run.started_at = None
     run.completed_at = None
     run.error_code = None
+    # FAR-1141 / ADR-042: a real row always carries the provenance column
+    # (FAR-1566 removed the coercion that used to rescue an unset stand-in).
+    run.execution_origin = None
     run.outputs_json = outputs_json
     run.node_telemetry_json = node_telemetry_json
     run.node_token_usage = node_token_usage

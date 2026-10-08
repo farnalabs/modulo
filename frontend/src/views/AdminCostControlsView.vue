@@ -378,7 +378,7 @@ const remainingClass = computed(() => {
   if (settings.value.budget <= 0) return ''
   const pct = percentUsed.value
   if (pct >= 100) return 'text-destructive'
-  if (pct >= 90) return 'text-warning'
+  if (pct >= 90) return 'text-warning-text'
   return 'text-success'
 })
 

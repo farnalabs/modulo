@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from modulo.api.routes import variant_batches as vb
 from modulo.api.routes.variant_batches import (
@@ -569,3 +570,66 @@ class TestReFireBatchHandler:
                 await re_fire_batch(uuid.uuid4(), session, principal)
             assert exc.value.status_code == 409
             assert exc.value.detail == f"Cannot create run: pipeline {pipeline_id} is archived"
+
+    async def _refusal_from_re_fire(self, refusal: Exception) -> HTTPException:
+        """Drive a domain refusal out of ``run_variant_batch`` through the REAL
+        ``re_fire_batch`` handler and return the HTTPException the shared
+        ``handle_db_errors`` translation answers (FAR-1589).
+
+        ``re_fire_batch`` carries no route-local ``except`` chain for any of
+        the ``create_run`` gates, so the shared translation is the only thing
+        between the refusal and the generic 500 backstop.
+        """
+        org_id = uuid.uuid4()
+        principal = make_mock_principal(org_id=org_id)
+        session = make_session_mock()
+        state = MagicMock()
+        state.variant_group_id = uuid.uuid4()
+        state.input_payload = {"prompt": "hi"}
+        group = MagicMock()
+        group.organisation_id = org_id
+        with (
+            _patch_rls()[0],
+            _patch_rls()[1],
+            patch("modulo.api.routes.variant_batches.get_batch_state", new_callable=AsyncMock, return_value=state),
+            patch("modulo.api.routes.variant_batches.get_variant_group", new_callable=AsyncMock, return_value=group),
+            patch(
+                "modulo.api.routes.variant_batches.run_variant_batch",
+                new_callable=AsyncMock,
+                side_effect=refusal,
+            ),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await re_fire_batch(uuid.uuid4(), session, principal)
+        return exc.value
+
+    async def test_org_deleted_refusal_returns_409(self) -> None:
+        """FAR-1589: a soft-deleted org is a 409 on every sibling route
+        (``routes/runs.py`` trigger + rerun, ``routes/triggers.py`` test
+        trigger); the chain-less re-fire route must read the same."""
+        org_id = uuid.uuid4()
+        from modulo.core.exceptions import OrgDeletedError
+
+        http_exc = await self._refusal_from_re_fire(OrgDeletedError(org_id=org_id, deleted=True))
+        assert http_exc.status_code == 409
+        assert http_exc.detail == f"Cannot create run: organisation {org_id} is deleted"
+
+    async def test_org_missing_refusal_returns_404(self) -> None:
+        """The other branch of the same sibling mapping: no org row -> 404."""
+        org_id = uuid.uuid4()
+        from modulo.core.exceptions import OrgDeletedError
+
+        http_exc = await self._refusal_from_re_fire(OrgDeletedError(org_id=org_id, deleted=False))
+        assert http_exc.status_code == 404
+        assert http_exc.detail == f"Cannot create run: organisation {org_id} not found"
+
+    async def test_triggers_paused_refusal_returns_409(self) -> None:
+        """FAR-1589: the org-wide pause kill-switch refusal is a 409, never a
+        500 — ``re_fire_batch`` has no local ``except TriggersPausedError``
+        chain either, so the shared translation is the only mapping."""
+        org_id = uuid.uuid4()
+        from modulo.core.exceptions import TriggersPausedError
+
+        http_exc = await self._refusal_from_re_fire(TriggersPausedError(org_id=org_id, trigger_type="manual"))
+        assert http_exc.status_code == 409
+        assert http_exc.detail == f"Cannot create run: triggers are paused for organisation {org_id}"

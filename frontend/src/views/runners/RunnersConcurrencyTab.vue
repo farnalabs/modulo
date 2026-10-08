@@ -144,7 +144,7 @@ const preflightClass = computed(() => {
   const state = preflight.value?.state ?? 'unknown'
   if (state === 'ok') return 'border-success/40 bg-success/10 text-success'
   if (state === 'uncapped' || state === 'unknown') return 'border-border bg-muted/40 text-muted-foreground'
-  return 'border-warning/40 bg-warning/10 text-warning'
+  return 'border-warning/40 bg-warning/10 text-warning-text'
 })
 
 const saving = ref(false)

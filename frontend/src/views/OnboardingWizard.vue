@@ -413,7 +413,7 @@
             {{ $t('views.OnboardingWizard.go_to_dashboard') }}
           </router-link>
         </div>
-        <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning" data-testid="onboarding-wizard-run-empty-warning">
+        <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text" data-testid="onboarding-wizard-run-empty-warning">
           {{ emptyRunWarning }}
         </div>
         <div v-if="runResult" class="rounded-lg bg-success/10 p-3 text-sm text-success">

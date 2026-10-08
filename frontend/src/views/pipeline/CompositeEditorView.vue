@@ -51,7 +51,7 @@
           <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps">
             <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning">MANUAL</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">MANUAL</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>

@@ -95,7 +95,7 @@
                 :data-testid="`runs-list-queued-${row.run_id}`"
                 :title="queuedCapacityReason((row as RunListItem).capacity, t)"
                 :aria-label="queuedCapacityReason((row as RunListItem).capacity, t)"
-                class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning capitalize"
+                class="inline-flex items-center rounded-full bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning-text capitalize"
               >{{ $t('views.RunsListView.queued') }}</span>
               <RunErrorTag
                 v-if="(row as RunListItem).error_code"
@@ -123,7 +123,7 @@
           <template #cell-heartbeat="{ row }">
             <span
               :data-testid="`runs-list-heartbeat-${row.run_id}`"
-              :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning font-medium' : 'text-muted-foreground'"
+              :class="isListHeartbeatStale(row as RunListItem) ? 'text-warning-text font-medium' : 'text-muted-foreground'"
               class="text-xs whitespace-nowrap"
             >{{ formatHeartbeat(heartbeatAgeFor(row as RunListItem, now)) }}</span>
           </template>

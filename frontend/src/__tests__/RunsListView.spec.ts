@@ -881,6 +881,24 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('marks a stale heartbeat with the warning-text token', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(new Date('2026-01-02T12:00:00Z')) // nosemgrep: new-date-without-guard
+    const threeMinutesAgoAt = new Date(Date.now() - 180_000).toISOString() // nosemgrep: new-date-without-guard
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, status: 'running', completed_at: null, heartbeat_at: threeMinutesAgoAt },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    const cell = wrapper.find('[data-testid="runs-list-heartbeat-run1"]')
+    expect(cell.exists()).toBe(true)
+    expect(cell.text()).toBe('3m 00s ago')
+    expect(cell.classes()).toContain('text-warning-text')
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
   it('renders the queued badge when capacity.waiting is true', async () => {
     mockResponses['/api/v1/runs'] = listWith([
       { ...baseRun, status: 'pending', capacity: { active_runs: 3, concurrency_limit: 5, waiting: true } },

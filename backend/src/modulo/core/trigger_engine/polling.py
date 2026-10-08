@@ -23,7 +23,11 @@ import jmespath.exceptions
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.connectors.base import ConnectorBase, ConnectorResult
+from modulo.connectors.base import (
+    ConnectorACL,
+    ConnectorBase,
+    ConnectorResult,
+)
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
@@ -107,12 +111,52 @@ def _build_polling_connector(
             raise ValueError(f"Unsupported connector type for polling: {type_id!r}")
 
 
+def enforce_polling_read_acl(connector_instance: Any) -> None:
+    """Enforce the instance's ``read`` ACL before any polling query (FAR-1583).
+
+    Polling runs outside a normal run context, so
+    :func:`_build_polling_connector` deliberately does NOT wrap the connector
+    in ``_TracedConnector`` — and that wrapper is where the executor's
+    per-operation ACL gate lives. Without this gate a scheduled poll could read
+    through an instance whose non-empty ``allowed_operations`` excludes
+    ``read``, while every other ACL call site in the product denies it.
+
+    The check itself is delegated to :class:`ConnectorACL` so the polling path
+    makes EXACTLY the same decision as the rest of the product (FAR-1564):
+    ``None``/``[]`` are UNRESTRICTED and pass, a non-empty list must list
+    ``read``, and a malformed value is restricted to nothing (fail closed).
+
+    Polling is a system-level operation with no caller visibility scope, so an
+    absent/garbage ``visibility`` is normalised to ``org`` rather than raising
+    a ``ValueError`` the callers would surface as a generic build failure —
+    ``visibility`` only tightens an ACL for a team-scoped caller, and a poll
+    has none.
+
+    Raises :class:`ConnectorPermissionError` when the read is not permitted.
+    """
+    visibility = getattr(connector_instance, "visibility", None)
+    if visibility not in ("org", "team"):
+        visibility = "org"
+    ConnectorACL(
+        visibility=visibility,
+        allowed_operations=getattr(connector_instance, "allowed_operations", None),
+    ).check("read")
+
+
 async def _build_polling_connector_from_instance(
     session: AsyncSession,
     connector_instance: Any,
     org_id: uuid.UUID | str,
 ) -> tuple[ConnectorBase, Any]:
-    """Wire a polling REST connector to the shared fleet-wide rate budget.
+    """Wire a polling REST connector to the shared fleet-wide rate budget (FAR-1583 ACL).
+
+    The FIRST thing this does is :func:`enforce_polling_read_acl` — every poll
+    read in the product flows through here (the SAQ cron fire job via
+    ``cron_helpers._build_polling_connector`` and the one-off
+    ``TriggerEngine.evaluate_condition``), so this is the single gate that
+    keeps a non-empty ``allowed_operations`` allowlist from being bypassed by
+    the polling/cron read path. It runs BEFORE any credential is decrypted, so
+    a denied instance never exposes its secrets.
 
     Shared by the cron fire path (``cron_helpers``) and the sync one-off
     ``TriggerEngine.evaluate_condition`` so the three-step wiring
@@ -126,12 +170,19 @@ async def _build_polling_connector_from_instance(
     configured / a non-tenant probe), in which case the connector stays on its
     per-process local bucket — correct when no shared budget exists to multiply.
 
+    Raises :class:`ConnectorPermissionError` (fail-closed) when the instance's
+    allowlist excludes ``read`` — see :func:`enforce_polling_read_acl`.
+
     Raises :class:`SharedBudgetUnavailableError` (fail-closed) when the shared
     budget is configured but unresolvable; the caller surfaces that per its own
     contract rather than degrading to the per-process bucket (which would
     reconstruct the fleet-wide ``N x burst`` fail-open FAR-439 removed).
     """
     import json
+
+    # FAR-1583: gate FIRST — before any credential is decrypted, so a denied
+    # instance never exposes its secrets to this path.
+    enforce_polling_read_acl(connector_instance)
 
     from modulo.core.connector_hub import resolve_shared_rate_limit_redis
     from modulo.core.secrets_backend import create_secrets_backend

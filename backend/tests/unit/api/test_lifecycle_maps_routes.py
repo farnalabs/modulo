@@ -126,6 +126,8 @@ def _run_row() -> MagicMock:
     r.status = "complete"
     r.completed_at = _NOW
     r.trigger_type = "cron"
+    # A real row always carries the provenance column (FAR-1566).
+    r.execution_origin = None
     return r
 
 

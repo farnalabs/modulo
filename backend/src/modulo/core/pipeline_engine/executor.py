@@ -122,6 +122,7 @@ from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
 from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
@@ -234,19 +235,6 @@ def _sanitize_detail(detail: Any, limit: int | None = 5000) -> str:
     via ``str()`` and is a NO-OP for clean strings.
     """
     return sanitize_error_text(detail, limit)
-
-
-def _optional_run_str(value: Any) -> str | None:
-    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1141).
-
-    Core-local twin of ``api.routes.runs._optional_str`` — the import-linter
-    ``core-does-not-import-api`` contract forbids importing the API layer here.
-    The run row is a plain ORM entity in production, but unit tests pass
-    ``MagicMock`` run stand-ins whose unset attribute resolves to a mock — that
-    must degrade to ``None`` (origin not recorded) instead of leaking a repr
-    into an immutable, hash-linked audit payload.
-    """
-    return value if isinstance(value, str) else None
 
 
 async def _safe_pipeline_name(
@@ -2240,11 +2228,11 @@ class PipelineExecutor:
                 "pipeline_id": str(pipeline_id),
                 # FAR-1141 / ADR-042: the run-keyed audit payload carries the
                 # run's execution origin ('dispatched' / NULL) so the audit log
-                # can tell a dispatched run from one Modulo executed. The
-                # coercion mirrors api.routes.runs._optional_str (core may not
-                # import the API layer): a MagicMock/partial run stand-in whose
-                # attribute is not a plain string degrades to NULL, never a repr.
-                "execution_origin": _optional_run_str(getattr(running_run, "execution_origin", None)),
+                # can tell a dispatched run from one Modulo executed. Composed
+                # from the shared serializer (FAR-1565) — core may not import
+                # the API layer, which is exactly why the serializer lives here
+                # in core and serves both layers.
+                **run_provenance_fields(running_run),
                 "summary": compose_run_started_summary(
                     await _safe_pipeline_name(session, pipeline_id, org_id, run_id),
                     pipeline_id,
@@ -3868,12 +3856,12 @@ class PipelineExecutor:
             # FAR-1141 / ADR-042: the run's execution origin travels with this
             # run-keyed payload so the audit log can tell a dispatched run from
             # one Modulo executed. Best-effort and read INSIDE this audit's own
-            # transaction: a read failure degrades the field to NULL (logged)
-            # and never suppresses the audit event itself.
-            execution_origin: str | None = None
+            # transaction, with the serializer's ``None``-row form as the degrade
+            # arm: any read failure yields the key with NULL (logged) and never
+            # suppresses the audit event itself.
+            provenance: dict[str, Any] = run_provenance_fields(None)
             try:
-                origin_run = await get_run(session, run_id)
-                execution_origin = _optional_run_str(getattr(origin_run, "execution_origin", None))
+                provenance = run_provenance_fields(await get_run(session, run_id))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -3891,7 +3879,7 @@ class PipelineExecutor:
                     resource_id=run_id,
                     payload_json={
                         "pipeline_id": str(pipeline_id),
-                        "execution_origin": execution_origin,
+                        **provenance,
                         "error_detail": _sanitize_detail(error_detail, limit=None),
                         "actor": SYSTEM_ACTOR,
                         "summary": f"Guardrail eval blocked the run (pipeline {short_id(pipeline_id)})",
