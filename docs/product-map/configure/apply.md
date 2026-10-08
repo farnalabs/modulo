@@ -47,7 +47,9 @@ model backends, pipelines and triggers to a live deployment from one YAML file
 bearer `mk_` org key). The reference routes are the product surfaces the CLI
 writes to (`/schemas`, `/admin/model-backends`, `/pipelines`,
 `/settings/triggers`); there is no dedicated CLI page in the nav. Built on the
-schemas, model-backends, pipelines and triggers features.
+schemas, model-backends, pipelines and triggers features. For a copy-paste
+Terraform-style CI loop (plan on every pull request, apply on merge to `main`),
+see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-actions.md).
 
 ## Behaviours
 
