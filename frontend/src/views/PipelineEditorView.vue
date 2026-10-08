@@ -179,6 +179,54 @@
                 <option value="fully_autonomous">{{ $t('views.PipelineEditorView.autonomy_fully_autonomous') }}</option>
               </select>
             </div>
+            <!-- FAR-1558: per-pipeline environment profile - the runtime provider
+                 this pipeline's runs dispatch on. Gated on the
+                 `environment_profiles` plan feature because the profile list
+                 endpoint is feature-gated (an ungated fetch would fail on plans
+                 without it). Change semantics: an untouched select sends
+                 nothing (the stored binding stays OMITTED/unchanged), choosing
+                 "None (default route)" sends an explicit `null` (clears the
+                 binding and restores the default route), choosing a profile
+                 sends its id. -->
+            <div
+              v-if="showEnvironmentProfileControl"
+              class="flex items-center gap-1"
+              v-tooltip.bottom="$t('views.PipelineEditorView.environment_profile_hint')"
+            >
+              <label
+                for="pipeline-environment-profile"
+                class="whitespace-nowrap text-[10px] text-muted-foreground"
+                :title="$t('views.PipelineEditorView.environment_profile_hint')"
+              >{{ $t('views.PipelineEditorView.environment_profile_label') }}:</label>
+              <select
+                id="pipeline-environment-profile"
+                :value="environmentProfileInput"
+                class="w-56 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                :title="$t('views.PipelineEditorView.environment_profile_hint')"
+                aria-describedby="pipeline-environment-profile-help"
+                @change="updateEnvironmentProfile"
+                data-testid="pipeline-editor-environment-profile"
+              >
+                <option value="">{{ $t('views.PipelineEditorView.environment_profile_none') }}</option>
+                <option v-for="p in environmentProfileOptions" :key="p.id" :value="p.id">{{ p.label }}</option>
+              </select>
+              <span id="pipeline-environment-profile-help" class="sr-only">{{ $t('views.PipelineEditorView.environment_profile_hint') }}</span>
+              <!-- A bind/clear write is async: announce its outcome, and fail
+                   LOUD on error (role="alert"), never silently. -->
+              <span
+                v-if="environmentProfileError"
+                role="alert"
+                class="max-w-56 truncate text-xs text-destructive"
+                :title="environmentProfileError"
+                data-testid="pipeline-editor-environment-profile-error"
+              >{{ environmentProfileError }}</span>
+              <span
+                v-else-if="environmentProfileStatus"
+                role="status"
+                class="max-w-56 truncate text-[10px] text-muted-foreground"
+                data-testid="pipeline-editor-environment-profile-status"
+              >{{ environmentProfileStatus }}</span>
+            </div>
             <!-- FAR-1257: per-pipeline HITL review window override. Empty =
                  clear the override (inherit the org default); the value is
                  seconds, the same envelope the API enforces (60..604800). -->
@@ -1460,6 +1508,8 @@ import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
+import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import { Pencil as PencilIcon, LoaderCircle as LoaderCircleIcon, Download as DownloadIcon, Play as PlayIcon, Plus as PlusIcon, Maximize2 as Maximize2Icon, X as XIcon, ExternalLink as ExternalLinkIcon } from '@lucide/vue'
@@ -2700,6 +2750,7 @@ async function loadPipeline() {
     circuitBreakerInput.value = data?.circuit_breaker_threshold ?? ''
     maxAutonomyInput.value = (data as any)?.max_autonomy_level ?? null
     syncHitlReviewWindowFromPipeline()
+    syncEnvironmentProfileFromPipeline()
     syncRetryPolicyFromPipeline()
   } catch (e) {
     pageError.value = t('views.PipelineEditorView.failed_to_load_pipeline', { error: formatApiError(e) })
@@ -2864,6 +2915,119 @@ async function updateMaxAutonomyLevel(event: Event) {
     // Timeout / network failure: same revert — never display a value the
     // server rejected.
     maxAutonomyInput.value = pipeline.value?.max_autonomy_level ?? null
+  }
+}
+
+// FAR-1558 slice 2: per-pipeline environment profile - the runtime provider
+// this pipeline's runs dispatch on. The select is the ONLY send site, which
+// is what makes omit-vs-null unambiguous: an untouched control fires no
+// request at all (the stored binding stays OMITTED and therefore unchanged),
+// while choosing "None (default route)" sends an explicit `null` (clears the
+// binding and restores the default route).
+const environmentProfilesStore = useEnvironmentProfilesStore()
+const environmentProfileInput = ref('')
+const environmentProfileUpdateError = ref<string | null>(null)
+const environmentProfileStatus = ref<string | null>(null)
+
+// The profile list endpoint is feature-gated (`environment_profiles`), so
+// render + fetch only when the plan grants it - never a request we know fails.
+const showEnvironmentProfileControl = computed(() =>
+  planStore.featureEnabled('environment_profiles'),
+)
+
+// Options are the org's profiles, PLUS a placeholder for a binding the list
+// cannot resolve (the list is team-scoped, so a profile bound by another team
+// may be invisible here). Rendering the bound id as an option keeps the
+// control from displaying "None" while a binding is actually stored - the
+// select never misrepresents the current state.
+const environmentProfileOptions = computed(() => {
+  const rows = environmentProfilesStore.profiles.map((p) => ({
+    id: p.id,
+    label: profileOptionLabel(p.name, p.provider_type),
+  }))
+  const bound = environmentProfileInput.value
+  if (bound && !rows.some((row) => row.id === bound)) {
+    rows.unshift({
+      id: bound,
+      label: t('views.PipelineEditorView.environment_profile_unavailable'),
+    })
+  }
+  return rows
+})
+
+// Load failure (feature gate, network) surfaces alongside a write failure -
+// a profile list we could not load must not render as a silent empty menu.
+const environmentProfileError = computed(() => {
+  if (environmentProfileUpdateError.value) return environmentProfileUpdateError.value
+  const loadError = environmentProfilesStore.error
+  if (showEnvironmentProfileControl.value && loadError) {
+    return t('views.PipelineEditorView.environment_profile_load_failed', { error: loadError })
+  }
+  return null
+})
+
+// Option/status text: "<profile name> — <provider tier>" (e.g. "Staging
+// Docker — Bundled Runner (Docker)"). A profile with no resolvable tier
+// renders its name alone rather than trailing a dangling separator.
+function profileOptionLabel(name: string, providerType?: string | null): string {
+  const labelKey = runnerTierLabelKeyForProvider(providerType)
+  return labelKey ? `${name} — ${t(labelKey)}` : name
+}
+
+function profileLabelForId(id: string): string {
+  const profile = environmentProfilesStore.profiles.find((p) => p.id === id)
+  return profile ? profileOptionLabel(profile.name, profile.provider_type) : id
+}
+
+function syncEnvironmentProfileFromPipeline() {
+  const stored = (pipeline.value as { environment_profile_id?: string | null } | null)
+    ?.environment_profile_id
+  environmentProfileInput.value = stored ?? ''
+}
+
+watch(
+  showEnvironmentProfileControl,
+  (show) => {
+    if (show && environmentProfilesStore.profiles.length === 0) {
+      void environmentProfilesStore.fetchProfiles()
+    }
+  },
+  { immediate: true },
+)
+
+async function updateEnvironmentProfile(event: Event) {
+  const raw = (event.target as HTMLSelectElement).value
+  // '' clears (explicit null on the wire); anything else binds that profile.
+  const val = raw === '' ? null : raw
+  environmentProfileInput.value = raw
+  environmentProfileUpdateError.value = null
+  environmentProfileStatus.value = null
+  try {
+    const { error } = await withTimeout((signal) => api.PATCH('/api/v1/pipelines/{pipeline_id}', {
+      params: { path: { pipeline_id: pipelineId } },
+      body: { environment_profile_id: val },
+      signal,
+    }))
+    if (error) {
+      // A 422 is a refused bind (profile not visible to the pipeline's owner
+      // team, cross-org, ...) - never display a binding the server rejected.
+      environmentProfileUpdateError.value = t('views.PipelineEditorView.environment_profile_update_failed', {
+        error: formatApiError(error),
+      })
+      syncEnvironmentProfileFromPipeline()
+      return
+    }
+    if (pipeline.value) pipeline.value.environment_profile_id = val
+    environmentProfileStatus.value = val
+      ? t('views.PipelineEditorView.environment_profile_bound', { label: profileLabelForId(val) })
+      : t('views.PipelineEditorView.environment_profile_cleared')
+  } catch (e: unknown) {
+    // Timeout / network failure: same revert - the stored value was never
+    // updated, so the control must not keep showing the rejected choice.
+    environmentProfileUpdateError.value = t('views.PipelineEditorView.environment_profile_update_failed', {
+      error: formatApiError(e),
+    })
+    syncEnvironmentProfileFromPipeline()
   }
 }
 
