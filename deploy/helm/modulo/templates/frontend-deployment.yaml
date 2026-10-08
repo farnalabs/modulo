@@ -23,9 +23,11 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
-      # The Modulo workloads never call the Kubernetes API, and the chart's
-      # ServiceAccount carries no RBAC bindings, so mounting a token only
-      # widens the blast radius of a compromised pod (kubernetes:S6865).
+      # The frontend is a static nginx SPA: it never calls the Kubernetes
+      # API, even when the Kubernetes runtime provider is enabled on the
+      # backend/SAQ workloads, so its token stays unmounted unconditionally
+      # (kubernetes:S6865). serviceAccount.automountServiceAccountToken does
+      # not apply here by design.
       automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
