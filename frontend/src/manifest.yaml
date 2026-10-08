@@ -6013,7 +6013,7 @@ features:
             - "[x] The provider delete-confirmation dialog warns that users already signed in with the provider are NOT signed out automatically — their sessions remain valid until they expire and only new sign-ins through the provider are blocked (settings-sso-delete-session-warning, `SettingsSsoView.vue`)"
         deferrals:
             - IdP-initiated SSO and ACS paths are exercised with the XML-signature step mocked (xmlsec cannot sign/verify round-trip on this Windows host); a Linux CI job with a real signed response would close the gap
-            - SAML single logout (SLO) and SCIM deprovisioning are not implemented yet
+            - SAML single logout (SLO) is not implemented yet (SCIM user/group provisioning and deprovisioning ship API-only and are tracked under feat-scim)
     feat-system-config:
         description: System-level configuration administration
         status: covered

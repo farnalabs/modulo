@@ -1129,6 +1129,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > pause (`run_enabled: false`, one-way) and the breaker's fold into the unified
 > state (an operator pause survives a breaker reset). `_ORPHANED_BDD_FEATURES`
 > stays empty.
+>
+> **Closed this walk (2026-10-08):** tracked the untracked **SCIM 2.0
+> provisioning** surface as a new `feat-scim` behaviour tracker
+> (`auth/scim-provisioning.md`). The API-only `/scim/v2/*` surface (Users and
+> Groups CRUD, the `ServiceProviderConfig` document, the shared-secret
+> `MODULO_SCIM_TOKEN` auth, the `scim` plan gate, record-preserving
+> last-admin-safe deprovisioning, and fail-closed mutation audits) shipped with
+> executing BDD (`scim_provisioning.feature`) and five unit suites but was
+> described by NEITHER product-map layer — invisible to the feature graph and
+> to Assistant's `search_documentation` indexer. Corrected the stale `feat-sso`
+> deferral that still claimed "SCIM deprovisioning [is] not implemented yet"
+> (it is: `DELETE /scim/v2/Users/{id}` and `PATCH active=false` tombstone the
+> membership); the deferral now names only the genuinely-unshipped SAML single
+> logout. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
@@ -1146,6 +1160,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 - [feat-core-saml-integration](auth/saml-integration.md) => PRD 9.4
 - [feat-auth-jwt-auth](auth/jwt-auth.md) => PRD N/A
 - [feat-sso](auth/sso-provider-ui.md) => PRD 9.4
+- [feat-scim](auth/scim-provisioning.md) => PRD 9.4
 - [feat-onboarding](auth/onboarding.md) => PRD N/A
 
 ### Build
