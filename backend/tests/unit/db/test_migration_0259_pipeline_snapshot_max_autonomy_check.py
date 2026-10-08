@@ -36,7 +36,8 @@ Lenses:
    0286_pipeline_run_state chains onto 0285_system_audit_events, and
    0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state, and
    0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals, and
-   0289_pipelines_environment_profile chains onto 0288_runs_execution_origin as the
+   0289_pipelines_environment_profile chains onto 0288_runs_execution_origin, and
+   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile as the
    single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -62,7 +63,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0289_pipelines_environment_profile"
+_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

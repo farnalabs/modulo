@@ -3,8 +3,9 @@
 Structural — load the migration module and pin its contract without a
 database, plus ORM parity for both new columns:
 
-1. the chain: 0288 revises 0287_team_rls_lifecycle_evals, and
-   0289_pipelines_environment_profile chains onto 0288 as the single
+1. the chain: 0288 revises 0287_team_rls_lifecycle_evals,
+   0289_pipelines_environment_profile chains onto 0288, and
+   0290_scheduled_reports_due_scan chains onto 0289 as the single
    linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -36,7 +37,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0289_pipelines_environment_profile"
+_CHAIN_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.
