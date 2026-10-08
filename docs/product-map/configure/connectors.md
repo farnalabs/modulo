@@ -208,8 +208,9 @@ and per-destination rate limiting.
       allowlist so every operation is denied — malformed input restricts, never
       grants (`backend/src/modulo/connectors/base.py`,
       `backend/src/modulo/core/graph_validator/__init__.py`,
-      `backend/src/modulo/core/guardrails/conformance.py`,
-      `backend/src/modulo/core/connector_hub/health_sweep.py`;
+      `backend/src/modulo/core/guardrails/conformance.py`;
+      `backend/src/modulo/core/connector_hub/health_sweep.py` references the
+      ACL-denial semantics in comments only and does not read the predicate;
       `unit-tests: test_acl.py, test_connectors_endpoint.py,
       test_guardrail_conformance_midrun.py`)
 
