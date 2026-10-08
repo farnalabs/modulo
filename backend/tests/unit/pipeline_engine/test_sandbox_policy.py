@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import uuid
@@ -22,9 +23,11 @@ from types import SimpleNamespace
 import pytest
 
 from modulo.core.pipeline_engine.sandbox_mode import (
+    _validate_allowlist_host,
     _validate_sandbox_git_credentials_config,
     _validate_sandbox_read_only_config,
     derive_sandbox_capabilities,
+    is_valid_egress_host,
 )
 from modulo.core.pipeline_engine.sandbox_policy import (
     _GH_PR_GUARD_CLAIM_RECEIPT,
@@ -88,6 +91,66 @@ def test_egress_selected_script_drops_then_allows() -> None:
     assert "DROP" in script.upper()
     assert "api.example.com" in script
     assert "443" in script
+
+
+_HOSTILE_HOSTS = [
+    "a.com;id",
+    "$(id).example.com",
+    "`id`.example.com",
+    "a b.example.com",
+    "a.com\nid",
+    "a.com&&id",
+    "a.com|id",
+    "-d",
+    "",
+]
+
+
+@pytest.mark.parametrize("host", _HOSTILE_HOSTS)
+def test_validate_allowlist_host_rejects_metacharacters(host: str) -> None:
+    with pytest.raises(ValueError, match="egress_allowlist"):
+        _validate_allowlist_host(host, 0, "n1")
+
+
+@pytest.mark.parametrize("host", ["api.github.com", "localhost", "10.0.0.5", "2001:db8::1"])
+def test_validate_allowlist_host_accepts_hostnames_and_ips(host: str) -> None:
+    assert _validate_allowlist_host(host, 0, "n1") is None
+
+
+@pytest.mark.parametrize("host", [None, 123, 1.5, ["a.com"], {"host": "a.com"}, b"a.com"])
+def test_is_valid_egress_host_rejects_non_strings(host: object) -> None:
+    assert is_valid_egress_host(host) is False
+
+
+def test_is_valid_egress_host_rejects_empty_string() -> None:
+    assert is_valid_egress_host("") is False
+
+
+@pytest.mark.parametrize("host", _HOSTILE_HOSTS[:-1])
+def test_is_valid_egress_host_rejects_metacharacters(host: str) -> None:
+    assert is_valid_egress_host(host) is False
+
+
+@pytest.mark.parametrize("host", ["api.github.com", "localhost", "10.0.0.5", "2001:db8::1"])
+def test_is_valid_egress_host_accepts_hostnames_and_ips(host: str) -> None:
+    assert is_valid_egress_host(host) is True
+
+
+@pytest.mark.parametrize("host", _HOSTILE_HOSTS[:-1])
+def test_egress_script_refuses_hostile_host(host: str) -> None:
+    with pytest.raises(ValueError, match="invalid egress allowlist target"):
+        build_egress_selected_script([{"host": host, "port": 443}])
+
+
+def test_egress_script_refuses_hostile_resolved_ip() -> None:
+    with pytest.raises(ValueError, match="invalid egress allowlist target"):
+        build_egress_selected_script([{"host": "api.example.com", "port": 443, "_resolved_ip": "1.2.3.4; id"}])
+
+
+def test_egress_script_uses_resolved_ip_in_quoted_rule() -> None:
+    script = build_egress_selected_script([{"host": "api.example.com", "port": 443, "_resolved_ip": "203.0.113.7"}])
+    rule = f"iptables -A OUTPUT -d {shlex.quote('203.0.113.7')} -p tcp --dport 443 -j ACCEPT"
+    assert rule in script
 
 
 # ---------------------------------------------------------------------------
