@@ -28,9 +28,8 @@ the CLI would write — as a comment on the PR, and merging to `main` runs the
   pauses until the rules pass, so keep rules only where you want a hold.
 - **The apply config** — the YAML file `modulo apply -f` consumes, committed to
   this repo (the example uses `modulo.yaml`).
-- **CLI installation in CI** — not documented yet; the example uses
-  `pip install farnalabs-modulo` (the package behind the `modulo` console
-  script). **Install method to be confirmed.**
+- **CLI installation in CI** — `pip install farnalabs-modulo`, the PyPI package
+  that provides the `modulo` console script.
 
 ## Workflow
 
@@ -51,9 +50,18 @@ jobs:
   # plan exits 0, so a pending change never fails the job (config, auth or
   # network errors still exit non-zero and fail it loudly).
   plan-staging:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: staging
+    # One in-flight plan per PR: a new push cancels the previous plan job, so
+    # the PR gets a single, current plan comment instead of a duplicate per
+    # push. Only the plan jobs are concurrency-scoped — the apply jobs are
+    # deliberately left alone so a mid-run apply is never cancelled.
+    concurrency:
+      group: modulo-plan-staging-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     env:
       MODULO_URL: ${{ vars.MODULO_URL }}
       MODULO_API_KEY: ${{ secrets.MODULO_API_KEY }}
@@ -66,7 +74,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
-        # Install method TO BE CONFIRMED — see Prerequisites.
         run: pip install farnalabs-modulo
       - name: Plan
         run: |
@@ -85,9 +92,14 @@ jobs:
           } | gh pr comment "$PR_NUMBER" --body-file -
 
   plan-production:
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: production
+    concurrency:
+      group: modulo-plan-production-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     env:
       MODULO_URL: ${{ vars.MODULO_URL }}
       MODULO_API_KEY: ${{ secrets.MODULO_API_KEY }}
@@ -100,7 +112,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
-        # Install method TO BE CONFIRMED — see Prerequisites.
         run: pip install farnalabs-modulo
       - name: Plan
         run: |
@@ -134,7 +145,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
-        # Install method TO BE CONFIRMED — see Prerequisites.
         run: pip install farnalabs-modulo
       - name: Apply
         run: modulo apply -f modulo.yaml
@@ -153,7 +163,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
-        # Install method TO BE CONFIRMED — see Prerequisites.
         run: pip install farnalabs-modulo
       - name: Apply
         run: modulo apply -f modulo.yaml
@@ -192,7 +201,8 @@ fails before producing a report), so a broken config or missing
   re-sent every run.
 - Fork PRs: `pull_request` runs from forks receive neither secrets nor a
   write-capable token, so the plan jobs fail at the CLI step (no
-  `MODULO_API_KEY`) and could not comment anyway. The example therefore
-  plans same-repo branches; if you accept fork PRs, gate the jobs with
-  `github.event.pull_request.head.repo.full_name == github.repository`
-  so fork PRs skip them instead of failing.
+  `MODULO_API_KEY`) and could not comment anyway. The plan jobs therefore
+  gate on `github.event.pull_request.head.repo.full_name == github.repository`
+  so fork PRs skip them instead of failing. Drop that gate if you deliberately
+  want forks to plan — they will then need their own `MODULO_URL` and
+  `MODULO_API_KEY`.
