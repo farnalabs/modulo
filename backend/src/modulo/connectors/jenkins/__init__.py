@@ -120,6 +120,14 @@ class JenkinsConnector(ConnectorBase):
 
     Uses Basic auth (username + API token or password).
     Optionally fetches a crumb for write operations.
+
+    Fail-loud job-name contract (FAR-1141 hardening, documented in FAR-1570):
+    ``trigger_run``, ``list_runs``, ``query(resource="builds")`` and ``write``
+    raise ``ValueError`` on an empty or missing job name — the
+    ``pipeline_id``/``job_name`` parameter as the method names it — BEFORE any
+    HTTP request is made. In that case they neither return an empty result nor
+    surface a 404 for a malformed ``/job//…`` path (the pre-hardening
+    behaviour).
     """
 
     def __init__(self, username: str, token: str, base_url: str = "http://localhost:8080") -> None:
@@ -229,6 +237,15 @@ class JenkinsConnector(ConnectorBase):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        """Trigger a new build of the Jenkins job named by ``pipeline_id``.
+
+        Fail-loud contract (FAR-1570): an empty ``pipeline_id`` (or ``None``)
+        raises ``ValueError`` BEFORE any HTTP request is made — the call
+        does not issue the malformed ``/job//…`` build request (which used to
+        404), does not return an empty run, and never surfaces that 404. The
+        parameter is required, so an omitted argument is a Python
+        ``TypeError``, never a request.
+        """
         job_name = pipeline_id
         # Validate BEFORE any HTTP call: this URL carries the connector's
         # Basic credentials, so a traversal `pipeline_id` must never be
@@ -365,6 +382,14 @@ class JenkinsConnector(ConnectorBase):
         status: CIRunStatus | None = None,
         limit: int = 20,
     ) -> list[CIRun]:
+        """List recent builds of the Jenkins job named by ``pipeline_id``.
+
+        Fail-loud contract (FAR-1570): an empty or missing (``None``)
+        ``pipeline_id`` raises ``ValueError`` BEFORE any HTTP request is
+        made — the call does not issue the malformed ``/job//api/json`` request
+        (which used to 404), does not return an empty run list, and never
+        surfaces that 404.
+        """
         job_name = pipeline_id or ""
         # Fail CLOSED before any HTTP call: an empty/None or traversal
         # `pipeline_id` must raise rather than build `/job//api/json` (or a
@@ -384,6 +409,15 @@ class JenkinsConnector(ConnectorBase):
             return runs
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
+        """Query a Jenkins resource: ``jobs``, ``builds`` or ``nodes``.
+
+        Fail-loud contract (FAR-1570): for ``resource="builds"`` an empty or
+        missing ``q.filters["job_name"]`` raises ``ValueError`` BEFORE
+        any HTTP request is made — the call does not issue the malformed
+        ``/job//api/json`` request (which used to 404), does not return an
+        empty result, and never surfaces that 404. The ``jobs`` and ``nodes``
+        resources address no job and take no job name.
+        """
         match q.resource:
             case "jobs":
                 async with self._client() as client:
@@ -417,6 +451,14 @@ class JenkinsConnector(ConnectorBase):
                 raise ValueError(f"Unsupported query resource: {q.resource!r}")
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
+        """Execute a write; only ``resource="build"`` (trigger a build) is supported.
+
+        Fail-loud contract (FAR-1570): for ``resource="build"`` an empty or
+        missing ``payload.data["job_name"]`` raises ``ValueError`` BEFORE
+        any HTTP request is made — the call does not issue the malformed
+        ``/job//…`` build request (which used to 404), does not return an
+        empty result, and never surfaces that 404.
+        """
         if payload.resource != "build":
             raise ValueError(f"Unsupported write resource: {payload.resource!r}")
         job_name = payload.data.get("job_name", "")
