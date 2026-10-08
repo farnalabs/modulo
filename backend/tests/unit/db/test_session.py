@@ -18,9 +18,15 @@ exactly once.
 factory's own contract so the overrides, per-backend knobs and singleton
 semantics can't silently drift:
 
-  * **Pool sizing** — postgres/mariadb get 20/10/3600/30 defaults; a caller's
+  * **Pool sizing** — postgres/mariadb get 20/10/1500/30 defaults; a caller's
     ``pool_size``/``max_overflow`` wins; sqlite skips every pool knob
     (aiosqlite has no real pool).
+  * **Proxy-window recycle (FAR-1524)** — ``pool_recycle`` comes from
+    ``Settings.db_pool_recycle_seconds`` and MUST stay strictly below the
+    Fly HAProxy session inactivity window (``timeout client/server 30m`` =
+    1800 s) in front of Postgres; the Settings field itself rejects
+    anything at/above that window (fail-fast), and ``pool_pre_ping`` stays
+    on as the checkout-time safety net.
   * **Per-backend connect args** — ``timeout=10`` on every backend; postgres
     additionally gets an explicit ``ssl`` value (``False`` when absent/
     ``disable``; the operator's ``require``/``verify-*`` string otherwise;
@@ -48,11 +54,20 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from modulo.settings import Settings
 
 POSTGRES_URL = "postgresql+asyncpg://u:p@localhost/db"
 SQLITE_URL = "sqlite+aiosqlite:///./test.db"
 MARIADB_URL = "mysql+aiomysql://u:p@localhost:3306/db"
+
+# Fly HAProxy in front of Postgres closes a session after 30 minutes of
+# inactivity (``timeout client 30m`` in /fly/haproxy.cfg). ``pool_recycle``
+# must stay strictly below this or pooled connections silently outlive the
+# proxy window (FAR-1524).
+_HAPROXY_IDLE_WINDOW_SECONDS = 1800
 
 
 @pytest.fixture
@@ -73,10 +88,11 @@ def session_mod() -> Any:
     m._GLOBAL_HOOKS_REGISTERED = orig_hooks
 
 
-def _settings(modulo_db: str, database_url: str) -> MagicMock:
+def _settings(modulo_db: str, database_url: str, pool_recycle: int = 1500) -> MagicMock:
     settings = MagicMock()
     settings.modulo_db = modulo_db
     settings.database_url = database_url
+    settings.db_pool_recycle_seconds = pool_recycle
     return settings
 
 
@@ -102,7 +118,7 @@ class TestBuildEngine:
         assert kw["pool_pre_ping"] is True
         assert kw["pool_size"] == 20
         assert kw["max_overflow"] == 10
-        assert kw["pool_recycle"] == 3600
+        assert kw["pool_recycle"] == 1500
         assert kw["pool_timeout"] == 30
         assert kw["connect_args"] == {"timeout": 10, "ssl": False, "statement_cache_size": 0}
         assert mock_create.return_value is engine
@@ -240,7 +256,7 @@ class TestBuildEngine:
         kw = mock_create.call_args[1]
         assert kw["pool_size"] == 20
         assert kw["max_overflow"] == 10
-        assert kw["pool_recycle"] == 3600
+        assert kw["pool_recycle"] == 1500
         assert kw["pool_timeout"] == 30
         assert kw["connect_args"] == {"timeout": 10}
 
@@ -278,6 +294,86 @@ class TestBuildEngine:
         ):
             session_mod._build_engine()
         assert mock_create.call_args[1]["url"] == POSTGRES_URL
+
+
+# ---------------------------------------------------------------------------
+# Proxy-window pool_recycle contract (FAR-1524) + pool_pre_ping stays on
+# ---------------------------------------------------------------------------
+
+
+class TestPoolRecycleProxyWindowContract:
+    """The engine must never hold a pooled connection longer than the Fly
+    HAProxy session window, and pre-ping must stay enabled (FAR-1524)."""
+
+    @pytest.mark.parametrize("modulo_db", ["postgres", "mariadb"])
+    def test_default_recycle_sits_below_the_haproxy_idle_window(self, session_mod: Any, modulo_db: str) -> None:
+        """Default pool_recycle < 1800s — a pooled connection is recycled by
+        SQLAlchemy BEFORE the proxy's 30m inactivity kill can strand it."""
+        url = POSTGRES_URL if modulo_db == "postgres" else MARIADB_URL
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings(modulo_db, url)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+
+        recycle = mock_create.call_args[1]["pool_recycle"]
+        assert recycle < _HAPROXY_IDLE_WINDOW_SECONDS
+
+    def test_recycle_is_configurable_from_settings(self, session_mod: Any) -> None:
+        """An operator's DB_POOL_RECYCLE_SECONDS reaches the engine verbatim."""
+        with (
+            patch(
+                "modulo.db.session.get_settings",
+                return_value=_settings("postgres", POSTGRES_URL, pool_recycle=900),
+            ),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+
+        assert mock_create.call_args[1]["pool_recycle"] == 900
+
+    def test_pre_ping_stays_on_for_postgres(self, session_mod: Any) -> None:
+        """pool_pre_ping is the checkout-time safety net — never dropped by
+        the recycle change (it masks idle death; recycle keeps pooled
+        connections inside the proxy window)."""
+        with (
+            patch("modulo.db.session.get_settings", return_value=_settings("postgres", POSTGRES_URL)),
+            patch("modulo.db.session.create_async_engine") as mock_create,
+            patch("modulo.db.session.register_rls_reset_hook"),
+        ):
+            session_mod._build_engine()
+
+        assert mock_create.call_args[1]["pool_pre_ping"] is True
+
+    @staticmethod
+    def _real_settings(**extra: str) -> Settings:
+        return Settings(
+            database_url=POSTGRES_URL,
+            secret_key="a" * 32,
+            fernet_key="b" * 32,
+            **extra,  # type: ignore[arg-type]
+        )
+
+    def test_settings_default_recycle_is_below_the_proxy_window(self) -> None:
+        settings = self._real_settings()
+        assert settings.db_pool_recycle_seconds < _HAPROXY_IDLE_WINDOW_SECONDS
+
+    def test_settings_accepts_a_recycle_inside_the_proxy_window(self) -> None:
+        assert self._real_settings(DB_POOL_RECYCLE_SECONDS="900").db_pool_recycle_seconds == 900
+
+    @pytest.mark.parametrize("bad", ["1800", "3600", "7200"])
+    def test_settings_rejects_a_recycle_at_or_above_the_proxy_window(self, bad: str) -> None:
+        """Fail-fast at Settings load: an operator can no longer configure
+        the 3600s > 30m mismatch that FAR-1524 fixes."""
+        with pytest.raises(ValidationError):
+            self._real_settings(DB_POOL_RECYCLE_SECONDS=bad)
+
+    @pytest.mark.parametrize("bad", ["0", "30"])
+    def test_settings_rejects_a_vanishing_recycle(self, bad: str) -> None:
+        with pytest.raises(ValidationError):
+            self._real_settings(DB_POOL_RECYCLE_SECONDS=bad)
 
 
 # ---------------------------------------------------------------------------
