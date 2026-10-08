@@ -7,15 +7,22 @@ code:
   - backend/src/modulo/api/routes/node_categories.py
   - backend/src/modulo/api/routes/pipeline_folders.py
   - backend/src/modulo/api/routes/composite_templates.py
+  - backend/src/modulo/db/crud/pipeline.py
+  - backend/src/modulo/db/models/pipeline.py
+  - backend/src/modulo/db/migrations/versions/0286_pipeline_run_state.py
   - backend/src/modulo/core/pipeline_engine
 unit-tests:
   - backend/tests/unit/api/test_pipelines_endpoint.py
+  - backend/tests/unit/api/test_pipelines_routes_coverage.py
   - backend/tests/unit/api/test_node_category_endpoint.py
   - backend/tests/unit/api/test_composite_templates_api.py
   - backend/tests/unit/api/test_pipeline_patch_updated_at.py
   - backend/tests/unit/api/test_pipeline_copy_errors.py
   - backend/tests/unit/api/test_pipeline_retry_policy.py
   - backend/tests/unit/api/test_pipeline_team_visibility.py
+  - backend/tests/unit/db/test_pipeline_pause_resume_crud.py
+  - backend/tests/unit/db/test_pipeline_state_gate.py
+  - backend/tests/integration/test_migration_0286_pipeline_run_state.py
   - backend/tests/unit/test_pipeline_execution.py
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator
@@ -92,6 +99,22 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       `run_sequential.feature`); a trigger refused by `max_concurrent_runs` while a
       pending run is already active surfaces 429 through the typed
       `RateLimitConflictError` path
+- [x] Per-pipeline Paused execution state (FAR-1530): a pipeline can be PRESENT and
+      VISIBLE but NON-EXECUTING — deliberately distinct from `archived_at` (hidden) and
+      the ORG-level `triggers_paused` kill-switch. `run_enabled` (default true) is the
+      unified state; `run_disabled_reason` (closed vocabulary `operator` /
+      `circuit_breaker`) and `run_disabled_at` name the first cause, carried on every
+      `PipelineResponse`. `POST /api/v1/pipelines/{id}/pause` sets the state
+      (`reason='operator'`, audited `pipeline_paused`) and `POST .../resume` clears it
+      (audited `pipeline_resumed`), both idempotent with first-cause-owns-the-reason;
+      resume is REFUSED 409 while `circuit_breaker_tripped` holds (reset the breaker
+      first). Unarchiving lands in Paused, not Active, so a dormant pipeline never
+      surprise-fires. The state is enforced at `create_run` for every origin via
+      `PipelineNotRunnableError` state `paused` → 409 (run-side details under `feat-runs`)
+      (`backend/tests/unit/db/test_pipeline_pause_resume_crud.py`,
+      `backend/tests/unit/api/test_pipelines_routes_coverage.py`,
+      `backend/tests/unit/db/test_pipeline_state_gate.py`,
+      `backend/tests/integration/test_migration_0286_pipeline_run_state.py`)
 - [x] Node categories: deleting an unreferenced category succeeds, deleting one still
       referenced by a pipeline node is refused (409) with the referencing pipeline listed,
       and viewers cannot delete categories (403) (`admin/node-categories.feature`)
@@ -133,6 +156,17 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   covers the DB-backed pre-run checks.
 
 ## QA History
+- 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
+  `feat-pipelines` sub-surface for FAR-1530 (per-pipeline Paused execution state),
+  which shipped in PR #1367 but was described by neither product-map layer (the same
+  walk's FAR-1528 entry covered only archived/soft-deleted). Added the behaviour line
+  to the manifest `feat-pipelines` registry and this tracker, citing the pause/resume
+  routes, the unified `run_enabled` / `run_disabled_reason` / `run_disabled_at` columns
+  (migration 0286), the archive→Paused taxonomy, the create_run state gate, and the
+  circuit-breaker resume refusal. Also extended the `feat-runs` FAR-1528 line to name
+  the `paused` state and updated the `feat-costs` breaker line for the unified-state
+  fold (an operator pause survives a breaker reset; a trip keeps a first-cause
+  `'operator'` reason). `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-09-25: **Improve Architecture product-map walk** – reconciled the
   manifest `feat-pipelines` registry entry with this tracker (both now
   `status: covered`): the "'run recovery and retry' partially wired" unchecked item
