@@ -168,3 +168,26 @@ async def test_bare_by_contract_ids() -> None:
     assert "/" not in teamcity.id
     assert circle.id
     assert teamcity.id
+
+
+#: Doubles whose run-id contract REQUIRES a usable pipeline_id and so must fail
+#: loud on an empty one (they can never emit a bare/empty id). CircleCI and
+#: TeamCity are excluded — their bare-id contract has no pipeline_id to qualify
+#: (see ``test_bare_by_contract_ids``).
+_EMPTY_ID_REJECTING_CASES = [
+    pytest.param(_GitHubActionsTestDouble, "pipeline_id is required", id="github_actions"),
+    pytest.param(_GitLabCITestDouble, "pipeline_id is required", id="gitlab_ci"),
+    pytest.param(_BuildkiteTestDouble, "Invalid pipeline_id format", id="buildkite"),
+    pytest.param(_AzurePipelinesTestDouble, "pipeline_id is required", id="azure_pipelines"),
+    pytest.param(_JenkinsTestDouble, "Unsafe job name", id="jenkins"),
+]
+
+
+@pytest.mark.parametrize(("double_cls", "error_match"), _EMPTY_ID_REJECTING_CASES)
+async def test_trigger_run_rejects_empty_pipeline_id(
+    double_cls: Callable[[], Any],
+    error_match: str,
+) -> None:
+    """An empty pipeline_id fails loud instead of emitting an unusable id."""
+    with pytest.raises(ValueError, match=error_match):
+        await double_cls().trigger_run(pipeline_id="")

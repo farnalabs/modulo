@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo._types import _LIST_DICT_STR_ANY
+from modulo.connectors._ci_test_double import CITestDoubleMixin
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -314,8 +315,15 @@ class BuildkiteConnector(ConnectorBase):
             return [self._parse_run(run, org=org, pipeline_slug=pipeline_slug) for run in raw_runs[:limit]]
 
 
-class _BuildkiteTestDouble(BuildkiteConnector):
-    """Minimal test double that does not make HTTP calls."""
+class _BuildkiteTestDouble(CITestDoubleMixin, BuildkiteConnector):
+    """Minimal test double that does not make HTTP calls.
+
+    ``trigger_run`` / ``list_runs`` scaffolding comes from
+    :class:`CITestDoubleMixin`; the ``org/pipeline_slug/build_number`` id shape
+    is supplied by the ``_double_*`` hooks below.
+    """
+
+    _double_default_pipeline_id = "my-org/my-pipeline"
 
     def __init__(self) -> None:
         import uuid as _uuid
@@ -334,31 +342,21 @@ class _BuildkiteTestDouble(BuildkiteConnector):
     async def health_check(self) -> HealthResult:
         return HealthResult(ok=True)
 
-    async def trigger_run(
-        self,
-        pipeline_id: str,
-        branch: str = "",
-        variables: dict[str, str] | None = None,
-    ) -> CIRun:
-        # Run-id contract (FAR-1141): emit `org/pipeline_slug/build_number`
-        # (TWO slashes) - the exact form get_run_status/get_run_logs parse. A
-        # bare id is rejected there, so validate the pipeline_id the same way
-        # the real producer does before building the id.
+    def _record_triggered_run(self, run: CIRun, variables: dict[str, str] | None) -> None:
+        self._triggered.append({"run": run, "variables": variables or {}})
+
+    def _double_trigger_id(self, pipeline_id: str) -> str:
         org, _, pipeline_slug = pipeline_id.partition("/")
         if not pipeline_slug:
             raise ValueError(
                 f"Invalid pipeline_id format: {pipeline_id!r}. Expected 'org/pipeline_slug'.",
             )
         self._build_seq += 1
-        run = CIRun(
-            id=f"{org}/{pipeline_slug}/{self._build_seq}",
-            pipeline_id=pipeline_id,
-            status=CIRunStatus.QUEUED,
-            branch=branch,
-        )
-        self._triggered.append({"run": run, "variables": variables or {}})
-        self._status = CIRunStatus.QUEUED
-        return run
+        return f"{org}/{pipeline_slug}/{self._build_seq}"
+
+    def _double_listed_id(self, resolved: str) -> str:
+        self._build_seq += 1
+        return f"{resolved}/{self._build_seq}"
 
     async def get_run_status(self, run_id: str) -> CIRun:
         return CIRun(
@@ -369,22 +367,6 @@ class _BuildkiteTestDouble(BuildkiteConnector):
 
     async def get_run_logs(self, run_id: str, _cursor: str | None = None) -> CIRunLog:
         return CIRunLog(run_id=run_id, lines=self._run_logs)
-
-    async def list_runs(
-        self,
-        pipeline_id: str | None = None,
-        status: CIRunStatus | None = None,
-        _limit: int = 20,
-    ) -> list[CIRun]:
-        resolved = pipeline_id or "my-org/my-pipeline"
-        self._build_seq += 1
-        return [
-            CIRun(
-                id=f"{resolved}/{self._build_seq}",
-                pipeline_id=resolved,
-                status=status or CIRunStatus.SUCCESS,
-            ),
-        ]
 
     async def query(self, _q: ConnectorQuery) -> ConnectorResult:
         return ConnectorResult(records=[])
