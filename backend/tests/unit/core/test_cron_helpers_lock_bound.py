@@ -463,3 +463,31 @@ class TestOrgLockTimeoutSkip:
             )
 
         assert not any("org_lock_timeout" in record.getMessage() for record in caplog.records)
+
+    async def test_cancelled_error_propagates_out_of_the_body_unchanged(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The body re-raises ``CancelledError`` FIRST — before the 55P03
+        handler can see it — so a cancellation is never swallowed as a lock
+        timeout, never turned into an org skip, and never unwinds the tick's
+        in-memory accounting as if the org had merely contended a row lock.
+
+        Scope note: this is the body's OWN cancellation contract (the
+        per-org time bound and the 55P03 skip both sit below it), and it is
+        red exactly when the ``except Exception`` arm is allowed to swallow a
+        cancellation."""
+        org = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            raise asyncio.CancelledError
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        with pytest.raises(asyncio.CancelledError):
+            await _drive_body(
+                [org],
+                fake_reconcile_org,
+                summary=summary,
+                terminalized_run_ids=[],
+                record_facts=AsyncMock(),
+            )
+
+        assert not any("org_lock_timeout" in record.getMessage() for record in caplog.records)
