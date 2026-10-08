@@ -264,7 +264,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     const vm = wrapper.vm as any
     vm.pipeline = { id: 'test-pipeline-id', name: 'Test' }
 
-    useApiFns.post.mockRejectedValueOnce(new Error('archive_fail'))
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: undefined, error: { detail: 'archive_fail' } })
     await vm.handleArchive()
     await flushPromises()
     expect(vm.pageError).toContain('archive_fail')
@@ -280,7 +280,7 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     const vm = wrapper.vm as any
     vm.pipeline = { id: 'test-pipeline-id', name: 'Test', archived_at: '2026-01-01' }
 
-    useApiFns.post.mockRejectedValueOnce(new Error('unarchive_fail'))
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: undefined, error: { detail: 'unarchive_fail' } })
     await vm.handleUnarchive()
     await flushPromises()
     expect(vm.pageError).toContain('unarchive_fail')

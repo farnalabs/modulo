@@ -27,7 +27,8 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0286_pipeline_run_state`` ->
 ``0287_team_rls_lifecycle_evals`` ->
 ``0288_runs_execution_origin`` ->
-``0289_pipelines_environment_profile`` as the single linear head) and the
+``0289_pipelines_environment_profile`` ->
+``0290_scheduled_reports_due_scan`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -54,7 +55,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0289_pipelines_environment_profile"
+_CHAIN_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 

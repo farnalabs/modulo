@@ -4188,6 +4188,9 @@ elements:
         type: element
         dynamic_testid: false
     /schemas/infer:
+      - testid: schema-inference-loading-skeleton
+        type: element
+        dynamic_testid: false
       - testid: schema-inference-connector
         type: select
         dynamic_testid: false

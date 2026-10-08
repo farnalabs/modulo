@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from tests.bdd.conftest import _active_client, make_mock_pipeline
+
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/costs/cost_controls.feature")
 
@@ -1190,3 +1192,105 @@ def response_contains_configured_components(request: Any) -> None:
     assert isinstance(body, list), f"Expected 1 configured component, got {body!r}"
     assert len(body) == 1, f"Expected 1 configured component, got {body!r}"
     assert body[0].get("name") == "llm_tokens"
+
+
+# ===========================================================================
+# Threshold change permission rule (FAR-1184 — raise/clear needs cost.manage)
+# ===========================================================================
+
+
+def _threshold_value(raw: str) -> float | None:
+    """Parse a `<new_value>` step value: ``$50.00`` → ``50.0``, ``null`` → ``None``."""
+    if raw == "null":
+        return None
+    return float(raw.replace("$", "").replace(",", ""))
+
+
+def _threshold_row(threshold: Any) -> MagicMock:
+    """Build a response-shaped Pipeline row carrying ``threshold``."""
+    pipeline = make_mock_pipeline(name="data-pipeline")
+    pipeline.circuit_breaker_threshold = threshold
+    pipeline.circuit_breaker_tripped = False
+    pipeline.circuit_breaker_tripped_at = None
+    return pipeline
+
+
+@when(parsers.parse("I PATCH /api/v1/pipelines/{pipeline_id} with circuit_breaker_threshold {value}"))
+def patch_pipeline_threshold(value: str, pipeline_id: str, request: Any, ctx: dict[str, Any]) -> None:
+    """Drive ``PATCH /api/v1/pipelines/{id}`` through the real route.
+
+    Only the DB/CRUD doubles the route needs are patched (mirrors the unit
+    suite's ``TestRestThresholdPermission``): the stored row, the CRUD writer,
+    the in-txn team gate, and the denial-audit writer. The role comes from the
+    scenario's auth ``Given`` (``_active_client``), so the shared
+    ``circuit_breaker_threshold_change_allowed`` rule runs for real.
+    """
+    sent = _threshold_value(value)
+    previous = ctx.get("pipeline_cb_threshold")
+    current = _threshold_row(previous)
+    updated = _threshold_row(sent)
+    update_mock = AsyncMock(return_value=updated)
+    denial_audit = AsyncMock()
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", new=AsyncMock(return_value=current)),
+        patch("modulo.api.routes.pipelines.update_pipeline", new=update_mock),
+        patch("modulo.api.routes.pipelines._assert_team_transition_allowed", new=AsyncMock()),
+        patch(
+            "modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn",
+            new=AsyncMock(return_value=current),
+        ),
+        patch("modulo.api.routes.pipelines.append_audit_event", new=AsyncMock()),
+        patch("modulo.api.routes.pipelines.append_audit_event_isolated", new=denial_audit),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True)),
+    ):
+        resp = _active_client(request).patch(
+            f"/api/v1/pipelines/{pipeline_id}",
+            json={"circuit_breaker_threshold": sent},
+        )
+    ctx["threshold_pipeline_id"] = uuid.UUID(pipeline_id)
+    ctx["threshold_previous_usd"] = float(previous) if previous is not None else None
+    ctx["threshold_sent_usd"] = sent
+    ctx["threshold_update"] = update_mock
+    ctx["threshold_denial_audit"] = denial_audit
+    _store_response(request, ctx, resp)
+
+
+@then(parsers.parse("the update pipeline call received circuit_breaker_threshold {expected}"))
+def update_received_threshold(expected: str, ctx: dict[str, Any]) -> None:
+    update_mock = ctx.get("threshold_update")
+    assert update_mock is not None, "no pipeline update was driven"
+    update_mock.assert_awaited_once()
+    updates = update_mock.await_args.args[2]
+    actual = updates["circuit_breaker_threshold"]
+    expected_value = _threshold_value(expected)
+    assert actual == expected_value, f"Expected stored threshold {expected_value!r}, got {actual!r}"
+
+
+@then("the update pipeline call was not made")
+def update_not_made(ctx: dict[str, Any]) -> None:
+    update_mock = ctx.get("threshold_update")
+    assert update_mock is not None, "no pipeline update was driven"
+    update_mock.assert_not_awaited()
+
+
+@then(parsers.parse('the audit event "{event_type}" was written'))
+def threshold_denial_audit_written(event_type: str, ctx: dict[str, Any]) -> None:
+    denial_audit = ctx.get("threshold_denial_audit")
+    assert denial_audit is not None, "no denial audit was driven"
+    denial_audit.assert_awaited_once()
+    kwargs = denial_audit.await_args.kwargs
+    assert kwargs["event_type"] == event_type, f"Expected event {event_type!r}, got {kwargs['event_type']!r}"
+    assert kwargs["resource_id"] == ctx["threshold_pipeline_id"], f"Unexpected resource {kwargs['resource_id']!r}"
+    payload = kwargs["payload"]
+    assert payload["denied"] is True
+    assert payload["previous_threshold_usd"] == ctx["threshold_previous_usd"]
+    assert payload["new_threshold_usd"] == ctx["threshold_sent_usd"]
+
+
+@then("the threshold change denial audit was not written")
+def threshold_denial_audit_not_written(ctx: dict[str, Any]) -> None:
+    denial_audit = ctx.get("threshold_denial_audit")
+    assert denial_audit is not None, "no denial audit was driven"
+    denial_audit.assert_not_awaited()
