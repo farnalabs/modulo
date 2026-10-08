@@ -3,8 +3,9 @@
 Structural — load the migration module and pin its contract without a
 database, plus ORM parity for both new columns:
 
-1. the chain: 0288 is the single linear head and revises
-   0287_team_rls_lifecycle_evals;
+1. the chain: 0288 revises 0287_team_rls_lifecycle_evals, and
+   0289_pipelines_environment_profile chains onto 0288 as the single
+   linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
 3. the downgrade drops exactly those two columns;
@@ -35,6 +36,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
+_CHAIN_HEAD_MIGRATION = "0289_pipelines_environment_profile"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.
@@ -67,9 +69,9 @@ def _migration_calls(entry_point: str) -> list[tuple[tuple[Any, ...], dict[str, 
 
 
 class TestChain:
-    def test_single_head_is_0288_runs_execution_origin(self) -> None:
+    def test_single_head_is_0289_pipelines_environment_profile(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+        assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0287_team_rls_lifecycle_evals(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
