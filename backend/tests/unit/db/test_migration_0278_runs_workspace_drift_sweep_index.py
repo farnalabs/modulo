@@ -191,7 +191,7 @@ def _model_index() -> Index:
 
 
 class TestChain:
-    def test_single_head_is_0289_pipelines_environment_profile(self) -> None:
+    def test_single_head_is_0288_runs_execution_origin(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
