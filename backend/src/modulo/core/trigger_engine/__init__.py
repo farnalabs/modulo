@@ -959,6 +959,7 @@ class TriggerEngine:
         checks. For automatic scheduled evaluation use the SAQ fire job path.
         """
         from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+        from modulo.connectors.base import ConnectorPermissionError
         from modulo.core.trigger_engine.polling import (
             _build_polling_connector_from_instance,
             _close_polling_resources,
@@ -987,6 +988,17 @@ class TriggerEngine:
                 connector, redis_client = await _build_polling_connector_from_instance(session, instance, org_id)
             except asyncio.CancelledError:
                 raise
+            except ConnectorPermissionError as exc:
+                # FAR-1583 fail-closed: the instance's allowlist excludes
+                # ``read`` (or its allowed_operations is malformed). No
+                # credential was decrypted and no query ran. Named explicitly
+                # rather than folded into the generic "Connector init failed"
+                # arm so an ACL decision is never reported as a build error.
+                return {
+                    "status": "error",
+                    "error": f"Connector ACL denied read: {str(exc)[:200]}",
+                    "acl_denied": True,
+                }
             except SharedBudgetUnavailableError as exc:
                 # Fail-closed (FAR-442): a configured-but-unresolvable shared rate
                 # budget must not be downgraded to the per-process local bucket.

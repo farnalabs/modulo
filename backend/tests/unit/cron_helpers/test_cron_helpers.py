@@ -2293,6 +2293,21 @@ class TestFireCronTrigger:
 
 
 class TestFirePollingTrigger:
+    @pytest.fixture(autouse=True)
+    def _no_backpressure(self):
+        # FAR-604 backpressure gate: patched out for this whole branch matrix —
+        # the canned session reads below pin the connector-lookup slot, and the
+        # gate's OWN read consumed it (leaving a bare MagicMock as the connector
+        # instance, which the FAR-1583 polling read ACL then correctly rejects
+        # as a malformed allowlist). Each of these tests pins one specific fire
+        # branch, not admission control.
+        with patch(
+            "modulo.core.run_admission.evaluate_backpressure",
+            new_callable=AsyncMock,
+            return_value=(False, ""),
+        ):
+            yield
+
     def _session(
         self,
         trigger: MagicMock,

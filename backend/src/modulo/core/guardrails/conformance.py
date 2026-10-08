@@ -40,7 +40,11 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.connectors.base import ConnectorType, unrestricted_allowed_operations
+from modulo.connectors.base import (
+    Capability,
+    ConnectorType,
+    unrestricted_allowed_operations,
+)
 from modulo.core.guardrails import (
     ConformanceDerivation,
     ConformanceState,
@@ -49,6 +53,83 @@ from modulo.core.guardrails import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Canonical capability vocabulary (FAR-1582)
+# ---------------------------------------------------------------------------
+
+
+def canonical_capability(value: str) -> str | None:
+    """Reduce a capability spelling to the canonical bare :class:`Capability` form.
+
+    ONE vocabulary is used for connector conformance: ``Capability``'s own
+    values (``read``, ``write``, ``create_pr``, ...). That is what
+    ``ConnectorACL.check`` enforces at every ACL call site, what
+    ``ConnectorType.capabilities`` declares, and what the determination draft
+    generator writes into a claim — so it is the vocabulary consumers actually
+    match on.
+
+    A legacy type-qualified spelling (``github.read``, ``github:write``) is
+    recognised and reduced to its bare value, which is what makes a claim
+    match IDENTICALLY whether the bound connector is allowlisted (whose stored
+    ``allowed_operations`` may still carry the legacy spelling) or
+    unrestricted (whose type capabilities are always bare).
+
+    Returns ``None`` when *value* is not a capability in any accepted
+    spelling — ``sandbox.egress``, ``docker``, ``egress:github.com`` belong to
+    the sandbox/environment/agent surfaces, whose own vocabulary this must
+    never rewrite.
+    """
+    try:
+        return str(Capability(value))
+    except ValueError:
+        pass
+    for separator in (".", ":"):
+        prefix, found, suffix = value.partition(separator)
+        if not found:
+            continue
+        try:
+            ConnectorType(prefix)
+        except ValueError:
+            continue
+        try:
+            return str(Capability(suffix))
+        except ValueError:
+            continue
+    return None
+
+
+def _canonical_claim(value: str) -> str:
+    """Canonicalise a claim/manifest key, passing non-connector caps through."""
+    canonical = canonical_capability(value)
+    return value if canonical is None else canonical
+
+
+def _canonical_capability_list(values: Any) -> set[str]:
+    """Canonicalise a stored ``allowed_operations`` list to bare capabilities.
+
+    Entries that are not capabilities in any accepted spelling are DROPPED
+    (with a log): they grant nothing, and carrying them would let an arbitrary
+    stored string satisfy a claim of the same spelling. ``[]``/``None`` never
+    reach here — :func:`unrestricted_allowed_operations` routes them to the
+    connector TYPE's capability set first.
+    """
+    canonical: set[str] = set()
+    if not isinstance(values, list):
+        return canonical
+    for raw in values:
+        if not isinstance(raw, str):
+            continue
+        capability = canonical_capability(raw)
+        if capability is None:
+            _log.warning(
+                "guardrail.conformance.operation_not_a_capability",
+                extra={"operation": str(raw)[:100]},
+            )
+            continue
+        canonical.add(capability)
+    return canonical
 
 
 @dataclass(frozen=True)
@@ -75,14 +156,19 @@ class ConformanceRecheckResult:
 
 
 def _capabilities_for_connector(row: Any) -> set[str]:
-    """Capability surface of a ConnectorInstance row (live).
+    """Capability surface of a ConnectorInstance row (live), in ONE vocabulary.
 
     The instance's ``allowed_operations`` is the authoritative declared scope
-    when it is a NON-EMPTY list. ``None``/``[]`` means the connector is
-    UNRESTRICTED (FAR-1564) — the unset value every connector created through
-    REST/MCP/UI carries — so the surface is then whatever the connector TYPE
-    declares, which may legitimately be EMPTY (``custom`` and any type id with
-    no capability mapping contribute nothing; see :func:`_type_capabilities`).
+    when it is a NON-EMPTY list; its entries are reduced to the canonical bare
+    ``Capability`` spelling by :func:`_canonical_capability_list`, so the
+    allowlisted branch and the unrestricted branch below emit the SAME
+    vocabulary and a canonical claim matches either identically (FAR-1582).
+    ``None``/``[]`` means the connector is UNRESTRICTED (FAR-1564) — the unset
+    value every connector created through REST/MCP/UI carries — so the surface
+    is then whatever the connector TYPE declares, which may legitimately be
+    EMPTY (``custom`` and any type id with no capability mapping contribute
+    nothing; see :func:`_type_capabilities`).
+
     A MALFORMED non-list value is RESTRICTED and certifies nothing (fail
     closed, logged) — never the full type set, because ``ConnectorACL`` reads
     the same value restrictively. We never read credential material here
@@ -92,7 +178,7 @@ def _capabilities_for_connector(row: Any) -> set[str]:
     if unrestricted_allowed_operations(allowed):
         return _type_capabilities(row)
     if isinstance(allowed, list):
-        return {str(c) for c in allowed if isinstance(c, str)}
+        return _canonical_capability_list(allowed)
     # Malformed (dict/str/int/...): fail CLOSED — certify nothing rather than
     # the connector's FULL capability set.
     _log.warning(
@@ -111,6 +197,9 @@ def _type_capabilities(row: Any) -> set[str]:
     whose capability mapping is empty (``custom`` and any unmapped member):
     the declared set is genuinely empty, and it is logged the same way an
     unknown type id is so an empty surface is never silent.
+
+    ``ConnectorType.capabilities`` already yields bare ``Capability`` values,
+    so this branch and the allowlist branch above emit one vocabulary (FAR-1582).
     """
     type_id = row.connector_type_id if hasattr(row, "connector_type_id") else None
     if not isinstance(type_id, str):
@@ -383,12 +472,49 @@ def _required_of(config: dict[str, Any]) -> list[str]:
     return []
 
 
+def _merge_states(values: list[bool | None]) -> bool | None:
+    """Reduce the states a capability gathered under several spellings.
+
+    Confirmed-present wins (ANY live surface declaring it is the manifest's
+    contract), then confirmed-absent, then unknown — a capability is only
+    unknown when no surface took a position on it.
+    """
+    if any(v is True for v in values):
+        return True
+    if any(v is False for v in values):
+        return False
+    return None
+
+
 def decide_conformance(
     required_capabilities: list[str],
     registered: dict[str, bool | None],
 ) -> ConformanceDerivation:
-    """Derive the conformance state for one guardrail's claim (reuses T1)."""
-    return derive_conformance_state(required_capabilities, registered)
+    """Derive the conformance state for one guardrail's claim (reuses T1).
+
+    This is the single consumption point of the live manifest, so it is where
+    BOTH sides are reduced to the canonical bare ``Capability`` vocabulary
+    (FAR-1582). A claim and a manifest entry that name the same capability in
+    different accepted spellings (``github.read`` vs ``read``) therefore match
+    identically whether the bound connector is unrestricted or allowlisted.
+    Keys that are not capabilities (``sandbox.egress``, ``docker``, ...) pass
+    through untouched — their surfaces own their vocabulary.
+    """
+    if not required_capabilities:
+        return derive_conformance_state(required_capabilities, registered)
+
+    claims: list[str] = []
+    for capability in required_capabilities:
+        canonical = _canonical_claim(str(capability))
+        if canonical not in claims:
+            claims.append(canonical)
+
+    buckets: dict[str, list[bool | None]] = {}
+    for key, state in registered.items():
+        buckets.setdefault(_canonical_claim(str(key)), []).append(state)
+    canonical_registered = {key: _merge_states(states) for key, states in buckets.items()}
+
+    return derive_conformance_state(claims, canonical_registered)
 
 
 def worst_state(derivations: list[ConformanceDerivation]) -> ConformanceState:
