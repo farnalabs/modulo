@@ -45,19 +45,21 @@
         <Select
   :aria-label="$t('views.EnvironmentProfileForm.provider_type')"
   v-model="form.provider_type"
+  input-id="environmentprofileform-field-5"
   :placeholder="$t('views.EnvironmentProfileForm.select_provider_type')"
   data-testid="envprofile-form-provider"
   class="w-full"
-  :options="[{ value: 'local_docker', label: $t('views.EnvironmentProfileForm.local_docker') }, { value: 'e2b', label: $t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') }]"
+  :options="providerTypeOptions"
   option-label="label"
   option-value="value"
+  :pt="providerSelectPt"
 >
   <template #option="{ option }">
     <span :data-value="option.value">{{ option.label }}</span>
   </template>
 </Select>
-        <p v-if="submitted && !form.provider_type" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
-        <p v-if="formTierLabel" class="mt-1 text-xs text-muted-foreground">
+        <p v-if="submitted && !form.provider_type" id="envprofile-form-provider-error" class="mt-1 text-xs text-destructive">{{ $t('views.EnvironmentProfileForm.provider_type_is_required') }}</p>
+        <p v-if="formTierLabel" id="envprofile-form-tier-hint" role="status" class="mt-1 text-xs text-muted-foreground">
           <span
             class="mr-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
             data-testid="envprofile-form-tier-badge"
@@ -231,6 +233,29 @@ const loadedVisibility = ref('org')
 const formTierLabel = computed(() => {
   const tier = runnerTierForProvider(form.provider_type)
   return tier ? t(runnerTierLabelKey(tier)) : null
+})
+
+// Provider options offered by the form. The backend provider_type vocabulary
+// (FAR-1051) is local_docker / e2b / kubernetes; `local` and `runner_docker`
+// are system-seeded and not offered for manual creation.
+const providerTypeOptions = computed(() => [
+  { value: 'local_docker', label: t('views.EnvironmentProfileForm.local_docker') },
+  { value: 'e2b', label: t('views.EnvironmentProfileForm.e2b_sandboxed_cloud') },
+  { value: 'kubernetes', label: t('views.EnvironmentProfileForm.kubernetes_external') },
+])
+
+// PrimeVue Select only forwards fallthrough attrs (e.g. aria-describedby) to
+// its wrapper <div>, not to the focusable combobox — route the hints through
+// pt.label so assistive tech reads them with the control itself. Omit the key
+// entirely while no hint exists so no empty/undefined reference is emitted.
+const providerSelectPt = computed(() => {
+  const hintIds = [
+    submitted.value && !form.provider_type ? 'envprofile-form-provider-error' : null,
+    formTierLabel.value ? 'envprofile-form-tier-hint' : null,
+  ].filter(Boolean)
+  return hintIds.length
+    ? { label: { 'aria-describedby': hintIds.join(' ') } }
+    : { label: {} }
 })
 
 function toggleCapability(cap: string) {

@@ -615,6 +615,7 @@ export default {
       "select_provider_type": "Select provider type",
       "local_docker": "Bundled Runner (Docker)",
       "e2b_sandboxed_cloud": "External Runner (E2B)",
+      "kubernetes_external": "External Runner (Kubernetes)",
       "provider_type_is_required": "Provider type is required",
       "image_reference": "Image Reference",
       "image_reference_placeholder": "e.g. python:3.12-slim, node:20-bookworm",
