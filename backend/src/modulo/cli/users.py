@@ -37,6 +37,16 @@ Break-glass refusal: ``reset-password`` refuses break-glass accounts
 overwriting the hash breaks the break-glass CAS and orphans the
 last-resort recovery credential.
 
+Audit (FAR-1574): ``users add --admin`` escalates the seeded membership to
+``admin`` AFTER ``seed_modulo_user`` returns. That escalation — a privilege
+grant made with no HTTP principal in scope — is appended to the org's audit
+chain itself (``user_admin_escalated``, SYSTEM actor, ``actor_source=
+cli_admin_escalation``) through the seeder's shared
+``append_user_grant_audit`` helper, in the same transaction as the grant.
+The credential + initial membership the seeder creates are already recorded
+as ``user_seeded``, so the escalation is recorded only when the role
+actually changes — never twice.
+
 Residual token window (stated in the reset-password help): the reset and
 token-family blacklist kill refresh/rotation immediately, but a stolen
 access JWT stays valid until it expires — same as the admin reset route.
@@ -250,10 +260,20 @@ async def _add_user(url: str, email: str, password: str, as_admin: bool) -> str:
     The role REPORTED is the membership role actually stored after seeding —
     the seeder special-cases admin/admin@modulo.run to admin even without
     ``--admin``, so the flag alone must never decide the printed role.
+
+    FAR-1574: ``--admin`` is a SECOND privilege grant — it escalates the
+    membership ``seed_modulo_user`` just created, after the seeder returns.
+    That escalation records itself on the org's audit chain
+    (``user_admin_escalated``, SYSTEM actor, ``actor_source=
+    cli_admin_escalation``); the credential + initial membership stay covered
+    by the seeder's own ``user_seeded`` event. When the seeder ALREADY
+    granted admin (the admin/admin@modulo.run special case) nothing is
+    escalated, so nothing extra is recorded — a privilege grant is never
+    double-recorded.
     """
     from modulo.db.models.account import Account
     from modulo.db.models.org_membership import OrgMembership
-    from modulo.db.seed import seed_modulo_user
+    from modulo.db.seed import append_user_grant_audit, seed_modulo_user
 
     engine, maker = _engine_and_factory(url)
     try:
@@ -274,8 +294,26 @@ async def _add_user(url: str, email: str, password: str, as_admin: bool) -> str:
             ).scalar_one_or_none()
             if membership is None:
                 raise UserCliError(f"membership for {email} missing after creation")
-            if as_admin:
+            if as_admin and membership.role != "admin":
+                previous_role = membership.role
                 membership.role = "admin"
+                await append_user_grant_audit(
+                    session,
+                    org_id=org.id,
+                    event_type="user_admin_escalated",
+                    account_id=account.id,
+                    actor_source="cli_admin_escalation",
+                    log_key="cli.users.admin_escalation_audit_failed",
+                    payload={
+                        "summary": (
+                            f"User {email} escalated from {previous_role} to admin "
+                            f"in organisation '{org.name}' by 'modulo users add --admin'"
+                        ),
+                        "email": email,
+                        "role": "admin",
+                        "previous_role": previous_role,
+                    },
+                )
             return f"Created user {email} ({membership.role} in organisation '{org.name}')"
     finally:
         await engine.dispose()

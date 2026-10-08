@@ -7,6 +7,10 @@ tests/unit/db/test_seed.py — through the real command resolution path
 
 * creation reuses the promoted boot-seeder path (bcrypt hashes, membership),
 * ``--admin`` grants the admin role in the primary organisation,
+* the ``--admin`` escalation is recorded on the org audit chain as its own
+  event (``user_admin_escalated``, SYSTEM actor, ``actor_source=
+  cli_admin_escalation``) without duplicating the seeder's ``user_seeded``
+  record, and an audit failure never blocks the grant (FAR-1574),
 * the REPORTED role is the membership role actually stored (the seeder
   special-cases admin/admin@modulo.run to admin even without ``--admin``),
 * duplicate-user refusal and unknown-user reset failure (exit code 1),
@@ -34,6 +38,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from click.testing import CliRunner
@@ -261,6 +266,83 @@ class TestUsersAdd:
         assert result.exit_code == 0, result.output
         assert "Created user admin@modulo.run (admin in organisation 'Primary')" in result.output
         assert _account_role(seeded_db, "admin@modulo.run") == "admin"
+
+
+class TestUsersAddAdminEscalationAudit:
+    """FAR-1574: ``users add --admin`` escalates the seeded membership AFTER
+    the seeder returns — that privilege grant must leave a durable record of
+    its own, without double-recording what ``user_seeded`` already covers."""
+
+    @pytest.fixture
+    def audit_append_spy(self, monkeypatch: pytest.MonkeyPatch) -> Any:
+        """Intercept the shared in-transaction audit append.
+
+        The hermetic harness below creates only four tables, so the real
+        append would fail-open on a missing ``audit_events``; spying here
+        asserts the WIRING (event type, actor, payload) directly — the same
+        seam the seeder's own audit tests use.
+        """
+        spy = AsyncMock(return_value=MagicMock())
+        monkeypatch.setattr("modulo.core.audit_logger.append_audit_event", spy)
+        return spy
+
+    def _event_types(self, spy: Any) -> list[str]:
+        return [call.kwargs["event_type"] for call in spy.await_args_list]
+
+    def test_add_admin_records_the_escalation_separately_from_the_seed(
+        self, seeded_db: str, audit_append_spy: Any
+    ) -> None:
+        result = _invoke("add", "chief@example.com", "--admin", "--password", PASSWORD)
+        assert result.exit_code == 0, result.output
+
+        # Two events: the seed's own record, then the escalation.
+        assert self._event_types(audit_append_spy) == ["user_seeded", "user_admin_escalated"]
+
+        escalation = audit_append_spy.await_args_list[1].kwargs
+        assert escalation["actor_user_id"] is None
+        assert escalation["resource_type"] == "user"
+        assert escalation["resource_id"] is not None
+        payload = escalation["payload_json"]
+        assert payload["actor"] == "system"
+        assert payload["actor_source"] == "cli_admin_escalation"
+        assert payload["email"] == "chief@example.com"
+        assert payload["role"] == "admin"
+        assert payload["previous_role"] == "runner"
+        assert "escalated from runner to admin" in payload["summary"]
+        assert _account_role(seeded_db, "chief@example.com") == "admin"
+
+    def test_add_without_admin_records_no_escalation(self, seeded_db: str, audit_append_spy: Any) -> None:
+        result = _invoke("add", "ops@example.com", "--password", PASSWORD)
+        assert result.exit_code == 0, result.output
+
+        # Only the seeder's record — no privilege was granted by the CLI.
+        assert self._event_types(audit_append_spy) == ["user_seeded"]
+
+    def test_add_admin_never_double_records_the_seeder_admin_special_case(
+        self, seeded_db: str, audit_append_spy: Any
+    ) -> None:
+        # The seeder already grants admin for admin@modulo.run, so --admin
+        # escalates nothing: one event, the one that already records it.
+        result = _invoke("add", "admin@modulo.run", "--admin", "--password", PASSWORD)
+        assert result.exit_code == 0, result.output
+
+        assert self._event_types(audit_append_spy) == ["user_seeded"]
+        assert audit_append_spy.await_args_list[0].kwargs["payload_json"]["role"] == "admin"
+        assert _account_role(seeded_db, "admin@modulo.run") == "admin"
+
+    def test_escalation_audit_failure_never_blocks_the_grant(
+        self, seeded_db: str, audit_append_spy: Any, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Fail-open with a loud log (the same contract the seeder's append
+        # has): the grant is still made and the command still succeeds.
+        audit_append_spy.side_effect = RuntimeError("audit db down")
+
+        with caplog.at_level("ERROR"):
+            result = _invoke("add", "chief@example.com", "--admin", "--password", PASSWORD)
+
+        assert result.exit_code == 0, result.output
+        assert _account_role(seeded_db, "chief@example.com") == "admin"
+        assert any("cli.users.admin_escalation_audit_failed" in record.message for record in caplog.records)
 
 
 class TestUsersList:

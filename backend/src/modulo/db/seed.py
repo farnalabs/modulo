@@ -15,6 +15,12 @@ is the one ``db -> core`` seam this module carries, exempted in
 ``backend/.importlinter`` next to the four ``db.crud.* -> core.audit_logger``
 exemptions: the seed only invokes the append; audit-chain semantics stay in
 core.
+
+FAR-1574: that append helper (:func:`append_user_grant_audit`) is public
+because ``modulo users add --admin`` escalates the membership the seeder just
+created — a second privilege grant with its own honest ``actor_source``
+(``cli_admin_escalation``). The credential + initial membership stay covered
+by ``user_seeded``; the escalation records itself separately, never twice.
 """
 
 import asyncio
@@ -179,24 +185,29 @@ async def seed_modulo_users(session_factory: Callable[[], Any], modulo_users: st
             await seed_modulo_user(session, org, entry)
 
 
-async def _append_boot_user_audit(
+async def append_user_grant_audit(
     session: Any,
     *,
     org_id: uuid.UUID,
     event_type: str,
     account_id: uuid.UUID | None,
     payload: dict[str, Any],
+    actor_source: str = _SEED_ACTOR_SOURCE,
+    log_key: str = _SEED_AUDIT_LOG_KEY,
 ) -> None:
-    """Record a MODULO_USERS seed grant on the organisation's audit chain (FAR-1561).
+    """Record a user-credential / role grant on the organisation's audit chain.
 
     A seed entry creates a login credential and — for ``admin`` /
-    ``admin@modulo.run`` — the ``admin`` role, with no HTTP principal in scope.
-    The event therefore carries the SYSTEM actor plus an honest
-    ``actor_source`` (``boot_seed``), the same convention
-    ``core.audit_logger.background`` enforces for every other background write.
+    ``admin@modulo.run`` — the ``admin`` role, with no HTTP principal in
+    scope; ``modulo users add --admin`` escalates a seeded membership to
+    ``admin`` the same way (FAR-1574). Either way the event carries the
+    SYSTEM actor plus an honest ``actor_source`` (``boot_seed`` /
+    ``cli_admin_escalation``), the same convention
+    ``core.audit_logger.background`` enforces for every other background
+    write.
 
-    Appended IN the seeding transaction (the seam ``db.crud.*`` audit appends
-    use): the grant and its record commit atomically, and
+    Appended IN the caller's transaction (the seam ``db.crud.*`` audit
+    appends use): the grant and its record commit atomically, and
     ``append_audit_event`` isolates the append in a savepoint, so a failed
     record can never discard the grant it describes. ``set_rls_org`` runs
     first — ``audit_events`` carries the STRICT org-only RLS policy (the
@@ -205,6 +216,18 @@ async def _append_boot_user_audit(
 
     Fail-open with a loud log (the grant is already made; mirrors the admin
     create-user route): ``CancelledError`` always propagates.
+
+    Args:
+        session: The caller's session, inside an open transaction.
+        org_id: Owning organisation (bound as the RLS org context).
+        event_type: Chained-audit event type (``user_seeded`` /
+            ``user_rehashed`` / ``user_admin_escalated``).
+        account_id: The granted account, as the event's ``resource_id``.
+        payload: Event payload, applied after the SYSTEM-actor markers —
+            callers must not carry ``actor`` / ``actor_source`` keys of their
+            own; those are stamped by this helper.
+        actor_source: Which grant path caused the change.
+        log_key: Log key for an append failure.
     """
     from modulo.core.audit_logger import append_audit_event
     from modulo.core.audit_logger.labels import SYSTEM_ACTOR
@@ -218,13 +241,13 @@ async def _append_boot_user_audit(
             actor_user_id=None,
             resource_type="user",
             resource_id=account_id,
-            payload_json={"actor": SYSTEM_ACTOR, "actor_source": _SEED_ACTOR_SOURCE, **payload},
+            payload_json={"actor": SYSTEM_ACTOR, "actor_source": actor_source, **payload},
         )
     except asyncio.CancelledError:
         raise
     except Exception:
         _log.exception(
-            _SEED_AUDIT_LOG_KEY,
+            log_key,
             extra={"event_type": event_type, "org_id": str(org_id), "account_id": str(account_id)},
         )
 
@@ -278,7 +301,7 @@ async def seed_modulo_user(session: Any, org: Any, entry: str) -> None:
     )
     session.add(membership)
     _log.info("startup.user_seeded", extra={"email": email})
-    await _append_boot_user_audit(
+    await append_user_grant_audit(
         session,
         org_id=org.id,
         event_type="user_seeded",
@@ -327,7 +350,7 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
     # A rehash is also a privilege decision: the seeded password can ESCALATE
     # the account to ``admin`` (see ``admin_role`` above), so the credential
     # rotation and the role it landed on are recorded together (FAR-1561).
-    await _append_boot_user_audit(
+    await append_user_grant_audit(
         session,
         org_id=org.id,
         event_type="user_rehashed",
