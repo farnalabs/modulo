@@ -334,7 +334,6 @@ def _run_row_bytes(run: Run, node_output_bytes: int = 0) -> int:
     ``_RUN_PAYLOAD_BYTES`` comment for the documented asymmetry; the values
     agree only for simple ASCII payloads.
     """
-
     return (
         node_output_bytes
         + _json_bytes(run.cost_breakdown)
@@ -359,7 +358,6 @@ def _retention_conditions(
     match, while ``statuses`` (when given) is a whitelist to intersect — the
     purge passes ``TERMINAL_STATUSES`` so a request can never purge a live run.
     """
-
     conditions: list[Any] = []
     if org_id is not None:
         conditions.append(Run.organisation_id == org_id)
@@ -394,7 +392,6 @@ def _serialize_run(run: Run, *, checkpoint_count: int, checkpoint_bytes: int, bl
     ``run_node_outputs``, so these readers serve an
     absent-side shape for them — accepted, evidence is preserved elsewhere.
     """
-
     return {
         "id": str(run.id),
         "run_number": run.run_number,
@@ -447,7 +444,6 @@ async def _checkpoint_detail(
     clause landing in GROUP BY, see _CHECKPOINT_SIZE_SQL) behind a benign
     "table missing" message.
     """
-
     if not thread_ids:
         return {}, {}
     bytes_by_thread: dict[str, int] = {}
@@ -494,7 +490,6 @@ async def _select_run_page(
     offset: int,
 ) -> list[Run]:
     """Fetch one page of runs matching the retention filters."""
-
     stmt = (
         select(Run)
         .where(
@@ -552,7 +547,6 @@ async def list_retention_candidates(
       approximation (every failed component contributes 0), and the caller
       must annotate them rather than present an authoritative 0.
     """
-
     conditions = _retention_conditions(
         org_id=org_id,
         date_from=date_from,
@@ -838,7 +832,6 @@ async def iter_run_export(
     live in the quarantine table (ops SQL), so they export with absent blob
     sides — accepted, see :func:`_serialize_run`.
     """
-
     offset = 0
     while True:
         page = await _select_run_page(
@@ -915,7 +908,6 @@ async def purge_terminal_runs(
     ``purged_checkpoints`` counts checkpoint rows removed; ``freed_estimated_bytes``
     is the estimated reclaimable byte total of the deleted runs + checkpoints.
     """
-
     purged_runs = 0
     purged_checkpoints = 0
     freed_estimated_bytes = 0
@@ -1018,7 +1010,6 @@ async def purge_terminal_checkpoints(
     the number of terminal runs whose threads were swept, ``bytes_freed`` the
     pre-delete estimated byte total of those checkpoint rows.
     """
-
     cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
 
     checkpoints_purged = 0
@@ -1071,7 +1062,6 @@ async def _delete_checkpoints(
     missing table must not block the run purge itself — the runs are still
     reclaimed, and a log records that checkpoints could not be swept.
     """
-
     if not thread_ids:
         return
     params: dict[str, Any] = {"tids": thread_ids}
@@ -1106,7 +1096,6 @@ async def _delete_run_id_rows(session: AsyncSession, run_ids: list[Any]) -> None
     left with a dangling ``run_id``. Tables with ON DELETE CASCADE are handled
     by the database.
     """
-
     if not run_ids:
         return
     # These are ORM-mapped, so RLS (Postgres) and the generic tenant filter
@@ -1140,7 +1129,6 @@ async def _delete_quarantine_rows(session: AsyncSession, run_ids: list[Any]) -> 
     0192-quarantined legacy blobs; the delete stays live and the retention
     purge keeps reclaiming them.
     """
-
     if not run_ids:
         return
     try:
