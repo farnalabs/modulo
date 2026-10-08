@@ -2614,7 +2614,13 @@ export default {
       "no": "no",
       "no_fields_inferred": "No fields inferred.",
       "eg_issues_repositories_pullrequests": "e.g. issues, repositories, pull requests",
-      "eg_stateopensortupdatede": "e.g. state=open, sort=updated, desc"
+      "eg_stateopensortupdatede": "e.g. state=open, sort=updated, desc",
+      "raw_json": "raw JSON",
+      "failed_to_load_connectors": "Failed to load connectors: {error}",
+      "schema_inference_failed": "Schema inference failed: {error}",
+      "publish_failed": "Publish failed: {error}",
+      "publish_failed_no_response": "Publish failed: no response",
+      "schema_published": "Schema \"{name}\" published."
     },
     "ParameterSchemasView": {
       "title": "Parameter Schemas",
