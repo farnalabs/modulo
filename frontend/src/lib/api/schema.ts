@@ -18480,6 +18480,8 @@ export interface components {
              * @default none
              */
             channel: string;
+            /** Environment Profile Id */
+            environment_profile_id?: string | null;
             /** Graph Json */
             graph_json?: {
                 [key: string]: unknown;
@@ -18650,6 +18652,8 @@ export interface components {
              * @default none
              */
             channel: string;
+            /** Environment Profile Id */
+            environment_profile_id?: string | null;
         };
         /** SnapshotTagUpdate */
         SnapshotTagUpdate: {

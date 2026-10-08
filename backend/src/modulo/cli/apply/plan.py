@@ -106,6 +106,13 @@ def _pipeline_current_view(current: dict[str, Any], desired_view: dict[str, Any]
             # (or null); coerce so a UUID object and its string form hash alike.
             value = current.get(key)
             view[key] = None if value is None else str(value)
+        elif key == "environment_profile_id":
+            # FAR-1599: the binding hashes in the same UUID-string id-space as
+            # the owners — the desired side stringifies in managed_view, the
+            # current side arrives as the API's string (or null); the str()
+            # coercion defends against a UUID object in a test double.
+            value = current.get(key)
+            view[key] = None if value is None else str(value)
         else:
             view[key] = current.get(key)
     return view

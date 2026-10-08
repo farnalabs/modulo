@@ -4404,8 +4404,21 @@ class SnapshotResponse(BaseModel):
     created_kind: str = "run"
     draft: bool = False
     channel: str = "none"
+    # FAR-1599: the environment-profile binding frozen onto this snapshot
+    # (copied from the pipeline at snapshot creation, FAR-1558) — the value
+    # dispatch reads. Additive, nullable: null = unbound (default route).
+    # Legacy snapshots predate the column and serialise as null.
+    environment_profile_id: uuid.UUID | None = None
 
     model_config = {"from_attributes": True, "populate_by_name": True}
+
+    @field_validator("environment_profile_id", mode="before")
+    @classmethod
+    def _coerce_snapshot_environment_profile_id(cls, value: Any) -> Any:
+        # Read defensively (same treatment as PipelineResponse's binding
+        # validator): a partial stand-in that lacks the column serialises as
+        # "unbound" (None), never a validation failure.
+        return value if isinstance(value, uuid.UUID | str) else None
 
 
 class SnapshotDetailResponse(SnapshotResponse):
@@ -4480,6 +4493,10 @@ def _snapshot_to_response(s: Any) -> SnapshotResponse:
         created_kind=s.created_kind,
         draft=s.draft,
         channel=s.channel,
+        # FAR-1599: getattr — stand-ins predating the column lack the
+        # attribute entirely; the response validator then serialises the
+        # absent value as null (unbound).
+        environment_profile_id=getattr(s, "environment_profile_id", None),
     )
 
 
@@ -4520,6 +4537,9 @@ def _snapshot_to_detail_response(s: Any) -> SnapshotDetailResponse:
         default_autonomy_level=s.default_autonomy_level,
         max_autonomy_level=getattr(s, "max_autonomy_level", None),
         run_context_defaults=s.run_context_defaults,
+        # FAR-1599: same getattr treatment as the list builder — a stand-in
+        # predating the column reads as null (unbound).
+        environment_profile_id=getattr(s, "environment_profile_id", None),
     )
 
 

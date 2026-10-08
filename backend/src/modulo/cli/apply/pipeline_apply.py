@@ -296,6 +296,13 @@ def apply_pipelines(
     carries the key, keeping the pause/resume routes the single transition
     surface (they own the audit events and the resume-while-tripped 409 trap).
 
+    ``environment_profile_id`` (FAR-1599) is sent on PATCH only when DECLARED
+    (opt-in): a declared id binds, a declared null clears, an omitted key is
+    never sent. ``PipelineCreate`` has no such field, so a CREATED pipeline
+    binds through the follow-up PATCH (force-sent when the key is declared,
+    even without a graph). The server validates every write with the shared
+    FAR-1558 predicate; a refusal fails the entity with the API's message.
+
     Returns the pipeline name -> id map (current + created), consumed by the
     trigger phase to resolve (pipeline, name) identities. When a JUST-CREATED
     pipeline's apply fails (POST or the graph PATCH), the name is dropped
@@ -403,6 +410,22 @@ def apply_pipelines(
                 # clears the column back to "inherit the default".
                 if entity.manages_max_autonomy:
                     patch_payload["max_autonomy_level"] = entity.max_autonomy_level
+                # FAR-1599: the environment-profile binding is sent only when
+                # DECLARED (opt-in like the ceiling above): a DECLARED id binds,
+                # a DECLARED null clears the binding, and an omitted key is
+                # never sent so a UI/API-set binding survives untouched.
+                # PipelineCreate does not accept the field, so a CREATED
+                # pipeline binds through this PATCH (the condition below force-
+                # sends the PATCH when the config declares the key, even with
+                # no graph) — the server validates the binding with the shared
+                # FAR-1558 predicate and a refusal fails the entity loudly.
+                if entity.manages_environment_profile:
+                    # Stringify: the field parses to a uuid.UUID, but the wire
+                    # payload is JSON — send the id in the API's string space
+                    # (None serialises as the clearing null).
+                    patch_payload["environment_profile_id"] = (
+                        None if entity.environment_profile_id is None else str(entity.environment_profile_id)
+                    )
                 # FAR-1294: same opt-in gate as the create path. A DECLARED
                 # limit is always sent as a concrete int (the drift hash
                 # compares the key, so the write must be able to change it);
@@ -414,7 +437,10 @@ def apply_pipelines(
                     patch_payload["max_duration_seconds"] = entity.max_duration_seconds
                 if entity.graph is not None and graph is not None and graph_differs:
                     patch_payload["graph_json"] = graph
-                if status == "updated" or entity.graph is not None:
+                # FAR-1599: a create with a declared binding must PATCH even
+                # without a graph — PipelineCreate cannot carry
+                # environment_profile_id, so the bind rides the follow-up PATCH.
+                if status == "updated" or entity.graph is not None or entity.manages_environment_profile:
                     executor._patch(f"/pipelines/{pipeline_id}", patch_payload)
                 # FAR-1530: converge a declared run_enabled (only ever false)
                 # by POSTing the dedicated /pause route AFTER the field PATCH —

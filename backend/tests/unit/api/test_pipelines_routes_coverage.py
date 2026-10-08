@@ -1491,9 +1491,15 @@ def _make_snapshot(**overrides: object) -> MagicMock:
     s.model_backend_pins_json = []
     s.default_autonomy_level = None
     s.run_context_defaults = {}
+    # FAR-1599: set explicitly (a MagicMock child attribute would otherwise be
+    # an arbitrary object, not the stand-in's real binding). Unset → null.
+    s.environment_profile_id = None
     for key, value in overrides.items():
         setattr(s, key, value)
     return s
+
+
+_SNAP_ENV_PROFILE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000e1")
 
 
 def test_list_snapshots_unknown_pipeline_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
@@ -1526,6 +1532,45 @@ def test_list_snapshots_happy_path(client: tuple[TestClient, AsyncMock]) -> None
     body = resp.json()
     assert body["total"] == 1
     assert body["items"][0]["id"] == str(_SNAP_ID)
+
+
+def test_list_snapshots_exposes_environment_profile_id(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1599: a snapshot's frozen environment-profile binding is readable
+    through the list route (the field was settable but never surfaced)."""
+    http, _session = client
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(
+            f"{_PREFIX}list_snapshots",
+            new=AsyncMock(return_value=([_make_snapshot(environment_profile_id=_SNAP_ENV_PROFILE_ID)], 1)),
+        ),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["environment_profile_id"] == str(_SNAP_ENV_PROFILE_ID)
+
+
+def test_list_snapshots_unbound_binding_serialises_null(client: tuple[TestClient, AsyncMock]) -> None:
+    """An unbound snapshot (legacy rows / no binding) reads as null — never
+    omitted, never a validation failure."""
+    http, _session = client
+    with (
+        patch(f"{_PREFIX}get_pipeline", new=AsyncMock(return_value=_make_pipeline())),
+        patch(f"{_PREFIX}list_snapshots", new=AsyncMock(return_value=([_make_snapshot()], 1))),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["environment_profile_id"] is None
 
 
 def test_save_edit_snapshot_invalid_channel_returns_422(client: tuple[TestClient, AsyncMock]) -> None:
@@ -1616,6 +1661,25 @@ def test_get_snapshot_detail_happy_path(client: tuple[TestClient, AsyncMock]) ->
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["graph_json"] == {"nodes": [], "edges": []}
+
+
+def test_get_snapshot_detail_exposes_environment_profile_id(client: tuple[TestClient, AsyncMock]) -> None:
+    """FAR-1599: the detail response carries the snapshot's binding too."""
+    http, _session = client
+    with (
+        patch(
+            f"{_PREFIX}get_snapshot_detail",
+            new=AsyncMock(return_value=_make_snapshot(environment_profile_id=_SNAP_ENV_PROFILE_ID)),
+        ),
+    ):
+        _rls_started = _start_rls()
+        try:
+            resp = http.get(f"/api/v1/pipelines/{_PIPELINE_ID}/snapshots/{_SNAP_ID}")
+        finally:
+            _stop_all(_rls_started)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["environment_profile_id"] == str(_SNAP_ENV_PROFILE_ID)
 
 
 def test_tag_snapshot_unknown_returns_404(client: tuple[TestClient, AsyncMock]) -> None:

@@ -103,6 +103,10 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
     "set_pipeline_owners": "pipeline.update",
+    # FAR-1599: environment-profile binding - same permission key as the REST
+    # PATCH /pipelines/{id} that also sets it (the shared FAR-1558 predicate
+    # validates the binding on both surfaces).
+    "update_pipeline": "pipeline.update",
     "create_model_backend": "model_backend.create",
     "list_runs": "run.list",
     "get_run_evals": "run.evals",
