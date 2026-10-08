@@ -1529,7 +1529,7 @@ jobs:
           # For each pending PR, check whether its CI workflow run has concluded.
           # The collect step already identified this PR as CI-pending via
           # `gh run list --branch <branch> --workflow "CI: Fast Validation"`,
-          # so we use the same source (workflow run created_at + conclusion)
+          # so we use the same source (workflow run start time + conclusion)
           # rather than the unreliable check-runs API. Required behaviour
           # (Hopper spec):
           #   - No CI conclusion on the head SHA within 30 minutes →
@@ -1549,23 +1549,32 @@ jobs:
               [ -z "$PR_NUM" ] && continue
               CI_BRANCH=$(gh pr view "$PR_NUM" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
               [ -z "$CI_BRANCH" ] && continue
-              # Use the same source as the collect step: workflow run conclusion + createdAt
+              # Use the same source as the collect step: workflow run conclusion + status.
+              # Age the pending window from the CURRENT attempt's start (`startedAt`),
+              # not `createdAt`: createdAt is pinned to the run's first creation and
+              # does NOT advance on a re-run, so an actively-progressing attempt 2+
+              # was misreported as stalled once attempt 1's createdAt aged past 2h
+              # (2026-10-07: PR #1374's Test (Backend) was still running while its
+              # attempt-1 createdAt showed 188min). Fall back to createdAt only when
+              # startedAt is empty (a run queued but never picked up by a runner).
               CI_RUN=$(gh run list --branch "$CI_BRANCH" --workflow "CI: Fast Validation" --limit 1 \
-                --json conclusion,createdAt,status 2>/dev/null || echo "[]")
+                --json conclusion,createdAt,startedAt,status 2>/dev/null || echo "[]")
               CI_CONCLUSION=$(echo "$CI_RUN" | jq -r '.[0].conclusion // empty' 2>/dev/null || echo "")
               CI_CREATED=$(echo "$CI_RUN" | jq -r '.[0].createdAt // empty' 2>/dev/null || echo "")
+              CI_STARTED=$(echo "$CI_RUN" | jq -r '.[0].startedAt // empty' 2>/dev/null || echo "")
+              CI_SINCE="${CI_STARTED:-$CI_CREATED}"
               if [ -n "$CI_CONCLUSION" ]; then
                 echo "  PR #$PR_NUM: CI concluded ($CI_CONCLUSION) — not stalled"
                 continue
               fi
-              if [ -z "$CI_CREATED" ]; then
+              if [ -z "$CI_SINCE" ]; then
                 echo "  PR #$PR_NUM: no CI run found — skipping stall check"
                 continue
               fi
-              CI_EPOCH=$(date -u -d "$CI_CREATED" +%s 2>/dev/null || echo "$NOW")
+              CI_EPOCH=$(date -u -d "$CI_SINCE" +%s 2>/dev/null || echo "$NOW")
               AGE_S=$((NOW - CI_EPOCH))
               AGE_MIN=$((AGE_S / 60))
-              echo "  PR #$PR_NUM: CI pending for ${AGE_MIN}min (since $CI_CREATED)"
+              echo "  PR #$PR_NUM: CI pending for ${AGE_MIN}min (since $CI_SINCE)"
 
               if [ "$AGE_S" -gt 7200 ]; then
                 # >2 hours — hard fail + Linear comment

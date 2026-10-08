@@ -528,6 +528,33 @@ class TestGetEngine:
         finally:
             rsched._ENGINE = saved
 
+    def test_pool_recycle_from_settings_below_the_proxy_window(self) -> None:
+        """FAR-1524: pool_recycle comes from Settings.db_pool_recycle_seconds
+        and must stay strictly below the Fly HAProxy 30m session window
+        (1800 s) — never the old hardcoded 3600 s."""
+        import modulo.core.reports.scheduler as rsched
+
+        saved = rsched._ENGINE
+        try:
+            rsched._ENGINE = None
+            settings_mock = MagicMock()
+            settings_mock.modulo_db = "postgres"
+            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
+            settings_mock.db_pool_recycle_seconds = 1500
+            mock_engine = MagicMock()
+            with (
+                patch.object(rsched, "_ENGINE", None),
+                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
+                patch.object(rsched, "get_settings", return_value=settings_mock),
+            ):
+                _get_engine()
+            _, kwargs = mock_create.call_args
+            assert kwargs["pool_recycle"] == 1500
+            assert kwargs["pool_recycle"] < 1800
+            assert kwargs["pool_pre_ping"] is True
+        finally:
+            rsched._ENGINE = saved
+
     def test_translates_sslmode_require_onto_connect_args(self) -> None:
         import modulo.core.reports.scheduler as rsched
 

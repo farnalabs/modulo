@@ -230,20 +230,20 @@ import { watchDebounced, useIntervalFn } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import {
   fetchErrorGroups,
+  fetchInstanceErrorGroups,
   fetchSchedulerStarvation,
   type ErrorGroupSummary,
   type ErrorListResponse,
   type FetchErrorGroupsParams,
   type SchedulerStarvationResponse,
 } from '../lib/api/errors'
-import { api } from '../lib/api/client'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageTabs from "../components/PageTabs.vue"
 import { shortId } from '../utils/format'
-import { formatApiError, throwOnError } from "../lib/api/formatError"
+import { formatApiError } from "../lib/api/formatError"
 import { DataTable } from '../components/ui/data-table'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
@@ -300,11 +300,7 @@ watch([filterLevel, filterStatus, filterSource], () => {
 async function fetchGroups(): Promise<ErrorListResponse> {
   const params = buildParams()
   if (!isInstanceScope.value) return fetchErrorGroups(params)
-  return throwOnError(
-    await api.GET('/api/v1/errors/instance', {
-      params: { query: params as unknown as Record<string, unknown> },
-    }),
-  ) as ErrorListResponse
+  return fetchInstanceErrorGroups(params)
 }
 
 const { data: groupsData, loading, error, load: loadGroups } = useDataFetch<{ items: ErrorGroupSummary[]; total: number }>(

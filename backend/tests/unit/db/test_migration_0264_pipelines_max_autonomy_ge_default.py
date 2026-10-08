@@ -29,8 +29,9 @@ Lenses:
    0282_env_profiles_kubernetes chains onto 0281_org_api_keys_grants, and
    0283_runs_drop_unused_indexes chains onto 0282_env_profiles_kubernetes, and
    0285_system_audit_events chains onto 0284_add_rejected_run_status, and
-   0286_pipeline_run_state chains onto 0285_system_audit_events as the
-   single linear head (0259's test documents the run-up through 0284).
+   0286_pipeline_run_state chains onto 0285_system_audit_events, and
+   0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state as the
+   single linear head (0259's test documents the run-up through 0287).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -65,7 +66,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0286_pipeline_run_state"
+_HEAD_MIGRATION = "0287_team_rls_lifecycle_evals"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

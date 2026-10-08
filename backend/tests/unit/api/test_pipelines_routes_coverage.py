@@ -1175,6 +1175,31 @@ def test_pause_does_not_consider_the_circuit_breaker(client: tuple[TestClient, A
     assert resp.status_code == 200, resp.text
 
 
+@pytest.mark.parametrize("action", ["pause", "resume"])
+@pytest.mark.parametrize("role", ["runner", "viewer"])
+def test_run_state_actions_low_privilege_denied(
+    client: tuple[TestClient, AsyncMock],
+    role: str,
+    action: str,
+) -> None:
+    """POST /pipelines/{id}/{pause,resume} is ``pipeline.update`` (operator+).
+
+    Locks the "any-credential != any-role" guarantee structurally: the routes
+    accept an mk_ API key as well as a user JWT, but a low-privilege
+    credential (runner/viewer) must still be refused 403 at the org-role gate
+    rather than reach the state write.
+    """
+    http, _session = client
+    _install_auth(role)
+    try:
+        resp = http.post(f"/api/v1/pipelines/{_PIPELINE_ID}/{action}")
+    finally:
+        _install_auth("admin")
+
+    assert resp.status_code == 403, resp.text
+    assert "pipeline.update" in resp.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Clone
 # ---------------------------------------------------------------------------

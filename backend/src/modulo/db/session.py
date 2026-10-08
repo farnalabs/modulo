@@ -80,7 +80,10 @@ def _build_engine(
     a fail-closed SSL mode; ``prefer``/``allow`` are rejected at boot
     because asyncpg would silently downgrade them to plaintext). Pool sizing
     defaults to 20/10 unless overridden (the SAQ worker passes its
-    per-worker budget).
+    per-worker budget), and ``pool_recycle`` comes from
+    ``Settings.db_pool_recycle_seconds`` (default 1500s — always below the
+    Fly HAProxy 30m session window; FAR-1524) with ``pool_pre_ping`` kept
+    on as the checkout-time safety net.
     """
     settings = get_settings()
     db_type = settings.modulo_db.lower()
@@ -116,7 +119,15 @@ def _build_engine(
     if db_type != "sqlite":
         kw["pool_size"] = pool_size if pool_size is not None else 20
         kw["max_overflow"] = max_overflow if max_overflow is not None else 10
-        kw["pool_recycle"] = 3600
+        # FAR-1524: recycle must stay STRICTLY BELOW the Fly HAProxy
+        # session window in front of Postgres (``timeout client 30m`` =
+        # 1800s), or the proxy silently closes pooled connections before
+        # SQLAlchemy ever recycles them — checked-out connections crossing
+        # that window then die mid-operation (asyncpg
+        # ConnectionDoesNotExistError). Settings enforces ``< 1800``
+        # (fail-fast); pool_pre_ping below stays on as the checkout-time
+        # safety net for any connection that dies anyway.
+        kw["pool_recycle"] = settings.db_pool_recycle_seconds
         kw["pool_timeout"] = 30
 
     engine = create_async_engine(**kw)

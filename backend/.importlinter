@@ -109,6 +109,12 @@ ignore_imports =
     modulo.db.crud.pipeline -> modulo.core.audit_logger
     modulo.db.crud.pipeline_snapshot_versioning -> modulo.core.audit_logger
     modulo.db.session -> modulo.core.audit_logger.append_only
+    # FAR-1561 boot user seeding: the MODULO_USERS seeder appends a SYSTEM-actor
+    # audit event for the account + admin role grant it creates (same narrow
+    # cross-boundary category as the db.crud.* audit exemptions above - the DB
+    # layer only invokes the append; audit-chain semantics stay in core).
+    modulo.db.seed -> modulo.core.audit_logger
+    modulo.db.seed -> modulo.core.audit_logger.labels
     # FAR-208 guardrails: the ingestion-edge interception lives in create_run
     # (the single chokepoint for all run-creation dispatch paths), so the DB
     # layer is the ONLY caller of the core guardrail pass. The mapping is a

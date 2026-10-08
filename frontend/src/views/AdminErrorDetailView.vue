@@ -261,14 +261,14 @@ import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowLeft, ChevronRight } from '@lucide/vue'
-import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail, type ErrorEventListResponse } from '../lib/api/errors'
+import { fetchErrorGroup, updateErrorGroup, fetchErrorGroupEvents, fetchInstanceErrorGroup, fetchInstanceErrorGroupEvents, type ErrorGroupDetail, type ErrorEventDetail, type ErrorEventListResponse } from '../lib/api/errors'
 import { api } from '../lib/api/client'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { useDataFetch } from '../composables/useDataFetch'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import BackLink from '../components/BackLink.vue'
 import FeatureGate from '../components/FeatureGate.vue'
-import { formatApiError, throwOnError } from '../lib/api/formatError'
+import { formatApiError } from '../lib/api/formatError'
 import { shortId } from '../utils/format'
 import Select from '../components/shared/AppSelect.vue'
 
@@ -300,11 +300,7 @@ const eventsLimit = 20
 
 async function fetchDetail(): Promise<ErrorGroupDetail> {
   if (!isInstanceScope) return fetchErrorGroup(errorId)
-  return throwOnError(
-    await api.GET('/api/v1/errors/instance/{error_id}', {
-      params: { path: { error_id: errorId } },
-    }),
-  ) as ErrorGroupDetail
+  return fetchInstanceErrorGroup(errorId)
 }
 
 const { data: groupData, loading, error, load: loadDetail } = useDataFetch(
@@ -373,11 +369,7 @@ async function loadEvents(offset?: number) {
   if (offset !== undefined) eventsOffset.value = offset
   try {
     const data: ErrorEventListResponse = isInstanceScope
-      ? (throwOnError(
-          await api.GET('/api/v1/errors/instance/{error_id}/events', {
-            params: { path: { error_id: errorId }, query: { limit: eventsLimit, offset: eventsOffset.value } },
-          }),
-        ) as ErrorEventListResponse)
+      ? await fetchInstanceErrorGroupEvents(errorId, { limit: eventsLimit, offset: eventsOffset.value })
       : await fetchErrorGroupEvents(errorId, { limit: eventsLimit, offset: eventsOffset.value })
     events.value = data.items
     eventsTotal.value = data.total

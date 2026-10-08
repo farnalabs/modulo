@@ -47,3 +47,14 @@ Feature: Cross-Team Isolation
     And user "alice" is a member of team "design"
     When user "alice" requests the pipeline list
     Then the response total count does not include team-private pipelines
+
+  # Lifecycle-map team isolation is deliberately NOT asserted in this feature:
+  # the step definitions here filter an in-memory dict with no database behind
+  # it, so such a scenario passes even with the whole change reverted. The real
+  # coverage is:
+  #   * tests/integration/test_rls_isolation.py::
+  #     test_lifecycle_and_eval_tables_team_rls_enforcement — the DB policy:
+  #     a member sees team + org rows, a cross-team non-member sees only the
+  #     org row, the execution context sees both;
+  #   * tests/unit/api/test_lifecycle_maps_routes.py — the request-time route
+  #     gate: non-member 403, member 200, non-admin restore 200.

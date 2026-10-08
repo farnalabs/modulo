@@ -1,0 +1,91 @@
+# Self-asserting pytest-BDD step baseline (FAR-1578).
+#
+# BDD step functions that fabricate the HTTP response/status they later
+# assert on instead of driving the real route; they are PRE-EXISTING false
+# green tests the FAR-1578 sweep rewrites file by file. Generated, never
+# hand-edited. Regenerate with:
+#
+#   cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py
+#
+# This list can only SHRINK:
+#   * test_no_self_asserting_bdd_step_responses fails on any step NOT listed
+#     here (a NEW self-asserting step), and
+#   * test_self_asserting_bdd_baseline_has_no_stale_entries fails when a
+#     listed step is fixed but not removed from the baseline.
+#
+# Entry format: <path relative to backend/tests>:<step-function-name>
+bdd/steps/test_admin_override.py:bulk_reassign
+bdd/steps/test_admin_override.py:delete_pipeline
+bdd/steps/test_admin_override.py:reassign_pipeline
+bdd/steps/test_admin_override.py:request_connector
+bdd/steps/test_admin_override.py:request_pipeline
+bdd/steps/test_admin_override.py:request_pipeline_list
+bdd/steps/test_assistant.py:check_assistant_access
+bdd/steps/test_assistant.py:llm_emits_sequence
+bdd/steps/test_assistant.py:llm_emits_tool_call
+bdd/steps/test_auth.py:step_create_api_key
+bdd/steps/test_auth.py:step_list_api_keys
+bdd/steps/test_auth.py:step_revoke_api_key
+bdd/steps/test_auth.py:step_wrong_api_key_request
+bdd/steps/test_connectors.py:get_connector_health
+bdd/steps/test_connectors.py:step_infer_schema
+bdd/steps/test_convert_to_agent_steps.py:pipeline_saves_successfully
+bdd/steps/test_cross_team_isolation.py:bind_cross_team_connector
+bdd/steps/test_cross_team_isolation.py:i_view_pipelines
+bdd/steps/test_cross_team_isolation.py:user_requests_connector
+bdd/steps/test_cross_team_isolation.py:user_requests_pipeline_list
+bdd/steps/test_error_tracking.py:create_11th_rule
+bdd/steps/test_error_tracking.py:create_notification_rule
+bdd/steps/test_error_tracking.py:get_nonexistent_group
+bdd/steps/test_eval.py:eval_run_completes
+bdd/steps/test_eval.py:navigate_to_eval_results
+bdd/steps/test_eval.py:step_create_eval_def
+bdd/steps/test_eval.py:step_delete_eval_def
+bdd/steps/test_eval.py:step_list_evals
+bdd/steps/test_eval.py:step_update_eval_def
+bdd/steps/test_eval.py:trigger_eval_run
+bdd/steps/test_hitl.py:post_approve_decision
+bdd/steps/test_hitl.py:post_deliver_manual_expired
+bdd/steps/test_hitl.py:post_deliver_manual_no_token
+bdd/steps/test_hitl.py:submit_manual_output_missing
+bdd/steps/test_model_backends.py:delete_model_backend_by_id
+bdd/steps/test_model_backends.py:get_list_model_backends
+bdd/steps/test_model_backends.py:get_model_backend_by_id
+bdd/steps/test_model_backends.py:patch_model_backend_api_key
+bdd/steps/test_model_backends.py:patch_model_backend_name_model
+bdd/steps/test_model_backends.py:post_create_model_backend
+bdd/steps/test_model_backends.py:post_create_model_backend_duplicate
+bdd/steps/test_orgs.py:get_onboarding_status
+bdd/steps/test_orgs.py:get_onboarding_step
+bdd/steps/test_orgs.py:mark_all_steps_complete
+bdd/steps/test_orgs.py:post_onboarding_step
+bdd/steps/test_personas.py:add_new_node_between
+bdd/steps/test_personas.py:alice_create_connector_instance
+bdd/steps/test_personas.py:alice_update_connector_binding
+bdd/steps/test_personas.py:approve_gate
+bdd/steps/test_personas.py:ci_job_posts_run
+bdd/steps/test_personas.py:configure_github_connector
+bdd/steps/test_personas.py:copy_workflow_to_workspace
+bdd/steps/test_personas.py:export_yaml_bundle
+bdd/steps/test_personas.py:import_bundle_other_instance
+bdd/steps/test_personas.py:jordan_copy_workflow_to_workspace
+bdd/steps/test_personas.py:jordan_import_bundle
+bdd/steps/test_personas.py:jordan_search_library
+bdd/steps/test_personas.py:jordan_webhook_trigger_fires
+bdd/steps/test_personas.py:resume_run
+bdd/steps/test_personas.py:run_completes_successfully
+bdd/steps/test_personas.py:run_status_becomes_failed
+bdd/steps/test_personas.py:trigger_manual_run
+bdd/steps/test_personas.py:trigger_run
+bdd/steps/test_personas.py:view_run_detail
+bdd/steps/test_revert_to_manual_steps.py:pipeline_saves_successfully
+bdd/steps/test_stale_jwt_revocation.py:user_attempts_claim
+bdd/steps/test_stale_jwt_revocation.py:user_requests_pipeline
+bdd/steps/test_stale_jwt_revocation.py:user_uses_old_jwt
+bdd/steps/test_team_hitl_review.py:mcp_attempts_approve
+bdd/steps/test_team_hitl_review.py:request_gate_context
+bdd/steps/test_team_hitl_review.py:user_approves_gate
+bdd/steps/test_team_hitl_review.py:user_claims_gate
+bdd/steps/test_team_pipeline_visibility.py:create_team_pipeline
+bdd/steps/test_view_as_team_non_admin_rejected.py:get_pipelines_with_view_as_team
+bdd/steps/test_view_as_team_non_admin_rejected.py:get_viewmodel_with_view_as_team

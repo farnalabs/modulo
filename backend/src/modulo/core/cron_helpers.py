@@ -651,6 +651,12 @@ def _get_system_engine() -> AsyncEngine:
             _SYSTEM_ENGINE = create_async_engine(
                 system_url,
                 pool_pre_ping=True,
+                # FAR-1524: settings-driven recycle window, strictly below the
+                # Fly HAProxy 30m session timeout — without it this pooled
+                # system engine never recycled by age at all (connections
+                # could outlive the proxy window indefinitely). Same contract
+                # as db.session._build_engine / saq_worker's system engine.
+                pool_recycle=settings.db_pool_recycle_seconds,
                 connect_args=system_connect_args,
             )
         else:

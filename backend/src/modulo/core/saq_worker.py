@@ -729,6 +729,16 @@ async def fire_suite_run_trigger(
         pipeline_id=uuid.UUID(pipeline_id),
     )
     if result.get("status") == "fired" and result.get("suite_run_id"):
+        # FAR-1561: the SuiteRun row is committed by now (the helper returns
+        # from inside its transaction) — record the privilege-equivalent fact
+        # that a new eval run was created BEFORE enqueueing its execution, so a
+        # Redis/SAQ outage still leaves `created` on the org's audit chain.
+        await _record_suite_run_created_audit(
+            result["suite_run_id"],
+            org_id=org_id,
+            trigger_id=trigger_id,
+            pipeline_id=pipeline_id,
+        )
         try:
             await _enqueue_suite_run_execution(result["suite_run_id"], org_id)
             result["dispatched"] = "enqueued"
@@ -747,6 +757,77 @@ async def fire_suite_run_trigger(
             await _fail_suite_run_on_enqueue_error(result["suite_run_id"], org_id)
             result["dispatched"] = "enqueue_failed"
     return result
+
+
+async def _record_suite_run_created_audit(
+    suite_run_id: str,
+    *,
+    org_id: str,
+    trigger_id: str,
+    pipeline_id: str,
+) -> None:
+    """Record the freshly-committed ``pending`` SuiteRun (FAR-1561).
+
+    Runs after ``cron_helpers.fire_suite_run_trigger`` returned — i.e. after
+    the creation transaction COMMITTED — and the shared helper re-selects the
+    row before appending (phantom-event guard). Fail-open: an audit failure is
+    logged by the helper and never fails the fire job.
+    """
+    from modulo.core.audit_logger.background import SUITE_RUN_PENDING_STATES, record_suite_run_audit
+
+    await record_suite_run_audit(
+        _make_session_factory(),
+        suite_run_id=uuid.UUID(suite_run_id),
+        org_id=uuid.UUID(org_id),
+        event_type="suite_run_created",
+        expected_states=SUITE_RUN_PENDING_STATES,
+        actor_source="fire_suite_run_trigger",
+        log_key="saq.fire_suite_run_trigger.audit_failed",
+        summary_prefix="SuiteRun created by",
+        payload_json={"trigger_id": trigger_id, "pipeline_id": pipeline_id},
+    )
+
+
+async def _record_suite_run_execution_audits(
+    factory: Any,
+    suite_run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> None:
+    """Record the start + terminal outcome of a SuiteRun execution (FAR-1561).
+
+    Called AFTER the execution transaction committed (both the success path and
+    the re-persisted-failure path), never inside it: an event written before the
+    COMMIT could describe a transition the rollback then discarded. The helper
+    re-selects the row and applies the phantom-event guard — ``started`` only
+    lands when the run is no longer ``pending``, ``completed`` only when it is
+    terminal. Fail-open: never raises except ``CancelledError``.
+    """
+    from modulo.core.audit_logger.background import (
+        SUITE_RUN_NON_PENDING_STATES,
+        SUITE_RUN_TERMINAL_STATES,
+        record_suite_run_audit,
+    )
+
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=suite_run_id,
+        org_id=org_id,
+        event_type="suite_run_started",
+        expected_states=SUITE_RUN_NON_PENDING_STATES,
+        actor_source="execute_suite_run",
+        log_key="saq.execute_suite_run.audit_failed",
+        summary_prefix="SuiteRun started by",
+    )
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=suite_run_id,
+        org_id=org_id,
+        event_type="suite_run_completed",
+        expected_states=SUITE_RUN_TERMINAL_STATES,
+        actor_source="execute_suite_run",
+        log_key="saq.execute_suite_run.audit_failed",
+        summary_prefix="SuiteRun terminalised by",
+    )
 
 
 async def _fail_suite_run_on_enqueue_error(suite_run_id: str, org_id: str) -> None:
@@ -783,6 +864,24 @@ async def _fail_suite_run_on_enqueue_error(suite_run_id: str, org_id: str) -> No
         raise
     except Exception:
         _log.exception("fire_suite_run_trigger: failed to terminalise suite_run %s after enqueue error", rid)
+        return
+
+    # FAR-1561: the ``failed`` transition above COMMITTED (the missing/cross-org
+    # branch returns earlier), so the terminal outcome is re-selected and
+    # recorded here — post-commit, with the phantom-event guard. Fail-open.
+    from modulo.core.audit_logger.background import SUITE_RUN_TERMINAL_STATES, record_suite_run_audit
+
+    await record_suite_run_audit(
+        factory,
+        suite_run_id=rid,
+        org_id=oid,
+        event_type="suite_run_completed",
+        expected_states=SUITE_RUN_TERMINAL_STATES,
+        actor_source="fire_suite_run_trigger",
+        log_key="saq.fire_suite_run_trigger.audit_failed",
+        summary_prefix="SuiteRun terminalised by",
+        payload_json={"reason": "enqueue_failed"},
+    )
 
 
 async def _enqueue_suite_run_execution(suite_run_id: str, org_id: str) -> str | None:
@@ -903,6 +1002,11 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
             "saq.execute_suite_run.done",
             extra={"suite_run_id": str(rid), "state": stats.get("state"), "org": str(oid)},
         )
+        # FAR-1561: the execution transaction above is COMMITTED by now, so the
+        # pending -> running -> terminal transitions are durable facts worth
+        # recording. Post-commit (never inside the block) + re-select guard: an
+        # event written before COMMIT would survive a rollback as a phantom.
+        await _record_suite_run_execution_audits(factory, rid, oid)
         return stats
     except asyncio.CancelledError:
         raise
@@ -918,6 +1022,10 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
         # the failure in a FRESH session/transaction here so it survives the
         # rollback, then re-raise for the after_process sink.
         await _persist_suite_run_execution_failure(factory, rid, oid, exc)
+        # The re-persisted ``failed`` state is committed in its own transaction —
+        # record it here too (FAR-1561); the re-select guard skips cleanly when
+        # even that persist failed and the run is still ``pending``.
+        await _record_suite_run_execution_audits(factory, rid, oid)
         raise
 
 
@@ -2071,6 +2179,12 @@ def _get_system_async_engine() -> AsyncEngine:
                 pool_pre_ping=True,
                 pool_size=effective_pool,
                 max_overflow=0,
+                # FAR-1524: settings-driven recycle window, strictly below the
+                # Fly HAProxy 30m session timeout — without it this pooled
+                # system engine never recycled by age at all (connections
+                # could outlive the proxy window indefinitely). Same contract
+                # as db.session._build_engine.
+                pool_recycle=settings.db_pool_recycle_seconds,
                 connect_args=_system_connect_args,
             )
         else:

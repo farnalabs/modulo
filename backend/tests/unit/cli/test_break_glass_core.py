@@ -45,6 +45,7 @@ def _make_settings() -> SimpleNamespace:
         modulo_break_glass_standby_secret="s" * 32,
         modulo_break_glass_ttl_minutes=60,
         modulo_break_glass_max_ttl_minutes=120,
+        db_pool_recycle_seconds=1500,
     )
 
 
@@ -511,9 +512,38 @@ class TestEngineFactory:
         engine_one = bg.get_break_glass_engine(_make_settings())
         engine_two = bg.get_break_glass_engine(_make_settings())
         assert engine_one is engine_two
-        other = SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@other:5432/db")
+        other = SimpleNamespace(
+            modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@other:5432/db",
+            db_pool_recycle_seconds=1500,
+        )
         engine_other = bg.get_break_glass_engine(other)
         assert engine_other is not engine_one
+
+    def test_engine_recycle_from_settings_below_the_proxy_window(self) -> None:
+        """FAR-1524: the module-cached break-glass engine takes pool_recycle
+        from Settings.db_pool_recycle_seconds and must stay strictly below
+        the Fly HAProxy 30m session window (1800 s)."""
+        import modulo.cli.break_glass as bg
+
+        saved_engine = bg._bg_engine
+        saved_url = bg._bg_engine_url
+        try:
+            bg._bg_engine = None
+            bg._bg_engine_url = None
+            settings = SimpleNamespace(
+                modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db",
+                db_pool_recycle_seconds=1500,
+            )
+            with patch.object(bg, "create_async_engine", return_value=MagicMock()) as mock_create:
+                assert bg.get_break_glass_engine(settings) is mock_create.return_value
+
+            kwargs = mock_create.call_args.kwargs
+            assert kwargs["pool_recycle"] == 1500
+            assert kwargs["pool_recycle"] < 1800
+            assert kwargs["pool_pre_ping"] is True
+        finally:
+            bg._bg_engine = saved_engine
+            bg._bg_engine_url = saved_url
 
     def test_engine_translates_sslmode_for_tls_deploy(self) -> None:
         """FAR-1440: a ``?sslmode=require`` break-glass URL must not be forced
@@ -526,7 +556,8 @@ class TestEngineFactory:
             bg._bg_engine = None
             bg._bg_engine_url = None
             settings = SimpleNamespace(
-                modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require"
+                modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require",
+                db_pool_recycle_seconds=1500,
             )
             mock_engine = MagicMock()
             with patch.object(bg, "create_async_engine", return_value=mock_engine) as mock_create:
@@ -574,7 +605,12 @@ class TestEngineSslPosture:
     ) -> None:
         bg = self._isolate(monkeypatch)
         with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
-            engine = bg.get_break_glass_engine(SimpleNamespace(modulo_break_glass_database_url=url))
+            engine = bg.get_break_glass_engine(
+                SimpleNamespace(
+                    modulo_break_glass_database_url=url,
+                    db_pool_recycle_seconds=1500,
+                )
+            )
 
         assert engine is create.return_value
         _, kwargs = create.call_args
@@ -585,10 +621,16 @@ class TestEngineSslPosture:
         bg = self._isolate(monkeypatch)
         with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
             engine = bg.get_break_glass_engine(
-                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require")
+                SimpleNamespace(
+                    modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require",
+                    db_pool_recycle_seconds=1500,
+                )
             )
             cached = bg.get_break_glass_engine(
-                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require")
+                SimpleNamespace(
+                    modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=require",
+                    db_pool_recycle_seconds=1500,
+                )
             )
         assert engine is cached
         create.assert_called_once()
@@ -600,7 +642,10 @@ class TestEngineSslPosture:
         bg = self._isolate(monkeypatch)
         with patch.object(bg, "create_async_engine") as create, pytest.raises(ValueError, match="sslmode"):
             bg.get_break_glass_engine(
-                SimpleNamespace(modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=prefer")
+                SimpleNamespace(
+                    modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@h:5432/db?sslmode=prefer",
+                    db_pool_recycle_seconds=1500,
+                )
             )
         create.assert_not_called()
         # Fail-closed leaves no engine cached — the next invocation raises again.
@@ -610,7 +655,10 @@ class TestEngineSslPosture:
         bg = self._isolate(monkeypatch)
         with patch.object(bg, "create_async_engine", return_value=MagicMock()) as create:
             engine = bg.get_break_glass_engine(
-                SimpleNamespace(modulo_break_glass_database_url="sqlite+aiosqlite:///tmp/breakglass.db")
+                SimpleNamespace(
+                    modulo_break_glass_database_url="sqlite+aiosqlite:///tmp/breakglass.db",
+                    db_pool_recycle_seconds=1500,
+                )
             )
         assert engine is create.return_value
         _, kwargs = create.call_args

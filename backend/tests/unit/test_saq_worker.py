@@ -2527,6 +2527,13 @@ class TestFireSuiteRunTriggerEnqueueFailure:
             patch.object(sw, "_make_session_factory", return_value=factory),
             patch("modulo.core.eval_engine.execute_suite_run._fail_run", side_effect=fake_fail_run),
             patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock),
+            # FAR-1561: creation + the enqueue-failure terminalisation are both
+            # recorded through the shared background helper.
+            patch(
+                "modulo.core.audit_logger.background.record_suite_run_audit",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as record_audit,
         ):
             result = await sw.fire_suite_run_trigger(
                 {},
@@ -2542,6 +2549,13 @@ class TestFireSuiteRunTriggerEnqueueFailure:
         assert fail_calls, "pending SuiteRun must be terminalised on enqueue failure"
         assert fail_calls[0][0] is run
         assert "enqueue" in fail_calls[0][1].lower()
+
+        # FAR-1561 audit wiring: `created` (before enqueue) then the
+        # enqueue-failure `completed`, both with the fire job as actor source.
+        events = [call.kwargs["event_type"] for call in record_audit.await_args_list]
+        assert events == ["suite_run_created", "suite_run_completed"]
+        assert record_audit.await_args_list[0].kwargs["actor_source"] == "fire_suite_run_trigger"
+        assert record_audit.await_args_list[1].kwargs["payload_json"] == {"reason": "enqueue_failed"}
 
     @pytest.mark.asyncio
     async def test_enqueue_success_marks_dispatched(self) -> None:
@@ -2564,6 +2578,12 @@ class TestFireSuiteRunTriggerEnqueueFailure:
                 return_value=fired,
             ),
             patch.object(sw, "_enqueue_suite_run_execution", side_effect=fake_enqueue),
+            patch.object(sw, "_make_session_factory", return_value=MagicMock()),
+            patch(
+                "modulo.core.audit_logger.background.record_suite_run_audit",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as record_audit,
         ):
             result = await sw.fire_suite_run_trigger(
                 {},
@@ -2574,3 +2594,31 @@ class TestFireSuiteRunTriggerEnqueueFailure:
 
         assert result["dispatched"] == "enqueued"
         assert enqueue_calls == [(suite_run_id, org_id)]
+        # FAR-1561: the committed `pending` SuiteRun is recorded BEFORE enqueue.
+        record_audit.assert_awaited_once()
+        kwargs = record_audit.await_args.kwargs
+        assert kwargs["event_type"] == "suite_run_created"
+        assert kwargs["suite_run_id"] == UUID(suite_run_id)
+        assert kwargs["org_id"] == UUID(org_id)
+        assert kwargs["actor_source"] == "fire_suite_run_trigger"
+        assert kwargs["payload_json"]["trigger_id"] == trigger_id
+        assert kwargs["payload_json"]["pipeline_id"] == pipeline_id
+
+    @pytest.mark.asyncio
+    async def test_terminalise_failure_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        """If the terminalisation transaction itself fails (DB down), the fire
+        job must still return cleanly — the error is logged, never propagated
+        (re-raising would retry the fire and duplicate the SuiteRun)."""
+        factory_cm = MagicMock()
+        factory_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
+        factory_cm.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=factory_cm)
+
+        with (
+            patch.object(sw, "_make_session_factory", return_value=factory),
+            caplog.at_level(logging.ERROR, logger="modulo.core.saq_worker"),
+        ):
+            # Must return without raising.
+            await sw._fail_suite_run_on_enqueue_error(_UUID_1, _UUID_ORG)
+
+        assert any("failed to terminalise suite_run" in record.message for record in caplog.records)
