@@ -58,6 +58,43 @@ Feature: Cost Controls
     Then the circuit breaker is reset
     And new runs are allowed
 
+  # ── Threshold change permission rule (FAR-1184: raise/clear needs
+  #    cost.manage; lowering/setting keeps pipeline.update) ──────────────────
+
+  Scenario: Operator lowering the circuit breaker threshold succeeds
+    Given I am authenticated as an operator in org "acme"
+    And pipeline "data-pipeline" has a circuit breaker threshold of $100.00
+    When I PATCH /api/v1/pipelines/20000000-0000-0000-0000-000000000001 with circuit_breaker_threshold $50.00
+    Then the response status is 200
+    And the update pipeline call received circuit_breaker_threshold 50.0
+    And the threshold change denial audit was not written
+
+  Scenario Outline: Operator <change> of the circuit breaker threshold is denied
+    Given I am authenticated as an operator in org "acme"
+    And pipeline "data-pipeline" has a circuit breaker threshold of $50.00
+    When I PATCH /api/v1/pipelines/20000000-0000-0000-0000-000000000001 with circuit_breaker_threshold <new_value>
+    Then the response status is 403
+    And the error detail mentions "cost.manage"
+    And the audit event "pipeline.circuit_breaker_threshold_change_denied" was written
+    And the update pipeline call was not made
+
+    Examples:
+      | change  | new_value |
+      | raising  | $100.00   |
+      | clearing | null      |
+
+  Scenario Outline: Org admin <change> of the circuit breaker threshold succeeds
+    Given pipeline "data-pipeline" has a circuit breaker threshold of $50.00
+    When I PATCH /api/v1/pipelines/20000000-0000-0000-0000-000000000001 with circuit_breaker_threshold <new_value>
+    Then the response status is 200
+    And the update pipeline call received circuit_breaker_threshold <expected>
+    And the threshold change denial audit was not written
+
+    Examples:
+      | change  | new_value | expected |
+      | raising  | $100.00   | 100.0    |
+      | clearing | null      | null     |
+
   # ── Admin API (implemented) ───────────────────────────────────────────────
 
   Scenario: Admin sets org spend limit
