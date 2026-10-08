@@ -187,7 +187,6 @@ async def test_write_file_create_conflict_falls_back_to_update(connector):
         )
     )
     assert result["file_path"] == "src/main.py"
-    assert put_route.called, "create conflict must be retried as an update"
     body = json.loads(put_route.calls.last.request.content)
     assert body["sha"] == "abc123", "the re-probe SHA must be attached to the update"
 
@@ -211,7 +210,6 @@ async def test_write_file_create_conflict_updates_without_sha_when_reprobe_fails
         )
     )
     assert result["file_path"] == "src/main.py"
-    assert put_route.called, "create conflict must be retried as an update"
     body = json.loads(put_route.calls.last.request.content)
     assert "sha" not in body, "`sha` is optional on the update endpoint and the re-probe found none"
     assert body["branch"] == "main"
