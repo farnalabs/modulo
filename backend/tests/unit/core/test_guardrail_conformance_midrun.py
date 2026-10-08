@@ -497,8 +497,8 @@ def test_canonical_capability_list_non_list_is_empty() -> None:
     routes only ``isinstance(allowed, list)`` here, but the helper must still
     handle a malformed value fail-closed rather than raise.
     """
-    assert _canonical_capability_list("read") == set()
-    assert _canonical_capability_list(None) == set()
+    assert not _canonical_capability_list("read")
+    assert not _canonical_capability_list(None)
 
 
 def test_canonical_capability_list_drops_non_string_and_non_capability(caplog) -> None:
