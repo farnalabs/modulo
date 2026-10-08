@@ -699,9 +699,14 @@ async def connector_health_endpoint(
             # connector's allowed_operations, not a transport/upstream failure.
             # Report it distinctly (403) so it can never be mistaken for — or
             # hidden behind — the generic 502 that masks a real connector
-            # failure.
-            logger.warning(
-                "connectors.connector_health_endpoint.denied: %s",
+            # failure. ConnectorPermissionError is a SHARED type: it is raised
+            # both by ``ConnectorACL.check`` (via the hub's traced wrapper) and
+            # by connectors' own guards (e.g. the shell connector), so this arm
+            # logs the full traceback + connector id rather than a bare
+            # warning, matching the sibling ``ConnectorDecryptError`` arm.
+            logger.exception(
+                "connectors.connector_health_endpoint.denied connector_id=%s: %s",
+                connector_id,
                 exc,
             )
             raise HTTPException(

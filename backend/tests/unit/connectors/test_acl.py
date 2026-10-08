@@ -2,7 +2,7 @@
 
 import pytest
 
-from modulo.connectors.base import ConnectorACL, ConnectorPermissionError
+from modulo.connectors.base import ConnectorACL, ConnectorPermissionError, unrestricted_allowed_operations
 
 
 def test_acl_org_visibility():
@@ -85,3 +85,41 @@ def test_acl_blocks_wrong_visibility():
 def test_invalid_visibility_raises():
     with pytest.raises(ValueError, match="visibility must be 'org' or 'team'"):
         ConnectorACL(visibility="public")
+
+
+# ---------------------------------------------------------------------------
+# Shared unrestricted predicate + malformed fail-closed (FAR-1564)
+# ---------------------------------------------------------------------------
+
+
+def test_unrestricted_predicate_only_accepts_none_and_empty_list():
+    assert unrestricted_allowed_operations(None)
+    assert unrestricted_allowed_operations([])
+    assert not unrestricted_allowed_operations(["read"])
+    assert not unrestricted_allowed_operations({"read": 1})
+    assert not unrestricted_allowed_operations("read")
+    assert not unrestricted_allowed_operations(0)
+
+
+def test_acl_malformed_dict_allowlist_fails_closed():
+    # A malformed non-list must never be read as UNRESTRICTED: previously
+    # ``frozenset({"read": 1})`` silently became the allowlist ``{"read"}``,
+    # so a malformed value CERTIFIED an operation the stored value never
+    # declared — while the graph validator and the guardrail conformance
+    # reader read the same value restrictively.
+    acl = ConnectorACL(visibility="org", allowed_operations={"read": 1})  # type: ignore[arg-type]
+    assert acl.allowed_operations is not None
+    assert not acl.allowed_operations
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("read")
+
+
+def test_acl_malformed_int_allowlist_fails_closed():
+    # ``frozenset(7)`` used to raise TypeError at construction; now a
+    # malformed value restricts to the empty allowlist, so EVERY operation is
+    # denied (fail closed) rather than crashing the ACL build.
+    acl = ConnectorACL(visibility="org", allowed_operations=7)  # type: ignore[arg-type]
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("read")
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("write")

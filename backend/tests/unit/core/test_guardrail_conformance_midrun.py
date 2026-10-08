@@ -8,6 +8,7 @@ with async mock sessions.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -304,6 +305,53 @@ def test_capabilities_for_connector_unknown_type_certifies_nothing():
     row = _row_connector(uuid.uuid4(), [])
     row.connector_type_id = "not-a-real-type"
     assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_allowlist_certifies_nothing():
+    """FAR-1564 fail-closed: a MALFORMED non-list ``allowed_operations`` is
+    RESTRICTED.
+
+    Before the shared predicate, ``isinstance(allowed, list) and allowed``
+    sent EVERY non-list value (dict/str/int/...) down the unrestricted branch,
+    so a malformed value certified the connector TYPE's full capability set
+    while ``ConnectorACL`` read the same value restrictively — the exact
+    contradiction the module's fail-closed contract forbids.
+    """
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = {"read": 1}  # malformed: dict, not a list
+    row.connector_type_id = "github"
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_string_certifies_nothing():
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = "read"  # malformed: str, not a list
+    row.connector_type_id = "github"
+    assert not _capabilities_for_connector(row)
+
+
+def test_capabilities_for_connector_malformed_allowlist_is_logged(caplog):
+    """The malformed read is logged, not silently swallowed (fail closed loudly)."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = 7  # malformed: int, not a list
+    row.connector_type_id = "github"
+    with caplog.at_level(logging.WARNING):
+        assert not _capabilities_for_connector(row)
+    assert "guardrail.conformance.allowed_operations_malformed" in caplog.text
+
+
+def test_capabilities_for_connector_empty_capability_type_is_logged(caplog):
+    """FAR-1564 FIX D: a KNOWN type whose capability mapping is empty
+    (``custom``) certifies nothing — AND is logged the same way an unknown
+    type id is, so an empty-capability surface is never silent."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = []
+    row.connector_type_id = "custom"
+    assert not ConnectorType("custom").capabilities
+    with caplog.at_level(logging.WARNING):
+        assert not _capabilities_for_connector(row)
+    assert "guardrail.conformance.connector_type_no_capabilities" in caplog.text
+    assert "guardrail.conformance.connector_type_unknown" not in caplog.text
 
 
 async def test_build_live_manifest_connector_missing_is_unknown(monkeypatch: pytest.MonkeyPatch):

@@ -244,3 +244,37 @@ async def test_sweep_records_the_skip_reason_not_a_bare_not_found(sweep) -> None
     error = row.last_health_check_error
     assert error
     assert not error.startswith("ConnectorNotFoundError"), error
+
+
+async def test_sweep_acl_denial_is_not_a_health_failure(sweep, tmp_path) -> None:
+    """FAR-1564: an ACL denial from ``health_check()`` is a PERMISSION answer,
+    not a connector health failure.
+
+    ``_TracedConnector.health_check`` enforces the ``read`` operation, so a
+    connector whose non-empty allowlist omits ``read`` raises
+    ``ConnectorPermissionError`` BEFORE the probe runs. The broad per-instance
+    handler used to record that as ``last_health_check_error`` and count the
+    instance unhealthy — marking a perfectly healthy connector broken. The
+    sweep now skips it distinctly: no health columns written (the probe never
+    ran), counted ``skipped``, never ``unhealthy``.
+    """
+    run, seeder, rows = sweep
+    await seeder(
+        [
+            _instance(
+                connector_type_id="filesystem",
+                config_json={"base_path": str(tmp_path)},
+                allowed_operations=["write"],  # non-empty allowlist WITHOUT read
+            ),
+        ]
+    )
+
+    result = await run()
+
+    assert result["checked"] == 1
+    assert result["healthy"] == 0
+    assert result["unhealthy"] == 0
+    assert result["skipped"] == 1
+    (row,) = await rows()
+    assert row.last_health_check_at is None
+    assert row.last_health_check_error is None
