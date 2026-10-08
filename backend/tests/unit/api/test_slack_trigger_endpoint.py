@@ -26,7 +26,7 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_s
 from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.settings import Settings, get_settings
-from tests.unit.api.conftest import make_system_session_mock
+from tests.unit.api.conftest import _ProvisionedSystemSettings, make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -53,6 +53,45 @@ def _stub_audit_session(monkeypatch: pytest.MonkeyPatch) -> None:
         yield session
 
     monkeypatch.setattr("modulo.core.audit_coverage._shared_session_factory", lambda: _factory)
+
+
+@pytest.fixture(autouse=True)
+def _system_engine_isolated(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """FAR-1569: keep the route's 503 system-engine gate deterministic per test.
+
+    ``receive_slack_event`` refuses with 503 (``slack.system_bootstrap_degraded``)
+    when ``system_engine_is_fallback()`` reads True. That flag is a process
+    global written as a side effect of the FIRST ``get_or_create_system_engine()``
+    call, so one degraded initialisation poisons every later Slack test in the
+    session, and its settings reading is whichever fixture happened to be
+    installed at that moment.
+
+    Two leaks are closed here, both by resetting the three system-engine
+    globals around each test and presenting a provisioned system URL for the
+    duration of the test:
+
+    * a state left behind by an earlier test/package;
+    * the api conftest's own ``_provisioned_system_engine`` patch being lost
+      for this module when pytest revisits the directory through a different
+      collector node (autouse fixtures from a conftest are keyed to the node
+      that first loaded it) - a module fixture is registered against this
+      module, so it always applies.
+
+    Teardown leaves the globals CLEARED rather than restoring a snapshot: a
+    cached fallback engine is exactly the pollution being fixed.
+    """
+    from modulo.api import dependencies as _deps
+
+    _deps._SYSTEM_ASYNC_ENGINE = None
+    _deps._SYSTEM_SESSION_FACTORY = None
+    _deps._SYSTEM_ENGINE_IS_FALLBACK = False
+    monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
+    try:
+        yield
+    finally:
+        _deps._SYSTEM_ASYNC_ENGINE = None
+        _deps._SYSTEM_SESSION_FACTORY = None
+        _deps._SYSTEM_ENGINE_IS_FALLBACK = False
 
 
 def _make_settings() -> Settings:
