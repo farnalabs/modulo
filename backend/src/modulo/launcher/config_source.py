@@ -57,6 +57,7 @@ __all__ = [
     "LauncherConfigSource",
     "compose_config",
     "load_launcher_config_inputs",
+    "render_env_file",
     "write_pinned_env_file",
 ]
 
