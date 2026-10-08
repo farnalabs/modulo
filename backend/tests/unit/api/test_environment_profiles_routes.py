@@ -374,6 +374,224 @@ class TestUpdateProfile:
         assert "already exists" in resp.json()["detail"]
 
 
+class TestScopeChangeBindingGuard:
+    """FAR-1558 F2: a profile scope change must never strand a binding.
+
+    The pipeline -> profile team rule has three writers (bind time, pipeline
+    scope change, profile scope change); this class pins the third — the one
+    that could otherwise undo a valid bind AFTER the fact.
+    """
+
+    URL = "/api/v1/environment-profiles"
+    _TEAM_A = uuid.UUID("00000000-0000-0000-0000-00000000000a")
+    _TEAM_B = uuid.UUID("00000000-0000-0000-0000-00000000000b")
+
+    @staticmethod
+    def _pipeline_row(owner_team_id: uuid.UUID | None) -> MagicMock:
+        row = MagicMock()
+        row.id = uuid.uuid4()
+        row.owner_team_id = owner_team_id
+        return row
+
+    @staticmethod
+    def _install_session(
+        *,
+        profile: MagicMock | None,
+        bound: list[MagicMock],
+        queries: list[str],
+    ) -> None:
+        """Serve the guard's two SELECTs and record every statement run.
+
+        ``queries`` is the caller's recorder so a test can assert a lookup
+        never happened (the "no scope change, no query" contract).
+        """
+        session = _make_mock_session()
+
+        def _execute(stmt: Any, *args: Any, **kwargs: Any) -> MagicMock:
+            sql = str(stmt)
+            queries.append(sql)
+            result = MagicMock()
+            # Case-insensitive: SQLAlchemy renders ``FROM pipelines`` but the
+            # needle must never be matched against an upper-cased haystack.
+            if "from pipelines" in sql.lower():
+                result.all.return_value = bound
+                return result
+            if "environment_profiles" in sql:
+                result.scalar_one_or_none.return_value = profile
+                return result
+            # authz_enforce and anything else the strict default used to serve.
+            result.scalar_one_or_none.return_value = True
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+
+        async def override_session() -> AsyncMock:
+            yield session
+
+        app.dependency_overrides[get_db_session] = override_session
+
+    def _put(
+        self,
+        client: TestClient,
+        body: dict[str, Any],
+        *,
+        profile: MagicMock | None,
+        bound: list[MagicMock],
+        queries: list[str],
+    ) -> tuple[Any, MagicMock]:
+        self._install_session(profile=profile, bound=bound, queries=queries)
+        with (
+            patch(f"{_ROUTES}.update_environment_profile") as mock_update,
+            patch(f"{_ROUTES}.set_rls_org"),
+        ):
+            mock_update.return_value = profile
+            resp = client.put(f"{self.URL}/{_PROFILE_ID}", json=body)
+        return resp, mock_update
+
+    def test_mismatched_binding_refuses_the_flip_before_any_write(self, client: TestClient) -> None:
+        """Org-visible profile with a team-B binding, flipped team-A-private."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team", "owner_team_id": str(self._TEAM_A)},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "environment_profile_binding_team_mismatch" in resp.json()["detail"]
+        # Fail closed BEFORE the mutation: the CRUD write never runs.
+        mock_update.assert_not_called()
+
+    def test_matching_binding_allows_the_flip(self, client: TestClient) -> None:
+        """The mirror direction: same flip, but every binding already matches."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team", "owner_team_id": str(self._TEAM_A)},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[self._pipeline_row(self._TEAM_A), self._pipeline_row(self._TEAM_A)],
+            queries=queries,
+        )
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_called_once()
+        # Discriminating: the check RAN and passed — a skipped guard would also
+        # return 200, so the pipeline lookup must be observed.
+        assert any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_team_flip_with_no_bindings_is_allowed(self, client: TestClient) -> None:
+        """Nothing is bound, so nothing can be stranded."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team", "owner_team_id": str(self._TEAM_A)},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[],
+            queries=queries,
+        )
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_called_once()
+        assert any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_team_flip_without_an_owner_team_refuses_when_bound(self, client: TestClient) -> None:
+        """Team-private with NO owner team is owned by nobody — fail closed."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team"},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[self._pipeline_row(self._TEAM_A)],
+            queries=queries,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "environment_profile_binding_team_mismatch" in resp.json()["detail"]
+        mock_update.assert_not_called()
+
+    def test_moving_the_owner_team_off_a_matching_binding_is_refused(self, client: TestClient) -> None:
+        """A team-private profile whose owner team moves away from its bindings."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"owner_team_id": str(self._TEAM_B)},
+            profile=_fake_profile(visibility="team", owner_team_id=self._TEAM_A),
+            bound=[self._pipeline_row(self._TEAM_A)],
+            queries=queries,
+        )
+        assert resp.status_code == 422, resp.text
+        assert "environment_profile_binding_team_mismatch" in resp.json()["detail"]
+        mock_update.assert_not_called()
+
+    def test_assigning_an_owner_team_while_org_visible_is_never_checked(self, client: TestClient) -> None:
+        """Org-visible profiles are compatible with every pipeline, so the
+        binding query must not even run (and cannot block the change)."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"owner_team_id": str(self._TEAM_A)},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_called_once()
+        assert not any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_a_non_scope_change_never_consults_bindings(self, client: TestClient) -> None:
+        """A plain field edit (name) must not query pipelines at all."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"name": "renamed"},
+            profile=_fake_profile(visibility="team", owner_team_id=self._TEAM_A),
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_called_once()
+        assert not any("environment_profiles" in q for q in queries), queries
+        assert not any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_null_visibility_is_not_treated_as_team_private(self, client: TestClient) -> None:
+        """``visibility: null`` cannot satisfy the team branch of the rule —
+        it falls through to the org arm and the write path rejects it (NOT
+        NULL) instead of being mis-validated here."""
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": None},
+            profile=_fake_profile(visibility="org", owner_team_id=None),
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        # The guard does not refuse it (org arm), and the CRUD stub accepts it.
+        assert resp.status_code == 200, resp.text
+        mock_update.assert_called_once()
+        assert not any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_scope_change_on_a_missing_profile_defers_to_the_update_404(self, client: TestClient) -> None:
+        """A scope change for a profile that does not exist is not the guard's
+        job: it returns early and the update path raises the 404.
+
+        The guard only refuses a scope change that would STRAND an existing
+        binding; when the profile row is absent there is nothing to strand, so
+        it must not raise the binding-mismatch 422 (nor run the team-blind
+        pipeline scan) — the following update produces the canonical 404.
+        """
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team", "owner_team_id": str(self._TEAM_A)},
+            profile=None,
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Environment profile not found"
+        mock_update.assert_called_once()
+        # Early return BEFORE the binding scan: the pipelines query never ran.
+        assert not any("from pipelines" in q.lower() for q in queries), queries
+
+
 class TestDeleteProfile:
     URL = "/api/v1/environment-profiles"
 

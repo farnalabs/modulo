@@ -1055,6 +1055,13 @@ async def create_snapshot_from_live_graph(
                         default_autonomy_level=pipeline.default_autonomy_level,
                         max_autonomy_level=pipeline.max_autonomy_level,
                         stdout_retention_config=copy.deepcopy(pipeline.stdout_retention_config),
+                        # FAR-1558: freeze the pipeline's environment-profile
+                        # binding onto the snapshot. The snapshot column has
+                        # existed since 0003/0110 and is what dispatch reads
+                        # (runner_dispatch / executor / graph_validator) — it
+                        # was simply never written. NULL = unbound, i.e. the
+                        # historical default route (provider_type "none").
+                        environment_profile_id=pipeline.environment_profile_id,
                         version_kind=version_kind,
                         created_kind=created_kind,
                         draft=draft,

@@ -98,6 +98,18 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     reliability_owner_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
     )
+    # FAR-1558: per-pipeline environment-profile binding — WHICH runtime
+    # provider tier (runner_docker / e2b / kubernetes / ...) this pipeline's
+    # sandbox_agent nodes dispatch on. Nullable: NULL keeps the historical
+    # default route (no bound profile -> provider_type "none" -> the legacy E2B
+    # path). Copied verbatim into ``PipelineSnapshot.environment_profile_id`` at
+    # snapshot freeze (the column runs already read there); FK SET NULL so
+    # deleting a profile unbinds rather than deletes the pipeline. Same-org
+    # tenant trigger ``trg_pipelines_environment_profile_id_tenant`` (migration
+    # 0289) plus a route-level eligibility check (org + owner-team visibility).
+    environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(), ForeignKey("environment_profiles.id", ondelete="SET NULL"), index=True
+    )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
     lock_wait_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, server_default="300")

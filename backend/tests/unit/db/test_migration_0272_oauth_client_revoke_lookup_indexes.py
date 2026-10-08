@@ -123,9 +123,10 @@ class TestChain:
         # 0285_system_audit_events (FAR-1517), then
         # 0286_pipeline_run_state (FAR-1530), then
         # 0287_team_rls_lifecycle_evals (FAR-1514), then
-        # 0288_runs_execution_origin (FAR-1141),
-        # now chain onto this migration, so the single head moved up sixteen.
-        assert heads == ["0288_runs_execution_origin"], f"expected a single head, got {heads}"
+        # 0288_runs_execution_origin (FAR-1141), then
+        # 0289_pipelines_environment_profile (FAR-1558),
+        # now chain onto this migration, so the single head moved up seventeen.
+        assert heads == ["0289_pipelines_environment_profile"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

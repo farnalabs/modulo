@@ -27,7 +27,8 @@ Lenses:
    0285_system_audit_events chains onto 0284_add_rejected_run_status, and
    0286_pipeline_run_state chains onto 0285_system_audit_events, and
    0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state, and
-   0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals as the single
+   0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals, and
+   0289_pipelines_environment_profile chains onto 0288_runs_execution_origin as the single
    linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -70,7 +71,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0288_runs_execution_origin"
+_HEAD_MIGRATION = "0289_pipelines_environment_profile"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

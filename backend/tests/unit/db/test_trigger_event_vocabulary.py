@@ -151,10 +151,11 @@ _MIGRATION_PATH = (
 # 0284_add_rejected_run_status chained onto 0283_runs_drop_unused_indexes, and
 # 0285_system_audit_events chained onto 0284_add_rejected_run_status, and
 # 0286_pipeline_run_state then 0287_team_rls_lifecycle_evals then
-# 0288_runs_execution_origin chained as the chain head.
+# 0288_runs_execution_origin chained onto 0287_team_rls_lifecycle_evals, and
+# 0289_pipelines_environment_profile chained onto 0288_runs_execution_origin as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0288_runs_execution_origin"
+_CHAIN_HEAD_MIGRATION_NAME = "0289_pipelines_environment_profile"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 
