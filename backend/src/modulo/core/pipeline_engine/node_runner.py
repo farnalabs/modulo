@@ -2352,6 +2352,21 @@ async def _write_raw_output_marker(
             run_id_filter: Any = run_id
             with suppress(ValueError):
                 run_id_filter = uuid.UUID(run_id)
+            # FAR-1601 (verified — this is NOT an unbounded hot-`runs` wait):
+            # this row lock is bounded CLIENT-side. Its ONLY call site wraps
+            # the whole session body in ``asyncio.wait_for(...,
+            # _RAW_OUTPUT_MARKER_PERSIST_TIMEOUT)`` (5 s), so a contended run
+            # row can stall this persist for at most 5 s — never silently past
+            # the Fly HAProxy 30-minute session window (FAR-1524 O11). A
+            # server-side ``SET LOCAL lock_timeout`` was deliberately NOT
+            # added: ``mutation_row_lock_timeout_ms`` (5000 ms) EQUALS that
+            # client bound and its timer starts later (after pool checkout and
+            # the two RLS ``set_config`` calls above), so it could never fire
+            # first — decorative dead code. On expiry the caller logs
+            # ``sandbox_agent.raw_output_marker_persist_timeout_or_error`` and
+            # the best-effort persist fails open (the documented FAR-438
+            # durability gap), which is the recovery this path already
+            # accepts.
             run = (
                 await session.execute(_sql_select(_RunModel).where(_RunModel.id == run_id_filter).with_for_update())
             ).scalar_one_or_none()
@@ -2706,6 +2721,17 @@ async def _read_connector_idempotency_gate_state(
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
             await set_rls_execution_context(session)
+            # FAR-1601 (verified — this is NOT an unbounded hot-`runs` wait):
+            # bounded CLIENT-side by ``asyncio.wait_for(_read(),
+            # _IDEMPOTENCY_GATE_READ_TIMEOUT)`` (3 s) at the call below — a
+            # contended run-row lock waits at most 3 s, and any expiry fails
+            # open to ``(None, None)`` with the
+            # ``connector.idempotency_gate_read_failed`` WARNING (the
+            # documented gate contract: never block a connector write). A
+            # server-side ``SET LOCAL lock_timeout``
+            # (``mutation_row_lock_timeout_ms``, 5000 ms) would sit ABOVE
+            # that 3 s client bound and could therefore never fire —
+            # deliberately not added.
             row = (
                 await session.execute(
                     _sql_text("SELECT id, idempotency_key FROM runs WHERE id=:rid AND organisation_id=:oid FOR UPDATE"),

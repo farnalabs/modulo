@@ -5,11 +5,13 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, ClassVar, Self
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
@@ -2359,6 +2361,251 @@ async def test_org_index_query_runs_inside_explicit_transaction(monkeypatch: pyt
     assert result["orgs_failed"] == 0
     assert result["scanned"] == 0
     assert result["cleared"] == 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-1601 — bounded row-lock wait on this module's hot `runs` writes
+# ---------------------------------------------------------------------------
+# This module has TWO writers on the hot `runs` row whose lock waits were
+# UNBOUNDED:
+#
+# * `acquire_runner_dispatch_slot`'s own-row `SELECT ... FROM runs ...
+#   FOR UPDATE` runs in BOTH flag states, but its
+#   `set_config('lock_timeout', ...)` sat inside `if flag_on:` — with
+#   `runner_capacity_gate_enabled` OFF the row lock waited with no ceiling at
+#   all (the FAR-1524 O11 class: a silent wait past the Fly HAProxy
+#   30-minute session window, which is what got prod connections culled
+#   mid-operation).
+# * `mark_runner_dispatch_cleared_at_hitl`'s tombstone UPDATE issued no bound
+#   at all.
+#
+# These tests pin: (1) the transaction-scoped `set_config('lock_timeout', ...,
+# true)` bound is issued BEFORE each writer's row lock — both are FAIL-FIRST
+# (without FAR-1601 neither test finds a bound at all); (2) a 55P03 expiry is
+# handled NON-SILENTLY through the module's existing per-class failure policy
+# (the gate degrades to a RETRYABLE `RunnerCapacityDeniedError`; the
+# best-effort tombstone skips with a WARNING naming the bound and the
+# recovery) — never a hang, never a silent no-op, never an exception escaping
+# a best-effort path. The real-Postgres contention behaviour (a held row lock
+# actually timing out) is an integration concern; this unit seam drives the
+# same 55P03 the bound produces.
+
+
+def _pg_bind() -> SimpleNamespace:
+    """A ``session.get_bind()`` reporting the postgresql dialect.
+
+    ``set_mutation_row_lock_timeout`` (the tombstone's bound) is
+    Postgres-only — SQLite has no ``set_config`` — so the LIVE branch of its
+    dialect gate needs a bind that positively reports ``postgresql``. The
+    default doubles (plain ``MagicMock``) report neither, which keeps every
+    pre-existing assertion over their recorded statement lists unchanged.
+    """
+    return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+
+def _lock_timeout_error(statement: str) -> DBAPIError:
+    """Simulated row-lock contention: asyncpg's real ``LockNotAvailableError``
+    (SQLSTATE 55P03) wrapped exactly the way SQLAlchemy surfaces it — the same
+    seam ``tests/unit/test_dispatch.py`` drives for FAR-1584's writers."""
+    from asyncpg import exceptions as asyncpg_exceptions
+
+    driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+    return DBAPIError(statement, {}, driver_error)
+
+
+class TestHotRunsRowLockBoundFAR1601:
+    """FAR-1601: the gate's own-row lock AND the HITL tombstone are bounded."""
+
+    @pytest.fixture(autouse=True)
+    def _mutation_bound_knob(self) -> Any:
+        """The tombstone bound's value knob (``db.crud.row_lock`` reads it at
+        the call site) — patched so no test builds a real ``Settings`` and so
+        the pin can assert an exact value."""
+        with patch(
+            "modulo.db.crud.row_lock.get_settings",
+            return_value=MagicMock(mutation_row_lock_timeout_ms=4321),
+        ):
+            yield
+
+    async def test_gate_flag_off_bounds_the_own_row_lock_wait(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """THE fail-first pin for the gate: the own-row
+        ``SELECT ... FROM runs ... FOR UPDATE`` runs in BOTH flag states, but
+        the bound used to sit inside ``if flag_on:`` — flag-off waited on the
+        hot ``runs`` row UNBOUNDED.
+
+        The bound is now issued unconditionally (still before the row lock,
+        still transaction-scoped, value from
+        ``Settings.runner_capacity_lock_timeout_ms``); the per-org ADVISORY
+        lock stays flag-gated, so only the bound became unconditional.
+        """
+        statements: list[tuple[str, Any]] = []
+        _patch_gate_structural(monkeypatch, statements, flag_on=False)
+        session = MagicMock()
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            text_str = str(stmt)
+            statements.append((text_str, params))
+            result = MagicMock()
+            if "claim_count" in text_str:
+                result.fetchone.return_value = (7,)
+            elif "UPDATE runs" in text_str:
+                result.fetchone.return_value = (uuid.uuid4(),)
+            else:
+                result.fetchone.return_value = None
+                result.scalar_one.return_value = 0
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=session_cm)
+
+        async def _fake_decision(_session: Any, _org: uuid.UUID, **_kw: Any) -> Any:
+            return RunnerCapacityDecision(cap=None, active=0, host_resource_only=False)
+
+        monkeypatch.setattr("modulo.core.runner_capacity.resolve_runner_capacity_decision", _fake_decision)
+
+        slot = await acquire_runner_dispatch_slot(
+            factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider="e2b"
+        )
+        assert slot.status == "acquired"
+
+        texts = [text_stmt for text_stmt, _params in statements]
+        bound_at = [i for i, s in enumerate(texts) if "set_config('lock_timeout'" in s]
+        rowlock_at = [i for i, s in enumerate(texts) if "FOR UPDATE" in s]
+        assert bound_at, f"flag-off issued NO transaction-local lock bound; statements={texts}"
+        assert rowlock_at, f"the own-row FOR UPDATE never ran; statements={texts}"
+        assert bound_at[0] < rowlock_at[0], (
+            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, FOR UPDATE at {rowlock_at[0]})"
+        )
+        # SET LOCAL semantics: set_config(..., is_local => true) — transaction-
+        # scoped, reverts on COMMIT/ROLLBACK, never leaks onto the pool.
+        assert ", true)" in texts[bound_at[0]]
+        bound_params = statements[bound_at[0]][1]
+        assert bound_params is not None
+        assert bound_params["val"] == "2000ms"
+        # Only the bound became unconditional: flag-off still takes NO advisory lock.
+        assert not any("pg_advisory_xact_lock" in s for s in texts)
+
+    async def test_gate_flag_off_lock_timeout_degrades_to_retryable_denial(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Contract pin (NOT fail-first — the 55P03 handler was never
+        flag-gated): a bounded-wait expiry on the flag-off own-row lock is a
+        RETRYABLE ``RunnerCapacityDeniedError``, not a hang and not a terminal
+        failure. This is the recovery that makes bounding flag-off SAFE: the
+        caller maps it to ``SandboxCapacityExceededError`` / ``capacity.org``
+        and the node is re-dispatched when capacity frees."""
+        _patch_gate(monkeypatch, flag_on=False)
+        session = MagicMock()
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            if "FOR UPDATE" in str(stmt):
+                raise _lock_timeout_error(str(stmt))
+            result = MagicMock()
+            result.fetchone.return_value = None
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        begin_cm = MagicMock()
+        begin_cm.__aenter__ = AsyncMock(return_value=session)
+        begin_cm.__aexit__ = AsyncMock(return_value=False)
+        session.begin = MagicMock(return_value=begin_cm)
+        session_cm = MagicMock()
+        session_cm.__aenter__ = AsyncMock(return_value=session)
+        session_cm.__aexit__ = AsyncMock(return_value=False)
+        factory = MagicMock(return_value=session_cm)
+
+        with caplog_at_level_warning() as caplog_ctx, pytest.raises(RunnerCapacityDeniedError):
+            await acquire_runner_dispatch_slot(
+                factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM, node_id="n1", provider=RUNNER_PROVIDER_DOCKER
+            )
+        assert any("runner.capacity.lock_degraded" in m for m in caplog_ctx.messages)
+
+    async def test_hitl_tombstone_bounds_its_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """THE fail-first pin for the HITL tombstone: its ``UPDATE runs SET
+        sandbox_dispatch_state = :tombstone`` is the hot ``runs`` row and used
+        to wait with no bound at all.
+
+        The bound is the transaction's FIRST statement (set_config takes no
+        lock, so it cannot disturb any lock ordering), is transaction-scoped,
+        and its value comes from ``Settings.mutation_row_lock_timeout_ms``.
+        """
+        _patch_gate(monkeypatch, flag_on=True)
+        factory = _fake_session()
+        session = factory.return_value.__aenter__.return_value
+        executed: list[tuple[str, Any]] = []
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            executed.append((str(stmt), params))
+            result = MagicMock()
+            result.fetchone.return_value = (uuid.uuid4(),)
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        session.get_bind = MagicMock(return_value=_pg_bind())
+
+        tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
+        assert tombstoned is True
+
+        texts = [text_stmt for text_stmt, _params in executed]
+        bound_at = [i for i, s in enumerate(texts) if "set_config('lock_timeout'" in s]
+        update_at = [i for i, s in enumerate(texts) if "UPDATE runs SET sandbox_dispatch_state" in s]
+        assert bound_at, f"no transaction-local lock bound issued; statements={texts}"
+        assert update_at, f"the tombstone UPDATE never ran; statements={texts}"
+        assert bound_at[0] < update_at[0], (
+            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
+        )
+        assert ", true)" in texts[bound_at[0]]
+        bound_params = executed[bound_at[0]][1]
+        assert bound_params == {"val": "4321ms"}
+
+    async def test_hitl_tombstone_lock_timeout_skips_with_a_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """THE 55P03 case for the tombstone: its UPDATE meets a held ``runs``
+        row lock and the BOUND fires.
+
+        The tombstone is BEST-EFFORT by contract, so no exception escapes —
+        but it must never be a silent no-op either: a distinct WARNING carries
+        the SQLSTATE, the knob and the recovery (the marker survives the park
+        and the marker sweep owns it). The generic ``hitl_tombstone_failed``
+        event does NOT fire: that one is for unexpected failures, so the two
+        stay distinguishable.
+        """
+        _patch_gate(monkeypatch, flag_on=True)
+        factory = _fake_session()
+        session = factory.return_value.__aenter__.return_value
+
+        async def _execute(stmt: Any, params: Any = None) -> Any:
+            if "UPDATE runs SET sandbox_dispatch_state" in str(stmt):
+                raise _lock_timeout_error(str(stmt))
+            result = MagicMock()
+            result.fetchone.return_value = (uuid.uuid4(),)
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        session.get_bind = MagicMock(return_value=_pg_bind())
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.runner_capacity")
+        tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=_ORG, run_id=_RUN, claim_token=_CLAIM)
+
+        assert tombstoned is False, "a bounded-wait expiry must not report a tombstone"
+        messages = [r.message for r in caplog.records]
+        assert any("runner.capacity.hitl_tombstone_lock_timeout" in m for m in messages)
+        assert "55P03" in caplog.text
+        assert not any("runner.capacity.hitl_tombstone_failed" in m for m in messages)
 
 
 def _unused(*_a: Any, **_kw: Any) -> None:  # pragma: no cover

@@ -82,7 +82,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.db.models.run import TERMINAL_STATUSES
-from modulo.db.sqlstates import sqlstate_of
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -423,9 +423,10 @@ async def acquire_runner_dispatch_slot(
     Transaction shape (uniform row→advisory ordering — cycle-free with the
     resume path, which writes the run row before its advisory lock):
 
-    1. ``SET LOCAL lock_timeout`` (env-tunable, default 2s) — a crowded
-       advisory lock degrades to a RETRYABLE denial instead of hanging on
-       ``deadlock_timeout``.
+    1. ``SET LOCAL lock_timeout`` (env-tunable, default 2s) — UNCONDITIONAL
+       (FAR-1601): it caps the own-row ``FOR UPDATE``'s wait in BOTH flag
+       states, and a crowded advisory lock degrades to a RETRYABLE denial
+       instead of hanging on ``deadlock_timeout``.
     2. Lock THIS run's own row FIRST — a claim-token-fenced
        ``SELECT ... FOR UPDATE``; the fenced marker UPDATE doubles as the row
        lock. Rowcount 0 = superseded / not running → fenced.
@@ -466,11 +467,20 @@ async def acquire_runner_dispatch_slot(
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
-            if flag_on:
-                await session.execute(
-                    text("SELECT set_config('lock_timeout', :val, true)"),
-                    {"val": f"{lock_timeout_ms}ms"},
-                )
+            # FAR-1601: bound this transaction's row-lock waits BEFORE its
+            # first lock, UNCONDITIONALLY. The own-row ``FOR UPDATE`` below
+            # runs in BOTH flag states, but this ``set_config`` used to sit
+            # inside ``if flag_on:`` — with ``runner_capacity_gate_enabled``
+            # OFF the hot ``runs`` row lock waited with no ceiling at all (the
+            # FAR-1524 O11 class: a silent wait past the Fly HAProxy
+            # 30-minute session window, which is what got prod connections
+            # culled mid-operation). ``set_config`` takes no lock, so it
+            # cannot disturb the uniform row→advisory ordering; only the
+            # ADVISORY lock below stays flag-gated.
+            await session.execute(
+                text("SELECT set_config('lock_timeout', :val, true)"),
+                {"val": f"{lock_timeout_ms}ms"},
+            )
             # (2) own-row lock FIRST — claim-token-fenced, status-guarded.
             row = (
                 await session.execute(
@@ -506,8 +516,9 @@ async def acquire_runner_dispatch_slot(
             # marker cannot self-block). The SINGLE decision path for both
             # flag states: the count body owns the flag-dependent population
             # (flag-off = the pre-D8 ACTIVE_RUN_STATUSES population, no
-            # advisory lock, no lock_timeout — the pre-D8 racy check-then-act
-            # semantics exactly).
+            # advisory lock — the pre-D8 racy check-then-act count semantics
+            # exactly; only the row-lock bound above is unconditional,
+            # FAR-1601).
             decision = await resolve_runner_capacity_decision(session, org_id, exclude_run_id=run_uuid)
             if decision.cap is not None and decision.active >= decision.cap:
                 # The Docker-tier default (absent key) gates ONLY host-resource
@@ -617,17 +628,37 @@ async def mark_runner_dispatch_cleared_at_hitl(
     with ``runner_capacity_gate_enabled`` OFF this is a NO-OP (returns
     False), so the flag-off window keeps the pre-D8 behaviour exactly (the
     marker simply survives the park).
+
+    Lock bound (FAR-1601): the tombstone UPDATE is a writer on the hot
+    ``runs`` row, so its transaction issues the transaction-scoped
+    ``lock_timeout`` bound (``db.crud.row_lock.
+    set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE the write — a contended row lock
+    waits at most that long, never the unbounded, >=30-minute silent wait
+    HAProxy culls mid-operation (FAR-1524 O11 / FAR-1584). Because the write
+    is BEST-EFFORT, a bounded wait that expires (SQLSTATE 55P03) is handled
+    NON-silently and without raising: the transaction rolled back whole, so
+    the marker still stands on the parked run — exactly the flag-off outcome
+    the contract above already accepts — and the marker sweep owns clearing
+    it. A distinct ``runner.capacity.hitl_tombstone_lock_timeout`` WARNING
+    carries the SQLSTATE, the knob and that recovery; any OTHER failure keeps
+    the pre-existing ``hitl_tombstone_failed`` event, so the two stay
+    distinguishable.
     """
     if session_factory is None or not claim_token:
         return False
     if not get_settings().runner_capacity_gate_enabled:
         return False
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
 
     try:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1601: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
             result = await session.execute(
                 text(
                     "UPDATE runs SET sandbox_dispatch_state = :tombstone "
@@ -648,7 +679,25 @@ async def mark_runner_dispatch_cleared_at_hitl(
         return tombstoned
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1601: the BOUNDED wait expired (55P03). Never silent and
+            # never raised — this write is best-effort — but never confused
+            # with an unexpected DB failure either: the transaction rolled
+            # back whole, so the live marker SURVIVES the park (the same
+            # outcome the flag-off contract accepts) and the marker sweep
+            # clears it; capacity-neutral tombstones only matter while the
+            # run is parked, and the sweep owns stale markers regardless.
+            _log.warning(
+                "runner.capacity.hitl_tombstone_lock_timeout run=%s — SQLSTATE 55P03 from the "
+                "bounded mutation_row_lock_timeout_ms wait; tombstone NOT written (transaction "
+                "rolled back), so the dispatch marker SURVIVES the park and the marker sweep "
+                "owns clearing it",
+                run_id,
+                extra={"run_id": run_id, "org_id": str(org_id)},
+                exc_info=True,
+            )
+            return False
         _log.exception(
             "runner.capacity.hitl_tombstone_failed",
             extra={"run_id": run_id, "org_id": str(org_id)},
