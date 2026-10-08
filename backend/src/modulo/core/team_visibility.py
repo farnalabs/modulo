@@ -46,8 +46,10 @@ refusal :class:`ConnectorBindingMissingError`, never a silent skip.
     pipeline owned by the same team. The predicate is SHARED by all three
     writers of the rule — bind time (``api/routes/pipelines.py``), a pipeline
     scope change (same module, stored-binding re-validation), and a profile
-    scope change (``api/routes/environment_profiles.py``) — so the three
-    cannot drift. The profile-side writer emits its own wire code
+    scope change (``api/routes/environment_profiles.py``) — and by the
+    dispatch-time backstop (FAR-1598,
+    ``core.bundled_runner.runner_dispatch``), so the four cannot drift. The
+    profile-side writer emits its own wire code
     (``ENVIRONMENT_PROFILE_BINDING_TEAM_MISMATCH``) because it refuses a
     different operation (stranding an existing binding vs. creating a
     mismatched one), and its bound-pipelines read is team-blind through
