@@ -11,12 +11,9 @@ const state = vi.hoisted(() => ({
   orgRole: 'admin' as string | null,
 }))
 
-const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }))
-
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({
     get: vi.fn().mockResolvedValue({ items: [] }),
-    post: (url: string) => postMock(url).then(() => ({ ...state.pipeline })),
   }),
 }))
 
@@ -45,7 +42,9 @@ vi.mock('../lib/api/client', () => {
   return {
     api: {
       GET: vi.fn(get),
-      POST: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
+      // FAR-1588: pause/resume/archive now go through the typed client, so
+      // POST answers with the pipeline fixture the same way GET does.
+      POST: vi.fn(() => Promise.resolve({ data: { ...state.pipeline }, error: undefined })),
       PATCH: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
       PUT: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
       DELETE: vi.fn().mockResolvedValue({ data: {}, error: undefined }),
@@ -54,8 +53,11 @@ vi.mock('../lib/api/client', () => {
   }
 })
 
+import { api } from '../lib/api/client'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import { usePlanStore } from '../stores/planStore'
+
+const postMock = api.POST as unknown as ReturnType<typeof vi.fn>
 
 const router = createRouter({
   history: createWebHistory(),
@@ -92,7 +94,6 @@ async function mountEditor() {
 // so pipeline-scoped calls (POST .../pause, .../resume) carry the real id.
 beforeEach(async () => {
   vi.clearAllMocks()
-  postMock.mockResolvedValue(undefined)
   state.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline', archived_at: null, run_enabled: true, run_disabled_reason: null }
   state.orgRole = 'admin'
   const { useRoute } = await import('vue-router')
@@ -111,7 +112,7 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
 
     await pause.trigger('click')
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/test-pipeline-id/pause')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/pause', expect.objectContaining({ params: { path: { pipeline_id: 'test-pipeline-id' } } }))
     wrapper.unmount()
   })
 
@@ -140,7 +141,7 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
 
     await resume.trigger('click')
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/test-pipeline-id/resume')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/resume', expect.objectContaining({ params: { path: { pipeline_id: 'test-pipeline-id' } } }))
     wrapper.unmount()
   })
 
@@ -183,7 +184,7 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
   it('reports a failed pause through the inline toolbar error', async () => {
     const wrapper = await mountEditor()
 
-    postMock.mockRejectedValueOnce(new Error('Pause failed'))
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'Pause failed' } })
     await wrapper.find(PAUSE).trigger('click')
     await flushPromises()
 
@@ -198,7 +199,7 @@ describe('PipelineEditorView - per-pipeline Paused state', () => {
     state.pipeline = { ...state.pipeline, run_enabled: false, run_disabled_reason: 'operator' }
     const wrapper = await mountEditor()
 
-    postMock.mockRejectedValueOnce(new Error('Resume failed'))
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'Resume failed' } })
     await wrapper.find(RESUME).trigger('click')
     await flushPromises()
 

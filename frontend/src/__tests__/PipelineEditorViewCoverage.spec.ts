@@ -1273,7 +1273,7 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     const vm = wrapper.vm as any
     vm.pipeline = { id: 'test-pipeline-id', archived_at: '2026-01-01' }
 
-    useApiFns.post.mockResolvedValueOnce({ id: 'test-pipeline-id', archived_at: null })
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: { id: 'test-pipeline-id', archived_at: null }, error: undefined })
     await vm.handleUnarchive()
     await flushPromises()
     expect(vm.pipeline.archived_at).toBeNull()

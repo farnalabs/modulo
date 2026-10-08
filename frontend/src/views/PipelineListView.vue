@@ -419,12 +419,13 @@ import { usePlanStore } from '../stores/planStore'
 import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { ChevronRight, Folder, FolderOpen, MoreVertical, X, FileStack } from '@lucide/vue'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, throwOnError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import Menu from 'primevue/menu'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
+import { withTimeout } from '../lib/asyncUtils'
 import { formatDateShort } from '../lib/formatDate'
 
 
@@ -473,7 +474,12 @@ interface PipelineListResponse {
 const router = useRouter()
 const planStore = usePlanStore()
 const { t } = useI18n()
-const { get, post: postUntyped, patch: patchUntyped } = useApi()
+const { get, patch: patchUntyped } = useApi()
+
+// The legacy useApi `post` helper aborted every request after 30s; the typed
+// client has no deadline of its own, so the archive/pause toggles keep the
+// same bound and still surface an error if the request stalls.
+const TOGGLE_REQUEST_TIMEOUT_MS = 30000
 
 const selectedFolderId = ref<string | null>(null)
 
@@ -947,7 +953,9 @@ async function handleRename() {
 
 async function handleArchive(p: PipelineItem) {
   try {
-    await postUntyped(`/api/v1/pipelines/${p.id}/archive`)
+    throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
+      params: { path: { pipeline_id: p.id } },
+    }), TOGGLE_REQUEST_TIMEOUT_MS, 'Archive pipeline'))
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
@@ -956,7 +964,9 @@ async function handleArchive(p: PipelineItem) {
 
 async function handleUnarchive(p: PipelineItem) {
   try {
-    await postUntyped(`/api/v1/pipelines/${p.id}/unarchive`)
+    throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
+      params: { path: { pipeline_id: p.id } },
+    }), TOGGLE_REQUEST_TIMEOUT_MS, 'Unarchive pipeline'))
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
@@ -980,7 +990,9 @@ function pausedBadgeHelp(p: PipelineItem): string {
 
 async function handlePause(p: PipelineItem) {
   try {
-    await postUntyped(`/api/v1/pipelines/${p.id}/pause`)
+    throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/pause', {
+      params: { path: { pipeline_id: p.id } },
+    }), TOGGLE_REQUEST_TIMEOUT_MS, 'Pause pipeline'))
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)
@@ -989,7 +1001,9 @@ async function handlePause(p: PipelineItem) {
 
 async function handleResume(p: PipelineItem) {
   try {
-    await postUntyped(`/api/v1/pipelines/${p.id}/resume`)
+    throwOnError(await withTimeout(api.POST('/api/v1/pipelines/{pipeline_id}/resume', {
+      params: { path: { pipeline_id: p.id } },
+    }), TOGGLE_REQUEST_TIMEOUT_MS, 'Resume pipeline'))
     await loadPipelines()
   } catch (e) {
     error.value = formatApiError(e)

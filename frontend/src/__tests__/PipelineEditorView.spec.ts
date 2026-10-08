@@ -147,6 +147,10 @@ import { api, getAccessToken } from '../lib/api/client'
 import PipelineEditorView from '../views/PipelineEditorView.vue'
 import { usePlanStore } from '../stores/planStore'
 
+// FAR-1588: archive/unarchive moved off the legacy untyped `useApi().post`
+// helper onto the typed client, so the spy lives on api.POST.
+const postMock = api.POST as unknown as ReturnType<typeof vi.fn>
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -1343,7 +1347,7 @@ describe('PipelineEditorView — run dialog', () => {
     wrapper.unmount()
   })
 
-  it('archives and unarchives the pipeline through the useApi post path', async () => {
+  it('archives and unarchives the pipeline through the typed API client', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = await mountEditorLoaded()
@@ -1351,14 +1355,14 @@ describe('PipelineEditorView — run dialog', () => {
     vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
     await nextTick()
 
-    useApiFns.post.mockResolvedValueOnce({ id: 'test-pipeline-id', name: 'Test Pipeline', archived_at: '2026-01-01T00:00:00Z' })
+    postMock.mockResolvedValueOnce({ data: { id: 'test-pipeline-id', name: 'Test Pipeline', archived_at: '2026-01-01T00:00:00Z' }, error: undefined })
     await wrapper.find('[data-testid="pipeline-editor-archive"]').trigger('click')
     await flushPromises()
     await nextTick()
-    expect(useApiFns.post).toHaveBeenCalledWith('/api/v1/pipelines/test-pipeline-id/archive')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/archive', expect.objectContaining({ params: { path: { pipeline_id: 'test-pipeline-id' } } }))
     expect(wrapper.find('[data-testid="pipeline-editor-unarchive"]').exists()).toBe(true)
 
-    useApiFns.post.mockResolvedValueOnce({ id: 'test-pipeline-id', name: 'Test Pipeline', archived_at: null })
+    postMock.mockResolvedValueOnce({ data: { id: 'test-pipeline-id', name: 'Test Pipeline', archived_at: null }, error: undefined })
     await wrapper.find('[data-testid="pipeline-editor-unarchive"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -1374,7 +1378,7 @@ describe('PipelineEditorView — run dialog', () => {
     vm.pipeline = { id: 'test-pipeline-id', name: 'Test Pipeline' }
     await nextTick()
 
-    useApiFns.post.mockRejectedValueOnce(new Error('archive_denied'))
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'archive_denied' } })
     await wrapper.find('[data-testid="pipeline-editor-archive"]').trigger('click')
     await flushPromises()
     await nextTick()
@@ -3095,13 +3099,13 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
   })
 
   it('handleUnarchive error sets pageError', async () => {
-    useApiFns.post.mockRejectedValueOnce(new Error('unarchive_failed'))
     router.push('/pipelines/test-pipeline-id/editor')
     await router.isReady()
     const wrapper = mountEditor()
     await flushPromises()
     const vm = wrapper.vm as any
     vm.pipeline = { id: 'test-pipeline-id', name: 'Test', archived_at: '2026-01-01T00:00:00Z' }
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'unarchive_failed' } })
     await vm.handleUnarchive()
     await flushPromises()
     expect(vm.pageError).toBeTruthy()
