@@ -28,8 +28,16 @@ the CLI would write – as a comment on the PR, and merging to `main` runs the
   pauses until the rules pass, so keep rules only where you want a hold.
 - **The apply config** – the YAML file `modulo apply -f` consumes, committed to
   this repo (the example uses `modulo.yaml`).
-- **CLI installation in CI** – `pip install farnalabs-modulo`, the PyPI package
-  that provides the `modulo` console script.
+- **CLI installation in CI** – `pip install farnalabs-modulo` (or
+  `uv tool install farnalabs-modulo`), the package name this repo declares
+  (`[project.scripts]` in `backend/pyproject.toml`). **To be confirmed**:
+  a published release can lag this repo, so before relying on the
+  workflow's install step, check the installed release actually ships the
+  `apply` subcommand (`modulo apply --help`) and pin that version
+  (`pip install farnalabs-modulo==<version>`). Until that is confirmed,
+  install from a checkout of this repo (`uv sync` in `backend/`, then
+  `uv run modulo apply ...`, as the self-hosted docs do) or from your own
+  package index.
 
 ## Workflow
 
@@ -74,6 +82,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
+        # To be confirmed: verify + pin a release that ships `apply` (see Prerequisites).
         run: pip install farnalabs-modulo
       - name: Plan
         run: |
@@ -112,6 +121,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
+        # To be confirmed: verify + pin a release that ships `apply` (see Prerequisites).
         run: pip install farnalabs-modulo
       - name: Plan
         run: |
@@ -145,6 +155,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
+        # To be confirmed: verify + pin a release that ships `apply` (see Prerequisites).
         run: pip install farnalabs-modulo
       - name: Apply
         run: modulo apply -f modulo.yaml
@@ -163,6 +174,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install modulo CLI
+        # To be confirmed: verify + pin a release that ships `apply` (see Prerequisites).
         run: pip install farnalabs-modulo
       - name: Apply
         run: modulo apply -f modulo.yaml
