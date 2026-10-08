@@ -8,7 +8,7 @@ const mockResponses: Record<string, unknown> = {
   default: { items: [], total: 0, page: 1, page_size: 100 },
 }
 
-const { patchMock, postMock } = vi.hoisted(() => ({ patchMock: vi.fn(), postMock: vi.fn() }))
+const { patchMock } = vi.hoisted(() => ({ patchMock: vi.fn() }))
 
 vi.mock('../lib/api/client', () => {
   const mockGet = vi.fn((url: string, options?: { params?: { query?: { page_size?: number } } }) => {
@@ -39,7 +39,6 @@ vi.mock('../lib/api/client', () => {
 vi.mock('../composables/useApi', () => ({
   useApi: () => ({
     get: vi.fn((url: string) => Promise.resolve(mockResponses[url] ?? [])),
-    post: postMock,
     patch: patchMock,
   }),
 }))
@@ -47,6 +46,10 @@ vi.mock('../composables/useApi', () => ({
 import PipelineListView from '../views/PipelineListView.vue'
 import { api } from '../lib/api/client'
 import { usePlanStore } from '../stores/planStore'
+
+// FAR-1588: the archive/pause/resume toggles moved off the legacy untyped
+// `useApi().post` helper onto the typed client, so the spy lives on api.POST.
+const postMock = api.POST as unknown as ReturnType<typeof vi.fn>
 
 const router = createRouter({
   history: createWebHistory(),
@@ -735,7 +738,7 @@ describe('PipelineListView', () => {
     expect(archive).toBeDefined()
     archive!.command()
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/archive')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/archive', expect.objectContaining({ params: { path: { pipeline_id: 'p1' } } }))
 
     // Exercise the Unarchive branch by selecting an already-archived pipeline.
     vm.openActionMenu({} as MouseEvent, { ...pipeline, archived_at: '2025-02-02T00:00:00Z' })
@@ -744,7 +747,7 @@ describe('PipelineListView', () => {
     expect(unarchive).toBeDefined()
     unarchive!.command()
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/unarchive')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/unarchive', expect.objectContaining({ params: { path: { pipeline_id: 'p1' } } }))
   })
 
   // FAR-1530: per-pipeline Paused execution state (list half).
@@ -769,7 +772,7 @@ describe('PipelineListView', () => {
     expect(vm.actionMenuItems.find(i => i.label === 'Resume')).toBeUndefined()
     pause!.command()
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/pause')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/pause', expect.objectContaining({ params: { path: { pipeline_id: 'p1' } } }))
 
     // The row must not claim the pipeline is paused before the state changes.
     expect(wrapper.find('[data-testid="pipeline-list-paused-badge"]').exists()).toBe(false)
@@ -798,7 +801,7 @@ describe('PipelineListView', () => {
     expect(resume!.disabled).toBe(false)
     resume!.command()
     await flushPromises()
-    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/p1/resume')
+    expect(postMock).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/resume', expect.objectContaining({ params: { path: { pipeline_id: 'p1' } } }))
 
     // A circuit-breaker pause can only be cleared by an org admin, so the
     // menu must block Resume (PrimeVue's Menuitem refuses the click on a
@@ -849,7 +852,7 @@ describe('PipelineListView', () => {
     vm.openActionMenu({} as MouseEvent, running)
     await nextTick()
 
-    postMock.mockRejectedValueOnce(new Error('Pause failed'))
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'Pause failed' } })
     vm.actionMenuItems.find(i => i.label === 'Pause')!.command()
     await flushPromises()
 
@@ -874,7 +877,7 @@ describe('PipelineListView', () => {
     vm.openActionMenu({} as MouseEvent, paused)
     await nextTick()
 
-    postMock.mockRejectedValueOnce(new Error('Resume failed'))
+    postMock.mockResolvedValueOnce({ data: undefined, error: { detail: 'Resume failed' } })
     vm.actionMenuItems.find(i => i.label === 'Resume')!.command()
     await flushPromises()
 

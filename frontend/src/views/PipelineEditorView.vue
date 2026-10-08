@@ -1494,7 +1494,7 @@ import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
+import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
@@ -1519,6 +1519,11 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
   const timeout = setTimeout(() => ctrl.abort(), ms)
   return factory(ctrl.signal).finally(() => clearTimeout(timeout))
 }
+
+// The legacy useApi `post` helper aborted every request after 30s; the typed
+// client has no deadline of its own, so the archive/pause toggles keep the
+// same bound and still surface an error if the request stalls.
+const TOGGLE_REQUEST_TIMEOUT_MS = 30000
 
 const { t } = useI18n()
 
@@ -1624,7 +1629,7 @@ const pickerAgentId = ref<string>('__all__')
 const pickerConnectorId = ref<string>('__all__')
 const revertSnapshotId = ref<string>('__all__')
 const convertError = ref<string | null>(null)
-const { get, post: postUntyped } = useApi()
+const { get } = useApi()
 const revertError = ref<string | null>(null)
 const revertLoading = ref(false)
 
@@ -2784,7 +2789,10 @@ async function handleRename() {
 
 async function handleArchive() {
   try {
-    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/archive`)
+    pipeline.value = throwOnError(await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/archive', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }), TOGGLE_REQUEST_TIMEOUT_MS))
   } catch (e: unknown) {
     pageError.value = t('views.PipelineEditorView.failed_to_archive_pipeline', { error: formatApiError(e) })
   }
@@ -2792,7 +2800,10 @@ async function handleArchive() {
 
 async function handleUnarchive() {
   try {
-    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/unarchive`)
+    pipeline.value = throwOnError(await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/unarchive', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }), TOGGLE_REQUEST_TIMEOUT_MS))
   } catch (e: unknown) {
     pageError.value = t('views.PipelineEditorView.failed_to_unarchive_pipeline', { error: formatApiError(e) })
   }
@@ -2803,7 +2814,10 @@ async function handleUnarchive() {
 // editor and would drop the open graph over a failed toggle).
 async function handlePause() {
   try {
-    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/pause`)
+    pipeline.value = throwOnError(await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/pause', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }), TOGGLE_REQUEST_TIMEOUT_MS))
     saveGraphError.value = null
   } catch (e: unknown) {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_pause_pipeline', { error: formatApiError(e) })
@@ -2812,7 +2826,10 @@ async function handlePause() {
 
 async function handleResume() {
   try {
-    pipeline.value = await postUntyped<Record<string, unknown>>(`/api/v1/pipelines/${pipelineId}/resume`)
+    pipeline.value = throwOnError(await withTimeout((signal) => api.POST('/api/v1/pipelines/{pipeline_id}/resume', {
+      params: { path: { pipeline_id: pipelineId } },
+      signal,
+    }), TOGGLE_REQUEST_TIMEOUT_MS))
     saveGraphError.value = null
   } catch (e: unknown) {
     saveGraphError.value = t('views.PipelineEditorView.failed_to_resume_pipeline', { error: formatApiError(e) })
