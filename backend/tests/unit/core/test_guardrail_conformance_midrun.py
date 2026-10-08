@@ -19,6 +19,7 @@ from modulo.connectors.base import ConnectorType
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
+    _canonical_capability_list,
     _capabilities_for_connector,
     build_live_manifest,
     canonical_capability,
@@ -466,6 +467,10 @@ async def _manifest_for(monkeypatch: pytest.MonkeyPatch, row: Any) -> dict[str, 
         ("sandbox.egress", None),
         ("egress:github.com", None),
         ("not-a-capability", None),
+        # A valid connector-type prefix with a non-capability suffix resolves to
+        # None in BOTH accepted separators — no spelling yields a capability.
+        ("github.bogus", None),
+        ("github:notacap", None),
     ],
     ids=[
         "bare-read",
@@ -476,11 +481,50 @@ async def _manifest_for(monkeypatch: pytest.MonkeyPatch, row: Any) -> dict[str, 
         "sandbox-surface-untouched",
         "agent-egress-untouched",
         "junk",
+        "type-dotted-invalid-suffix",
+        "type-colon-invalid-suffix",
     ],
 )
 def test_canonical_capability_vocabulary(spelling: str, expected: str | None) -> None:
     """ONE vocabulary: bare ``Capability`` values; non-connector caps pass through."""
     assert canonical_capability(spelling) == expected
+
+
+def test_canonical_capability_list_non_list_is_empty() -> None:
+    """A non-list is not a capability list, so it certifies nothing.
+
+    Guards the defensive arm of ``_canonical_capability_list``: the caller
+    routes only ``isinstance(allowed, list)`` here, but the helper must still
+    handle a malformed value fail-closed rather than raise.
+    """
+    assert _canonical_capability_list("read") == set()
+    assert _canonical_capability_list(None) == set()
+
+
+def test_canonical_capability_list_drops_non_string_and_non_capability(caplog) -> None:
+    """Non-string entries are skipped; a string that is not a capability in any
+    accepted spelling is DROPPED (and logged) — it grants nothing."""
+    with caplog.at_level(logging.WARNING):
+        result = _canonical_capability_list(["read", 123, "junk", "github.write"])
+    assert result == {"read", "write"}
+    assert "guardrail.conformance.operation_not_a_capability" in caplog.text
+
+
+def test_decide_conformance_dedupes_canonical_claims() -> None:
+    """Claims naming the same capability in different spellings collapse to ONE
+    canonical claim before derivation (no duplicate positions)."""
+    d = decide_conformance(["github.read", "read"], {"read": True})
+    assert d.state == "present"
+    assert d.claimed is True
+
+
+def test_decide_conformance_merges_multiple_spellings_of_one_capability() -> None:
+    """One capability declared under several spellings merges to a single state:
+    confirmed-present wins, else confirmed-absent, else unknown."""
+    present = decide_conformance(["read"], {"read": True, "github.read": False})
+    assert present.state == "present"
+    absent = decide_conformance(["write"], {"write": False, "github.write": None})
+    assert absent.state == "absent"
 
 
 async def test_parity_canonical_claim_matches_unrestricted_and_allowlisted(
