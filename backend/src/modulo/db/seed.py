@@ -330,6 +330,7 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
     )
     membership = mem_result.scalar_one_or_none()
     admin_role = "admin" if email in ("admin", "admin@modulo.run") else None
+    previous_role = membership.role if membership is not None else None
     if membership is not None:
         if admin_role and membership.role != "admin":
             membership.role = "admin"
@@ -350,6 +351,12 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
     # A rehash is also a privilege decision: the seeded password can ESCALATE
     # the account to ``admin`` (see ``admin_role`` above), so the credential
     # rotation and the role it landed on are recorded together (FAR-1561).
+    # ``role_granted`` reports the ACTUAL escalation, not the email: it is true
+    # only when the membership went from "not admin" (a lower role, or no
+    # membership at all) to ``admin``. An admin email whose membership is
+    # ALREADY admin escalates nothing and must record false, so the chain never
+    # implies a privilege grant that did not happen.
+    role_granted = final_role == "admin" and previous_role != "admin"
     await append_user_grant_audit(
         session,
         org_id=org.id,
@@ -359,6 +366,6 @@ async def rehash_existing_user(session: Any, org: Any, existing_account: Any, em
             "summary": f"User {email} credential rehashed with role {final_role}",
             "email": email,
             "role": final_role,
-            "role_granted": bool(admin_role),
+            "role_granted": role_granted,
         },
     )

@@ -1,7 +1,9 @@
 """Tests for the MODULO_TEST_STYLE_SCOPE opt-in scanning behaviour.
 
 Verifies that ``_iter_test_modules()`` honours the env var and that
-``_resolve_scope_paths()`` correctly resolves, caches, and filters paths.
+``_resolve_scope_paths()`` correctly resolves, caches, and filters paths; and
+that the self-asserting-BDD baseline staleness ratchet only judges baseline
+entries whose module the active scope actually scanned.
 """
 
 from __future__ import annotations
@@ -22,7 +24,12 @@ from test_test_suite_quality import (  # noqa: E402
     EXCLUDED_PACKAGES,
     TESTS,
     _iter_test_modules,
+    _read_self_asserting_bdd_baseline,
     _resolve_scope_paths,
+    _self_asserting_bdd_baseline_candidates,
+)
+from test_test_suite_quality import (  # noqa: E402
+    test_self_asserting_bdd_baseline_has_no_stale_entries as _stale_baseline_check,
 )
 
 # Import the wrapper script so its scope-building logic can be unit-tested.
@@ -210,3 +217,46 @@ class TestBuildScopeEnv:
         """The guard is satisfied when at least one scope entry exists."""
         rel = "backend/tests/architecture/test_test_suite_quality.py"
         assert _script._scope_has_real_files(_script._build_scope_env([rel]))
+
+
+class TestBaselineStalenessUnderScope:
+    """The stale-baseline ratchet must only judge modules the scoped scan
+    actually visited.
+
+    Regression: the ``--changed-files`` wrapper sets ``MODULO_TEST_STYLE_SCOPE``
+    to the changed test files, and every baseline entry lives in a BDD step
+    module — so a scoped run whose changed set excluded those steps read the
+    whole 75-entry baseline as "no longer violating" and failed with phantom
+    stale entries unrelated to the change under review (observed while gating
+    an unrelated branch; unscoped the same test passed).
+    """
+
+    def test_scoped_run_ignores_baseline_entries_it_never_scanned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Scope = one non-BDD file: no baseline entry is in scope, so both
+        the candidate set and the real stale check must come up empty rather
+        than reporting the 75 un-scanned entries."""
+        target = TESTS / "architecture" / "test_test_suite_quality.py"
+        assert _read_baseline(), "regression fixture: the BDD baseline must be non-empty"
+        assert not any(key.startswith("architecture/") for key in _read_baseline()), (
+            "regression fixture: the baseline lists only bdd/ modules, so this scope excludes them all"
+        )
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        _resolve_scope_paths.cache_clear()
+        assert not _candidates()
+        _stale_baseline_check()  # the real assertion; fails if out-of-scope entries count as stale
+
+    def test_unscoped_run_still_judges_every_baseline_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a scope the candidate set must be the WHOLE baseline — the
+        filter may never blind the tree-wide ratchet."""
+        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        _resolve_scope_paths.cache_clear()
+        assert _candidates() == _read_baseline()
+        assert _read_baseline()
+
+
+def _read_baseline() -> set[str]:
+    return _read_self_asserting_bdd_baseline()
+
+
+def _candidates() -> set[str]:
+    return _self_asserting_bdd_baseline_candidates()

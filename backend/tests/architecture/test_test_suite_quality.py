@@ -14249,11 +14249,30 @@ def test_no_self_asserting_bdd_step_responses():
     )
 
 
+def _self_asserting_bdd_baseline_candidates() -> set[str]:
+    """Baseline entries the stale check may judge under the active scan.
+
+    Unscoped: every entry (the tree-wide ratchet). Under
+    ``MODULO_TEST_STYLE_SCOPE`` only entries whose module is IN scope: the
+    scoped ``--changed-files`` run never re-checked the others, so an
+    un-scanned module cannot be judged stale — without this filter every
+    scoped run whose changed set excludes the BDD steps reported all 75
+    baseline entries as phantom-stale and failed a gate that had nothing to
+    do with the change under review. Tree-wide staleness stays owned by the
+    unscoped pass (CI's architecture run).
+    """
+    baseline = _read_self_asserting_bdd_baseline()
+    scope = _resolve_scope_paths()
+    if scope is None:
+        return baseline
+    return {key for key in baseline if (TESTS / key.split(":", 1)[0]).resolve() in scope}
+
+
 def test_self_asserting_bdd_baseline_has_no_stale_entries():
     """A step listed in the baseline but no longer a violation (because it was
     rewritten to drive the app) must leave the baseline: the ratchet only
     shrinks, so a completed sweep is recorded and never silently re-opens."""
-    stale = _read_self_asserting_bdd_baseline() - _self_asserting_bdd_baseline_keys()
+    stale = _self_asserting_bdd_baseline_candidates() - _self_asserting_bdd_baseline_keys()
     assert not stale, (
         f"{len(stale)} baseline entr(ies) no longer violate the lens - regenerate the baseline\n"
         "with `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`:\n  "

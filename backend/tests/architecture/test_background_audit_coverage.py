@@ -119,15 +119,6 @@ EXEMPT_REASONS: dict[str, str] = {
         "hands — the run lifecycle that produced the container is audited on the run "
         "chain instead"
     ),
-    "unwired_entry_point": (
-        "a public entry point with ZERO production callers, verified in FAR-1574: no "
-        "SAQ/cron task, no REST route and no CLI command reaches it, so it creates "
-        "and starts nothing and there is no event to record (and no post-commit seam "
-        "to record it at). Obligation, not a free pass: the moment a caller lands, "
-        "its post-commit seam must append the SuiteRun lifecycle events through "
-        "record_suite_run_audit (with the phantom-event state guard) and this entry "
-        "must be re-classified 'audited'"
-    ),
 }
 
 #: Every entry classified ``gap`` MUST carry a note saying what is missing and
@@ -198,10 +189,13 @@ INVENTORY: dict[str, PathRecord] = {
     ),
     "fire_report_trigger": _exempt("trigger_bookkeeping"),
     # --- SuiteRun-creation entry points (public build_suite_run callers) --
-    # FAR-1574: the SAQ seam above is the only path that actually runs; the
-    # enumeration still has to name every other function that could create a
-    # SuiteRun, so a future cron/REST/CLI caller cannot land unclassified.
-    "run_scheduled_suite": _exempt("unwired_entry_point"),
+    # FAR-1574: the SAQ seam above is the only path that actually runs. The
+    # caller scan below still enumerates every PUBLIC function that reaches
+    # ``build_suite_run``, so a future cron/REST/CLI caller cannot land
+    # unclassified. Today it finds none: ``run_scheduled_suite`` was the only
+    # one and was deleted as dead code (FAR-1561) — no production or test
+    # caller ever reached it — so this section is deliberately empty rather
+    # than exempt.
     # --- system-cron tasks (saq_worker._system_functions) -----------------
     "fire_due_triggers": _exempt("trigger_bookkeeping"),
     "dispatcher_reconcile": _audited(
@@ -349,7 +343,7 @@ def _public_function_calls(path: Path) -> dict[str, set[str]]:
     return calls
 
 
-def _suite_run_entry_point_names() -> set[str]:
+def _suite_run_entry_point_names(*, sources: list[Path] | None = None) -> set[str]:
     """Public module-level functions that create a ``SuiteRun`` (FAR-1574).
 
     ``build_suite_run`` is the single statement that INSERTs a ``suite_runs``
@@ -358,9 +352,13 @@ def _suite_run_entry_point_names() -> set[str]:
     honest about surfaces: wiring an existing entry point into a new cron job,
     REST route or CLI command shows up as a NEW enumerated name the inventory
     must classify, not as an invisible side entrance to the SAQ seam.
+
+    *sources* overrides the scanned files (test seam) — production callers
+    pass nothing and get the whole ``src/modulo`` tree.
     """
+    paths = sorted(SRC_DIR.rglob("*.py")) if sources is None else sorted(sources)
     callers: dict[str, set[str]] = {}
-    for path in sorted(SRC_DIR.rglob("*.py")):
+    for path in paths:
         if "migrations" in path.parts:
             continue
         for name, called in _public_function_calls(path).items():
@@ -447,10 +445,25 @@ def test_enumeration_finds_the_expected_registration_sites() -> None:
     assert "fire_due_triggers" in _saq_cron_function_names()
     assert "reconcile_journeys" in _reconciler_function_names()
     assert "boot:modulo_users" in _boot_seed_labels()
-    # FAR-1574: the SuiteRun-creation scan must keep finding the one non-SAQ
-    # builder. An empty result here would mean the scan silently stopped
-    # matching, which would make its half of the ratchet pass vacuously.
-    assert "run_scheduled_suite" in _suite_run_entry_point_names()
+
+
+def test_suite_run_caller_scan_flags_a_future_public_caller(tmp_path: Path) -> None:
+    """Guard the SuiteRun-creation scan itself (FAR-1574, kept by FAR-1561).
+
+    Since ``run_scheduled_suite`` was deleted as dead code the production scan
+    legitimately returns NOTHING — a vacuous result the old
+    ``"run_scheduled_suite" in _suite_run_entry_point_names()`` guard used to
+    rule out. Prove the mechanism instead: a synthetic module whose public
+    function reaches ``build_suite_run`` must be enumerated, else a future
+    cron/REST/CLI wiring would land unclassified and this half of the ratchet
+    would pass vacuously.
+    """
+    synthetic = tmp_path / "future_suite_entry.py"
+    synthetic.write_text(
+        "async def future_suite_cron_entry(session: object) -> object:\n    return await build_suite_run(session)\n",
+        encoding="utf-8",
+    )
+    assert _suite_run_entry_point_names(sources=[synthetic]) == {"future_suite_cron_entry"}
 
 
 def test_every_enumerated_background_path_is_classified() -> None:

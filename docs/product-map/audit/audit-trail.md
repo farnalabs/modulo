@@ -10,6 +10,7 @@ code:
   - backend/src/modulo/core/audit_logger/background.py
   - backend/src/modulo/core/audit_coverage.py
   - backend/src/modulo/core/cron_helpers.py
+  - backend/src/modulo/core/eval_engine/execute_suite_run.py
   - backend/src/modulo/core/run_admission.py
   - backend/src/modulo/core/run_terminal_advance.py
   - backend/src/modulo/core/runner_capacity.py
@@ -18,6 +19,7 @@ code:
   - backend/src/modulo/db/crud/system_audit_event.py
   - backend/src/modulo/db/crud/pipeline_snapshot_versioning.py
   - backend/src/modulo/db/seed.py
+  - backend/src/modulo/cli/users.py
   - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/db/models/audit_event.py
   - backend/src/modulo/core/system_audit_logger.py
@@ -40,6 +42,7 @@ unit-tests:
   - backend/tests/unit/core/eval_engine/test_execute_suite_run.py
   - backend/tests/unit/db/crud/test_pipeline_graph_updated_audit.py
   - backend/tests/unit/db/test_seed_users.py
+  - backend/tests/unit/cli/test_users_cli.py
   - backend/tests/unit/crud/test_system_audit_event.py
   - backend/tests/unit/core/test_system_audit_logger.py
   - backend/tests/integration/test_audit_append_only.py
@@ -192,21 +195,35 @@ guarded against tampering at both the ORM and the database layer.
       liveness, telemetry watermark, internal bookkeeping, boot config,
       demo fixture, infra-container GC). `tests/architecture/test_background_audit_coverage.py`
       mechanically enumerates every path from the SAQ registration functions,
-      the `CronJob` list, the `_boot_seed(...)` labels and the `core/`
-      reconciler/sweep/seed functions, so a new background path fails the gate
-      until classified. FAR-1561 closed the two gaps FAR-1549 left visible: the
+      the `CronJob` list, the `_boot_seed(...)` labels, the `core/`
+      reconciler/sweep/seed functions and — since FAR-1574 — a caller scan
+      seeded from `build_suite_run` (the single statement that INSERTs a
+      `suite_runs` row) walking outward over PUBLIC callers, so a new
+      background path, or an API route / CLI command wiring a SuiteRun
+      creation entry point, fails the gate until classified. FAR-1561 closed
+      the two gaps FAR-1549 left visible: the
       SuiteRun lifecycle appends `suite_run_created` (fire, before enqueue) and
       `suite_run_started` / `suite_run_completed` (execution, post-commit) with
       the same re-select phantom guard, and the `modulo_users` boot seed appends
       `user_seeded` / `user_rehashed` inside the seeding transaction — the
-      credential and any admin-role grant commit atomically with their record —
-      so no enumerated path is classified `gap` any more
+      credential and any admin-role grant commit atomically with their record,
+      and the rehash payload's `role_granted` is computed from the ACTUAL
+      previous role (true only on a genuine escalation to admin, false for an
+      admin email whose membership was already admin) — so no enumerated path
+      is classified `gap` any more. FAR-1574 added the CLI's own grant record:
+      `modulo users add --admin` escalates the membership the seeder just
+      created and appends `user_admin_escalated` (SYSTEM actor,
+      `actor_source=cli_admin_escalation`, carrying `previous_role`) in the
+      same transaction, recorded only when a grant actually happens — never
+      double-recorded when the seeder already granted admin
       (`core/audit_logger/background.py`,
       `core/cron_helpers.py`, `core/run_admission.py`,
       `core/run_terminal_advance.py`, `core/runner_capacity.py`,
-      `core/saq_worker.py`, `db/seed.py`, `test_background_audit.py`,
+      `core/saq_worker.py`, `db/seed.py`, `cli/users.py`,
+      `core/eval_engine/execute_suite_run.py`, `test_background_audit.py`,
       `test_background_audit_wiring.py`, `test_background_audit_coverage.py`,
-      `test_seed_users.py`, `test_execute_suite_run.py`)
+      `test_seed_users.py`, `test_execute_suite_run.py`,
+      `test_users_cli.py`)
 - [x] The durable org-lifecycle ledger has a system-admin read surface
       (FAR-1538): `GET /api/v1/admin/system-audit` lists the org-independent
       `system_audit_events` records read-only with offset pagination and
@@ -231,6 +248,25 @@ guarded against tampering at both the ORM and the database layer.
   durable, filterable evidence storage, not a verifiable cross-org trail.
 
 ## QA History
+- 2026-10-08: **Audit-cleanup reconciliation (FAR-1561)** — three cleanups out
+  of the FAR-1472/1549/1561/1574 audit work. (1) Deleted `run_scheduled_suite`
+  from `core/eval_engine/execute_suite_run.py`: an unwired public
+  `build_suite_run` caller whose docstring falsely claimed the SAQ job called
+  it — zero callers repo-wide (definition + `__all__` + the ratchet's
+  inventory entry were the only references, re-verified before deleting) —
+  removed together with its `unwired_entry_point` exemption, so the
+  `EXEMPT_REASONS` vocabulary above is now exactly the set in use; the
+  `build_suite_run` caller scan that enumerated it STAYS as the ratchet
+  mechanism (its guard test now proves the scan on a synthetic future caller
+  instead of pinning the deleted name). (2) `rehash_existing_user`'s
+  `user_rehashed` payload flag `role_granted` now derives from the ACTUAL
+  previous role vs the role the membership landed on (true only on a genuine
+  escalation to admin) instead of `bool(admin_role)`, which reported true for
+  an admin email whose membership was already admin. (3) This entry now cites
+  the FAR-1574 surfaces it previously omitted: the `build_suite_run`
+  public-caller scan as a ratchet enumeration source, the `user_admin_escalated`
+  CLI event, and the `cli/users.py` / `execute_suite_run.py` /
+  `test_users_cli.py` citations.
 - 2026-10-07: **Improve Architecture product-map walk** — closed two untracked
   audit sub-surfaces merged after the 2026-10-06 walk. (1) FAR-1549 audited the
   background/cron/boot write paths with a new shared

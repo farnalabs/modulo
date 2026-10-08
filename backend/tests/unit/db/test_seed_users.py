@@ -388,6 +388,44 @@ async def test_rehash_existing_user_noop_role_records_role_granted_false(audit_a
 
 
 @pytest.mark.anyio
+async def test_rehash_existing_user_already_admin_records_role_granted_false(
+    audit_append_spy: AsyncMock,
+) -> None:
+    """``role_granted`` reports the ACTUAL escalation, not the admin email: an
+    admin account whose membership is ALREADY admin escalates nothing, so the
+    chain must never imply a grant that did not happen."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), password_hash=None)
+    membership = SimpleNamespace(role="admin")
+    session = _mock_session(_result(scalar_one_or_none=membership))
+
+    await rehash_existing_user(session, org, existing, "admin", "$2b$12$newhash")
+
+    payload = audit_append_spy.await_args.kwargs["payload_json"]
+    assert membership.role == "admin"  # unchanged — nothing was escalated
+    assert payload["role"] == "admin"
+    assert payload["role_granted"] is False
+
+
+@pytest.mark.anyio
+async def test_rehash_existing_user_creates_admin_membership_records_role_granted_true(
+    audit_append_spy: AsyncMock,
+) -> None:
+    """A missing membership created straight at ``admin`` IS an escalation
+    (no membership -> admin), so ``role_granted`` must be true there too."""
+    org = SimpleNamespace(id=uuid.uuid4())
+    existing = SimpleNamespace(id=uuid.uuid4(), password_hash=None)
+    session = _mock_session(_result(scalar_one_or_none=None))
+
+    await rehash_existing_user(session, org, existing, "admin@modulo.run", "$2b$12$newhash")
+
+    payload = audit_append_spy.await_args.kwargs["payload_json"]
+    assert session.add.call_args_list[0].args[0].role == "admin"
+    assert payload["role"] == "admin"
+    assert payload["role_granted"] is True
+
+
+@pytest.mark.anyio
 async def test_audit_failure_never_fails_the_seed(
     audit_append_spy: AsyncMock, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
