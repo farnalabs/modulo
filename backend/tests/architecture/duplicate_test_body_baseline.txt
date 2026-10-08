@@ -1,0 +1,59 @@
+# Duplicate test-function-body baseline (copy-paste twins).
+#
+# Two test_* functions in the same scope (module top level, or the same
+# class) whose parameters, decorators, and executable statements are
+# byte-for-byte identical once the name and docstring are set aside: they
+# exercise the exact same code with the exact same inputs, so the second
+# adds no coverage. When their names/docstrings describe different scenarios
+# the pair is worse than redundant - the test claims a scenario it never
+# sets up, so the un-exercised path can regress green. These are PRE-EXISTING
+# duplicates frozen so the guard blocks NEW ones immediately while the
+# backlog is untangled file by file. Generated, never hand-edited. Regenerate:
+#
+#   cd backend && uv run python scripts/update_duplicate_test_body_baseline.py
+#
+# This list can only SHRINK:
+#   * test_no_duplicate_test_bodies fails on any pair NOT listed here (a NEW
+#     duplicate), and
+#   * test_duplicate_test_body_baseline_has_no_stale_entries fails when a
+#     listed pair is untangled but not removed from the baseline.
+#
+# Entry format: <path relative to backend/tests>:<scope>:<nameA>=<nameB>
+#   (scope is the class name, or <module> for module-level tests;
+#    nameA/nameB are sorted so the key is order-independent)
+integration/auth/test_saml_per_org_regression.py:<module>:test_idp_initiated_sso_without_relay_state_on_per_provider_acs=test_org_b_assertion_accepted_at_org_b_acs_control
+unit/api/routes/test_org_login.py:TestLoginContext:test_deleted_org_not_counted=test_zero_orgs_returns_multi_org_true
+unit/api/routes/test_org_login.py:TestLoginContext:test_sentinel_org_not_counted=test_zero_orgs_returns_multi_org_true
+unit/api/routes/test_org_login.py:TestLoginContext:test_suspended_org_not_counted=test_zero_orgs_returns_multi_org_true
+unit/api/test_csrf.py:TestBearerAuth:test_bearer_token_skips_csrf=test_bearer_token_without_csrf_header
+unit/api/test_csrf.py:TestDisabled:test_disabled_skips_all_checks=test_disabled_without_auth
+unit/api/test_lifecycle_maps_routes.py:<module>:test_update_generic_sqlalchemy_error_still_maps_to_503=test_update_map_sqlalchemy_error_maps_to_503
+unit/api/test_rate_limiter_keys.py:TestRateLimitKeyDerivation:test_no_auth_falls_back_to_ip=test_unauthenticated_uses_ip_prefix
+unit/api/test_sensitive_mask.py:TestMergeMaskedConfigJson:test_masked_list_still_preserves_stored_secrets=test_patch_of_masked_list_does_not_overwrite_stored_secrets
+unit/api/test_variants.py:TestBatchCompare:test_raises_404_when_batch_not_found=test_returns_404_for_cross_org_batch
+unit/auth/test_api_key.py:<module>:test_revoke_api_key_not_found_returns_none=test_revoke_api_key_wrong_org_returns_none
+unit/auth/test_kill_switch.py:TestResolveAuthzEnforce:test_defaults_to_true_when_column_falsy_none=test_defaults_to_true_when_row_absent
+unit/auth/test_permission_dependencies.py:TestRequireTargetOrgRoleReads:test_cross_org_member_at_operator_allowed=test_target_org_member_at_operator_allowed
+unit/connectors/test_gitlab_resilience.py:<module>:test_health_check_uses_single_client_session=test_hosted_health_check_does_not_probe_version
+unit/connectors/test_n8n.py:<module>:test_write_workflow_activate=test_write_workflow_activate_already_active
+unit/core/evidence/test_retention.py:<module>:test_save_policy_missing_org_raises=test_save_policy_missing_org_raises_value_error
+unit/core/pipeline_engine/test_egress_resolution.py:<module>:test_node_unset_defers_to_profile=test_regression_profile_none_node_unset_on_e2b_resolves_to_deny_all
+unit/core/pipeline_engine/test_policy_gate_eval_wiring.py:<module>:test_c8_sibling_enabled_gate_still_governs_in_live_fallback=test_legacy_none_pins_fall_back_to_live_gates
+unit/core/run_context/test_autonomy.py:TestValidateAutonomyCeiling:test_canonical_ceiling_still_passes=test_ceiling_above_default_is_valid
+unit/core/runtime_config/test_store.py:TestRuntimeConfigStore:test_default_value_when_no_env_and_no_override=test_get_returns_default_when_nothing_set
+unit/core/test_graph_cache.py:<module>:test_reject_routes_to_reject_target=test_reject_with_correction_target_still_routes_to_reject_target
+unit/core/test_guardrail_policy_gate.py:TestC2ResolverWiredWarn:test_resolver_warn_overrides_blocking_config=test_warn_gate_does_not_raise_on_violation
+unit/cron_helpers/test_dispatcher_reconcile.py:TestAwaitingHumanHasCommittedDecision:test_claimed_no_committed_decision_but_pending_claimed_row_skipped=test_claimed_no_decision_skipped
+unit/db/test_multi_backend_bdd.py:TestMigrationBackendConfig:test_detect_sqlite=test_render_as_batch_enabled_for_sqlite
+unit/graph_validator/test_retry_policy.py:<module>:test_retry_policy_null_on_does_not_loosen_non_list_non_null=test_retry_policy_on_not_a_list_is_malformed
+unit/hitl_manager/test_hitl_manager.py:<module>:test_claim_already_claimed_raises=test_claim_cross_account_on_claimed_gate_raises
+unit/launcher/test_supervisor_coverage_extra.py:<module>:test_degrade_locked_runtime_and_pause=test_degrade_locked_with_pause_hook_and_runtime
+unit/model_backend_hub/test_hub.py:<module>:test_get_with_rotation_empty_hub_raises=test_get_with_rotation_raises_for_unregistered_id
+unit/pipeline_engine/test_executor_coverage.py:<module>:test_retry_after_policy_eval_failed_code=test_retry_after_policy_legacy_eval_blocked
+unit/pipeline_engine/test_executor_coverage.py:<module>:test_retry_after_policy_legacy_executor_stalled=test_retry_after_policy_stall_executor_stalled_code
+unit/pipeline_engine/test_graph_cache.py:<module>:test_gate_kickback_router_rejection_kicks_back_to_reject_no_correction_marker=test_gate_kickback_router_without_correction_target_kicks_back_to_reject
+unit/pipeline_engine/test_loop_edge.py:TestGraphValidatorLoopEdges:test_loop_edge_does_not_block_entry_point=test_loop_edge_skipped_in_schema_compatibility
+unit/pipeline_engine/test_retry_compensation.py:<module>:test_compensation_fires_on_watched_node_terminal_failure_semantics=test_edge_has_compensation_when_on_failure_set
+unit/product_analytics/test_metrics_dump.py:TestShouldDumpNow:test_persisted_offset_out_of_window_false=test_upper_boundary_exclusive_false
+unit/registry/test_registry.py:TestRegistryCRUD:test_list_all_primitives=test_registry_total_count
+unit/trigger_engine/test_trigger_engine.py:<module>:test_handle_webhook_event_type_accepted_passes=test_handle_webhook_event_value_filter_absent_unchanged
