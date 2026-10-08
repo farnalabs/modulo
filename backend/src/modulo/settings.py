@@ -482,17 +482,32 @@ class Settings(BaseSettings):
     runner_marker_sweep_lock_timeout_seconds: int = Field(
         default=5, alias="RUNNER_MARKER_SWEEP_LOCK_TIMEOUT_SECONDS", ge=1, le=30
     )
-    # FAR-1279: operator-tunable bound for the pipeline MUTATION transaction's
-    # row-lock wait (`routes.pipelines._reapply_team_gate_inside_mutation_txn`
-    # issues `set_config('lock_timeout', ..., true)` before its `SELECT ...
-    # FOR UPDATE`). The bound applies to the WHOLE mutation transaction, so a
-    # deploy that surfaces new 409s (SQLSTATE 55P03 -> api.db_error_handling)
-    # can be relaxed without a code change. A module constant could not be
-    # raised by an operator; this mirrors `runner_capacity_lock_timeout_ms`'s
-    # naming/typing/validation (int, ms, alias, ge/le) while staying scoped to
-    # its OWN subsystem - reusing either runner knob would couple API PATCH
+    # FAR-1279: operator-tunable bound for row-lock waits in two consumers,
+    # each applied transaction-scoped (`set_config('lock_timeout', ..., true)`)
+    # before its transaction's first lock.
+    # (1) REST PIPELINE-MUTATION transaction - MULTI-row: `routes.pipelines.
+    # _reapply_team_gate_inside_mutation_txn` issues the bound before its
+    # `SELECT ... FOR UPDATE`, covering the mutation row lock, the edge/index
+    # and FK locks of the graph write, and the per-organisation
+    # `audit_chain_heads` row lock taken by `append_audit_event`. The bound
+    # applies to the WHOLE transaction, so a deploy that surfaces new 409s
+    # (SQLSTATE 55P03 -> api.db_error_handling) can be relaxed without a
+    # code change. A module constant could not be raised by an operator;
+    # this mirrors `runner_capacity_lock_timeout_ms`'s naming/typing/
+    # validation (int, ms, alias, ge/le) while staying scoped to its OWN
+    # subsystem - reusing either runner knob would couple API PATCH
     # contention to runner-capacity tuning. Default 5000 = the value the
     # constant shipped with, so behaviour is unchanged at the default.
+    # (2) FAR-1584 DISPATCH path - SINGLE hot `runs` row: every write the
+    # dispatcher makes on it (`core/dispatch.py` - dispatched_at,
+    # dispatcher='saq' + saq_job_id, enqueue_failed_at, and the admission
+    # transaction's org-cap demote) runs under the SAME bound via
+    # `db.crud.row_lock.set_mutation_row_lock_timeout`, because a dispatch
+    # row-lock wait must never approach the Fly HAProxy 30-minute session
+    # window (FAR-1524 O11). Tuning this knob therefore moves BOTH
+    # consumers together - one bound for "how long may a transaction wait
+    # for a row lock", which is the property both need; the `le=30000`
+    # ceiling keeps any configured value 60x below that window.
     mutation_row_lock_timeout_ms: int = Field(default=5000, alias="MUTATION_ROW_LOCK_TIMEOUT_MS", ge=100, le=30000)
     # Machine deployment identity for the runner workspace-identity label
     # (reconciler scoping; hostname fallback when unset).

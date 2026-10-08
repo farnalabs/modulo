@@ -2282,3 +2282,71 @@ class TestPerformUpgradeHappyPath:
         assert result.previous_version == "1.1.0"
         assert result.version == "1.2.0"
         assert len(boot_record) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_version",
+    ["../evil", "a/b", "a\b", "", ".", "..", "1.2.3\n", "1.2.3\nevil", "1 2", "bundle-v../x", "v"],
+    ids=[
+        "parent-dir-traversal",
+        "forward-slash",
+        "backspace",
+        "empty",
+        "dot",
+        "dot-dot",
+        "trailing-newline",
+        "embedded-newline",
+        "embedded-space",
+        "bundle-prefix-traversal",
+        "bare-v",
+    ],
+)
+def test_perform_upgrade_rejects_unsafe_version(tmp_path, bad_version):
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="invalid --version"):
+        upgrade_module.perform_upgrade(
+            tmp_path / "data",
+            install_root=tmp_path / "install-root",
+            target_version=bad_version,
+            fetch=lambda url, dest: fetched.append(url),
+        )
+    assert not fetched
+
+
+@pytest.mark.parametrize("bad_version", ["../evil", "a/b", "", "..", "1.0\n"])
+def test_fetch_release_assets_rejects_unsafe_version(tmp_path, bad_version):
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="invalid --version"):
+        upgrade_module.fetch_release_assets(
+            bad_version, tmp_path / "downloads", fetch=lambda url, dest: fetched.append(url)
+        )
+    assert not fetched
+    assert not (tmp_path / "downloads").exists()
+
+
+def test_fetch_release_assets_rejects_symlinked_tarball_escape(tmp_path):
+    """Defense-in-depth: even a well-formed version segment must not let a
+    pre-existing symlink at the tarball path resolve outside download_dir, so
+    the path-containment guard fires before any fetch (GitHub #1176)."""
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    tarball_name = f"modulo-1.2.3-linux-{upgrade_module._host_arch()}.tar.gz"
+    outside = tmp_path / "outside.tar.gz"
+    outside.write_bytes(b"")
+    (downloads / tarball_name).symlink_to(outside)
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="escapes the download directory"):
+        upgrade_module.fetch_release_assets("1.2.3", downloads, fetch=lambda url, dest: fetched.append(url))
+    assert not fetched
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("1.2.3", "1.2.3"), ("v1.2.3", "1.2.3"), ("bundle-v1.2.3", "1.2.3"), ("1.2.3-rc.1", "1.2.3-rc.1")],
+)
+def test_validate_version_segment_accepts_normal_versions(raw, expected):
+    stripped = upgrade_module._strip_bundle_prefix(raw)
+    assert upgrade_module._validate_version_segment(stripped) == expected

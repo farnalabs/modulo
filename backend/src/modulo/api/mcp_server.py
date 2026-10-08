@@ -11369,9 +11369,11 @@ async def _exchange_refresh_token(
     ``(response_dict, error)``; OAuth/DB exceptions propagate to the caller.
     """
     from modulo.auth.oauth import (
+        InvalidGrantError,
         create_oauth_access_token,
         create_oauth_refresh_token,
         decode_oauth_refresh_token,
+        rotate_oauth_token_family,
         validate_client_secret,
         verify_live_role_covers_scopes,
     )
@@ -11389,6 +11391,11 @@ async def _exchange_refresh_token(
 
         claims = decode_oauth_refresh_token(creds["refresh_token"], settings.secret_key)
 
+        # Client binding (#1174): the refresh token must have been issued to
+        # the authenticated client in the authenticated client's org.
+        if claims.client_id != client.client_id or claims.organisation_id != client.organisation_id:
+            raise InvalidGrantError("Refresh token was not issued to this client")
+
         # ADR 047: the consenting account's LIVE role must still cover the
         # scopes — a demoted/removed account is denied a fresh token.
         await verify_live_role_covers_scopes(
@@ -11398,25 +11405,46 @@ async def _exchange_refresh_token(
             scopes=claims.scopes,
         )
 
-        new_sequence = claims.token_sequence + 1
-        new_access_token = create_oauth_access_token(
-            claims.client_id,
-            settings.secret_key,
-            organisation_id=str(claims.organisation_id),
-            account_id=str(claims.account_id),
-            scopes=claims.scopes,
-            token_family=claims.token_family,
-            token_sequence=new_sequence,
-        )
-        new_refresh_token = create_oauth_refresh_token(
-            claims.client_id,
-            settings.secret_key,
-            organisation_id=str(claims.organisation_id),
-            account_id=str(claims.account_id),
-            scopes=claims.scopes,
-            token_family=claims.token_family,
-            token_sequence=new_sequence,
-        )
+        # Rotation (#1173): DB-backed sequence tracking. A stale sequence
+        # (replay) blacklists the family; blacklisted/unknown families are
+        # rejected. The rejection is raised AFTER the transaction block so the
+        # blacklist write is committed rather than rolled back with it.
+        rotation_error: InvalidGrantError | None = None
+        family_id = ""
+        new_sequence = 0
+        try:
+            family_id, new_sequence = await rotate_oauth_token_family(
+                s,
+                family_id=claims.token_family,
+                current_sequence=claims.token_sequence,
+                client_id=client.client_id,
+                org_id=client.organisation_id,
+            )
+        except InvalidGrantError as exc:
+            rotation_error = exc
+
+        if rotation_error is None:
+            new_access_token = create_oauth_access_token(
+                client.client_id,
+                settings.secret_key,
+                organisation_id=str(client.organisation_id),
+                account_id=str(claims.account_id),
+                scopes=claims.scopes,
+                token_family=family_id,
+                token_sequence=new_sequence,
+            )
+            new_refresh_token = create_oauth_refresh_token(
+                client.client_id,
+                settings.secret_key,
+                organisation_id=str(client.organisation_id),
+                account_id=str(claims.account_id),
+                scopes=claims.scopes,
+                token_family=family_id,
+                token_sequence=new_sequence,
+            )
+
+    if rotation_error is not None:
+        raise rotation_error
 
     return (
         {

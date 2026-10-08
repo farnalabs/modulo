@@ -23,10 +23,14 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "modulo.serviceAccountName" . }}
-      # The Modulo workloads never call the Kubernetes API, and the chart's
-      # ServiceAccount carries no RBAC bindings, so mounting a token only
-      # widens the blast radius of a compromised pod (kubernetes:S6865).
-      automountServiceAccountToken: false
+      # Opt-in via serviceAccount.automountServiceAccountToken (default
+      # false): the Kubernetes runtime provider has this workload
+      # create/exec/log workspace pods in-cluster, so operators enabling that
+      # provider must turn this on to give it a namespaced credential. With
+      # the provider off nothing here calls the Kubernetes API, and an
+      # unmounted token keeps the blast radius of a compromised pod small
+      # (kubernetes:S6865).
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

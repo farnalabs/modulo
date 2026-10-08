@@ -1049,6 +1049,10 @@ class GitLabConnector(ConnectorBase):
         yet exist, and updates (PUT) when it does.  When the caller supplies
         an explicit ``sha`` the probe is skipped and a PUT is issued directly
         (the caller is signalling they hold the current SHA).
+
+        A CREATE that GitLab rejects with "A file with this name already
+        exists" is retried as an UPDATE, so a miss on the probe can never
+        turn a write to an existing file into a lost one.
         """
         project = self._require_filter(payload.data, "project", payload.resource)
         path = self._require_filter(payload.data, "path", payload.resource)
@@ -1076,17 +1080,7 @@ class GitLabConnector(ConnectorBase):
         # GET returns 200 + the current SHA when the file exists, or
         # 404 when it does not.  GitLab requires POST to create a file
         # and PUT to update one — PUT on a non-existent path returns 400.
-        existing_sha: str | None = None
-        try:
-            probe = await self._call_api("GET", file_url, params={"ref": branch})
-            probe_data = _safe_json_object(probe)
-            existing_sha = probe_data.get("sha")
-        except ValueError:
-            # Non-retryable errors (404 file-not-found, 400 bad-ref, …)
-            # indicate the file does not exist or the ref is invalid.
-            # Fall through to POST; GitLab will report a real error if
-            # the ref itself is bad.
-            existing_sha = None
+        existing_sha = await self._probe_file_sha(file_url, branch)
 
         if existing_sha:
             body = {
@@ -1102,9 +1096,42 @@ class GitLabConnector(ConnectorBase):
                 "content": content,
                 "commit_message": message,
             }
-            r = await self._call_api("POST", file_url, json=body)
+            try:
+                r = await self._call_api("POST", file_url, json=body)
+            except ValueError as exc:
+                if "already exists" not in str(exc).lower():
+                    raise
+                # The probe answered "absent" for a path GitLab's create
+                # endpoint can see, so the CREATE was refused as a duplicate
+                # and the write would be lost.  Converge on UPDATE instead:
+                # re-probe for the current SHA (used when it resolves) and
+                # fall back to a sha-less PUT — `sha` is optional on the
+                # update endpoint, so the write still lands when the probe
+                # keeps failing for the very reason it missed the file.
+                update: dict[str, Any] = dict(body)
+                reprobe_sha = await self._probe_file_sha(file_url, branch)
+                if reprobe_sha:
+                    update["sha"] = reprobe_sha
+                r = await self._call_api("PUT", file_url, json=update)
 
         return _safe_json_object(r)
+
+    async def _probe_file_sha(self, file_url: str, branch: Any) -> str | None:
+        """Current SHA of the file at *file_url* on *branch*, else ``None``.
+
+        Any answer that is not a usable SHA — a 404 for a path that does not
+        exist (yet), a bad-ref 400, a transient 5xx/timeout that exhausted the
+        retry budget, or a non-object body — is reported as "no SHA" so the
+        caller falls through to the CREATE path rather than failing the write.
+        """
+        existing_sha: str | None = None
+        try:
+            probe = await self._call_api("GET", file_url, params={"ref": branch})
+            probe_data = _safe_json_object(probe)
+            existing_sha = probe_data.get("sha")
+        except ValueError:
+            return None
+        return existing_sha
 
     @staticmethod
     def _normalize_commit_action(action: Any, resource: str) -> dict[str, Any]:

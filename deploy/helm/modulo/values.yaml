@@ -65,6 +65,24 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
+  # Mount the ServiceAccount token into the pods that talk to the Kubernetes
+  # API. Applies to the three workspace-touching workloads — backend,
+  # saq-runner and saq-system; the frontend (a static nginx SPA) never calls
+  # the API and stays at `false` regardless of this knob.
+  #
+  # Default: false. With the Kubernetes runtime provider off (the default),
+  # nothing in this stack calls the Kubernetes API, so an unmounted token
+  # keeps the blast radius of a compromised pod small (kubernetes:S6865).
+  #
+  # Set to true ONLY when you enable the Kubernetes runtime provider
+  # (MODULO_KUBERNETES_ENABLED) — those workloads then create/exec/log
+  # workspace pods in-cluster and need a namespaced credential to do it.
+  # Trade-off: turning it on gives every backend/saq pod a bearer token
+  # scoped by whatever RBAC you bind to this ServiceAccount, so keep the
+  # grant a namespaced Role (see README "Kubernetes runtime provider").
+  # This is declarative — it survives `helm upgrade`, unlike the kubectl
+  # patch workaround the guide used to recommend.
+  automountServiceAccountToken: false
 
 # -- External Postgres (default) --------------------------------------------
 # This chart never deploys Postgres; provide an external database via

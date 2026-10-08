@@ -35,6 +35,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import EnvironmentProfileForm from '../../views/environment-profiles/EnvironmentProfileForm.vue'
+import AppSelect from '../../components/shared/AppSelect.vue'
 
 function fullProfile(over: Record<string, unknown> = {}) {
   return {
@@ -166,6 +167,68 @@ describe('EnvironmentProfileForm — create mode', () => {
 
     expect(postMock).toHaveBeenCalledTimes(1)
     expect(postMock.mock.calls[0][1].capabilities).toEqual(['git'])
+  })
+
+  it('offers kubernetes as a third provider type alongside local_docker and e2b', async () => {
+    const wrapper = mountForm()
+    await flush()
+
+    const providerSelect = wrapper
+      .findAllComponents(AppSelect)
+      .find((s) => s.find('[data-testid="envprofile-form-provider"]').exists())
+    expect(providerSelect).toBeTruthy()
+
+    const options = providerSelect!.props('options') as Array<{ value: string; label: string }>
+    expect(options.map((o) => o.value)).toEqual(['local_docker', 'e2b', 'kubernetes'])
+    expect(options.map((o) => o.label)).toEqual([
+      'Bundled Runner (Docker)',
+      'External Runner (E2B)',
+      'External Runner (Kubernetes)',
+    ])
+  })
+
+  it('labels the provider select and links its dynamic tier hint via aria-describedby', async () => {
+    const wrapper = mountForm()
+    await flush()
+
+    const selectRoot = wrapper.find('[data-testid="envprofile-form-provider"]')
+    expect(selectRoot.exists()).toBe(true)
+
+    // The visible label's `for` resolves to the combobox's id, which carries
+    // the accessible name (PrimeVue renders a span[role=combobox], not input).
+    const combobox = selectRoot.find('[role="combobox"]')
+    expect(combobox.exists()).toBe(true)
+    expect(combobox.attributes('aria-label')).toBe('Provider Type')
+    expect(combobox.attributes('id')).toBe('environmentprofileform-field-5')
+    expect(wrapper.find('label[for="environmentprofileform-field-5"]').exists()).toBe(true)
+
+    // The dynamic tier hint is a status region, referenced by the combobox.
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'kubernetes'
+    await nextTick()
+
+    const hint = wrapper.find('#envprofile-form-tier-hint')
+    expect(hint.exists()).toBe(true)
+    expect(hint.attributes('role')).toBe('status')
+    expect(combobox.attributes('aria-describedby')).toContain('envprofile-form-tier-hint')
+  })
+
+  it('create: selecting kubernetes POSTs provider_type kubernetes', async () => {
+    postMock.mockResolvedValue(fullProfile({ provider_type: 'kubernetes' }))
+    const wrapper = mountForm()
+    await flush()
+
+    const vm = wrapper.vm as unknown as { form: { provider_type: string } }
+    vm.form.provider_type = 'kubernetes'
+    await nextTick()
+
+    await wrapper.find('[data-testid="envprofile-form-name"]').setValue('k8s-profile')
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(postMock).toHaveBeenCalledTimes(1)
+    expect(postMock.mock.calls[0][1].provider_type).toBe('kubernetes')
+    expect(routerPush).toHaveBeenCalledWith('/environment-profiles')
   })
 
   it('shows the tier badge once a provider with a runner tier is selected', async () => {

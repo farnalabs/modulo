@@ -1031,6 +1031,21 @@ regression that silently weakens the suite:
   frozen in ``self_asserting_bdd_baseline.txt`` under the same shrink-only
   ratchet as the audit-coverage baseline, so the guard blocks NEW
   self-asserting steps immediately while the backlog is rewritten file by file
+- two ``test_*`` functions in the *same scope* (module top level, or the same
+  class) whose bodies are byte-for-byte identical once the function name and
+  docstring are set aside — same parameters, same decorators, same statements.
+  Such a pair exercises the exact same code with the exact same inputs, so the
+  second test adds no coverage while a reader (and a mutation-testing run)
+  believes two distinct scenarios are pinned. This is the test-level twin of
+  the duplicate-parametrize and duplicate-consecutive-assert lenses; when the
+  two names/docstrings describe *different* scenarios (``test_suspended_org_
+  not_counted`` next to ``test_zero_orgs_returns_multi_org_true``, both mocking
+  an empty result) it is worse than redundant — the test claims a scenario it
+  never sets up, so a regression in the un-exercised path stays green. The
+  pre-existing offenders (the duplicate-sweep backlog) are frozen in
+  ``duplicate_test_body_baseline.txt`` under the same shrink-only ratchet as
+  the audit-coverage baseline, so the guard blocks NEW duplicates immediately
+  while the backlog is untangled file by file
 
 Every lens is written so it reports actionable file:line violations instead
 of a bare "assert not violations", mirroring the sibling architecture tests.
@@ -14249,11 +14264,30 @@ def test_no_self_asserting_bdd_step_responses():
     )
 
 
+def _self_asserting_bdd_baseline_candidates() -> set[str]:
+    """Baseline entries the stale check may judge under the active scan.
+
+    Unscoped: every entry (the tree-wide ratchet). Under
+    ``MODULO_TEST_STYLE_SCOPE`` only entries whose module is IN scope: the
+    scoped ``--changed-files`` run never re-checked the others, so an
+    un-scanned module cannot be judged stale — without this filter every
+    scoped run whose changed set excludes the BDD steps reported all 75
+    baseline entries as phantom-stale and failed a gate that had nothing to
+    do with the change under review. Tree-wide staleness stays owned by the
+    unscoped pass (CI's architecture run).
+    """
+    baseline = _read_self_asserting_bdd_baseline()
+    scope = _resolve_scope_paths()
+    if scope is None:
+        return baseline
+    return {key for key in baseline if (TESTS / key.split(":", 1)[0]).resolve() in scope}
+
+
 def test_self_asserting_bdd_baseline_has_no_stale_entries():
     """A step listed in the baseline but no longer a violation (because it was
     rewritten to drive the app) must leave the baseline: the ratchet only
     shrinks, so a completed sweep is recorded and never silently re-opens."""
-    stale = _read_self_asserting_bdd_baseline() - _self_asserting_bdd_baseline_keys()
+    stale = _self_asserting_bdd_baseline_candidates() - _self_asserting_bdd_baseline_keys()
     assert not stale, (
         f"{len(stale)} baseline entr(ies) no longer violate the lens - regenerate the baseline\n"
         "with `cd backend && uv run python scripts/update_self_asserting_bdd_baseline.py`:\n  "
@@ -14372,3 +14406,257 @@ def test_self_asserting_bdd_step_lens_flags_fabricated_responses():
     for source in negative_sources:
         tree = ast.parse(source)
         assert not _self_asserting_bdd_step_violations(tree), f"lens should NOT flag:\n{source}"
+
+
+# ---------------------------------------------------------------------------
+# LENS: duplicate test function bodies (copy-paste twins)
+# ---------------------------------------------------------------------------
+def _docstring_value(node: ast.stmt) -> str | None:
+    """Return the string value when *node* is a docstring expression, else None."""
+    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        return node.value.value
+    return None
+
+
+def _test_body_fingerprint(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    """Return a name-and-docstring-independent fingerprint of a test function.
+
+    The fingerprint is ``(arguments, decorators, statements)``, each rendered
+    with ``ast.dump`` so it compares by syntax rather than by object identity.
+    The function name and its leading docstring are deliberately excluded: two
+    tests differ in name (and often only in the scenario they *claim* in a
+    docstring), but if their parameters, decorators, and executable statements
+    are identical they exercise the exact same code with the exact same inputs.
+    Decorators are part of the fingerprint so two otherwise-identical bodies
+    behind different ``@pytest.mark.parametrize`` matrices are treated as
+    distinct tests, and the argument list is included so a test that requests a
+    different fixture (and therefore runs a different setup) is not a twin.
+    """
+    arguments = ast.dump(fn.args, include_attributes=False)
+    decorators = tuple(sorted(ast.dump(dec, include_attributes=False) for dec in fn.decorator_list))
+    body = list(fn.body)
+    if body and _docstring_value(body[0]) is not None:
+        body = body[1:]
+    statements = tuple(ast.dump(stmt, include_attributes=False) for stmt in body)
+    return (arguments, decorators, statements)
+
+
+def _duplicate_test_body_functions(tree: ast.AST) -> list[tuple[str, str, str, int]]:
+    """Return ``(scope, first_name, second_name, second_lineno)`` for every
+    ``test_*`` function that repeats an earlier sibling's fingerprint.
+
+    Only functions in the *same* scope are compared: the module top level is
+    one scope and each class body is another. Two identical methods in two
+    different classes are not flagged, because a class attribute or helper
+    (``self.URL``, ``self.setup``) can legitimately make the same source text
+    exercise different behaviour per class — comparing across scopes would
+    produce exactly that false positive. Same-name repeats are skipped here:
+    a redefinition that silently shadows the earlier function is owned by the
+    same-scope-redefinition lens, not this one. Only the module top level and
+    top-level class bodies are scanned; a class nested inside another class is
+    not descended into (pytest does not collect nested classes), so its methods
+    are out of scope.
+    """
+    found: list[tuple[str, str, str, int]] = []
+
+    def _scan(scope: str, body: list[ast.stmt]) -> None:
+        seen: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = {}
+        for node in body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test_"):
+                continue
+            fingerprint = _test_body_fingerprint(node)
+            first = seen.get(fingerprint)
+            if first is None:
+                seen[fingerprint] = node.name
+            elif first != node.name:
+                found.append((scope, first, node.name, node.lineno))
+
+    _scan("<module>", tree.body)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            _scan(node.name, node.body)
+    return found
+
+
+def _duplicate_test_body_pair_key(first: str, second: str) -> str:
+    """Order-independent key for a duplicate pair, so the baseline does not
+    care which twin appears first in the file."""
+    return "=".join(sorted((first, second)))
+
+
+def _duplicate_test_body_baseline_key(rel: str, scope: str, first: str, second: str) -> str:
+    return f"{rel}:{scope}:{_duplicate_test_body_pair_key(first, second)}"
+
+
+_DUPLICATE_TEST_BODY_BASELINE_PATH = Path(__file__).resolve().parent / "duplicate_test_body_baseline.txt"
+_DUPLICATE_TEST_BODY_BASELINE_HEADER = (
+    "# Duplicate test-function-body baseline (copy-paste twins).\n"
+    "#\n"
+    "# Two test_* functions in the same scope (module top level, or the same\n"
+    "# class) whose parameters, decorators, and executable statements are\n"
+    "# byte-for-byte identical once the name and docstring are set aside: they\n"
+    "# exercise the exact same code with the exact same inputs, so the second\n"
+    "# adds no coverage. When their names/docstrings describe different scenarios\n"
+    "# the pair is worse than redundant - the test claims a scenario it never\n"
+    "# sets up, so the un-exercised path can regress green. These are PRE-EXISTING\n"
+    "# duplicates frozen so the guard blocks NEW ones immediately while the\n"
+    "# backlog is untangled file by file. Generated, never hand-edited. Regenerate:\n"
+    "#\n"
+    "#   cd backend && uv run python scripts/update_duplicate_test_body_baseline.py\n"
+    "#\n"
+    "# This list can only SHRINK:\n"
+    "#   * test_no_duplicate_test_bodies fails on any pair NOT listed here (a NEW\n"
+    "#     duplicate), and\n"
+    "#   * test_duplicate_test_body_baseline_has_no_stale_entries fails when a\n"
+    "#     listed pair is untangled but not removed from the baseline.\n"
+    "#\n"
+    "# Entry format: <path relative to backend/tests>:<scope>:<nameA>=<nameB>\n"
+    "#   (scope is the class name, or <module> for module-level tests;\n"
+    "#    nameA/nameB are sorted so the key is order-independent)\n"
+)
+
+
+def _duplicate_test_body_baseline_keys() -> set[str]:
+    """Every current duplicate-pair key (``<relpath>:<scope>:<pair>``), tree-wide."""
+    keys: set[str] = set()
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS).as_posix()
+        for scope, first, second, _lineno in _duplicate_test_body_functions(tree):
+            keys.add(_duplicate_test_body_baseline_key(rel, scope, first, second))
+    return keys
+
+
+def _read_duplicate_test_body_baseline() -> set[str]:
+    """Baseline entries (comments and blank lines stripped)."""
+    return {
+        stripped
+        for raw in _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
+        if (stripped := raw.strip()) and not stripped.startswith("#")
+    }
+
+
+def _render_duplicate_test_body_baseline(keys: set[str]) -> str:
+    """Canonical baseline text: fixed header + one sorted entry per line."""
+    return _DUPLICATE_TEST_BODY_BASELINE_HEADER + "".join(f"{key}\n" for key in sorted(keys))
+
+
+def test_no_duplicate_test_bodies():
+    """Two ``test_*`` functions in the same scope whose bodies are identical
+    once the name and docstring are set aside — same parameters, same
+    decorators, same executable statements — exercise the exact same code with
+    the exact same inputs, so the second adds no coverage. A reader (and a
+    mutation-testing run) believes two distinct scenarios are pinned when only
+    one body exists, and when the two names/docstrings describe *different*
+    scenarios the pair is worse than redundant: the test advertises a scenario
+    it never sets up, so a regression in the un-exercised path stays green.
+    Untangle the twins (make the second actually drive its scenario) or drop the
+    redundant one. The pre-existing offenders are frozen in
+    ``duplicate_test_body_baseline.txt`` so this guard blocks NEW duplicates
+    immediately while the backlog is untangled; the stale-entry test keeps the
+    sweep honest."""
+    baseline = _read_duplicate_test_body_baseline()
+    violations = []
+    for path in _iter_test_modules():
+        tree = _parse(path)
+        if tree is None:
+            continue
+        rel = path.relative_to(TESTS).as_posix()
+        for scope, first, second, lineno in _duplicate_test_body_functions(tree):
+            if _duplicate_test_body_baseline_key(rel, scope, first, second) in baseline:
+                continue
+            where = "" if scope == "<module>" else f" (class {scope})"
+            violations.append(
+                f"  {rel}:{lineno}{where}  {second} repeats {first} — identical parameters, decorators, and body"
+            )
+    assert not violations, (
+        f"Found {len(violations)} duplicate test function(s) outside the\n"
+        "duplicate_test_body_baseline.txt ratchet.\n"
+        "Two tests with identical parameters, decorators, and body exercise the same code with\n"
+        "the same inputs: untangle the second (drive its scenario) or drop it.\n" + "\n".join(violations)
+    )
+
+
+def test_duplicate_test_body_baseline_has_no_stale_entries():
+    """A pair listed in the baseline but no longer a duplicate (because it was
+    untangled or removed) must leave the baseline: the ratchet only shrinks, so
+    a completed sweep is recorded and never silently re-opens."""
+    stale = _read_duplicate_test_body_baseline() - _duplicate_test_body_baseline_keys()
+    assert not stale, (
+        f"{len(stale)} duplicate-test-body baseline entries are no longer duplicates - regenerate\n"
+        "the baseline with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`:\n  "
+        + "\n  ".join(sorted(stale))
+    )
+
+
+def test_duplicate_test_body_baseline_is_sorted_and_regenerable():
+    """The baseline must be byte-stable (fixed header + sorted entries) so
+    regeneration is idempotent and review diffs stay minimal."""
+    current = _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8")
+    assert current == _render_duplicate_test_body_baseline(_read_duplicate_test_body_baseline()), (
+        "dup baseline is not in canonical form - regenerate it with "
+        "`cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`"
+    )
+
+
+def test_duplicate_test_body_lens_flags_copies():
+    """Synthetic positive/negative control for the duplicate-test-body lens: it
+    must flag a second ``test_*`` function whose parameters, decorators, and
+    body match an earlier sibling in the same scope (module level, class body,
+    async tests, docstring-only differences), and ignore distinct bodies,
+    different parameters, different decorators, same-name redefinitions, single
+    tests, and identical bodies in different scopes (where a class attribute can
+    change the behaviour)."""
+    positive_sources = [
+        "def test_a():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 1\n",
+        (
+            "class TestX:\n"
+            "    def test_a(self):\n        assert self.url == '/x'\n"
+            "    def test_b(self):\n        assert self.url == '/x'\n"
+        ),
+        ("async def test_a():\n    assert await load() == 1\n\nasync def test_b():\n    assert await load() == 1\n"),
+        (
+            'def test_a():\n    """one scenario"""\n    assert f() == 1\n\n'
+            'def test_b():\n    """another scenario"""\n    assert f() == 1\n'
+        ),
+        (
+            "def test_a(client):\n    assert client.get('/x').status_code == 200\n\n"
+            "def test_b(client):\n    assert client.get('/x').status_code == 200\n"
+        ),
+    ]
+    for source in positive_sources:
+        tree = ast.parse(source)
+        assert _duplicate_test_body_functions(tree), f"lens should flag:\n{source}"
+
+    negative_sources = [
+        "def test_a():\n    assert f() == 1\n",
+        "def test_a():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 2\n",
+        "def test_a(client):\n    assert f() == 1\n\ndef test_b(other):\n    assert f() == 1\n",
+        (
+            "def test_a():\n    assert f() == 1\n\n"
+            "@pytest.mark.parametrize('x', [1, 2])\n"
+            "def test_b():\n    assert f() == 1\n"
+        ),
+        (
+            "class TestX:\n    def test_a(self):\n        assert self.url == '/x'\n\n"
+            "class TestY:\n    def test_a(self):\n        assert self.url == '/x'\n"
+        ),
+        ("def test_a():\n    assert f() == 1\n\ndef test_a():\n    assert f() == 1\n"),
+        "def helper():\n    assert f() == 1\n\ndef test_b():\n    assert f() == 1\n",
+    ]
+    for source in negative_sources:
+        tree = ast.parse(source)
+        assert not _duplicate_test_body_functions(tree), f"lens should NOT flag:\n{source}"
+
+    triple = (
+        "def test_a():\n    assert f() == 1\ndef test_b():\n    assert f() == 1\ndef test_c():\n    assert f() == 1\n"
+    )
+    found = _duplicate_test_body_functions(ast.parse(triple))
+    assert [(first, second) for _scope, first, second, _line in found] == [
+        ("test_a", "test_b"),
+        ("test_a", "test_c"),
+    ], f"triple-run pairs wrong: {found}"
