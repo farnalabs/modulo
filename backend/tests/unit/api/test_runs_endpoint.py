@@ -130,6 +130,9 @@ def _make_run(
     r.heartbeat_at = None
     r.work_item_refs = None
     r.parent_run_id = None
+    # FAR-1141 / ADR-042: execution provenance is a real, always-present column
+    # (FAR-1566 removed the production coercion for a stand-in that omits it).
+    r.execution_origin = None
     # FAR-490 run→snapshot linkage
     r.snapshot_id = None
     # Masked input payload on the detail response (no sentinel MagicMock)
@@ -828,9 +831,11 @@ def test_run_response_cancel_reason_null_when_not_recorded(client: TestClient) -
     assert body["cancelled_by"] is None
 
 
-def test_run_response_cancel_reason_degrades_for_non_string_value(client: TestClient) -> None:
-    """Defensive coercion: a malformed/unexpected column value degrades to
-    ``None`` (reason not recorded) instead of failing response validation."""
+def test_run_response_cancel_reason_rejects_a_non_string_value(client: TestClient) -> None:
+    """FAR-1566: the defensive coercion is gone. ``cancel_reason`` is a real
+    ``str | None`` column (closed vocabulary, DB-enforced), so a non-string is
+    a data-integrity violation and fails the response LOUDLY instead of being
+    silently rewritten to ``None``."""
     run = _make_run(status="cancelled")
     run.cancel_reason = object()
     with (
@@ -839,8 +844,7 @@ def test_run_response_cancel_reason_degrades_for_non_string_value(client: TestCl
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
-    assert resp.status_code == 200
-    assert resp.json()["cancel_reason"] is None
+    assert resp.status_code == 500
 
 
 # ---------------------------------------------------------------------------
@@ -881,11 +885,13 @@ def test_run_response_execution_origin_null_for_executed_run(client: TestClient)
     assert resp.json()["execution_origin"] is None
 
 
-def test_run_response_execution_origin_degrades_for_non_string_value(client: TestClient) -> None:
-    """Defensive coercion: the MagicMock stand-in's unset attribute (and any
-    malformed column value) degrades to null instead of failing response
-    validation — the same rule ``cancel_reason`` applies."""
+def test_run_response_execution_origin_rejects_a_non_string_value(client: TestClient) -> None:
+    """FAR-1566: neither the ``RunResponse`` construction nor the shared
+    serializer coerces test doubles anymore — a non-string origin fails the
+    response LOUDLY instead of being rewritten to NULL. Real rows are
+    ``str | None``, so production never takes this arm."""
     run = _make_run(status="pending")
+    run.execution_origin = object()
 
     with (
         patch("modulo.api.routes.runs._do_get_run", return_value=run),
@@ -893,8 +899,7 @@ def test_run_response_execution_origin_degrades_for_non_string_value(client: Tes
     ):
         resp = client.get(f"/api/v1/runs/{_RUN_ID}")
 
-    assert resp.status_code == 200
-    assert resp.json()["execution_origin"] is None
+    assert resp.status_code == 500
 
 
 def test_list_runs_includes_execution_origin(client: TestClient) -> None:

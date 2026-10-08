@@ -93,6 +93,11 @@ def _make_run() -> MagicMock:
     r.heartbeat_at = None
     r.work_item_refs = None
     r.parent_run_id = None
+    # Real, always-present columns on a Run row (FAR-1566 removed the
+    # production coercion for stand-ins that omit them).
+    r.execution_origin = None
+    r.cancel_reason = None
+    r.cancelled_by = None
     r.snapshot_id = None
     r.input_payload = None
     return r

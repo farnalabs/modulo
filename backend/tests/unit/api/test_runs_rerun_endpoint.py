@@ -103,6 +103,11 @@ def _make_source_run(
     r.run_classification = None
     r.blocked_partial_summary = None
     r.guardrail_summary_json = None
+    # Real, always-present columns on a Run row (FAR-1566 removed the
+    # production coercion for stand-ins that omit them).
+    r.execution_origin = None
+    r.cancel_reason = None
+    r.cancelled_by = None
     return r
 
 
@@ -129,6 +134,11 @@ def _make_rerun_run() -> MagicMock:
     r.run_classification = None
     r.blocked_partial_summary = None
     r.guardrail_summary_json = None
+    # Real, always-present columns on a Run row (FAR-1566 removed the
+    # production coercion for stand-ins that omit them).
+    r.execution_origin = None
+    r.cancel_reason = None
+    r.cancelled_by = None
     r.created_at = datetime.now(UTC)
     r.started_at = None
     r.completed_at = None

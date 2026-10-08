@@ -69,6 +69,8 @@ def _make_run() -> MagicMock:
     r.status = "complete"
     r.trigger_type = "manual"
     r.created_at = _NOW
+    # A real row always carries the provenance column (FAR-1566).
+    r.execution_origin = None
     return r
 
 

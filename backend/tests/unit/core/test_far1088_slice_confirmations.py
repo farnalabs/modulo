@@ -178,6 +178,11 @@ def _make_run(**overrides: object) -> MagicMock:
     run.created_at = datetime(2026, 8, 1, 10, 0, 0, tzinfo=UTC)
     run.started_at = datetime(2026, 8, 1, 10, 1, 0, tzinfo=UTC)
     run.completed_at = datetime(2026, 8, 1, 10, 5, 30, tzinfo=UTC)
+    # Real, always-present columns on a Run row (FAR-1566 removed the
+    # production coercion for stand-ins that omit them).
+    run.execution_origin = None
+    run.cancel_reason = None
+    run.cancelled_by = None
     for key, value in overrides.items():
         setattr(run, key, value)
     return run

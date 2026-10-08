@@ -162,6 +162,7 @@ from modulo.core.mcp.scope_validator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
@@ -2650,8 +2651,6 @@ async def set_pipeline_owners(
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
-    from modulo.api.routes.runs import _optional_str
-
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
     own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
@@ -2662,11 +2661,10 @@ def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str,
         "status": r.status,
         "trigger_type": r.trigger_type,
         # FAR-1141 / ADR-042: a dispatched run must never read
-        # indistinguishably from one Modulo executed. ``getattr`` degrades a
-        # partial run stand-in (no column loaded) to ``None``; ``_optional_str``
-        # then degrades a ``MagicMock``'s unset attribute the same way
-        # ``cancel_reason`` does on the REST list item.
-        "execution_origin": _optional_str(getattr(r, "execution_origin", None)),
+        # indistinguishably from one Modulo executed. Composed from the ONE
+        # shared serializer (FAR-1565); a row loaded without the column reads
+        # NULL, so provenance never breaks the read.
+        **run_provenance_fields(r),
         "run_number": r.run_number,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "started_at": r.started_at.isoformat() if r.started_at else None,
@@ -4182,8 +4180,6 @@ async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
 
 
 def _run_status_base(run: Run) -> dict[str, Any]:
-    from modulo.api.routes.runs import _optional_str
-
     result: dict[str, Any] = {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
@@ -4191,9 +4187,9 @@ def _run_status_base(run: Run) -> dict[str, Any]:
         "trigger_type": run.trigger_type,
         # FAR-1141 / ADR-042: ``get_run_status`` is a claim-ready surface, so
         # it carries the run's execution origin ('dispatched' / NULL) exactly
-        # like the REST detail. ``getattr`` + ``_optional_str`` degrade a
-        # partial run stand-in and a ``MagicMock`` to ``None``.
-        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
+        # like the REST detail — composed from the ONE shared serializer
+        # (FAR-1565), never a hand-rolled copy.
+        **run_provenance_fields(run),
         "created_at": run.created_at.isoformat(),
     }
     if run.started_at:

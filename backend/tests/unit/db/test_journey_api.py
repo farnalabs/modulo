@@ -987,6 +987,10 @@ class TestRoutes:
         run.status = "complete"
         run.completed_at = datetime(2026, 1, 5, tzinfo=UTC)
         run.trigger_type = "manual"
+        # A real row always carries the provenance column (FAR-1566 removed the
+        # coercion that used to rescue an unset stand-in), so the stand-in sets
+        # it explicitly: a Modulo-executed run reads NULL.
+        run.execution_origin = None
         with (
             patch(
                 "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
@@ -1002,9 +1006,8 @@ class TestRoutes:
         assert resp.status_code == 200
         body = resp.json()
         assert body["kind"] == "github_issue"
-        # FAR-1141: ``execution_origin`` is ALWAYS present on the wire; this
-        # stand-in never had the column set, so it must read NULL (never a
-        # repr of the mock, never an omitted key).
+        # FAR-1141: ``execution_origin`` is ALWAYS present on the wire — NULL
+        # for a Modulo-executed run, never a repr of the mock, never omitted.
         assert body["runs"] == [
             {
                 "run_id": str(run.id),
