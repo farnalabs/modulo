@@ -71,6 +71,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
+from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyGrantsUnavailableError,
@@ -161,7 +162,7 @@ from modulo.core.mcp.scope_validator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
-from modulo.core.runtime_config.key_bridge import get_public_url
+from modulo.core.runtime_config.key_bridge import public_url_is_configured
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
@@ -1203,11 +1204,48 @@ async def validate_current_auth() -> bool:
         return False
 
 
+def _resource_metadata_challenge(request: Request) -> dict[str, str]:
+    """``WWW-Authenticate`` challenge pointing at the RFC 9728 metadata.
+
+    A stock MCP harness (Claude Code 2.1.290 observed) learns where to start
+    OAuth from this header on the MCP ``401``: without it the client has no
+    way to discover ``/.well-known/oauth-protected-resource`` and falls back
+    to a manual override, which is exactly the friction FAR-1476 removes.
+
+    ONLY unauthenticated ``401`` responses carry it. ``403``/policy denials
+    come from an authenticated principal that is being told "not allowed" —
+    inviting it to re-authenticate would be wrong — so they never get it.
+    """
+    return {
+        "WWW-Authenticate": f'Bearer resource_metadata="{protected_resource_metadata_url(request)}"',
+    }
+
+
+def _with_resource_metadata(response: Response, request: Request) -> Response:
+    """Attach the RFC 9728 challenge to a ``401``; leave any other status alone.
+
+    The token-family failures are built by ``_verify_oauth_token_family``,
+    which is deliberately request-less (it documents that it is called
+    without a request object), so it cannot build the absolute
+    ``resource_metadata`` URL itself. The header is attached here instead, at
+    the middleware boundary where ``request`` is in scope. ``403``/policy
+    denials and ``5xx`` pass through untouched — only an *unauthenticated*
+    ``401`` should invite the client to fetch OAuth metadata — and the
+    ``WWW-Authenticate`` presence check keeps the operation idempotent should
+    the helper ever set it itself.
+    """
+    if response.status_code == 401 and "WWW-Authenticate" not in response.headers:
+        response.headers.update(_resource_metadata_challenge(request))
+    return response
+
+
 def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None]:
     """Extract the Bearer token from the Authorization header.
 
     Returns ``(token, None)`` on success or ``(None, error_response)`` when the
-    header is missing or not a Bearer token.
+    header is missing or not a Bearer token. The ``401`` carries the RFC 9728
+    ``WWW-Authenticate`` challenge so an unauthenticated client can discover
+    the OAuth metadata it needs to connect.
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -1215,6 +1253,7 @@ def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None
             '{"error":"unauthorized","detail":"Bearer token required"}',
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
+            headers=_resource_metadata_challenge(request),
         )
     token = auth_header[len("Bearer ") :].strip()
     return token, None
@@ -1443,6 +1482,7 @@ async def _authenticate_api_key(
             '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
+            headers=_resource_metadata_challenge(request),
         )
     except ApiKeyGrantsUnavailableError:
         # FAR-1477: grant flag unreadable -> fail closed as 503 (retryable), not 401.
@@ -1497,6 +1537,7 @@ async def _authenticate_oauth_jwt(
                     '{"error":"unauthorized","detail":"Invalid or expired access token"}',
                     status_code=401,
                     media_type=_CT_APPLICATION_JSON,
+                    headers=_resource_metadata_challenge(request),
                 ),
                 None,
             )
@@ -1778,10 +1819,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             await _set_authz_enforce(_ctx_org_id.get())
             return await gated_next(request)
 
-        # Verify token family is not blacklisted.
+        # Verify token family is not blacklisted. That helper is deliberately
+        # request-less, so the RFC 9728 challenge is attached here (every
+        # other 401 below is built by a helper that has `request` in scope
+        # and sets the header itself).
         family_err = await _verify_oauth_token_family(token, claims)
         if family_err is not None:
-            return family_err
+            return _with_resource_metadata(family_err, request)
 
         return await _finalize_oauth_principal(request, token, claims, gated_next)
 
@@ -10854,8 +10898,7 @@ def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | N
 
 def _oauth_authorize_settings_error(settings: Any) -> JSONResponse | None:
     """Return an error response when the public URL is unconfigured."""
-    public_url = get_public_url(settings)
-    if not public_url or public_url == "http://localhost:8000":
+    if not public_url_is_configured(settings):
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,
@@ -11190,8 +11233,7 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
         return cred_err
 
     settings = get_settings()
-    public_url = get_public_url(settings)
-    if not public_url or public_url == "http://localhost:8000":
+    if not public_url_is_configured(settings):
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,
