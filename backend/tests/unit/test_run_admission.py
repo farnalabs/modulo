@@ -16,14 +16,16 @@ Mock/fake based — no Postgres, no Redis. Covers:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import OperationalError
 
 import modulo.core.run_admission as ra
 from modulo.core.run_admission import (
@@ -66,6 +68,21 @@ def _released_row() -> Any:
     )
 
 
+def _dialect_bind(name: str = "sqlite") -> SimpleNamespace:
+    """Dialect bind for the connection doubles (FAR-1592's lock bound).
+
+    ``set_mutation_row_lock_timeout`` gates on the dialect — the
+    transaction-scoped bound is Postgres-only, and the SQLite path is a
+    documented no-op (``db.crud.row_lock``: "the unit fixtures run on SQLite
+    mocks"), so the default bind keeps every pre-existing sweep assertion over
+    the recorded statement list unchanged. Tests that PIN the bound itself
+    pass ``name="postgresql"`` so the real ``set_config('lock_timeout', ...)``
+    statement is issued and recorded (the ``_PgRecordingSession`` convention
+    from ``tests/unit/test_dispatch.py``).
+    """
+    return SimpleNamespace(dialect=SimpleNamespace(name=name))
+
+
 class _SweepConn:
     """Connection double: org enumeration + one guarded slot-release UPDATE.
 
@@ -84,6 +101,9 @@ class _SweepConn:
         self._released = released
         self._orgs = orgs
         self.params_seen = params_seen
+
+    def get_bind(self) -> SimpleNamespace:
+        return _dialect_bind()
 
     async def __aenter__(self) -> Self:
         return self
@@ -216,6 +236,9 @@ class TestReconcilePipelineSlots:
             def __init__(self, fail_on_release: bool) -> None:
                 self._fail_on_release = fail_on_release
 
+            def get_bind(self) -> SimpleNamespace:
+                return _dialect_bind()
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -265,6 +288,9 @@ class TestReconcilePipelineSlots:
         class _PartialConn:
             def __init__(self, fail_on_release: bool) -> None:
                 self._fail_on_release = fail_on_release
+
+            def get_bind(self) -> SimpleNamespace:
+                return _dialect_bind()
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1098,6 +1124,9 @@ class _ParkConn:
         self.params_seen = params_seen
         self._fail_on_park = fail_on_park
 
+    def get_bind(self) -> SimpleNamespace:
+        return _dialect_bind()
+
     async def __aenter__(self) -> Self:
         return self
 
@@ -1390,3 +1419,274 @@ class TestParkMarginFAR1257:
         # make the margin zero or negative.
         for grace in (0, -5, 1, 60, 86400):
             assert ra._park_margin_seconds(grace) > 0
+
+
+# ---------------------------------------------------------------------------
+# FAR-1592 — bounded row-lock wait on the sweeps' multi-row `runs` writes
+# ---------------------------------------------------------------------------
+# Both periodic sweeps in this module write the hot `runs` table with a
+# MULTI-row UPDATE (the heartbeat-stale slot release at reconcile_pipeline_slots
+# and the HITL park at park_expired_hitl_runs). Until FAR-1592 those waits were
+# UNBOUNDED: a live writer (executor heartbeat / claim / gate decision) holding
+# a needed row could stall the sweep silently past the Fly HAProxy 30-minute
+# session window, which is what got prod connections culled mid-operation
+# (FAR-1524 O11 — the same class FAR-1584 bounded on the dispatch path).
+# These tests pin: (1) the transaction-scoped `set_config('lock_timeout', ...,
+# true)` bound is issued BEFORE the sweep's UPDATE and takes its value from
+# `Settings.mutation_row_lock_timeout_ms`; (2) a 55P03 expiry is handled
+# NON-SILENTLY — the org is skipped with a WARNING and its rows are left for
+# the next sweep tick (never a silent no-op, never a lost recovery, no
+# exception escapes); (3) any OTHER failure keeps the sweep's own failure
+# contract. The real-Postgres contention behaviour (a held row lock actually
+# timing out) is an integration concern — this unit seam drives the same 55P03
+# the bound produces.
+
+
+def _lock_timeout_error(statement: str) -> OperationalError:
+    """Simulated row-lock contention: asyncpg's real ``LockNotAvailableError``
+    (SQLSTATE 55P03) wrapped exactly the way SQLAlchemy surfaces it — the seam
+    ``tests/unit/test_dispatch.py`` drives for FAR-1584's writers."""
+    from asyncpg import exceptions as asyncpg_exceptions
+
+    driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+    return OperationalError(statement, {}, driver_error)
+
+
+def _non_lock_db_error(statement: str) -> OperationalError:
+    """A different SQLSTATE (serialization failure) — NOT a lock timeout."""
+    return OperationalError(statement, {}, SimpleNamespace(sqlstate="40001"))
+
+
+def _sweep_settings(sweep_name: str) -> MagicMock:
+    """Settings double for the named sweep (same shapes the tests above use)."""
+    if sweep_name == "slot_reconciliation":
+        return MagicMock(slot_reconcile_stale_seconds=1800, heartbeat_stale_retry_budget=3)
+    return MagicMock(hitl_park_grace_seconds=86400)
+
+
+def _sweep_row(sweep_name: str) -> Any:
+    """A row the named sweep would RETURN from its UPDATE."""
+    return _released_row() if sweep_name == "slot_reconciliation" else _parked_row()
+
+
+async def _run_sweep(sweep_name: str, engine: Any) -> dict[str, Any]:
+    """Dispatch a parametrised sweep name to its implementation."""
+    if sweep_name == "slot_reconciliation":
+        return await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
+    return await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
+
+class _PgSweepEngine:
+    """Engine double whose per-org transactions run on the postgresql dialect.
+
+    So the LIVE branch of ``set_mutation_row_lock_timeout``'s dialect gate is
+    taken and the real bound statement is recorded (the ``_PgRecordingSession``
+    convention from ``tests/unit/test_dispatch.py``), while the doubles the
+    pre-existing sweep tests use report sqlite — the bound is a Postgres-only
+    safety improvement, so those keep their exact recorded-statement lists.
+    """
+
+    def __init__(
+        self,
+        rows: list[Any],
+        orgs: list[uuid.UUID],
+        write_errors: dict[uuid.UUID, BaseException] | None = None,
+    ) -> None:
+        # Aligned (statement, params) pairs — the base doubles keep two lists
+        # that are NOT index-aligned (the org enumeration carries no params).
+        self.trace: list[tuple[str, dict[str, object] | None]] = []
+        self.rows = rows
+        self.orgs = orgs
+        self.write_errors = write_errors or {}
+
+    def connect(self) -> _PgSweepConn:
+        return _PgSweepConn(self)
+
+
+class _PgSweepConn:
+    """Org-transaction double: bound, org GUC, then the sweep's UPDATE.
+
+    Raises whatever ``write_errors`` maps the UPDATE's bound ``oid`` to, so a
+    test can drive a real 55P03 (or any other SQLSTATE) out of the sweep's
+    write without a database.
+    """
+
+    def __init__(self, engine: _PgSweepEngine) -> None:
+        self._engine = engine
+
+    def get_bind(self) -> SimpleNamespace:
+        return _dialect_bind("postgresql")
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *args: object) -> bool:
+        return False
+
+    def begin(self) -> Self:
+        return self
+
+    async def execute(self, stmt: object, params: dict[str, object] | None = None) -> _AsyncResult:
+        sql = str(stmt)
+        self._engine.trace.append((sql, dict(params) if params is not None else None))
+        if "SELECT id FROM organisations" in sql:
+            return _AsyncResult(rows=[(org,) for org in self._engine.orgs])
+        if "UPDATE runs SET" in sql and params is not None:
+            oid_raw = params.get("oid")
+            if oid_raw is not None:
+                error = self._engine.write_errors.get(uuid.UUID(str(oid_raw)))
+                if error is not None:
+                    raise error
+            return _AsyncResult(rows=list(self._engine.rows))
+        return _AsyncResult()
+
+
+class TestSweepRowLockBoundFAR1592:
+    """Both sweeps bound their multi-row ``runs`` write (FAR-1592)."""
+
+    SWEEPS: ClassVar[list[str]] = ["slot_reconciliation", "hitl_park"]
+
+    @pytest.fixture(autouse=True)
+    def _row_lock_settings(self) -> Any:
+        """The bound's value knob — patched so no test ever builds a real
+        ``Settings`` (and so the pin can assert an exact value)."""
+        with patch(
+            "modulo.db.crud.row_lock.get_settings",
+            return_value=MagicMock(mutation_row_lock_timeout_ms=4321),
+        ):
+            yield
+
+    @pytest.mark.parametrize("sweep_name", SWEEPS)
+    async def test_lock_bound_precedes_the_write_and_comes_from_the_setting(
+        self,
+        sweep_name: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """THE pin: the bound is the transaction's FIRST statement (before the
+        UPDATE takes any row lock), is transaction-scoped (``is_local =>
+        true``), and its value comes from the operator knob — never a literal."""
+        engine = _PgSweepEngine([_sweep_row(sweep_name)], [ORG_ID])
+        monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings(sweep_name))
+        with patch.object(ra, "_advance_released_run", new_callable=AsyncMock):
+            await _run_sweep(sweep_name, engine)
+
+        sqls = [sql for sql, _ in engine.trace]
+        bound_at = [i for i, sql in enumerate(sqls) if "set_config('lock_timeout'" in sql]
+        update_at = [i for i, sql in enumerate(sqls) if "UPDATE runs SET" in sql]
+        assert bound_at, f"no transaction-local lock bound issued; statements={sqls}"
+        assert update_at, f"the sweep's UPDATE never ran; statements={sqls}"
+        assert bound_at[0] < update_at[0], (
+            f"the bound must precede the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
+        )
+        # SET LOCAL semantics: set_config(..., is_local => true) — reverts on
+        # COMMIT/ROLLBACK, never leaks onto a pooled connection.
+        assert ", true)" in sqls[bound_at[0]]
+        bound_params = engine.trace[bound_at[0]][1]
+        assert bound_params is not None
+        assert bound_params["val"] == "4321ms"
+
+    async def test_slot_sweep_lock_timeout_skips_the_org_with_a_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """THE 55P03 case: org 1's heartbeat-stale UPDATE meets a held ``runs``
+        row lock and the BOUND fires.
+
+        The org transaction rolled back WHOLE, so not one of its stale rows
+        moved: they are still ``running`` with a stale heartbeat and the next
+        sweep tick re-processes them. No exception escapes (the sweep keeps
+        going and still sweeps org 2), the timed-out org contributes nothing
+        to the result, and the condition is logged at WARNING with the
+        SQLSTATE, the org and the recovery — never silent, never lost.
+        """
+        org2 = OTHER_ORG_ID
+        row_org2 = SimpleNamespace(
+            id=RUN_ID,
+            organisation_id=org2,
+            pipeline_id=PIPELINE_ID,
+            claim_count=4,  # > retry budget -> terminal-failed for org 2
+        )
+        engine = _PgSweepEngine(
+            rows=[row_org2],
+            orgs=[ORG_ID, org2],
+            write_errors={ORG_ID: _lock_timeout_error("UPDATE runs SET ...")},
+        )
+        monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings("slot_reconciliation"))
+        with patch.object(ra, "_advance_released_run", new_callable=AsyncMock) as advance:
+            caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+            result = await reconcile_pipeline_slots(engine)  # type: ignore[arg-type]
+
+        # The sweep completed — no exception escaped and no failure was raised.
+        assert result["released"] == 1
+        assert result["per_pipeline"] == {str(PIPELINE_ID): 1}
+        # The timed-out org contributed NOTHING: its rows were never released,
+        # so they stay ``running`` and the next sweep tick re-processes them.
+        assert advance.await_count == 1
+        assert advance.await_args is not None
+        assert advance.await_args.args[2] == org2
+        # Never silent: WARNING carrying the SQLSTATE, the org and the reason.
+        assert "55P03" in caplog.text
+        assert "slot_reconciliation.org_lock_timeout" in caplog.text
+        assert str(ORG_ID) in caplog.text
+
+    async def test_park_sweep_lock_timeout_skips_the_org_with_a_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Same contract for the HITL park sweep: its org transaction rolled
+        back whole, so NO run left ``awaiting_human`` — every candidate row is
+        still park-eligible and the next 5-minute tick re-parks it. WARNING
+        with the SQLSTATE and the org; the sweep still parks org 2."""
+        org2 = OTHER_ORG_ID
+        row_org2 = SimpleNamespace(id=RUN_ID, organisation_id=org2, pipeline_id=PIPELINE_ID)
+        engine = _PgSweepEngine(
+            rows=[row_org2],
+            orgs=[ORG_ID, org2],
+            write_errors={ORG_ID: _lock_timeout_error("UPDATE runs SET status = :parked_status ...")},
+        )
+        monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings("hitl_park"))
+        caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+        result = await ra.park_expired_hitl_runs(engine)  # type: ignore[arg-type]
+
+        # No exception escaped; only the committed org's parks are counted.
+        assert result == {"parked": 1}
+        assert "55P03" in caplog.text
+        assert "hitl_park.org_lock_timeout" in caplog.text
+        assert str(ORG_ID) in caplog.text
+        # No phantom park event for the org whose transaction rolled back.
+        parked_orgs = {str(r.args[2]) for r in caplog.records if "hitl_park.parked" in r.message}
+        assert parked_orgs == {str(org2)}
+
+    @pytest.mark.parametrize("sweep_name", SWEEPS)
+    async def test_non_lock_timeout_error_still_propagates(
+        self,
+        sweep_name: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The handler is targeted at 55P03 ONLY: a serialization failure keeps
+        the sweep's own failure contract — raised to the SAQ cron wrapper, so
+        its ``retries=2`` engages — and is never routed through the
+        lock-timeout skip (no ``org_lock_timeout`` WARNING). A regression that
+        broadened the catch would swallow it here, and this test would fail.
+
+        Scope note: this guards the BOUNDARY of the new 55P03 handler, so it
+        passes both before the fix (nothing is caught at all) and after it
+        (only 55P03 is caught) — it is red exactly when the catch is too wide.
+        """
+        engine = _PgSweepEngine(
+            rows=[],
+            orgs=[ORG_ID],
+            write_errors={ORG_ID: _non_lock_db_error("UPDATE runs SET ...")},
+        )
+        monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings(sweep_name))
+        expected = SlotReconciliationError if sweep_name == "slot_reconciliation" else ra.HitlParkError
+        caplog.set_level(logging.WARNING, logger="modulo.core.run_admission")
+        with pytest.raises(expected) as excinfo:
+            await _run_sweep(sweep_name, engine)
+
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, OperationalError)
+        assert "org_lock_timeout" not in caplog.text
