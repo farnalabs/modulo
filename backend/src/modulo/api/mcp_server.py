@@ -2650,6 +2650,99 @@ async def set_pipeline_owners(
         return _tool_exception_error("Failed to set pipeline owners", exc, "mcp.set_pipeline_owners")
 
 
+@mcp.tool(
+    description=(
+        "Update a pipeline's environment_profile_id binding (FAR-1599) — the environment "
+        "profile the pipeline's sandbox_agent nodes dispatch on (FAR-1558). "
+        "environment_profile_id is REQUIRED and nullable: pass an environment-profile UUID to "
+        "bind, or pass null to clear the binding and restore the default route (MCP arguments "
+        "cannot express 'omitted', so there is no leave-unchanged state — pass the profile's "
+        "current id to keep it). The profile must exist in this organisation and be visible to "
+        "the pipeline's owner team (an org-visible profile, or a team profile owned by that "
+        "team); the shared FAR-1558 validation runs server-side exactly as on REST PATCH "
+        "/api/v1/pipelines/{pipeline_id}, and a violation returns validation_failed carrying "
+        "the typed environment_profile_* code. Returns the stored binding. Requires the "
+        "pipeline.update permission."
+    ),
+)
+@mcp_audited("pipeline_environment_profile_updated", "pipeline", fail_closed=False)
+@_RETRY_DB
+async def update_pipeline(
+    pipeline_id: str,
+    environment_profile_id: str | None,
+) -> dict[str, Any]:
+    """FAR-1599: MCP set path for the per-pipeline environment-profile binding.
+
+    Validation is DELEGATED to ``_assert_environment_profile_bindable`` — the
+    shared FAR-1558 predicate the REST update route calls — never re-implemented
+    here, so the MCP and REST writers cannot drift (same-org existence +
+    team-visibility, raising HTTP 422 with the typed wire code).
+    """
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("update_pipeline")
+
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        # Required + nullable: None CLEARS the binding (mirrors the REST
+        # explicit-null clear, which likewise runs no profile lookup).
+        parsed_profile, profile_err = _parse_optional_uuid(environment_profile_id, "environment_profile_id")
+        if profile_err is not None:
+            return profile_err
+
+        from modulo.db.crud.pipeline import update_pipeline as update_pipeline_row
+
+        org_id = _ctx_org_id_val()
+        account_id = _ctx_user_id_val()
+        async with _session(org_id) as s:
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            if parsed_profile is not None:
+                from modulo.api.routes.pipelines import _assert_environment_profile_bindable
+
+                # Raises HTTPException 422 (mapped below): missing, deleted,
+                # cross-org, or team-private-and-not-owned-by-this-team.
+                await _assert_environment_profile_bindable(
+                    s,
+                    org_id=org_id,
+                    profile_id=parsed_profile,
+                    pipeline_owner_team_id=owner_team_id,
+                )
+            pipeline = await update_pipeline_row(
+                s,
+                pid,
+                {"environment_profile_id": parsed_profile},
+                org_id=org_id,
+                account_id=account_id,
+            )
+            if pipeline is None:
+                return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
+            # Built inside the session (commits on exit) so no expired attribute is read.
+            stored = getattr(pipeline, "environment_profile_id", None)
+            return {
+                "pipeline_id": pipeline_id,
+                "environment_profile_id": str(stored) if isinstance(stored, uuid.UUID) else None,
+            }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except FastAPIHTTPException as exc:
+        # FAR-1558: the shared predicate's 422 detail (including the typed
+        # environment_profile_team_mismatch code clients branch on) must
+        # reach the caller — not a generic internal error.
+        return {"error": "validation_failed", "detail": str(exc.detail)}
+    except ProgrammingError:
+        _log.exception("update_pipeline failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("update_pipeline failed")
+        return _tool_exception_error("Failed to update pipeline", exc, "mcp.update_pipeline")
+
+
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
