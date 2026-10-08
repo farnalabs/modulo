@@ -1,4 +1,4 @@
-# MWI (Managed Workspace Inputs) P1 — Canary Plan, Acceptance Criteria, Rollback
+# MWI (Managed Workspace Inputs) P1 – Canary Plan, Acceptance Criteria, Rollback
 
 FAR-803 production readiness. Scope: the `sandbox_agent` workspace-inputs spine
 (FAR-796/797/798/800/801/802, ADR 033). Factual; no feature claims beyond what
@@ -13,26 +13,26 @@ is merged on the P1 branches.
   drift detection attached to the node envelope (`workspace_drift`,
   `workspace_drift_detected` run flags).
 - DB migration 0221 adds `environment_profiles.workspace_inputs` (JSON,
-  nullable, default `[]` — MWI is strictly opt-in).
+  nullable, default `[]` – MWI is strictly opt-in).
 - Credentials resolve from the connector store at provisioning time; tokens
   are delivered via a GIT_ASKPASS helper on /dev/shm, never in argv or URLs.
 
 ## Canary plan (staged rollout)
 
-1. **Stage 0 — flag-off soak.** Deploy with no pipelines using
+1. **Stage 0 – flag-off soak.** Deploy with no pipelines using
    `workspace_inputs`. Zero behaviour change expected: absent config is a
    no-op in the validator (`_validate_sandbox_managed_inputs_config`)
    and in `_sandbox_agent_impl`.
-2. **Stage 1 — internal single pipeline.** Enable MWI on ONE internal
-   app.modulo.run pipeline (one input, github.com, fixed SHA ref — no movable
+2. **Stage 1 – internal single pipeline.** Enable MWI on ONE internal
+   app.modulo.run pipeline (one input, github.com, fixed SHA ref – no movable
    refs in stage 1). Watch: `workspace_input.resolution_failed`,
    `workspace_input.provisioning_failed`, `workspace_input.drift_detection_*`
    warning logs, node failure rate on that pipeline.
-3. **Stage 2 — internal movable refs + two hosts.** Add a gitlab.com input and
+3. **Stage 2 – internal movable refs + two hosts.** Add a gitlab.com input and
    connect-backed token auth. Watch the same signals plus credential
    resolution failures (`sandbox.input_credential_failed`).
-4. **Stage 3 — broader internal rollout.** Remaining dogfood pipelines.
-5. **Customer GA** is NOT gated by us — the feature is already reachable by
+4. **Stage 3 – broader internal rollout.** Remaining dogfood pipelines.
+5. **Customer GA** is NOT gated by us – the feature is already reachable by
    any operator with the merged code; the canary controls US internally until
    acceptance criteria are met.
 
@@ -66,18 +66,18 @@ Abort the canary (move affected pipelines back to stage 0) when either:
    a systematic provisioning bug; the 1h spike is the killswitch because it
    usually means a code/config defect, not the network).
 2. Any single incident of **credential leakage** (a token observed in agent
-   stdout, envelope fields, or logs) — immediate stage-0 rollback, no rate
+   stdout, envelope fields, or logs) – immediate stage-0 rollback, no rate
    condition applies.
 
 ### Killswitch mechanism (how to turn MWI off NOW)
 
 - Per node: remove the `workspace_inputs` key from the graph node (UI/MCP
-  `update_pipeline_graph`) — the validator and runtime are no-ops without it;
+  `update_pipeline_graph`) – the validator and runtime are no-ops without it;
   the node reverts to the empty-home default.
 - Org-wide: clear `environment_profiles.workspace_inputs` back to `[]`
   (the migration default; no code deploy needed).
 - Last resort: revert the merge commit; the DB column 0221 is additive and
-  nullable — no migration-down is required for a safe revert, and leaving the
+  nullable – no migration-down is required for a safe revert, and leaving the
   column in place after a revert is harmless (unused by the older code).
 
 ## Known gaps at the time of writing (verification suite, FAR-803)

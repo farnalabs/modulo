@@ -20,9 +20,9 @@
 
 ## Methodology
 
-1. **Warm-up** — 30s ramp to target user count
-2. **Steady state** — 3 minutes at target load
-3. **Cool-down** — 30s ramp down
+1. **Warm-up** – 30s ramp to target user count
+2. **Steady state** – 3 minutes at target load
+3. **Cool-down** – 30s ramp down
 4. All tests run against the Docker Compose stack on localhost
 5. Test data is pre-seeded via `python -m tests.load.data_seed`
 6. Each scenario runs 3 times; reported values are the median run
@@ -83,7 +83,7 @@ After each load test run, record the following in a central location (Grafana / 
 
 ## Regression Detection
 
-**Immediate action** — if any metric exceeds its hard limit:
+**Immediate action** – if any metric exceeds its hard limit:
 
 1. Check recent deployments vs `git log` on main
 2. Run `git bisect` if a clear regression commit exists
@@ -91,7 +91,7 @@ After each load test run, record the following in a central location (Grafana / 
 4. Review recent Alembic migrations for missing indexes
 5. Check Redis `INFO` for evictions or blocked clients
 
-**Scheduled investigation** — if p95 degrades by >20% week-over-week:
+**Scheduled investigation** – if p95 degrades by >20% week-over-week:
 
 1. Profile the slowest endpoints with py-spy / async-profiler
 2. Review DB query plans via auto_explain
