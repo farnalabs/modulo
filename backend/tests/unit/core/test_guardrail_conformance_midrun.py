@@ -307,6 +307,20 @@ def test_capabilities_for_connector_unknown_type_certifies_nothing():
     assert not _capabilities_for_connector(row)
 
 
+def test_capabilities_for_connector_non_string_type_id_certifies_nothing():
+    """FAR-1564 fail-closed: a NON-STRING ``connector_type_id`` certifies nothing.
+
+    ``_type_capabilities`` guards ``isinstance(type_id, str)`` before it builds
+    a ``ConnectorType``; a null/malformed type id (or a row lacking the
+    attribute) must contribute NO capability rather than raising or certifying
+    the connector TYPE's full set — the same fail-closed contract ``ConnectorACL``
+    applies to a malformed ``allowed_operations``.
+    """
+    row = _row_connector(uuid.uuid4(), [])
+    row.connector_type_id = None
+    assert not _capabilities_for_connector(row)
+
+
 def test_capabilities_for_connector_malformed_allowlist_certifies_nothing():
     """FAR-1564 fail-closed: a MALFORMED non-list ``allowed_operations`` is
     RESTRICTED.
