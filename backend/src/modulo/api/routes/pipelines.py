@@ -98,8 +98,10 @@ from modulo.core.run_context.autonomy import (
 from modulo.core.schema_registry.rendering import SchemaProfile
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 from modulo.core.team_visibility import (
+    ENVIRONMENT_PROFILE_TEAM_MISMATCH,
     ConnectorBindingMissingError,
     connector_team_mismatch_detail,
+    environment_profile_team_mismatch,
     extract_connector_bindings,
     find_connector_team_mismatches,
     find_model_backend_team_mismatches,
@@ -3265,24 +3267,26 @@ async def _assert_environment_profile_bindable(
                 "another organisation)"
             ),
         )
-    # Mirror of ``core.team_visibility.model_backend_team_mismatch``: anything
-    # that is not declared team-private is org-visible and never mismatches.
-    if (profile.visibility or "org") != "team":
+    # SHARED predicate (core.team_visibility) — the same rule the profile-side
+    # scope-change guard applies, so the writers cannot drift. Org-visible
+    # profiles never mismatch; team-private ones must be owned by this
+    # pipeline's team (a team-private profile with no owner team owns nothing).
+    if not environment_profile_team_mismatch(profile.visibility, profile.owner_team_id, pipeline_owner_team_id):
         return
-    if profile.owner_team_id is None or profile.owner_team_id != pipeline_owner_team_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            # FAR-1558 F3: generic ON PURPOSE. A pipeline-PATCH caller holds
-            # ``pipeline.update`` and need NOT be a member of the profile's
-            # owner team, so the detail must not leak the profile's name, id or
-            # owner team. Clients branch on the typed code; profile-side detail
-            # stays on the environment-profile surface (which enforces the
-            # mirror-image guard when a profile's scope changes).
-            detail=(
-                "environment_profile_team_mismatch: the selected environment profile is "
-                "team-private and is not owned by this pipeline's owner team"
-            ),
-        )
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        # FAR-1558 F3: generic ON PURPOSE. A pipeline-PATCH caller holds
+        # ``pipeline.update`` and need NOT be a member of the profile's
+        # owner team, so the detail must not leak the profile's name, id or
+        # owner team. Clients branch on the typed code (shared constant, not a
+        # per-route literal); profile-side detail stays on the
+        # environment-profile surface (which enforces the mirror-image guard
+        # when a profile's scope changes).
+        detail=(
+            f"{ENVIRONMENT_PROFILE_TEAM_MISMATCH}: the selected environment profile is "
+            "team-private and is not owned by this pipeline's owner team"
+        ),
+    )
 
 
 async def _assert_team_transition_allowed(

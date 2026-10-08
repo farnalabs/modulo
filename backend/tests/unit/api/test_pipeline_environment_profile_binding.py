@@ -364,6 +364,11 @@ def test_scope_change_to_an_eligible_team_keeps_the_binding(
 
     assert resp.status_code == 200, resp.text
     assert harness.captured_updates["owner_team_id"] == _TEAM_A
+    # Discriminating: the stored-binding re-validation RAN and passed (a guard
+    # that never executed would also return 200), so the profile lookup must be
+    # observed — mirrors test_matching_binding_allows_the_flip on the
+    # environment-profiles side.
+    assert len(harness.profile_lookups) == 1, harness.profile_lookups
 
 
 def test_unchanged_binding_is_never_revalidated(make_harness: Callable[..., _RouteHarness]) -> None:

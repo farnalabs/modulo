@@ -32,6 +32,10 @@ from modulo.core.runtime_provider import (
     build_hub,
 )
 from modulo.core.runtime_provider.hub import RuntimeProviderHub
+from modulo.core.team_visibility import (
+    ENVIRONMENT_PROFILE_BINDING_TEAM_MISMATCH,
+    environment_profile_team_mismatch,
+)
 from modulo.db.bundled_runner_template import TEMPLATE_CONFIG_JSON
 from modulo.db.crud.environment_profile import (
     create_environment_profile,
@@ -41,6 +45,7 @@ from modulo.db.crud.environment_profile import (
     soft_delete_environment_profile,
     update_environment_profile,
 )
+from modulo.db.crud.team_scope import team_blind_org_scope
 from modulo.db.models.environment_profile import PROVIDER_TYPES, EnvironmentProfile
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -349,18 +354,32 @@ async def _assert_scope_change_keeps_bindings_eligible(
        team-private for another team, and the mismatched pipeline would keep
        dispatching on a profile its team cannot see.
 
-    Rule, byte-identical to bind time: a change that leaves (or makes) the
-    profile **org-visible** cannot strand anything and is not queried at all;
-    a change that leaves it **team-private** must find every bound pipeline
-    already owned by the resulting owner team — and a team-private profile
-    with NO owner team is owned by nobody, so any binding at all blocks it.
+    Rule, byte-identical to bind time (the SHARED
+    ``core.team_visibility.environment_profile_team_mismatch`` predicate — never a
+    second copy): a change that leaves (or makes) the profile **org-visible**
+    cannot strand anything and is not queried at all; a change that leaves it
+    **team-private** must find every bound pipeline already owned by the
+    resulting owner team — and a team-private profile with NO owner team is
+    owned by nobody, so any binding at all blocks it.
+
+    **The bound-pipelines scan is TEAM-BLIND (FAR-1558 M1, the FAR-1515
+    CRITICAL 1 defect class).** The route gate is ``environment_profile.update``
+    at min org role ``operator``, so the caller is frequently a member of ONE
+    team; under ``rls_team_isolation`` their own context cannot see another
+    team's ``visibility='team'`` pipeline — exactly the row whose binding this
+    change would strand — and a caller-context scan would return nothing and
+    pass vacuously. The read therefore runs inside
+    ``db.crud.team_scope.team_blind_org_scope``: the same widened
+    (``app.execution_context``) but still org-gated read the connector and
+    model-backend gates use, which restores the caller's GUCs afterwards.
 
     Fail closed with 422 (a validation refusal, mirroring the FAR-1161
     stored-owner re-validation on the pipeline side), never a silent unbind.
-    Soft-deleted pipelines do not block — the global soft-delete filter
-    excludes them, and their runs are already un-runnable. The detail carries
-    no pipeline identity: this caller holds ``environment_profile.update``,
-    not necessarily membership of the bound pipeline's team.
+    Soft-deleted pipelines do not block — the query filters ``deleted_at IS
+    NULL`` explicitly (plus the global soft-delete listener), and their runs are
+    already un-runnable. The detail carries no pipeline identity: this caller
+    holds ``environment_profile.update``, not necessarily membership of the
+    bound pipeline's team.
     """
     if "visibility" not in updates and "owner_team_id" not in updates:
         return
@@ -379,20 +398,27 @@ async def _assert_scope_change_keeps_bindings_eligible(
     new_owner_team_id = updates.get("owner_team_id", profile.owner_team_id)
     if (new_visibility or "org") != "team":
         return  # org-visible profiles are compatible with every pipeline.
-    bound_rows = (
-        await session.execute(
-            select(Pipeline.id, Pipeline.owner_team_id).where(
-                Pipeline.environment_profile_id == profile_id,
-                Pipeline.organisation_id == org_id,
+    # FAR-1558 M1: team-blind read — see the docstring above.
+    async with team_blind_org_scope(session, org_id):
+        bound_rows = (
+            await session.execute(
+                select(Pipeline.id, Pipeline.owner_team_id).where(
+                    Pipeline.environment_profile_id == profile_id,
+                    Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
             )
-        )
-    ).all()
-    stranded = [row.id for row in bound_rows if new_owner_team_id is None or row.owner_team_id != new_owner_team_id]
+        ).all()
+    stranded = [
+        row.id
+        for row in bound_rows
+        if environment_profile_team_mismatch(new_visibility, new_owner_team_id, row.owner_team_id)
+    ]
     if stranded:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
-                "environment_profile_binding_team_mismatch: this profile is bound to "
+                f"{ENVIRONMENT_PROFILE_BINDING_TEAM_MISMATCH}: this profile is bound to "
                 f"{len(stranded)} pipeline(s) whose owner team would not match the "
                 "team-private scope; rebind or unbind them first (PATCH "
                 "/api/v1/pipelines/{pipeline_id} with environment_profile_id, null to "
@@ -432,6 +458,16 @@ async def update_profile(
                 updates=updates,
             )
             profile = await update_environment_profile(session, profile_id, updates)
+            if profile is not None:
+                # Refresh IN-TRANSACTION: ``updated_at`` is DB-computed
+                # (``onupdate=func.current_timestamp()``), so the flush expires
+                # it — and ``_to_response`` runs AFTER this block commits, where
+                # a lazy refresh is impossible ("session used outside an active
+                # transaction" -> 500). Same fix the pipeline PATCH route
+                # carries (test_pipeline_patch_updated_at.py). Observed on real
+                # Postgres in
+                # tests/integration/test_environment_profile_scope_rls_guard.py.
+                await session.refresh(profile)
     except IntegrityError:
         _log.exception(_CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE)
         raise HTTPException(

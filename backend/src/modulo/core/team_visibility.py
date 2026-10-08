@@ -1,7 +1,7 @@
 """Cross-team resource binding enforcement (PRD §9.3, FAR-1515).
 
-Two rules are enforced at the pipeline-save command layer, each with its own
-named error:
+Three rules are enforced at the write layers that can create a cross-team
+binding, each with its own named error:
 
 ``connector_team_mismatch``
     A connector instance with ``visibility: team`` is only usable within
@@ -29,8 +29,8 @@ named error:
     an unenforceable rule. See the parity note on
     :func:`model_backend_team_mismatch`.
 
-The candidate rows behind both rules are read team-blind but org-scoped
-(FAR-1515 CRITICAL 1): the ``rls_team_isolation`` policy hides another team's
+The candidate rows behind both pipeline-save rules are read team-blind but
+org-scoped (FAR-1515 CRITICAL 1): the ``rls_team_isolation`` policy hides another team's
 ``visibility='team'`` rows from the request session, so a read in the caller's
 own context used to return NOTHING for the very connector the predicate had to
 judge — the binding looked absent and was skipped, and the save was accepted.
@@ -40,6 +40,21 @@ policy's ``app.execution_context`` escape hatch (still AND-gated by
 binding the organisation genuinely cannot resolve — after that team-blind
 read an absent row is definitive — is the named ``connector_team_mismatch``
 refusal :class:`ConnectorBindingMissingError`, never a silent skip.
+
+``environment_profile_team_mismatch`` (FAR-1558)
+    An environment profile with ``visibility: team`` is only usable by a
+    pipeline owned by the same team. The predicate is SHARED by all three
+    writers of the rule — bind time (``api/routes/pipelines.py``), a pipeline
+    scope change (same module, stored-binding re-validation), and a profile
+    scope change (``api/routes/environment_profiles.py``) — so the three
+    cannot drift. The profile-side writer emits its own wire code
+    (``ENVIRONMENT_PROFILE_BINDING_TEAM_MISMATCH``) because it refuses a
+    different operation (stranding an existing binding vs. creating a
+    mismatched one), and its bound-pipelines read is team-blind through
+    ``team_blind_org_scope`` for exactly the FAR-1515 CRITICAL 1 reason above:
+    a non-admin caller cannot see another team's team-private pipeline, so a
+    caller-context scan would return nothing and the strand would pass
+    vacuously.
 """
 
 from __future__ import annotations
@@ -59,6 +74,13 @@ from modulo.db.models.model_backend import ModelBackend
 
 CONNECTOR_TEAM_MISMATCH = "connector_team_mismatch"
 MODEL_BACKEND_TEAM_MISMATCH = "model_backend_team_mismatch"
+# FAR-1558: TWO wire codes for the one environment-profile rule, because the
+# two writers refuse DIFFERENT operations — binding/scoping a pipeline (the
+# profile's metadata must not leak to that caller) vs. re-scoping the profile
+# itself (the operation's own detail names the blocked count). Both are
+# defined HERE so neither route can re-hardcode its own spelling.
+ENVIRONMENT_PROFILE_TEAM_MISMATCH = "environment_profile_team_mismatch"
+ENVIRONMENT_PROFILE_BINDING_TEAM_MISMATCH = "environment_profile_binding_team_mismatch"
 
 
 @dataclass(frozen=True)
@@ -212,6 +234,38 @@ def model_backend_team_mismatch(
     if model_backend_owner_team_id is None:
         return True
     return model_backend_owner_team_id != pipeline_owner_team_id
+
+
+def environment_profile_team_mismatch(
+    profile_visibility: str | None,
+    profile_owner_team_id: uuid.UUID | None,
+    pipeline_owner_team_id: uuid.UUID | None,
+) -> bool:
+    """Return True when an environment-profile binding crosses team boundaries.
+
+    FAR-1558: an environment profile with ``visibility: team`` is only usable
+    by a pipeline owned by the *same* team — byte-identical to the
+    connector/model-backend rule (an org-visible profile never mismatches; a
+    team-private profile with NO owner team is owned by nobody, so it mismatches
+    every pipeline; an org-wide pipeline can only ever hold an org-visible
+    profile).
+
+    SHARED by all three writers of the rule so they cannot drift:
+
+    1. bind time — ``api/routes/pipelines.py::_assert_environment_profile_bindable``;
+    2. pipeline scope change — the same helper re-validating a STORED binding;
+    3. profile scope change — ``api/routes/environment_profiles.py``
+       (refuses re-scoping a profile whose bound pipelines would be stranded).
+
+    The visibility argument is accepted rather than read from a row so the
+    profile-side writer can evaluate a PROPOSED scope (``updates`` merged over
+    the stored row) with the same code path as the stored one.
+    """
+    if (profile_visibility or "org") != "team":
+        return False
+    if profile_owner_team_id is None:
+        return True
+    return profile_owner_team_id != pipeline_owner_team_id
 
 
 @dataclass(frozen=True)
