@@ -6,8 +6,9 @@ route and copies onto every snapshot frozen afterwards.
 
 Lenses:
 
-* **Chain** — 0289 chains onto ``0288_runs_execution_origin`` and is the
-  single linear head; the revision id matches the filename, and neither
+* **Chain** — 0289 chains onto ``0288_runs_execution_origin``, and
+  ``0290_scheduled_reports_due_scan`` chains onto 0289 as the single
+  linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
 * **Structure (mocked ``op``)** — upgrade emits FOUR calls IN ORDER: the
@@ -39,7 +40,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0289_pipelines_environment_profile"
+_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"
