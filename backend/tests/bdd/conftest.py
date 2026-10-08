@@ -205,6 +205,13 @@ def make_mock_run(**kwargs: Any) -> MagicMock:
     r.account_id = kwargs.get("account_id")
     r.heartbeat_at = kwargs.get("heartbeat_at")
     r.work_item_refs = kwargs.get("work_item_refs")
+    # Real, always-present columns on a Run row: execution provenance
+    # (FAR-1141 / ADR-042) plus the cancel audit pair. FAR-1566 removed the
+    # production coercion that used to rescue a stand-in which never set them,
+    # so this shared factory must set each to a real ``str | None`` value.
+    r.execution_origin = kwargs.get("execution_origin")
+    r.cancel_reason = kwargs.get("cancel_reason")
+    r.cancelled_by = kwargs.get("cancelled_by")
     return r
 
 

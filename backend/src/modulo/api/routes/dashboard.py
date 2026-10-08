@@ -29,6 +29,7 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.assistant.config_service import AssistantConfigService
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
@@ -606,8 +607,10 @@ async def _load_recent_runs(session: AsyncSession, org_id: uuid.UUID) -> list[di
             "created_at": row.created_at.isoformat(),
             "trigger_type": row.trigger_type,
             # Nullable column: pre-FAR-1141 rows and Modulo-executed runs read
-            # NULL, dispatched runs read 'dispatched' — never omitted.
-            "execution_origin": row.execution_origin,
+            # NULL, dispatched runs read 'dispatched' — never omitted. Composed
+            # from the shared run-provenance serializer (FAR-1565), reading the
+            # column this projection explicitly SELECTs above.
+            **run_provenance_fields(row),
         }
         for row in recent_runs_rows
     ]

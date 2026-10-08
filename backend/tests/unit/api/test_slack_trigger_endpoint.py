@@ -212,6 +212,10 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
     ts = str(int(time.time()))
     run_mock = MagicMock()
     run_mock.id = _RUN_ID
+    # FAR-1141 / ADR-042: the ack is a claim-ready run surface. The column is
+    # always present on a real row (FAR-1566 removed the coercion that used to
+    # rescue a stand-in which never set it), so this one sets it explicitly.
+    run_mock.execution_origin = None
 
     with (
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
@@ -237,9 +241,7 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
     body_json = resp.json()
     assert body_json["status"] == "accepted"
     assert body_json["run_id"] == str(_RUN_ID)
-    # FAR-1141 / ADR-042: the ack is a claim-ready run surface, so it carries
-    # the run's execution origin. This stand-in never set the attribute, so it
-    # must read NULL — present as a key, never a repr of the mock.
+    # Present as a key with the run's own origin — never omitted.
     assert body_json["execution_origin"] is None
     m.assert_awaited_once()
 

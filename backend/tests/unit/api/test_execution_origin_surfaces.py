@@ -14,12 +14,17 @@ it; this module pins the surfaces that did not:
 
 Every surface is asserted on BOTH sides of the conformance line — a dispatched
 run reads ``"dispatched"``, a Modulo-executed / pre-column run reads ``None`` —
-and every ``getattr``-based read is additionally proven MagicMock-safe: a
-``MagicMock`` run stand-in whose unset attribute resolves to a mock must degrade
-to ``None`` (origin not recorded), never a repr, because these payloads are
-serialized verbatim.
+and every row passed here is REAL-shaped (an actual ``Run`` ORM instance, or a
+row object that genuinely lacks the column): FAR-1566 removed the production
+code that used to coerce a ``MagicMock`` stand-in to ``None``, so a stand-in
+that has not set the column is now the test's problem, not the payload's.
 
-No DB and no network: sessions and run rows are in-memory stand-ins.
+That the *surface set itself* is complete — no run-rendering payload can
+hand-roll its own copy of the field, and a new run-shaped payload builder
+cannot forget it — is enforced structurally (AST scan of ``api/**`` and
+``core/pipeline_engine/**``) in ``test_run_provenance_serializer.py``.
+
+No DB and no network: rows are in-memory ORM instances / stand-ins.
 """
 
 from __future__ import annotations
@@ -30,17 +35,22 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from modulo.api.mcp_server import _mcp_run_item, _run_status_base
 from modulo.api.routes.dashboard import _load_recent_runs
 from modulo.api.routes.viewmodel import RunSummary
+from modulo.db.models.run import Run
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def _run_row(**overrides: Any) -> SimpleNamespace:
-    """A fully-populated run stand-in for the MCP read surfaces."""
-    row = SimpleNamespace(
+def _run_row(**overrides: Any) -> Run:
+    """A real ``Run`` row (no DB) for the MCP read surfaces."""
+    row = Run(
         id=uuid.UUID("00000000-0000-0000-0000-000000000009"),
         pipeline_id=uuid.UUID("00000000-0000-0000-0000-00000000000a"),
         status="complete",
@@ -49,9 +59,6 @@ def _run_row(**overrides: Any) -> SimpleNamespace:
         created_at=_NOW,
         started_at=_NOW,
         completed_at=_NOW,
-        error_code=None,
-        error_detail=None,
-        total_cost_usd=None,
         execution_origin=None,
     )
     for key, value in overrides.items():
@@ -73,10 +80,12 @@ class TestMcpRunItemExecutionOrigin:
         item = _mcp_run_item(_run_row(execution_origin=None), {})
         assert item["execution_origin"] is None
 
-    def test_mock_run_stand_in_degrades_to_null_not_a_repr(self) -> None:
-        """A MagicMock whose unset attribute resolves to a mock must never leak
-        a repr into the JSON tool result (the runs REST item degrades the same
-        way — this is the shared ``_optional_str`` contract)."""
+    def test_a_stand_in_that_never_set_the_column_is_not_silently_coerced(self) -> None:
+        """FAR-1566: production no longer coerces test doubles. The payload is a
+        pure pass-through of ``run.execution_origin`` — a stand-in that never
+        set the column is the test's bug, and it surfaces as itself (the REST
+        response models then reject it loudly) rather than being rewritten to
+        ``None`` behind the caller's back."""
         run = MagicMock()
         run.id = uuid.uuid4()
         run.pipeline_id = uuid.uuid4()
@@ -91,13 +100,13 @@ class TestMcpRunItemExecutionOrigin:
         run.total_cost_usd = None
         # execution_origin deliberately left unset -> a MagicMock attribute.
         item = _mcp_run_item(run, {})
-        assert item["execution_origin"] is None
+        assert item["execution_origin"] is run.execution_origin
 
     def test_run_without_the_column_at_all_degrades_to_null(self) -> None:
         """A pre-column / partially-loaded stand-in (no attribute at all) reads
         NULL rather than raising — provenance must never break the read."""
         row = _run_row()
-        del row.execution_origin  # type: ignore[attr-defined]
+        del row.execution_origin
         item = _mcp_run_item(row, {})
         assert item["execution_origin"] is None
 
@@ -109,22 +118,22 @@ class TestMcpRunItemExecutionOrigin:
 
 class TestMcpRunStatusBaseExecutionOrigin:
     def test_dispatched_run_reads_dispatched(self) -> None:
-        base = _run_status_base(_run_row(execution_origin="dispatched"))  # type: ignore[arg-type]
+        base = _run_status_base(_run_row(execution_origin="dispatched"))
         assert base["execution_origin"] == "dispatched"
 
     def test_executed_run_reads_null(self) -> None:
-        base = _run_status_base(_run_row(execution_origin=None))  # type: ignore[arg-type]
+        base = _run_status_base(_run_row(execution_origin=None))
         assert base["execution_origin"] is None
 
     def test_run_without_the_column_degrades_to_null(self) -> None:
         row = _run_row()
-        del row.execution_origin  # type: ignore[attr-defined]
-        assert _run_status_base(row)["execution_origin"] is None  # type: ignore[arg-type]
+        del row.execution_origin
+        assert _run_status_base(row)["execution_origin"] is None
 
     def test_the_field_sits_alongside_trigger_type(self) -> None:
         """The conformance shape: origin is a first-class sibling of the other
         run-identity keys, not buried in a nested object."""
-        base = _run_status_base(_run_row(execution_origin="dispatched"))  # type: ignore[arg-type]
+        base = _run_status_base(_run_row(execution_origin="dispatched"))
         assert {"run_id", "status", "trigger_type", "execution_origin"} <= set(base)
 
 
@@ -133,16 +142,18 @@ class TestMcpRunStatusBaseExecutionOrigin:
 # ---------------------------------------------------------------------------
 
 
-class _RecentRunsSession:
-    """Session stand-in capturing the SELECT so the test can prove the column is
-    really projected (not just mapped from an unrelated row attribute)."""
+class _RecentRunsSession(AsyncSession):
+    """A real ``AsyncSession`` subclass capturing the SELECT so the test can
+    prove the column is really projected (not merely mapped from an unrelated
+    row attribute). Only ``execute`` is overridden — no engine, no DB."""
 
     def __init__(self, rows: list[Any]) -> None:
+        super().__init__()
         self._rows = rows
         self.statements: list[Any] = []
 
-    async def execute(self, stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
-        self.statements.append(stmt)
+    async def execute(self, statement: Any, *_args: Any, **_kwargs: Any) -> Any:
+        self.statements.append(statement)
         return SimpleNamespace(all=lambda: self._rows)
 
 
@@ -161,12 +172,12 @@ def _recent_run_row(execution_origin: str | None) -> SimpleNamespace:
 class TestDashboardRecentRunsExecutionOrigin:
     async def test_dispatched_run_reads_dispatched(self) -> None:
         session = _RecentRunsSession([_recent_run_row("dispatched")])
-        rows = await _load_recent_runs(session, _ORG)  # type: ignore[arg-type]
+        rows = await _load_recent_runs(session, _ORG)
         assert rows[0]["execution_origin"] == "dispatched"
 
     async def test_executed_run_reads_null_and_the_key_is_never_omitted(self) -> None:
         session = _RecentRunsSession([_recent_run_row(None)])
-        rows = await _load_recent_runs(session, _ORG)  # type: ignore[arg-type]
+        rows = await _load_recent_runs(session, _ORG)
         assert rows[0]["execution_origin"] is None
         assert "execution_origin" in rows[0]
 
@@ -174,7 +185,7 @@ class TestDashboardRecentRunsExecutionOrigin:
         """Mapping the attribute back is not enough — the projection must carry
         the column or every row would read NULL regardless of the DB value."""
         session = _RecentRunsSession([])
-        await _load_recent_runs(session, _ORG)  # type: ignore[arg-type]
+        await _load_recent_runs(session, _ORG)
         assert len(session.statements) == 1
         assert "execution_origin" in str(session.statements[0])
 
@@ -207,21 +218,23 @@ class TestRunSummaryExecutionOrigin:
         )
         assert summary.execution_origin is None
 
-    def test_mock_run_stand_in_degrades_to_null(self) -> None:
-        """``/viewmodel/current`` is exercised with MagicMock run stand-ins in
-        ``test_viewmodel_endpoint`` — the ``before`` validator must coerce the
-        mock attribute to ``None`` instead of failing response validation."""
+    def test_a_mock_stand_in_without_the_column_is_rejected_not_coerced(self) -> None:
+        """FAR-1566 removed the ``before`` validator whose only job was to
+        coerce this unset mock attribute to ``None``. The response model now
+        rejects a non-string loudly instead of silently rewriting it — a real
+        row always carries ``str | None``, so production never hits this arm."""
         run = MagicMock()
         run.id = uuid.uuid4()
         run.pipeline_id = uuid.uuid4()
         run.status = "complete"
         run.trigger_type = "manual"
         run.created_at = _NOW
-        summary = RunSummary.model_validate(run)
-        assert summary.execution_origin is None
+        # execution_origin deliberately left unset -> a MagicMock attribute.
+        with pytest.raises(ValidationError):
+            RunSummary.model_validate(run)
 
-    def test_non_string_origin_is_rejected_to_null(self) -> None:
-        """An int/enum/whatever from a half-typed stand-in degrades to NULL —
-        the wire type stays ``str | None``."""
-        summary = RunSummary.model_validate(_run_row(execution_origin=12345))  # type: ignore[arg-type]
-        assert summary.execution_origin is None
+    def test_non_string_origin_is_rejected_not_silently_rewritten(self) -> None:
+        """The wire type stays ``str | None``: an int/enum/whatever from a
+        half-typed stand-in FAILS validation instead of being coerced to NULL."""
+        with pytest.raises(ValidationError):
+            RunSummary.model_validate(_run_row(execution_origin=12345))

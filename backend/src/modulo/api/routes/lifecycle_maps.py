@@ -57,6 +57,7 @@ from modulo.core.lifecycle_map.validation import (
     LifecycleMapContentError,
     LifecycleMapPipelineConflictError,
 )
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.models.lifecycle_map import LifecycleMap
 from modulo.db.models.lifecycle_map_stage import LifecycleMapStage
 from modulo.db.rls import set_rls_org, set_rls_user_context
@@ -1574,8 +1575,6 @@ async def get_journey_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
-    from modulo.api.routes.runs import _optional_str
-
     return JourneyDetailResponse(
         **_build_journey_summary(journey, unattributed).model_dump(),
         runs=[
@@ -1584,10 +1583,10 @@ async def get_journey_endpoint(
                 status=r.status,
                 completed_at=r.completed_at,
                 provenance=r.trigger_type,
-                # FAR-1141 / ADR-042: the run's execution origin. ``getattr``
-                # degrades a stand-in with no column loaded; ``_optional_str``
-                # degrades a MagicMock the way the REST list item does.
-                execution_origin=_optional_str(getattr(r, "execution_origin", None)),
+                # FAR-1141 / ADR-042: the run's execution origin, composed from
+                # the shared serializer (FAR-1565) — a row loaded without the
+                # column reads NULL, a dispatched run reads 'dispatched'.
+                **run_provenance_fields(r),
             )
             for r in runs
         ],

@@ -68,6 +68,9 @@ def _make_run(
     run.snapshot_id = _SNAPSHOT_ID
     run.langgraph_thread_id = f"{_ORG_ID}:{_RUN_ID}"
     run.status = status
+    # FAR-1141 / ADR-042: a real row always carries the provenance column
+    # (FAR-1566 removed the coercion that used to rescue an unset stand-in).
+    run.execution_origin = None
     run.outputs_json = outputs_json
     run.node_telemetry_json = node_telemetry_json
     return run
@@ -204,8 +207,8 @@ async def test_recover_node_with_valid_input():
     assert audit_kwargs["actor_user_id"] == _ACTOR_ID
     assert "actor" not in audit_kwargs["payload_json"]
     # FAR-1141 / ADR-042: the run-keyed payload carries the run's execution
-    # origin. This stand-in never set the attribute, so it must read NULL —
-    # present as a key, never a repr of the mock (audit payloads are immutable).
+    # origin — present as a key with the row's own value (NULL for a
+    # Modulo-executed run), never omitted (audit payloads are immutable).
     assert audit_kwargs["payload_json"]["execution_origin"] is None
 
 

@@ -853,6 +853,9 @@ def _make_journey_run_row(trigger_type: str) -> MagicMock:
     r.status = "complete"
     r.completed_at = datetime.now(UTC)
     r.trigger_type = trigger_type
+    # FAR-1141 / ADR-042: execution provenance is a real, always-present column
+    # (FAR-1566 removed the production coercion for a stand-in that omits it).
+    r.execution_origin = None
     return r
 
 

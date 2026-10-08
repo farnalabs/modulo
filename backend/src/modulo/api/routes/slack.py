@@ -43,6 +43,7 @@ from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
 from modulo.core.exceptions import PipelineNotRunnableError, TriggersPausedError
+from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
     PipelineRateLimitError,
@@ -408,13 +409,10 @@ async def receive_slack_event(
     background_tasks.add_task(_dispatch_slack_run, str(run_id), str(org_id))
 
     # FAR-1141 / ADR-042: the ack is a claim-ready run surface, so it carries the
-    # run's execution origin ('dispatched' / NULL). A deferred import keeps the
-    # route->route edge out of module import order; ``_optional_str`` degrades a
-    # MagicMock stand-in to ``None`` the way the REST list item does.
-    from modulo.api.routes.runs import _optional_str
-
+    # run's execution origin ('dispatched' / NULL) — composed from the shared
+    # run-provenance serializer (FAR-1565), never a hand-rolled copy.
     return {
         "run_id": str(run_id),
         "status": "accepted",
-        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
+        **run_provenance_fields(run),
     }
