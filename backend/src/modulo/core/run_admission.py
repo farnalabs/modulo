@@ -26,6 +26,8 @@ import asyncio
 import logging
 import uuid
 from collections import Counter
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -229,6 +231,45 @@ def _park_margin_seconds(park_grace_seconds: int) -> int:
     return max(int(park_grace_seconds), _PARK_MARGIN_FLOOR_SECONDS)
 
 
+async def _sweep_org_ids(async_engine: AsyncEngine) -> list[uuid.UUID]:
+    """Enumerate the organisations both periodic sweeps iterate over (FAR-604).
+
+    The root ``organisations`` table is read in system context — the
+    enumeration itself carries no RLS scope; each per-org write is scoped by
+    :func:`_org_lock_bounded_conn`. Shared by :func:`park_expired_hitl_runs`
+    and :func:`reconcile_pipeline_slots` so the enumeration is defined once.
+    """
+    async with async_engine.connect() as conn, conn.begin():
+        org_result = await conn.execute(text("SELECT id FROM organisations"))
+        return [row[0] for row in org_result.all()]
+
+
+@asynccontextmanager
+async def _org_lock_bounded_conn(
+    async_engine: AsyncEngine,
+    org_id: uuid.UUID,
+) -> AsyncIterator[Any]:
+    """Open one org's sweep transaction with the FAR-1592 row-lock bound first.
+
+    Shared by both periodic sweeps so the per-org preamble is defined once:
+    connect, begin, issue the transaction-scoped ``lock_timeout`` bound
+    (``db.crud.row_lock.set_mutation_row_lock_timeout`` — BEFORE the first row
+    lock is taken, so ``set_config`` can never disturb lock ordering; FAR-1592
+    / FAR-1584), then scope RLS with ``set_config('app.organisation_id', ...)``.
+    Yields the connection for the sweep's multi-row ``UPDATE runs``.
+
+    The import stays local to mirror the call sites' previous placement:
+    ``row_lock`` reaches ``db.crud.run``, so deferring it keeps that surface
+    out of this module's import time.
+    """
+    async with async_engine.connect() as conn, conn.begin():
+        from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+        await set_mutation_row_lock_timeout(conn)
+        await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+        yield conn
+
+
 async def park_expired_hitl_runs(
     async_engine: AsyncEngine,
     *,
@@ -289,22 +330,11 @@ async def park_expired_hitl_runs(
     parked: list[Any] = []
     sweep_error: BaseException | None = None
     try:
-        async with async_engine.connect() as conn, conn.begin():
-            org_result = await conn.execute(text("SELECT id FROM organisations"))
-            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
+        org_ids = await _sweep_org_ids(async_engine)
 
         for org_id in org_ids:
             try:
-                async with async_engine.connect() as conn, conn.begin():
-                    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-
-                    # FAR-1592: same class as the slot sweep above — this
-                    # multi-row ``UPDATE runs`` is the hot table, so the
-                    # transaction-scoped bound (``Settings.
-                    # mutation_row_lock_timeout_ms``) is issued BEFORE the
-                    # first lock the org transaction takes.
-                    await set_mutation_row_lock_timeout(conn)
-                    await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+                async with _org_lock_bounded_conn(async_engine, org_id) as conn:
                     result = await conn.execute(
                         _PARK_RUNS_SQL,
                         {
@@ -459,24 +489,11 @@ async def reconcile_pipeline_slots(
     per_pipeline: Counter[str] = Counter()
     sweep_error: BaseException | None = None
     try:
-        async with async_engine.connect() as conn, conn.begin():
-            org_result = await conn.execute(text("SELECT id FROM organisations"))
-            org_ids: list[uuid.UUID] = [row[0] for row in org_result.all()]
+        org_ids = await _sweep_org_ids(async_engine)
 
         for org_id in org_ids:
             try:
-                async with async_engine.connect() as conn, conn.begin():
-                    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-
-                    # FAR-1592: bound THIS org transaction's row-lock waits
-                    # first (set_config takes no lock, so it can never disturb
-                    # lock ordering) — the multi-row UPDATE below is the hot
-                    # ``runs`` table, so a contended lock waits at most
-                    # Settings.mutation_row_lock_timeout_ms, never the
-                    # unbounded, >=30-min silent wait HAProxy culls mid-
-                    # operation (FAR-1524 O11 / FAR-1584).
-                    await set_mutation_row_lock_timeout(conn)
-                    await conn.execute(text(_SQL_SET_ORG_ID), {"val": str(org_id)})
+                async with _org_lock_bounded_conn(async_engine, org_id) as conn:
                     # FAR-779 / FAR-812: auto-retry heartbeat-stale runs instead of
                     # terminal-failing them immediately.  When claim_count <=
                     # retry_budget (settings.heartbeat_stale_retry_budget), the run is
