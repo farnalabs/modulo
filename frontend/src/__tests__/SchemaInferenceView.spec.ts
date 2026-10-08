@@ -188,4 +188,151 @@ describe('SchemaInferenceView', () => {
     expect(wrapper.text()).toContain('Publish failed')
     expect(wrapper.text()).toContain('name already exists')
   })
+
+  it('shows the loading skeleton while connectors are being fetched', async () => {
+    let resolveGet: (value: unknown) => void = () => {}
+    ;(api.GET as any).mockReturnValue(
+      new Promise((resolve) => {
+        resolveGet = resolve
+      }),
+    )
+    const wrapper = mount(SchemaInferenceView, {
+      global: {
+        stubs: { RouterLink: true },
+      },
+    })
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-inference-loading-skeleton"]').exists()).toBe(true)
+
+    resolveGet({ data: { items: CONNECTORS }, error: undefined })
+    await nextTick()
+    await nextTick()
+    expect(wrapper.find('[data-testid="schema-inference-loading-skeleton"]').exists()).toBe(false)
+  })
+
+  it('shows an error message when the connector request throws', async () => {
+    ;(api.GET as any).mockRejectedValue(new Error('network down'))
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('Failed to load connectors')
+    expect(wrapper.text()).toContain('network down')
+  })
+
+  it('renders an em dash when the inferred schema has no description', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: { ...INFER_OK, suggestion_description: null }, error: undefined })
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect((wrapper.vm as any).draftSchema.description).toBeNull()
+    expect(wrapper.text()).toContain('—')
+  })
+
+  it('toggles the raw JSON viewer', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any).mockResolvedValue({ data: INFER_OK, error: undefined })
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const toggle = wrapper.find('[data-testid="schema-inference-toggle-raw-json"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect((wrapper.vm as any).showRawJson).toBe(false)
+
+    await toggle.trigger('click')
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect((wrapper.vm as any).showRawJson).toBe(true)
+    expect(wrapper.find('#schema-inference-raw-json').exists()).toBe(true)
+
+    await toggle.trigger('click')
+    await nextTick()
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+  })
+
+  it('shows the inference error message when the infer request throws', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any).mockRejectedValue(new Error('socket hangup'))
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Schema inference failed')
+    expect(wrapper.text()).toContain('socket hangup')
+  })
+
+  it('shows the publish error when creating the schema returns no data', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any)
+      .mockResolvedValueOnce({ data: INFER_OK, error: undefined })
+      .mockResolvedValueOnce({ data: null, error: undefined })
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="schema-inference-publish"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Publish failed: no response')
+  })
+
+  it('shows the publish error when creating the schema version fails', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any)
+      .mockResolvedValueOnce({ data: INFER_OK, error: undefined })
+      .mockResolvedValueOnce({ data: { id: 'schema-1', name: 'Inferred from GitHub' }, error: undefined })
+      .mockResolvedValueOnce({ data: undefined, error: { detail: 'version conflict' } })
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="schema-inference-publish"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Publish failed')
+    expect(wrapper.text()).toContain('version conflict')
+  })
+
+  it('shows the publish error when the publish request throws', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    ;(api.POST as any)
+      .mockResolvedValueOnce({ data: INFER_OK, error: undefined })
+      .mockRejectedValueOnce(new Error('server exploded'))
+    const wrapper = await mountView()
+
+    ;(wrapper.vm as any).selectedConnectorId = 'conn-1'
+    await wrapper.find('[data-testid="schema-inference-resource-type"]').setValue('issues')
+    await wrapper.find('[data-testid="schema-inference-infer-schema"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="schema-inference-publish"]').trigger('click')
+    await nextTick()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Publish failed')
+    expect(wrapper.text()).toContain('server exploded')
+  })
 })

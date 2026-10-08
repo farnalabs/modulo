@@ -143,7 +143,7 @@
             {{ showRawJson ? $t('common.hide') : $t('common.show') }} {{ $t('views.SchemaInferenceView.raw_json') }}
           </button>
           <div id="schema-inference-raw-json">
-            <JsonViewer v-if="showRawJson" :data="rawDefinitionJson ?? null" :show-toolbar="true" :max-height="'24rem'" />
+            <JsonViewer v-if="showRawJson" :data="rawDefinitionJson" :show-toolbar="true" :max-height="'24rem'" />
           </div>
         </div>
 
