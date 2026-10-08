@@ -46,7 +46,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
 from modulo.auth.oauth import VALID_SCOPES
-from modulo.core.runtime_config.key_bridge import get_public_url
+from modulo.core.runtime_config.key_bridge import get_public_url, public_url_is_configured
 from modulo.settings import Settings, get_settings
 
 router = APIRouter(tags=["oauth-metadata"])
@@ -73,20 +73,42 @@ def resolve_public_base_url(request: Request, settings: Settings | None = None) 
 
     ``MODULO_PUBLIC_URL`` (resolved through the runtime-config bridge so an
     admin ``PUT /api/v1/admin/runtime-config`` override wins over the
-    boot-time value) is the authority when it is set — that is what production
-    and any split-origin deployment want.
+    boot-time value) is the authority when it is *configured* — that is what
+    production and any split-origin deployment want.
 
-    **Fallback:** when it is falsy (nothing configured / an admin cleared the
-    override) the origin the request actually arrived on is used instead, so
-    discovery still resolves in local and dev setups where nobody set a public
-    URL. A trailing slash is stripped from either source so no advertised URL
+    **Fallback:** when it is unconfigured (falsy, or left at the
+    ``http://localhost:8000`` placeholder default — the same test the OAuth
+    flow uses via :func:`public_url_is_configured`) the origin the request
+    actually arrived on is used instead. The discovery routes below do NOT
+    advertise that fallback: they fail visible with ``500`` (see
+    :func:`_unconfigured_response`), matching the flow's refusal, so a stock
+    harness is never pointed at a localhost issuer the flow would reject.
+    The fallback remains for the ``WWW-Authenticate`` challenge, which is
+    best-effort and anchored to the origin the client actually used.
+
+    A trailing slash is stripped from either source so no advertised URL
     ever contains ``//``.
     """
     resolved = settings if settings is not None else get_settings()
     public_url = get_public_url(resolved)
-    if not public_url:
+    if not public_url_is_configured(resolved):
         return str(request.base_url).rstrip("/")
     return public_url.rstrip("/")
+
+
+def _unconfigured_response() -> Response:
+    """``500`` matching the OAuth flow's refusal when ``MODULO_PUBLIC_URL`` is unset.
+
+    Discovery must not advertise an issuer the flow would refuse: a
+    deployment that never configures ``MODULO_PUBLIC_URL`` gets the same
+    visible failure here as it does from ``register_oauth_client`` and the
+    authorize/token endpoints, instead of a document pointing at
+    ``http://localhost:8000`` (review feedback on PR #1384).
+    """
+    return JSONResponse(
+        {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
+        status_code=500,
+    )
 
 
 def protected_resource_metadata_url(request: Request, settings: Settings | None = None) -> str:
@@ -121,6 +143,8 @@ def authorization_server_metadata(request: Request, settings: Settings = Depends
     ``registration_endpoint``: there is no RFC 7591 dynamic client
     registration — clients pass an explicit ``--client-id``.
     """
+    if not public_url_is_configured(settings):
+        return _unconfigured_response()
     base = resolve_public_base_url(request, settings)
     return _json(
         {
@@ -148,10 +172,14 @@ def _protected_resource_payload(base: str) -> dict[str, object]:
 @router.get(PROTECTED_RESOURCE_METADATA_PATH, include_in_schema=False)
 def protected_resource_metadata(request: Request, settings: Settings = Depends(get_settings)) -> Response:
     """RFC 9728 protected-resource metadata for ``/mcp/``."""
+    if not public_url_is_configured(settings):
+        return _unconfigured_response()
     return _json(_protected_resource_payload(resolve_public_base_url(request, settings)))
 
 
 @router.get(PROTECTED_RESOURCE_MCP_PATH, include_in_schema=False)
 def protected_resource_metadata_mcp(request: Request, settings: Settings = Depends(get_settings)) -> Response:
     """Path-suffix variant of the RFC 9728 document (``/.well-known/oauth-protected-resource/mcp``)."""
+    if not public_url_is_configured(settings):
+        return _unconfigured_response()
     return _json(_protected_resource_payload(resolve_public_base_url(request, settings)))

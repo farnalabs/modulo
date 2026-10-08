@@ -67,8 +67,13 @@ def _make_settings() -> Settings:
 
 
 def _make_settings_without_public_url() -> Settings:
-    """A Settings instance with an EMPTY public URL (the local/dev fallback)."""
+    """A Settings instance with an EMPTY public URL."""
     return Settings(**_settings_values(), modulo_public_url="")
+
+
+def _make_settings_localhost_default() -> Settings:
+    """A Settings instance left at the ``http://localhost:8000`` placeholder default."""
+    return Settings(**_settings_values(), modulo_public_url="http://localhost:8000")
 
 
 def _content_type(resp: Any) -> str:
@@ -203,17 +208,53 @@ def test_discovery_needs_no_credentials(client: TestClient) -> None:
         assert resp.status_code != 401
 
 
-def test_discovery_falls_back_to_the_request_origin_when_unset(client: TestClient) -> None:
-    """Empty ``MODULO_PUBLIC_URL`` → the origin the request arrived on.
+@pytest.mark.parametrize("path", [_AUTHORIZATION_SERVER_PATH, _PROTECTED_RESOURCE_PATH, _PROTECTED_RESOURCE_MCP_PATH])
+def test_discovery_fails_visible_when_public_url_is_unset(client: TestClient, path: str) -> None:
+    """An EMPTY ``MODULO_PUBLIC_URL`` → ``500``, matching the OAuth flow.
 
-    The fallback is what keeps discovery working in local/dev setups where
-    nobody configured a public URL.
+    Discovery must not advertise an issuer the flow would refuse
+    (``register_oauth_client`` answers ``500`` for an unconfigured public
+    URL), so it fails the same visible way instead of pointing a stock
+    harness at a localhost URL (review feedback on PR #1384).
     """
     app.dependency_overrides[get_settings] = _make_settings_without_public_url
-    body = client.get(_AUTHORIZATION_SERVER_PATH).json()
-    # TestClient's default base_url — a real dev server would see its own host.
-    assert body["issuer"] == "http://testserver"
-    assert body["authorization_endpoint"] == "http://testserver/mcp/oauth/authorize"
+    resp = client.get(path)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "MODULO_PUBLIC_URL must be configured"
+
+
+@pytest.mark.parametrize("path", [_AUTHORIZATION_SERVER_PATH, _PROTECTED_RESOURCE_PATH, _PROTECTED_RESOURCE_MCP_PATH])
+def test_discovery_fails_visible_when_public_url_is_the_localhost_default(client: TestClient, path: str) -> None:
+    """The ``http://localhost:8000`` Settings default counts as unconfigured → ``500``.
+
+    The flow refuses that exact value, so discovery must too: a prod
+    deployment that never sets ``MODULO_PUBLIC_URL`` must not advertise
+    ``http://localhost:8000`` issuer/endpoint URLs.
+    """
+    app.dependency_overrides[get_settings] = _make_settings_localhost_default
+    resp = client.get(path)
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "MODULO_PUBLIC_URL must be configured"
+
+
+def test_challenge_falls_back_to_request_origin_when_public_url_unset(client: TestClient) -> None:
+    """The ``WWW-Authenticate`` challenge stays best-effort when unconfigured.
+
+    The discovery routes fail visible (above); the challenge still points the
+    client at the metadata URL on the origin it actually used. ``client`` is
+    taken only so the process-global ``MODULO_PUBLIC_URL`` override is cleared
+    for the duration (see its fixture docstring).
+    """
+    from modulo.api.mcp_server import _resource_metadata_challenge
+
+    with patch("modulo.api.routes.oauth_metadata.get_settings", _make_settings_without_public_url):
+        request = MagicMock()
+        request.base_url = "http://dev.example.com/"
+        headers = _resource_metadata_challenge(request)
+
+    assert headers == {
+        "WWW-Authenticate": ('Bearer resource_metadata="http://dev.example.com/.well-known/oauth-protected-resource"')
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +277,9 @@ def test_discovery_is_not_shadowed_by_the_spa_fallback(tmp_path: Path) -> None:
 
     test_app = FastAPI()
     test_app.include_router(oauth_metadata_router)
+    # A pinned public URL: discovery now fails visible (500) when unconfigured,
+    # so the routing-order proof needs a configured origin.
+    test_app.dependency_overrides[get_settings] = _make_settings
     mounted = _init_once_mount_spa(test_app, {"MODULO_SERVE_SPA": "1", "MODULO_FRONTEND_DIST": str(dist)})
     assert mounted is True
 
