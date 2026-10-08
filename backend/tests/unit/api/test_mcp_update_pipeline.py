@@ -48,6 +48,15 @@ class TestUpdatePipeline(_AuthContext):
         assert result["error"] == "invalid_id"
         assert result["field"] == "pipeline_id"
 
+    async def test_unparseable_pipeline_id_without_error_dict(self) -> None:
+        """The defensive ``pid is None`` arm: a parser that yields no error
+        dict still returns the invalid_id envelope (mirrors the other MCP tool
+        shells; ``_parse_uuid_param`` never returns ``(None, None)`` in
+        practice, so this branch is only reachable by patching it)."""
+        with patch.object(ms, "_parse_uuid_param", return_value=(None, None)):
+            result = await ms.update_pipeline(pipeline_id="whatever", environment_profile_id=None)
+        assert result == {"error": "invalid_id", "detail": ms._MSG_UUID_PARSE_FAILED}
+
     async def test_invalid_environment_profile_id(self) -> None:
         result = await ms.update_pipeline(pipeline_id=str(_PIPELINE_ID), environment_profile_id="nope")
         assert result["error"] == "invalid_id"
