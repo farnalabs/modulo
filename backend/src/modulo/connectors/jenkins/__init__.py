@@ -120,6 +120,16 @@ class JenkinsConnector(ConnectorBase):
 
     Uses Basic auth (username + API token or password).
     Optionally fetches a crumb for write operations.
+
+    **An empty or missing job name fails loud, it is never requested.**
+    ``trigger_run`` and ``list_runs`` (whose ``pipeline_id`` is the job path),
+    ``query`` with ``resource="builds"`` (whose ``job_name`` filter), and
+    ``write`` (whose ``job_name`` payload field) raise :class:`ValueError` on
+    an empty or otherwise unsafe job name, BEFORE any request is built - so a
+    missing job name can never issue ``/job//...`` with this connector's Basic
+    credentials attached. Each of those four entry points validates through
+    :func:`_reject_unsafe_job_name`; ``get_run_status``/``get_run_logs``
+    validate the job path extracted from a run id the same way.
     """
 
     def __init__(self, username: str, token: str, base_url: str = "http://localhost:8080") -> None:
