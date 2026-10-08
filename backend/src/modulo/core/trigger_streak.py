@@ -49,7 +49,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from redis.asyncio import Redis as AsyncRedis
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from modulo.core.pipeline_engine.classify import RunClassificationValue
@@ -169,11 +169,12 @@ CRON_STREAK_MASS_CASCADE_EVENT_TYPE = "cron_trigger.mass_cascade_alert"
 STREAK_DEACTIVATED_BY_STREAK = "no_delivery_streak"
 STREAK_DEACTIVATED_BY_CONFIG_FAILURE = "config_failure"
 
-# Redis markers: per-org pending deactivation-notification retry set (a failed
+# Redis marker: per-org pending deactivation-notification retry set (a failed
 # dispatch is retried on the next scheduler tick; the member carries the full
-# sanitised payload) + the once-per-window mass-cascade alert marker.
+# sanitised payload). The mass-cascade alert window is deduped from the audit
+# chain instead (see _streak_mass_cascade_alerted_this_window), so it needs no
+# Redis marker here.
 _STREAK_NOTIFY_PENDING_PREFIX = "saq:streak:notify_pending"
-_STREAK_MASS_CASCADE_ALERT_PREFIX = "saq:streak:mass_cascade_alerted"
 _STREAK_PENDING_MARKER_TTL = 7 * 24 * 3600  # 7d — long enough to retry across an outage
 
 # Notification payload reason allow-list — identifiers/titles + these reason
@@ -1826,8 +1827,6 @@ async def _streak_mass_cascade_alerted_this_window(
     per audit stream (FAR-1387): a cron cascade alert never masks an ongoing
     one or vice versa.
     """
-    from sqlalchemy import func
-
     from modulo.db.models.audit_event import AuditEvent
 
     ch = _ch()

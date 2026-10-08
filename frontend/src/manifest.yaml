@@ -2934,8 +2934,14 @@ elements:
         type: button
         dynamic_testid: false
     /library/:id/create-pipeline:
+      - testid: library-wizard-back-link
+        type: link
+        dynamic_testid: false
       - testid: library-wizard-back
         type: button
+        dynamic_testid: false
+      - testid: library-wizard-loading-skeleton
+        type: element
         dynamic_testid: false
       - testid: library-wizard-pipeline-name
         type: input

@@ -1,6 +1,6 @@
 <template>
   <div class="min-h-screen bg-background">
-    <BackLink to="/library" label="Back to Library" />
+    <BackLink to="/library" :label="$t('views.LibraryPipelineWizard.back_to_library')" data-testid="library-wizard-back-link" />
     <header class="bg-card border-b border-border px-6 py-4">
       <div class="max-w-3xl mx-auto">
         <button type="button"
@@ -8,7 +8,7 @@
           @click="router.push({ name: 'library' })"
           data-testid="library-wizard-back"
         >
-          <ArrowLeft class="h-4 w-4" />
+          <ArrowLeft class="h-4 w-4" aria-hidden="true" />
           {{ $t('views.LibraryPipelineWizard.back_to_library') }}
         </button>
         <PageHeader :title="$t('views.LibraryPipelineWizard.create_pipeline_from_template')" />
@@ -16,9 +16,24 @@
     </header>
 
     <main class="max-w-3xl mx-auto px-6 py-8">
-      <LoadingSpinner v-if="loading" />
+      <div v-if="loading" class="space-y-6" data-testid="library-wizard-loading-skeleton">
+        <div class="card p-6">
+          <SkeletonBlock height-class="h-6 w-64" />
+          <SkeletonBlock class="mt-3" height-class="h-4 w-3/4" />
+          <SkeletonBlock class="mt-6" height-class="h-14 w-full" />
+        </div>
+        <div class="card p-6">
+          <SkeletonBlock height-class="h-5 w-48" />
+          <SkeletonBlock class="mt-4" height-class="h-10 w-full" />
+          <SkeletonBlock class="mt-4" height-class="h-24 w-full" />
+        </div>
+        <div class="card p-6">
+          <SkeletonBlock height-class="h-5 w-40" />
+          <SkeletonBlock class="mt-4" height-class="h-10 w-full" />
+        </div>
+      </div>
 
-      <ErrorAlert v-else-if="error" :message="error" class="mb-6" />
+      <ErrorAlert v-else-if="error" :message="error" :on-retry="reload" class="mb-6" />
 
       <div v-else>
         <div class="card p-6 mb-6">
@@ -38,8 +53,8 @@
           </div>
 
           <div class="bg-muted rounded-lg p-4 text-sm text-foreground">
-            <p><strong>{{ $t('views.LibraryPipelineWizard.author') }}</strong> {{ primitive?.author }}</p>
-            <p><strong>{{ $t('views.LibraryPipelineWizard.version') }}</strong> {{ primitive?.version }}</p>
+            <p><strong>{{ $t('views.LibraryPipelineWizard.author') }}</strong> {{ primitive?.author || '—' }}</p>
+            <p><strong>{{ $t('views.LibraryPipelineWizard.version') }}</strong> {{ primitive?.version || '—' }}</p>
           </div>
         </div>
 
@@ -178,7 +193,7 @@ import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
 import { useDataFetch } from '../composables/useDataFetch'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import OwnershipPicker from '../components/OwnershipPicker.vue'
 import type { OwnershipValue } from '../components/OwnershipPicker.vue'
@@ -243,7 +258,7 @@ const result = ref<CreatePipelineResponse | null>(null)
 
 const templateAgents = ref<Array<{ name: string; description?: string; connector_type_refs?: Array<{ connector_type: string }> }>>([])
 
-const { loading, error, data: primitive, load: _reload } = useDataFetch<LibraryPrimitive>(
+const { loading, error, data: primitive, load: reload } = useDataFetch<LibraryPrimitive>(
   () => api.GET('/api/v1/libraries/{primitive_id}', {
     params: { path: { primitive_id: primitiveId } },
   }),
