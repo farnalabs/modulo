@@ -16,6 +16,7 @@ Mock/fake based — no Postgres, no Redis. Covers:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -1690,3 +1691,26 @@ class TestSweepRowLockBoundFAR1592:
         cause = excinfo.value.__cause__
         assert isinstance(cause, OperationalError)
         assert "org_lock_timeout" not in caplog.text
+
+    @pytest.mark.parametrize("sweep_name", SWEEPS)
+    async def test_cancellation_during_org_transaction_propagates(
+        self,
+        sweep_name: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A ``CancelledError`` mid-org-transaction is NOT swallowed by the
+        55P03 handler and NOT wrapped in the sweep's failure contract.
+
+        ``CancelledError`` is a ``BaseException``: the targeted ``except
+        Exception`` must not convert task cancellation (SAQ shutdown / worker
+        teardown) into a lock-timeout skip, so the ``except
+        asyncio.CancelledError: raise`` above it keeps it propagating and the
+        org transaction rolls back whole."""
+        engine = _PgSweepEngine(
+            rows=[],
+            orgs=[ORG_ID],
+            write_errors={ORG_ID: asyncio.CancelledError()},
+        )
+        monkeypatch.setattr(ra, "get_settings", lambda: _sweep_settings(sweep_name))
+        with pytest.raises(asyncio.CancelledError):
+            await _run_sweep(sweep_name, engine)
