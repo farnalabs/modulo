@@ -96,11 +96,11 @@
           </div>
         </div>
 
-<div class="flex justify-end mt-6">
-              <Button :disabled="!selectedPipeline" class="px-6 py-2.5" @click="step = 2" data-testid="copy-wizard-next-step1">
-                {{ $t('views.CopyPipelineWizard.next_configure_copy') }}
-              </Button>
-            </div>
+        <div class="flex justify-end mt-6">
+          <Button :disabled="!selectedPipeline" class="px-6 py-2.5" @click="step = 2" data-testid="copy-wizard-next-step1">
+            {{ $t('views.CopyPipelineWizard.next_configure_copy') }}
+          </Button>
+        </div>
       </template>
 
       <template v-else-if="step === 2">
