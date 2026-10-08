@@ -2282,3 +2282,41 @@ class TestPerformUpgradeHappyPath:
         assert result.previous_version == "1.1.0"
         assert result.version == "1.2.0"
         assert len(boot_record) == 1
+
+
+@pytest.mark.parametrize(
+    "bad_version",
+    ["../evil", "a/b", "a\b", "", ".", "..", "1.2.3\n", "1.2.3\nevil", "1 2", "bundle-v../x", "v"],
+)
+def test_perform_upgrade_rejects_unsafe_version(tmp_path, bad_version):
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="invalid --version"):
+        upgrade_module.perform_upgrade(
+            tmp_path / "data",
+            install_root=tmp_path / "install-root",
+            target_version=bad_version,
+            fetch=lambda url, dest: fetched.append(url),
+        )
+    assert not fetched
+
+
+@pytest.mark.parametrize("bad_version", ["../evil", "a/b", "", "..", "1.0\n"])
+def test_fetch_release_assets_rejects_unsafe_version(tmp_path, bad_version):
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="invalid --version"):
+        upgrade_module.fetch_release_assets(
+            bad_version, tmp_path / "downloads", fetch=lambda url, dest: fetched.append(url)
+        )
+    assert not fetched
+    assert not (tmp_path / "downloads").exists()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("1.2.3", "1.2.3"), ("v1.2.3", "1.2.3"), ("bundle-v1.2.3", "1.2.3"), ("1.2.3-rc.1", "1.2.3-rc.1")],
+)
+def test_validate_version_segment_accepts_normal_versions(raw, expected):
+    stripped = upgrade_module._strip_bundle_prefix(raw)
+    assert upgrade_module._validate_version_segment(stripped) == expected

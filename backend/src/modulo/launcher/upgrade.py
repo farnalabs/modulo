@@ -470,6 +470,21 @@ def _strip_bundle_prefix(version_text: str) -> str:
     return version_text.removeprefix("bundle-v").removeprefix("v")
 
 
+_VERSION_SEGMENT_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _validate_version_segment(version_text: str) -> str:
+    """Fail closed unless `version_text` is a single safe path/URL segment.
+
+    The value is interpolated into a download filename and a release URL, so
+    only `[A-Za-z0-9._-]+` is allowed; empty, dot-only (`.`/`..`), separator,
+    whitespace and newline values are refused (GitHub #1176).
+    """
+    if _VERSION_SEGMENT_RE.fullmatch(version_text) is None or not version_text.strip("."):
+        raise UpgradeError(f"invalid --version {version_text!r}: only letters, digits, '.', '_' and '-' are allowed")
+    return version_text
+
+
 def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
     """0600-creation JSON write, fsynced before close.
 
@@ -828,11 +843,14 @@ def fetch_release_assets(
     argv. The signed manifest lands beside the tarball so the sha256 gate
     runs BEFORE extraction.
     """
+    target_version = _validate_version_segment(target_version)
     release_tag = f"bundle-v{target_version}"
     download_dir.mkdir(parents=True, exist_ok=True)
     tarball_name = f"modulo-{target_version}-linux-{_host_arch()}.tar.gz"
     base = f"{_RELEASES_DOWNLOAD_BASE}/{release_tag}"
     tarball = download_dir / tarball_name
+    if not tarball.resolve().is_relative_to(download_dir.resolve()):
+        raise UpgradeError(f"invalid --version {target_version!r}: download path escapes the download directory")
     manifest_file = download_dir / _RELEASE_MANIFEST_NAME
     signature_file = download_dir / f"{_RELEASE_MANIFEST_NAME}.sig"
     fetch_fn = fetch if fetch is not None else _urllib_fetch
@@ -1347,9 +1365,9 @@ def perform_upgrade(
     8. Retention (the last 2 version dirs; sweep caches; never the
        state.json-referenced incumbent or the re-run .prev-<ts> copies).
     """
-    assert_upgrade_platform()
     if target_version is not None:
-        target_version = _strip_bundle_prefix(target_version)
+        target_version = _validate_version_segment(_strip_bundle_prefix(target_version))
+    assert_upgrade_platform()
     reserve_target = _resolve_current_target(install_root)
     previous_version = reserve_target.name
     scrub_os_environment()
