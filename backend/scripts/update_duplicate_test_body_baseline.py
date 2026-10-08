@@ -38,7 +38,7 @@ def main() -> int:
     lens._DUPLICATE_TEST_BODY_BASELINE_PATH.write_text(
         lens._render_duplicate_test_body_baseline(keys), encoding="utf-8"
     )
-    print(f"wrote {len(keys)} duplicate-test-body baseline entr(ies) to {lens._DUPLICATE_TEST_BODY_BASELINE_PATH}")
+    print(f"wrote {len(keys)} duplicate-test-body baseline entries to {lens._DUPLICATE_TEST_BODY_BASELINE_PATH}")
     return 0
 
 

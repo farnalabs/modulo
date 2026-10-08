@@ -14433,7 +14433,10 @@ def _duplicate_test_body_functions(tree: ast.AST) -> list[tuple[str, str, str, i
     exercise different behaviour per class — comparing across scopes would
     produce exactly that false positive. Same-name repeats are skipped here:
     a redefinition that silently shadows the earlier function is owned by the
-    same-scope-redefinition lens, not this one.
+    same-scope-redefinition lens, not this one. Only the module top level and
+    top-level class bodies are scanned; a class nested inside another class is
+    not descended into (pytest does not collect nested classes), so its methods
+    are out of scope.
     """
     found: list[tuple[str, str, str, int]] = []
 
@@ -14512,9 +14515,9 @@ def _duplicate_test_body_baseline_keys() -> set[str]:
 def _read_duplicate_test_body_baseline() -> set[str]:
     """Baseline entries (comments and blank lines stripped)."""
     return {
-        line.strip()
-        for line in _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
-        if line.strip() and not line.startswith("#")
+        stripped
+        for raw in _DUPLICATE_TEST_BODY_BASELINE_PATH.read_text(encoding="utf-8").splitlines()
+        if (stripped := raw.strip()) and not stripped.startswith("#")
     }
 
 
@@ -14565,7 +14568,7 @@ def test_duplicate_test_body_baseline_has_no_stale_entries():
     a completed sweep is recorded and never silently re-opens."""
     stale = _read_duplicate_test_body_baseline() - _duplicate_test_body_baseline_keys()
     assert not stale, (
-        f"{len(stale)} duplicate-test-body baseline entr(ies) are no longer duplicates - regenerate\n"
+        f"{len(stale)} duplicate-test-body baseline entries are no longer duplicates - regenerate\n"
         "the baseline with `cd backend && uv run python scripts/update_duplicate_test_body_baseline.py`:\n  "
         + "\n  ".join(sorted(stale))
     )
