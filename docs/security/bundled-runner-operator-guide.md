@@ -1,4 +1,4 @@
-# Bundled Runner — operator guide
+# Bundled Runner – operator guide
 
 <!-- FAR-590, D4 of the Agent Execution Tiers plan (ADR 029). Audience:
      self-hosting operators enabling and running the Bundled Runner tier.
@@ -13,9 +13,9 @@ operations.
 ## 1. Prerequisites
 
 - Docker engine reachable from the Modulo backend and SAQ workers (the same
-  host in the default compose; a remote engine works identically — see
+  host in the default compose; a remote engine works identically – see
   "Remote engine" below).
-- The runner image available at the pinned digest (see §3 — until the GHCR
+- The runner image available at the pinned digest (see §3 – until the GHCR
   publish job is live, build it yourself: `deploy/docker/runner-opencode.Dockerfile`).
 
 ## 2. Enable the overlay
@@ -26,23 +26,23 @@ docker compose -f docker-compose.yml -f deploy/compose/runner.yml --profile runn
 
 The overlay is OFF by default (the `runner` compose profile). Enabling it:
 
-1. Adds `docker-socket-proxy` — the filtered Docker endpoint (socket mounted
+1. Adds `docker-socket-proxy` – the filtered Docker endpoint (socket mounted
    read-only, digest-pinned image, `restart: unless-stopped`, no host ports).
 2. Sets `MODULO_DOCKER_HOST=tcp://docker-socket-proxy:2375` on `backend`,
    `saq-runner`, and `saq-system` (the documented 4-step endpoint chain:
    `MODULO_DOCKER_HOST` → `DOCKER_HOST` → local socket).
 3. Declares + references the dedicated `modulo-runner-workspace` bridge
    network (compose does not create unreferenced networks under `--profile`,
-   so the holder service must exist — phase-0 spike finding).
+   so the holder service must exist – phase-0 spike finding).
 
 **Docker endpoint env chain** (documented precedence everywhere the backend
 touches Docker): constructor arg → `MODULO_DOCKER_HOST` → `DOCKER_HOST` →
-local socket. The raw socket is an operator override — prefer the proxy.
+local socket. The raw socket is an operator override – prefer the proxy.
 
 **Registration matrix**: the Bundled Runner provider (`runner_docker`)
 registers when any `MODULO_RUNNER_*` variable OR a Docker endpoint
 (`MODULO_DOCKER_HOST`/`DOCKER_HOST`) is set. With none set, it does not
-register — binding a profile to it then raises a typed dispatch error
+register – binding a profile to it then raises a typed dispatch error
 naming `MODULO_DOCKER_HOST` (remediation copy), never a silent fallback.
 
 ## 3. The runner image + digest pinning
@@ -68,10 +68,10 @@ Operator-pinned older digests SURVIVE: seeding is idempotent and template
 updates are surfaced per row ("shipped template updated - apply"), never
 silently applied.
 
-> **⚠️ Dispatch breakage window — placeholder digest (known GA follow-up).**
+> **⚠️ Dispatch breakage window – placeholder digest (known GA follow-up).**
 > As shipped, `BUNDLED_RUNNER_IMAGE_REF` is the **all-zero `sha256:0000…0000`
 > placeholder** digest. A seeded or backfilled profile that still carries this
-> digest **cannot provision a workspace** — the image does not exist in any
+> digest **cannot provision a workspace** – the image does not exist in any
 > registry, so a dispatch fails at container-create. This is **fail-loud by
 > design, not silent**: resolving the dispatch route raises a typed
 > `SandboxDispatchUnboundError` naming the placeholder digest and pointing here,
@@ -94,9 +94,9 @@ org-creation (owned by the org's admin account). Orgs that predate the hook
 receive it via the one-time migration `0191_bundled_runner_seed_backfill`,
 which also re-points the legacy `modulo-dev` `local_docker` row to the
 Bundled Runner (release note covers the change; the rollback path restores
-the row, and the inserted backfill rows are left in place — additive).
+the row, and the inserted backfill rows are left in place – additive).
 
-Locked property: **`persistence_policy` is `ephemeral`** — the CRUD
+Locked property: **`persistence_policy` is `ephemeral`** – the CRUD
 validator rejects `retained`/`cache` for `runner_docker` (dispatch
 re-checks). Runner workspaces are throwaway by design.
 
@@ -108,27 +108,27 @@ network defaults) while preserving operator-owned ones.
 ## 5. What runs where (network shape)
 
 - Backend + SAQ + proxy: the compose default network.
-- Workspaces: the `modulo-runner-workspace` bridge ONLY — they cannot reach
+- Workspaces: the `modulo-runner-workspace` bridge ONLY – they cannot reach
   the proxy or backend services (verified + docker-marked-asserted).
-- Egress default: permitted — by design (the tier's purpose is an agent
+- Egress default: permitted – by design (the tier's purpose is an agent
   with network access). Per-profile opt-out: `network_policy: none` →
   `--network=none` (loopback only).
 - **Accepted gap: no bounded egress in this tier.** There is no egress
   allowlist in the Docker tier (T1, and T2b). This is a DECISION, not an
   omission: bounded egress belongs to your cluster's controls, not a
   vendor-built gateway. For self-hosted compute, the supported bounded
-  answer is the Kubernetes tier (T3 — the provider ships on main,
+  answer is the Kubernetes tier (T3 – the provider ships on main,
   FAR-1051): run Modulo's runner on your cluster and bound the workspace
   with your own NetworkPolicy. Its kind conformance gate is green
   (FAR-1053) but does not exercise workload identity or NetworkPolicy
   enforcement, and the scheduled managed-cluster leg has not run yet
   (`docs/deployment/k8s-conformance-parity.md`). The
-  managed-sandbox tier (T2a / E2B) is a separate case — it supports egress
+  managed-sandbox tier (T2a / E2B) is a separate case – it supports egress
   allowlists today via node-level `egress_policy: selected` +
   `egress_allowlist` (an enforced, fail-closed allowlist inside the
   sandbox).
 - Host-published ports (DB/Redis in the default compose) are reachable from
-  egress-permitted workspaces — see the trust-boundary doc for the
+  egress-permitted workspaces – see the trust-boundary doc for the
   hardening criterion and operator mitigations.
 
 ### Where this tier sits (execution-tier model)
@@ -139,12 +139,12 @@ compute lives; T4 swaps in the customer's agent image.
 
 | Tier | Shape | Status |
 | -- | -- | -- |
-| **T1** Bundled Runner (self-hosted Docker) — this guide | simplest, self-contained; **deliberately permissive networking** — bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
+| **T1** Bundled Runner (self-hosted Docker) – this guide | simplest, self-contained; **deliberately permissive networking** – bounded egress is the customer's cluster's job, not a bespoke module of ours | shipped + hardened |
 | **T2a** Managed sandbox (E2B, and the adapter pattern for Daytona et al.) | zero-setup external compute | E2B shipped |
-| **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* — T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
-| **T3** Modulo runner on Kubernetes | **most recommended shape** — inherits the customer's RBAC, admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) — workload identity / NetworkPolicy enforcement not exercised by the gate, managed leg pending |
+| **T2b** Bundled Runner on rented compute (Hetzner/Ubicloud/any Docker host) | *not a new tier* – T1 on rented metal, works via `MODULO_DOCKER_HOST`; needs validation + docs, not an adapter | doc/validation |
+| **T3** Modulo runner on Kubernetes | **most recommended shape** – inherits the customer's RBAC (role-based access control), admission policy, NetworkPolicy and workload identity; bounded by *their* controls | shipped (FAR-1051); kind conformance gate green (FAR-1053) – workload identity / NetworkPolicy enforcement not exercised by the gate, managed leg pending |
 | **T4** Bring-your-own agent image | Modulo provisions the workspace, runs **the customer's** agent image; same machinery, different payload + result contract | to build, after T3 |
-| **Dispatch** | govern an agent you already run — external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
+| **Dispatch** | govern an agent you already run – external CI triggers and customer-hosted agent endpoints | separate spike; connectors story, not a runner tier |
 
 T1 is deliberately the permissive end of the spectrum. For bounded egress
 on self-hosted compute, choose T3 (the provider ships on main, FAR-1051)
@@ -156,7 +156,7 @@ and enforce with your own NetworkPolicy; the managed-sandbox tier
 A system cron sweeps labelled workspace containers every 5 min:
 
 - Machine-scoped by the deployment-identity label (`modulo.machine.id`, set
-  from `MODULO_RUNNER_MACHINE_ID`, hostname fallback) — two deployments
+  from `MODULO_RUNNER_MACHINE_ID`, hostname fallback) – two deployments
   sharing one engine never destroy each other's workspaces. Set
   `MODULO_RUNNER_MACHINE_ID` when you run more than one deployment against
   a shared engine.
@@ -164,7 +164,7 @@ A system cron sweeps labelled workspace containers every 5 min:
   period; the destroy path re-checks run status first and aborts with
   `runner.reconciler.suspected_false_positive` if the run went active again.
 - **Soak mode first**: `RUNNER_RECONCILER_DESTROY_ENABLED` defaults to
-  `false` — orphans are logged loudly (`runner.reconciler.orphan_detected`)
+  `false` – orphans are logged loudly (`runner.reconciler.orphan_detected`)
   for at least one soak period before you flip it to `true` in production.
 - Fail-safe: any cross-reference query error aborts the sweep, destroys
   nothing, and emits `runner.reconciler.sweep_aborted` (the SAQ cron retries
@@ -172,7 +172,7 @@ A system cron sweeps labelled workspace containers every 5 min:
 - 24h max-lifetime backstop: a labelled container older than 24h is
   reclaimed regardless of run state (`runner.workspace.reclaimed_max_lifetime`).
 - Liveness: `/healthz/ready` exposes the advisory `runner_workspace_reconcile`
-  check from the shared sweep-stats key — a dead sweep degrades, never gates.
+  check from the shared sweep-stats key – a dead sweep degrades, never gates.
 
 ## 7. Verifying the install
 
@@ -185,7 +185,7 @@ A system cron sweeps labelled workspace containers every 5 min:
    dropped caps, uid 1001), live output streams mid-exec, output.json
    collected, container destroyed at teardown.
 3. Kill the engine (or `docker kill` the workspace) mid-exec: the node fails
-   RETRYABLE — never as a completed run with a fabricated zero exit.
+   RETRYABLE – never as a completed run with a fabricated zero exit.
 4. Docker-marked acceptance suite (requires a live engine):
    `uv run pytest tests/docker -m docker` from `backend/`
    (`MODULO_RUNNER_DIND_TESTS=1` adds the dind engine-kill strip, ~560 MB).
@@ -194,25 +194,25 @@ A system cron sweeps labelled workspace containers every 5 min:
 
 Point `MODULO_DOCKER_HOST` at a remote engine's TCP endpoint and deploy the
 same socket proxy in front of it (the overlay's proxy is host-agnostic).
-Everything else — hardening, labels, reconciler scoping — behaves
+Everything else – hardening, labels, reconciler scoping – behaves
 identically; the reconciler's machine-identity label isolates multiple
 deployments sharing one engine.
 
-For the full rented-VM walkthrough (T2b) — including the engine-dependent
-bridge-isolation verification step and its deferred-validation status — see
+For the full rented-VM walkthrough (T2b) – including the engine-dependent
+bridge-isolation verification step and its deferred-validation status – see
 `docs/operations/bundled-runner-rented-compute.md`.
 
 **FAR-1038: TLS is required for remote TCP endpoints.** A remote engine
 endpoint without TLS is rejected at provider registration with an actionable
 error. **Loopback** TCP endpoints (`tcp://localhost:2375`,
 `tcp://127.0.0.1:2375`, `tcp://[::1]:2375`) are exempt because they do not
-traverse a network — this is a legitimate, common configuration (Docker
+traverse a network – this is a legitimate, common configuration (Docker
 Desktop, Docker-in-Docker, CI rigs). Local unix sockets and the shipped
 compose-internal proxy (`tcp://docker-socket-proxy:2375`) are also exempt.
 The `docker-socket-proxy` exemption is pinned to the shipped port `2375`;
 the same hostname on any other port is treated as remote. The gate is
-enforced for both Docker consumers — provider registration and the orphan
-reconciler — so a rejected endpoint is rejected on every path.
+enforced for both Docker consumers – provider registration and the orphan
+reconciler – so a rejected endpoint is rejected on every path.
 
 ### Loopback endpoints (no TLS needed)
 
@@ -280,7 +280,7 @@ The client verifies the engine's certificate but the engine does not
 authenticate the client.
 
 **Mutual TLS** (two-way): all three files (`ca.pem`, `cert.pem`,
-`key.pem`) must be present. Both client and server authenticate — this is
+`key.pem`) must be present. Both client and server authenticate – this is
 the recommended configuration for production remote engines.
 
 The Docker daemon must be configured with TLS enabled (`--tlsverify
@@ -289,7 +289,7 @@ and typically listens on port 2376 (TLS) instead of 2375 (plaintext).
 
 ## 9. Rollback
 
-- Disable the tier: unset the `runner` profile (the overlay is opt-in) —
+- Disable the tier: unset the `runner` profile (the overlay is opt-in) –
   bound profiles then raise the typed dispatch-unbound error (fail-closed,
   no silent activation).
 - The overlay's services are stateless; removing them costs nothing.
@@ -305,30 +305,30 @@ engine THROUGH the same endpoint chain (`MODULO_DOCKER_HOST` →
 `DOCKER_HOST` → local socket) and caches per-(org, machine) results in
 the `runner_probe_cache` table: engine reachability, pinned-image
 presence, and the engine's `/info` CPU/memory. **The Runners page reads
-only this cache — it never probes the engine synchronously on the request
+only this cache – it never probes the engine synchronously on the request
 path.**
 
 The probe's own liveness is observed like every other system cron:
 
 - `/healthz/ready` carries the advisory `runner_health_probe` check
-  (the `saq:cron:stats:runner_health_probe` outcome key) — a dead probe
+  (the `saq:cron:stats:runner_health_probe` outcome key) – a dead probe
   degrades, never gates; the per-machine FAR-538 cron heartbeat
   (`saq:cron:heartbeat:runner_health_probe`) also refreshes per tick.
 - The probe prunes cache rows not refreshed within a 24h retention window
   (a decommissioned machine's corpse row cannot pin the strip to a
   permanent unknown); the read side bounds by the same window.
 
-### Strip states — remediation
+### Strip states – remediation
 
 The persistent strip on the Runners page aggregates worst-of across the
 org's machine rows:
 
 | State | Meaning | Remediation |
 |---|---|---|
-| ✓ healthy | Engine reachable, pinned image present | — |
+| ✓ healthy | Engine reachable, pinned image present | – |
 | ⚠ engine unreachable | The engine did not answer | Check `docker-socket-proxy` is running and `MODULO_DOCKER_HOST` resolves; the probe error text (scrubbed of any URL credentials) is shown inline |
 | ⚠ image not pulled | A non-placeholder pinned digest has no image on the engine | Pull the pinned image on this machine (`deploy/docker/runner-opencode.Dockerfile`) or advance the digest (/§3) |
-| stale | The cache is older than 2x the probe interval — the probe itself is suspended, the state is **never green** | Restart the SAQ system worker; the advisory `runner_health_probe` readiness check alerts too |
+| stale | The cache is older than 2x the probe interval – the probe itself is suspended, the state is **never green** | Restart the SAQ system worker; the advisory `runner_health_probe` readiness check alerts too |
 
 A healthy→unreachable transition emits a `runner_unavailable`
 error-dashboard entry and an in-app notification (category `runner`)

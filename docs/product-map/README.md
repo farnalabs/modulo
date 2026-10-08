@@ -3,13 +3,13 @@
 The product map is the single inventory of every shipped feature in Modulo. It has two
 layers:
 
-1. **`frontend/src/manifest.yaml`** — the machine-readable product surface (ADR 008 — Core
+1. **`frontend/src/manifest.yaml`** – the machine-readable product surface (ADR 008 – Core
    Shared Manifest). It registers every UI route, its `product_map: [feat-*]` references,
    sidebar grouping, permissions/tiers, testable `data-testid` elements, and the
    `features:` registry of allowed feature ids. The backend serves it at
    `/api/v1/manifest`, the frontend router/nav consume it at build time, and Assistant's
    `search_documentation` indexes each route's `product_map` refs.
-2. **`docs/product-map/`** — the feature graph (this directory). One behaviour-tracker
+2. **`docs/product-map/`** – the feature graph (this directory). One behaviour-tracker
    entry per feature, keyed by the same `feat-*` id, describing expected behaviours,
    happy paths, error semantics, coverage, and known gaps. Entries are the human-readable
    layer on top of the manifest registry.
@@ -23,7 +23,7 @@ reason: every registered feature is referenced by at least one shipped route, an
 `feat-*` reference anywhere in the codebase must resolve either to a registered manifest
 feature or to a behaviour-tracker entry below (enforced by
 `backend/tests/architecture/test_product_map.py`). If a feature ships, it appears in one
-of these two places — otherwise it is invisible to Assistant and to this graph.
+of these two places – otherwise it is invisible to Assistant and to this graph.
 
 ## Entry format
 
@@ -60,7 +60,7 @@ Dated audit notes: what was verified, when, and by which pass.
 
 The node id in a feature-graph entry is the `feat-*` id (e.g. `feat-infra-health`).
 Infra-only surfaces that have no UI route are tracked **here**, not in the manifest
-`features:` registry — the manifest registry is for route-referenced product features.
+`features:` registry – the manifest registry is for route-referenced product features.
 
 ## Contribution workflow
 
@@ -68,7 +68,7 @@ For **any** feature change (new feature, changed behaviour, deprecated behaviour
 
 1. Update the manifest: add/update the route's `product_map` references and keep the
    `features:` registry description accurate (`frontend/src/manifest.yaml`).
-2. Update the behaviour-tracker entry in this directory (`docs/product-map/`) — tick
+2. Update the behaviour-tracker entry in this directory (`docs/product-map/`) – tick
    verified behaviours, add tests to `code:`/`unit-tests:`/`bdd:`, and note new known
    gaps. If the change adds a genuinely new feature, create a new entry here **and**
    register it in `features:` (unless it is an infra-only surface with no UI route).
@@ -76,22 +76,22 @@ For **any** feature change (new feature, changed behaviour, deprecated behaviour
    `uv run --project backend --no-sync pytest backend/tests/architecture/test_product_map*.py -q`
 4. Update the PRD if the change introduces new behaviour (see CONTRIBUTING.md).
 
-## Index — manifest feature registry (single source of truth)
+## Index – manifest feature registry (single source of truth)
 
 Every registered manifest feature, its description, and the routes that reference it.
 Fresh entries for these features are added to the graph below as behaviour trackers.
 
 ### Build
-- **feat-dashboard** - Home dashboard and metrics overview (Saved Views ship as the private_preview `/admin/views` CRUD surface behind `view_modes`; the apply-to-list `ViewToggle` is not yet wired into list pages — see FAR-546) - routes: `/`
-- **feat-pipelines** - Visual pipeline editor and composite editor (Node Categories deferred from the MVP nav — hidden via private_preview; see FAR-545) - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`
+- **feat-dashboard** - Home dashboard and metrics overview (Saved Views ship as the private_preview `/admin/views` CRUD surface behind `view_modes`; the apply-to-list `ViewToggle` is not yet wired into list pages – see FAR-546) - routes: `/`
+- **feat-pipelines** - Visual pipeline editor and composite editor (Node Categories deferred from the MVP nav – hidden via private_preview; see FAR-545) - routes: `/library/:id/create-pipeline`, `/pipelines`, `/pipelines/copy`, `/pipelines/:id/editor`, `/composites/:id/editor`
 - **feat-router** - Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A) - routes: `/pipelines`
 - **feat-library** - Reusable pipeline templates, the community library, and library collections (collection authoring/publishing is flag-gated behind `library_collection`; see FAR-760) - routes: `/library/:id/create-pipeline`, `/library`, `/library/collections/new`, `/library/collections/:id`
 - **feat-library-collections** - Install, uninstall, and manage library collection installs into runnable org entities (flag-gated behind `library_collection`; see FAR-760 / FAR-762 / FAR-764) - routes: `/library/collections/new`, `/library/collections/:id`
-- **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav — hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
+- **feat-runs** - Run execution, history, and detail (Output Diff deferred from the MVP nav – hidden via private_preview; see FAR-542) - routes: `/runs`, `/runs/:id`
 - **feat-lifecycle-maps** - Lifecycle maps and stage workflows - routes: `/lifecycle-maps`, `/lifecycle-maps/:id/editor`, `/lifecycle-maps/:id`
 
 ### Monitor
-- **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav — hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
+- **feat-observability** - Error dashboard and observability exports (Error Forwarders and Browser Monitoring deferred from the MVP nav – hidden via private_preview; see FAR-547 / FAR-543) - routes: `/settings/observability`, `/admin/errors`, `/admin/errors/:id`
 - **feat-notifications** - Notifications, email delivery, and notification logs - routes: `/notifications`, `/settings/email`, `/admin/notification-delivery`
 - **feat-costs** - Cost tracking, spend limits, cost controls, and cost components - routes: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`, `/admin/costs/components`
 - **feat-hitl** - Human-in-the-loop approval gates and review - routes: `/settings/hitl-review`
@@ -108,21 +108,21 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-mcp** - Model Context Protocol tool configuration - routes: `/settings/mcp`
 - **feat-guardrails** - Guardrail policies (in-page Import control ships on `/settings/guardrails`) - routes: `/settings/guardrails`
 - **feat-connectors** - External tool connectors - routes: `/admin/connectors`
-- **feat-environments** - Environment profiles and run environments (canonical UI is the Runners page; the `/environment-profiles*` and `/admin/environments` deep links redirect there — FAR-591 D5) - routes: `/admin/runners/profiles`, `/admin/runners/profiles/new`, `/admin/runners/profiles/:id/edit`, `/admin/runners/concurrency`
+- **feat-environments** - Environment profiles and run environments (canonical UI is the Runners page; the `/environment-profiles*` and `/admin/environments` deep links redirect there – FAR-591 D5) - routes: `/admin/runners/profiles`, `/admin/runners/profiles/new`, `/admin/runners/profiles/:id/edit`, `/admin/runners/concurrency`
 - **feat-triggers** - Manual, webhook, and scheduled triggers - routes: `/settings/triggers`, `/admin/trigger-events`
 - **feat-apply** - `modulo apply` declarative configuration CLI (FAR-681) - routes: `/schemas`, `/admin/model-backends`, `/pipelines`, `/settings/triggers`
 
 ### Admin
 - **feat-teams** - Users, teams, and role-based access - routes: `/settings/teams`, `/admin/users`
-- **feat-org** - Organization settings (Feature Flags deferred from the MVP nav — hidden via private_preview; see FAR-548) - routes: `/admin/org`
+- **feat-org** - Organization settings (Feature Flags deferred from the MVP nav – hidden via private_preview; see FAR-548) - routes: `/admin/org`
 - **feat-sso** - Single sign-on (SSO) - routes: `/settings/sso`
-- **feat-plugins** - Plugin registry (deferred from the MVP nav — hidden via private_preview; see FAR-544). Supports connector, model-backend, eval, and schema-type entry point groups via `modulo.connectors`, `modulo.model_backends`, `modulo.evals`, and `modulo.schema_types` - routes: `/admin/plugins`
+- **feat-plugins** - Plugin registry (deferred from the MVP nav – hidden via private_preview; see FAR-544). Supports connector, model-backend, eval, and schema-type entry point groups via `modulo.connectors`, `modulo.model_backends`, `modulo.evals`, and `modulo.schema_types` - routes: `/admin/plugins`
 - **feat-audit** - Audit trail and audit log - routes: `/admin/audit`
 - **feat-feedback** - Feedback inbox - routes: `/feedback/inbox`
 
 ### System
 - **feat-license** - Feature licensing and plan tiers - routes: `/settings/license`
-- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency on the Runners page (Runtime Config and Rate Limits deferred from the MVP nav — hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/run-retention`, `/admin/runners/profiles`, `/admin/runners/concurrency`
+- **feat-runtime** - Runtime configuration, rate limits, retention, and sandbox concurrency on the Runners page (Runtime Config and Rate Limits deferred from the MVP nav – hidden via private_preview; see FAR-549 / FAR-550) - routes: `/admin/housekeeping`, `/admin/run-retention`, `/admin/runners/profiles`, `/admin/runners/concurrency`
 - **feat-system-config** - System-level configuration administration - routes: `/admin/system/config`
 - **feat-system-orgs** - System-level organization administration - routes: `/admin/system/orgs`
 - **feat-product-analytics** - Product usage and adoption analytics for system administrators - routes: `/admin/product-analytics`
@@ -131,13 +131,13 @@ Fresh entries for these features are added to the graph below as behaviour track
 - **feat-auth** - OAuth authorization, sessions, and user profile - routes: `/accept-invite`, `/oauth/authorize`, `/admin/my-profile`
 - **feat-onboarding** - First-run onboarding wizard for new users and organizations - routes: `/onboarding`
 
-## Index — feature graph entries
+## Index – feature graph entries
 
 Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 `manifest.yaml`) are tracked here as well, keyed by their `feat-*` id.
 
 > **Known gaps:** registered manifest features that still lack a behaviour-tracker
-> entry here are listed once, at the end of this file — see
+> entry here are listed once, at the end of this file – see
 > [Known graph gaps](#known-graph-gaps). Keeping a single list stops the two copies
 > drifting apart (they did: the older inline copy still named features whose trackers
 > had already landed in the index below).
@@ -150,7 +150,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `feat-product-analytics`, `feat-pipelines`, `feat-runs`, `feat-dashboard`,
 > `feat-costs`, `feat-notifications`, `feat-observability`, `feat-plugins`,
 > `feat-triggers`, `feat-analytics`, `feat-audit` gained their behaviour-tracker
-> entries — see the graph index below. The 2026-09-10 walk added `feat-apply`
+> entries – see the graph index below. The 2026-09-10 walk added `feat-apply`
 > (registered in the manifest by FAR-681 but never tracked). A follow-up
 > 2026-09-10 walk reconciled this registry's `routes:` lists with the manifest
 > after the FAR-591 D5 Runners-page rename and the FAR-760 library collections
@@ -223,7 +223,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > checks) and deleted the redundant duplicate
 > `pipelines/pipeline_config_validation.feature`, closing `feat-pipelines`'s
 > graph/config-validation BDD gap (`pipelines/pipelines.md`).
-> `_ORPHANED_BDD_FEATURES` is now empty — no orphaned feature files remain.
+> `_ORPHANED_BDD_FEATURES` is now empty – no orphaned feature files remain.
 >
 > **Closed this walk (2026-09-17):** added DELETE coverage to the executing
 > system-admin BDD suite. `system_admin_config.feature` gained successful-delete,
@@ -242,7 +242,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > and regular-org-admin 403 across GET/PUT/DELETE), driving the real
 > `admin_orgs.py` license surface (`require_target_org_role` gating,
 > `_resolve_org_license`, `_verify_license_key`, and the FOR-UPDATE locked
-> read-modify-write). Removed the tracked known gap — `feat-system-orgs` is now
+> read-modify-write). Removed the tracked known gap – `feat-system-orgs` is now
 > fully BDD-covered (`system/system-orgs.md`).
 >
 > **Closed this walk (2026-09-17):** closed `feat-hitl`'s "No executing BDD
@@ -260,15 +260,15 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > the "Forced password change clears the admin-reset flag in the same
 > transaction" scenario (driven by `steps/test_change_password.py`), asserting
 > the real `PUT /api/v1/me/password` route clears the `must_change_password`
-> flag — the flag App.vue's forced-change gate arms on — in the same transaction
+> flag – the flag App.vue's forced-change gate arms on – in the same transaction
 > as the hash swap (`auth/auth.md`).
 >
 > **Closed this walk (2026-09-17):** closed `feat-audit`'s "No BDD scenario for
 > append-only tampering" gap (`audit/audit-trail.md`). Registered the new
 > `audit/append_only.feature` into the executing BDD suite
 > (`steps/test_audit_append_only.py`), driving the real application-layer
-> append-only guard — `register_append_only_guard()` plus its SQLAlchemy
-> `before_update` / `before_delete` listeners — against persisted `AuditEvent`
+> append-only guard – `register_append_only_guard()` plus its SQLAlchemy
+> `before_update` / `before_delete` listeners – against persisted `AuditEvent`
 > and `ErrorEvent` rows in an in-memory engine: UPDATE and DELETE are rejected
 > on both models (`AppendOnlyViolationError` naming the event id and mutation)
 > while a plain INSERT is not blocked. The placeholder "Audit events are
@@ -280,12 +280,12 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > triggering is unit-tested only" gap (`triggers/trigger-engine.md`).
 > Registered the new `triggers/slack_app_mention.feature` into the executing
 > BDD suite (`steps/test_slack_app_mention_triggers.py`), driving the real
-> `slack_app_mention.py` seams — Slack signed-request verification
-> (HMAC-SHA256 `X-Slack-Signature` + ±300s `X-Slack-Request-Timestamp` replay
+> `slack_app_mention.py` seams – Slack signed-request verification
+> (hash-based message authentication code, HMAC-SHA256 `X-Slack-Signature` + ±300s `X-Slack-Request-Timestamp` replay
 > window, wrong-secret and expired-timestamp refusals), the `url_verification`
 > challenge echo, envelope parsing / payload mapping, Slack `event_id`
 > deduplication, concurrency-queuing, pipeline rate limiting, and the
-> advisory-lock busy refusal — with every delivery audited to a TriggerEvent
+> advisory-lock busy refusal – with every delivery audited to a TriggerEvent
 > (`accepted` / `hmac_failed` / `deduplicated` / `event_type_not_accepted` /
 > `parse_failed` / `concurrency_limit_reached` / `rate_limited`).
 > `_ORPHANED_BDD_FEATURES` stays empty.
@@ -308,7 +308,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-18):** closed `feat-core-ssrf`'s "No BDD
 > feature files" gap (`core/ssrf.md`). Registered `security/ssrf_guard.feature`
 > into the executing BDD suite from the new `steps/test_ssrf_guard.py`,
-> driving the real `modulo.core.ssrf` seams network-free — literal-IP
+> driving the real `modulo.core.ssrf` seams network-free – literal-IP
 > fail-closed blocking (loopback / private / link-local metadata / CGNAT /
 > Aliyun metadata / current-network), pre-DNS syntax rejection (scheme,
 > userinfo, hostname, port, non-canonical IP literals), sync + async
@@ -322,13 +322,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > BDD feature file" gap (`auth/jwt-auth.md`). Registered
 > `auth/jwt_auth_crypto.feature` into the executing BDD suite from the new
 > `steps/test_jwt_auth_crypto.py`, driving the real `modulo.auth.jwt` seams
-> network-free and DB-free — access-token mint/decode round-trip (identity, role,
+> network-free and DB-free – access-token mint/decode round-trip (identity, role,
 > tenant org, `client_kind`), wrong-secret / tampered-signature / expired /
 > `alg=none` / missing-subject rejections, the purpose-isolation matrix (access /
 > `ws` / `refresh` accepted only under their own purpose, the
 > `refresh_access_token` rotation seam refusing a `ws` token), refresh-rotation
 > propagation of identity + credential class into the new access token,
-> `decode_claim_token` HITL-gate run/gate scoping with a wrong-gate refusal, and
+> `decode_claim_token` HITL (human-in-the-loop) gate run/gate scoping with a wrong-gate refusal, and
 > the legacy no-`client_kind` token decoding as `browser`.
 > `_ORPHANED_BDD_FEATURES` stays empty.
 >
@@ -337,7 +337,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > Registered `eval/feedback_inbox.feature` into the executing BDD suite from the
 > new `steps/test_feedback_inbox.py`, driving the real
 > `modulo/api/routes/feedback.py` seams with only the FeedbackManager CRUD,
-> RLS and audit seams patched — inbox list with pipeline-name enrichment + the
+> RLS (row-level security) and audit seams patched – inbox list with pipeline-name enrichment + the
 > type/status filter passthrough, inbox-item detail, the `/inbox/{id}/review`
 > workflow (`mark_reviewed` → resolved, `dismiss` → dismissed,
 > `create_correction_run` → spawned correction run, invalid action → 422, missing
@@ -350,7 +350,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > "No BDD feature files" gap (`core/secrets-backend.md`). Registered
 > `infra/secrets_backend.feature` into the executing BDD suite from the new
 > `steps/test_secrets_backend.py`, driving the REAL
-> `modulo.core.secrets_backend` seams network-free and DB-free — the
+> `modulo.core.secrets_backend` seams network-free and DB-free – the
 > `FernetSecretsBackend` persists/reads real rows in an in-memory aiosqlite
 > engine (round-trip, in-place upsert, delete, whitespace-normalised keys),
 > organisation scoping via the real `WHERE organisation_id = :oid` SQL the
@@ -364,7 +364,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-19):** closed `feat-apply`'s "No BDD feature file"
 > gap (`configure/apply.md`). Registered `cli/apply.feature` into the executing
 > BDD suite from the new `steps/test_apply_cli.py`, driving the REAL
-> `modulo.cli.apply` seams network-free and DB-free — the loader / `ApplyConfig`
+> `modulo.cli.apply` seams network-free and DB-free – the loader / `ApplyConfig`
 > validators (single + multi-document YAML merge, duplicate names within and
 > across documents, empty file, trigger forward-references), refs-only secrets
 > (`resolve_secret_refs`), the plan engine (created / unchanged / updated /
@@ -381,7 +381,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > colocated `features/analytics/test_analytics_query_steps.py`, driving the
 > REAL `modulo/api/routes/analytics.py` routes with only the four advisory
 > service functions (`run_analytics_query`, `run_concurrency_query`,
-> `export_facts`, `run_guardrail_scorecard`) patched — the `/query` envelope +
+> `export_facts`, `run_guardrail_scorecard`) patched – the `/query` envelope +
 > freshness indicators, the repeated `pipeline_id` A/B composition (both ids
 > asserted to reach the service) and dimension echo, FastAPI-level validation
 > (malformed date / `limit` bound → 422), the typed error mapping (inverted
@@ -411,7 +411,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > sequential-order scenario now drives the REAL `run_variant_batch` seam (runs
 > created in variant insertion order under one `batch_id`) and the eval-coverage
 > draft was re-anchored to the REAL `get_coverage_gaps` seam; the two per-node
-> eval-score / per-token breakdown comparison drafts were removed — they assert
+> eval-score / per-token breakdown comparison drafts were removed – they assert
 > a wire shape the product does not ship (`get_batch_compare`'s per-run
 > `eval_pass_rate` / `eval_count` / `total_tokens` / `total_cost_usd` +
 > frozen-snapshot override-diff contract is already locked by the batch-scope
@@ -440,7 +440,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `test_saml_rls_resolution.py`), driving the REAL `modulo.auth.sso`
 > `_resolve_oidc_provider` seam and the REAL `GET /oidc/{provider}/login` route
 > through the real `modulo_system` (BYPASSRLS) / `modulo_app` (NOBYPASSRLS)
-> roles — the system leg resolves an OIDC provider owned by a NON-first org,
+> roles – the system leg resolves an OIDC provider owned by a NON-first org,
 > unknown slugs fail closed all-None (never RuntimeError→500), the app fallback
 > resolves first-org-only inside a scoped transaction, an unbound app session
 > sees zero OIDC providers, and a cross-org provider slug 307s to the IdP while
@@ -448,7 +448,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > regression exposes: `_resolve_oidc_provider` now opens its own
 > `session.begin()` for the app fallback when the caller has no active
 > transaction (previously it called `_set_default_rls_org` outside any
-> transaction, matching the SAML bug FAR-1058 fixed — a provider read on a
+> transaction, matching the SAML bug FAR-1058 fixed – a provider read on a
 > transaction-less autobegin=False app session raised `RuntimeError` → 500).
 > Demoted the deferral and added the behaviour lines to
 > `frontend/src/manifest.yaml` `feat-sso`. `_ORPHANED_BDD_FEATURES` stays empty.
@@ -460,7 +460,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_connector_crud.py`, driving the real `/api/v1/connectors`
 > create / get / list / PATCH / delete routes with only the DB CRUD + RLS
 > seams patched (the TestClient + mock-org-session pattern of the
-> `test_connectors_endpoint.py` unit suite): 9 scenarios — 201 create with
+> `test_connectors_endpoint.py` unit suite): 9 scenarios – 201 create with
 > credentials Fernet-encrypted at rest and never echoed, 422 malformed REST
 > credentials / invalid REST `on_unknown` config at the boundary, 200
 > individual + paginated retrieval (redacted), PATCH re-encrypting fresh
@@ -469,9 +469,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-09-21):** closed the composite content_json
 > validation gap (`composites/composite_library.feature`, under `feat-library`).
-> The "Composite content_json validation — missing required fields returns
-> error" scenario — the last `@awaiting-implementation` draft in
-> `composite_library.feature` — now drives the REAL `POST /api/v1/libraries`
+> The "Composite content_json validation – missing required fields returns
+> error" scenario – the last `@awaiting-implementation` draft in
+> `composite_library.feature` – now drives the REAL `POST /api/v1/libraries`
 > create route: `LibraryPrimitiveCreate` in `api/routes/library.py` gained a
 > `model_validator` that rejects a `composite` primitive whose `content_json`
 > lacks the `nodes`/`edges` graph body with 422 (10 empty/missing-key/pass
@@ -482,7 +482,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Review follow-up (2026-09-21):** extended the same composite graph
-> validation to the update boundary — `PATCH /api/v1/libraries/{id}` now rejects
+> validation to the update boundary – `PATCH /api/v1/libraries/{id}` now rejects
 > (422) a composite whose patched `content_json` lacks the `nodes`/`edges` lists,
 > so an existing composite can no longer be mutated into a structurally broken
 > graph. The shared `_assert_composite_content_json` helper backs both the create
@@ -495,7 +495,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `steps/test_sso_admin_crud.py`, driving the real `/api/v1/admin/sso`
 > provider CRUD routes with only the DB CRUD, RLS and outbound-network seams
 > patched (the TestClient + mock-org-session pattern of the conftest): 16
-> scenarios — 200 provider list with type badges, 201 OIDC create (client
+> scenarios – 200 provider list with type badges, 201 OIDC create (client
 > secret never echoed, computed callback URL) and SAML 2.0 create, the FAR-855
 > unrestricted-provisioning 422 while the flag is off, duplicate-name 409,
 > 422 invalid provider type, 200 update / toggle, 400 empty update body,
@@ -508,7 +508,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (`observability/observability.md`). Un-gated the two scenarios in
 > `observability/active_run_observability.feature` and re-anchored them so they
 > drive the REAL `GET /api/v1/runs/{id}` and `GET /api/v1/runs/{id}/events`
-> routes with only the `_do_*` DB-fetch seams patched — the route handler, the
+> routes with only the `_do_*` DB-fetch seams patched – the route handler, the
 > `require_permission_any_credential` authz dependency, and the `RunResponse` /
 > `RunEventsResponse` serialization all run for real. The event-stream scenario
 > additionally drives the REAL per-run `RunEventBroker` from the shared registry
@@ -522,12 +522,12 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-21):** closed `feat-teams-org-entity`'s
 > "No org-CRUD BDD feature file" gap
 > (`teams/org-entity.md`). `system_admin_orgs.feature` gained 3 org-listing
-> scenarios (system-admin list success, reserved infrastructure orgs — the
-> nil-UUID error-ingest org and the modulo-library registry org — filtered from
+> scenarios (system-admin list success, reserved infrastructure orgs – the
+> nil-UUID error-ingest org and the modulo-library registry org – filtered from
 > the list, and a regular-admin 403) and `system_admin_users.feature` gained 5
 > create-user error-path scenarios (email already a member of the org → 409, a
-> local account holding a password in another org → 409 — the SECURITY #1189
-> cross-tenant adoption refusal —, an invalid `org_role` → 422, a weak password
+> local account holding a password in another org → 409 – the SECURITY #1189
+> cross-tenant adoption refusal –, an invalid `org_role` → 422, a weak password
 > → 422, and a missing org → 404), all driving the REAL `/api/v1/admin/orgs`
 > routes (`admin_create_org_user` / `admin_list_orgs`) with only DB seams
 > patched (`steps/test_system_admin.py`). The `feat-system-orgs` tracker gained
@@ -545,7 +545,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > / `E2BRuntimeProvider(api_key=...)` constructors open no connections): the
 > env-gated registration matrix (local always; e2b / docker family gated on
 > their documented signals; an unrelated `MODULO_RUNNER_*` var never registers
-> Docker — FAR-996), the deterministic resolve matrix (hint-wins,
+> Docker – FAR-996), the deterministic resolve matrix (hint-wins,
 > docker-family aliases share one provider, known-but-unregistered →
 > `ProviderNotConfiguredError` naming the remediation env var, unknown →
 > `UnknownProviderTypeError` naming the valid vocabulary, missing type →
@@ -554,7 +554,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > 13 scenarios execute in CI. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-22):** closed `feat-observability`'s "No BDD for
-> OTel *trace* span capture" gap (`observability/observability.md`). The four
+> OTel (OpenTelemetry) *trace* span capture" gap (`observability/observability.md`). The four
 > `otel_traces.feature` scenarios previously fabricated span dicts in `ctx` and
 > never exercised the real bridge; they are now re-anchored (`steps/test_observability.py`)
 > to drive the REAL `LangGraphOtelBridge` seams network-free and DB-free (the
@@ -585,7 +585,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > scenarios previously targeted the dead legacy `/mcp/tools/call` HTTP surface
 > (pinned `@awaiting-implementation`, never ran); they are rewritten to drive
 > the REAL shipped contract by calling the `trigger_pipeline` / `review_hitl`
-> handler functions directly (request ContextVars hydrated by hand) — exercising
+> handler functions directly (request ContextVars hydrated by hand) – exercising
 > the real `_check_agent_tool_scope` scope-gate chokepoint (manual run with
 > `trigger_type manual` and the caller's account via `create_run`, `input_payload`
 > passthrough, unknown-pipeline `pipeline_not_found` refusal), the real
@@ -599,7 +599,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-09-23):** implemented agent input/output schema
 > (re)assignment + detachment on `PATCH /api/v1/agents/{id}` and closed the
-> last `@awaiting-implementation` gap under `feat-schemas` — the "Remove schema
+> last `@awaiting-implementation` gap under `feat-schemas` – the "Remove schema
 > assignment" scenario in `agents/schema_assignment.feature` (pinned
 > `@awaiting-implementation`, never executed). `AgentUpdate` now exposes
 > `input_schema_id` / `output_schema_id` + version fields; an omitted version
@@ -614,7 +614,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > immutable-schema test. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-23):** closed the four stale pipeline-level BDD
-> drafts tracked as `@awaiting-implementation` gaps under the feature graph —
+> drafts tracked as `@awaiting-implementation` gaps under the feature graph –
 > every one was a placeholder whose behaviour was already shipped and covered by
 > the executing `feat-triggers` suite or unit coverage, so the duplicates were
 > archived, not re-wired: `pipelines/webhook_trigger.feature` (deleted; HMAC
@@ -639,7 +639,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `licensing/stripe_billing.feature` into the executing BDD suite from the new
 > `steps/test_stripe_billing.py` (10 scenarios), driving the REAL
 > `POST /api/v1/webhooks/stripe` route with only the `fulfil_team_purchase`
-> background-task seam and the `get_settings` seam patched — signature
+> background-task seam and the `get_settings` seam patched – signature
 > verification (HMAC-SHA256 over `<timestamp>.<raw_body>` with the ±300s replay
 > window) runs for real: valid `invoice.paid` → 200 + exactly one fulfilment
 > dispatch carrying `event_id`/`customer_email`/`org_name`, checkout→invoice
@@ -650,7 +650,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `admin/tier_catalog.feature` into `feat-license`'s citations as the
 > tier-catalogue surface it belongs to. `_ORPHANED_BDD_FEATURES` stays empty.
 >
-> **Closed this walk (2026-09-24):** closed `feat-mcp`'s MCP HITL-review
+> **Closed this walk (2026-09-24):** closed `feat-mcp`'s MCP (Model Context Protocol) HITL-review
 > `@awaiting-implementation` gap (`configure/mcp.md`). The five
 > `mcp/review_hitl.feature` scenarios previously targeted the dead legacy
 > `/mcp/tools/call` HTTP surface (pinned since 2026-08) and never ran; they are
@@ -661,7 +661,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > scope gate (a `runner` is denied `hitl:review` → `insufficient_scope`), the
 > real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
-> pending-gate serialisation with the shared gate description resolver —
+> pending-gate serialisation with the shared gate description resolver –
 > network-free and DB-free with only the auth re-validation and DB/HITLManager
 > seams patched. Removed the five scenarios from
 > `PINNED_AWAITING_IMPLEMENTATION` (`test_test_suite_safety_nets.py`); added the
@@ -674,7 +674,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > surface (`@awaiting-implementation`, never ran); following the
 > `trigger.feature` / `review_hitl.feature` re-anchor pattern, they now drive
 > the REAL `search_library` tool handler directly (request ContextVars
-> hydrated by hand) — the list surface (`id` / `name` / `type` wire items),
+> hydrated by hand) – the list surface (`id` / `name` / `type` wire items),
 > the text-search passthrough reaching the real `list_primitives` seam, the
 > read-only posture, and the scope-gate denial: a node-level
 > `capability_scope.allowed_tools` that excludes the tool is denied the
@@ -692,8 +692,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-24):** closed `feat-runs`'s deferred run
 > recovery/retry BDD drafts (`build/runs.md` error-state coverage). The
 > run-level `/resume` / `/retry` endpoints those scenarios targeted never
-> shipped — recovery is per-node via
-> `POST /api/v1/runs/{run_id}/nodes/{node_id}/recover` — so
+> shipped – recovery is per-node via
+> `POST /api/v1/runs/{run_id}/nodes/{node_id}/recover` – so
 > `errors/retry.feature` was deleted (its retry-from-node /
 > retry-on-success semantics are the replay / already-completed-409 cases now
 > locked by the recovery surface) and `errors/recovery.feature` now drives the
@@ -718,12 +718,12 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `{"error": "human_only_gate", "detail": MSG_HUMAN_ONLY_DENY}`) and attempts
 > the FAR-634 `hitl.human_only_denied` denial audit; `list_pending_hitl` lists
 > the pending human-only gate with a real per-gate `human_only` flag; and the
-> FAR-611 decision-audit `client_type` attribution is exercised on both sides —
+> FAR-611 decision-audit `client_type` attribution is exercised on both sides –
 > `browser` via the REST `hitl._client_type` for a browser principal and `mcp`
 > stamped by the MCP `_dispatch_hitl_action`. Product improvement closing the
 > wire gap the scenario describes: `list_pending_hitl` now surfaces each
 > pending gate's `human_only` flag via the new shared batched resolver
-> (`db/crud/hitl_review_config.resolve_gate_human_only_map` — claim-stamped
+> (`db/crud/hitl_review_config.resolve_gate_human_only_map` – claim-stamped
 > fire-time config preferred, snapshot-config fallback, fail-safe
 > `DEFAULT_HUMAN_ONLY`), so an MCP agent can see which gates REQUIRE a browser
 > human before it attempts an action. Removed the three scenarios from
@@ -735,8 +735,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `workflows/import.feature` `@awaiting-implementation` gap
 > (`library/library.md`). The five drafted scenarios previously targeted a wire
 > shape the workflow-import path does not ship (an Ed25519 signature check on
-> `/import/confirm` — signatures are verified on the community-registry install
-> path — and a connector-instance selection list) and were pinned since 2026-08;
+> `/import/confirm` – signatures are verified on the community-registry install
+> path – and a connector-instance selection list) and were pinned since 2026-08;
 > they are rewritten to the real two-phase import contract and now drive the
 > REAL `POST /api/v1/libraries/import/analyse` + `/api/v1/libraries/import/confirm`
 > routes with only the DB read/materialisation seams patched
@@ -751,8 +751,8 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-09-27):** completed the reverse testid-coverage
 > guard (`OWNED_PAGES` in `test_product_map_consistency.py`) across every
-> manifest route. `/admin/trigger-events` — the FAR-1255 org-wide trigger event
-> log page shipped 2026-09-26 — was the last route not mapped to its owning
+> manifest route. `/admin/trigger-events` – the FAR-1255 org-wide trigger event
+> log page shipped 2026-09-26 – was the last route not mapped to its owning
 > view (`SettingsTriggerEventLogView.vue`); its six documented elements
 > (`settings-trigger-event-log-*`) were registered but unguarded, so a newly
 > shipped testid on the page could silently stay invisible to Assistant's docs
@@ -767,7 +767,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-28):** closed `feat-sso`'s
 > "Delete-provider confirmation does not warn about active SSO sessions" gap
 > (`auth/sso-provider-ui.md`). The delete-confirmation dialog now explains that
-> deleting a provider does NOT sign out already-signed-in users — their sessions
+> deleting a provider does NOT sign out already-signed-in users – their sessions
 > remain valid until they expire and only new sign-ins through the provider are
 > blocked. The warning ships a static `settings-sso-delete-session-warning`
 > testid, registered in the `/settings/sso` manifest `elements:` inventory (the
@@ -780,14 +780,14 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (`admin/org.md`). The five `ui/org_settings.feature` drafts (view page, rename
 > org, invite member, revoke API key, viewer denial) referenced eleven
 > `data-testid`s that exist NOWHERE in the frontend (verified 0/11 across
-> `frontend/src`; `/admin/org` ships a different surface — org profile, data
+> `frontend/src`; `/admin/org` ships a different surface – org profile, data
 > export, product-analytics + community-objects toggles, delete confirmation),
 > so they described a page that never shipped and could never execute. The stale
 > drafts were archived (file deleted, `scenarios()` registration + Playwright
 > steps removed from `steps/test_ui.py`, pin removed from
 > `PINNED_AWAITING_IMPLEMENTATION`) and `feat-org` was re-anchored to the REAL
 > org-management coverage: self-service org profile read/rename/delete +
-> admin-role gate (unit, `tests/unit/api/test_admin.py` — slug immutability +
+> admin-role gate (unit, `tests/unit/api/test_admin.py` – slug immutability +
 > operator/viewer 403), member invites (`system_admin_users.feature`),
 > API-key create/revoke + non-admin 403 (`auth/api_keys.feature`), viewer denial
 > (`viewmodel_current.feature`), org deletion BDD (`org_deletion.feature`). The
@@ -798,7 +798,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-09-28):** reconciled `feat-assistant`'s stale "Test
 > breadth" known gap (`configure/assistant.md`). The bullet claimed deeper unit
 > coverage for the permission round-trips "lives in
-> `backend/tests/unit/api/test_me_assistant_skills.py` only" — but the permission
+> `backend/tests/unit/api/test_me_assistant_skills.py` only" – but the permission
 > round-trip helpers (`_default_tool_permission`, `_resolve_tool_permission`,
 > `_check_nogo`, `_tool_allowlist_disabled`, `_build_permission_request_payload`,
 > `_classify_ui_tool_permissions`, `clear_session_approvals_for_account`) and the
@@ -810,7 +810,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-09-28):** archived the five remaining stale
 > `ui/*.feature` UI-journey BDD drafts pinned `@awaiting-implementation` since
-> 2026-08 — they describe surfaces that could never execute. Following the
+> 2026-08 – they describe surfaces that could never execute. Following the
 > `ui/org_settings.feature` precedent, every testid the drafts' Playwright steps
 > depend on was verified to exist NOWHERE in the frontend (0 hits for
 > `theme-toggle`, `pipeline-canvas`, `agent-sidebar`, `agent-item`, `canvas-node`,
@@ -844,13 +844,13 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > actually executes.
 
 > **Closed this walk (2026-09-29):** reconciled the four behaviour-tracker
-> frontmatter `status:` fields with the manifest `features:` registry — the two
+> frontmatter `status:` fields with the manifest `features:` registry – the two
 > layers disagreed on the same features' coverage. `feat-guardrails`,
 > `feat-license`, `feat-plugins` and `feat-product-analytics` were sharpened to
 > `status: partial` in the manifest during the 2026-09-26 walk (each carries an
-> unshipped sub-surface — cross-org guardrail inheritance, universal license
+> unshipped sub-surface – cross-org guardrail inheritance, universal license
 > gating, registry-API plugin lifecycle management, in-product analytics
-> export — tracked as an unchecked behaviour deferral), but each
+> export – tracked as an unchecked behaviour deferral), but each
 > `docs/product-map/` tracker kept `status: covered` even though its own QA
 > note said "Status stays `partial`". A reader of the graph got the opposite
 > coverage answer from the machine layer Assistant indexes from. The trackers
@@ -861,7 +861,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > manifest↔tracker status agreement an invariant so the two layers can never
 > drift again. `_ORPHANED_BDD_FEATURES` stays empty.
 >
-> **Closed this walk (2026-09-30):** closed four stale sub-surface gaps —
+> **Closed this walk (2026-09-30):** closed four stale sub-surface gaps –
 > shipped behaviour that neither product-map layer described. `feat-apply`
 > (FAR-1294): `modulo apply` manages the pipeline runtime limits
 > `node_timeout_seconds` / `max_duration_seconds` (declare-only, null rejected
@@ -872,16 +872,16 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > revocation, `settings-mcp-key-status` badge), added to the manifest
 > registry + `configure/mcp.md`. `feat-notifications` (FAR-1295): the
 > approaching-deadline HITL sweep's webhook / in-app leg under the single
-> fire-once claim — the manifest tracked it but `notifications/notifications.md`
+> fire-once claim – the manifest tracked it but `notifications/notifications.md`
 > lagged; behaviour line + citations added. `feat-runs` (FAR-1305): the
 > truthful `missing_self_report_reason` (`agent_not_reported` vs
 > `zero_report_unproven`; a third state, `sub_floor_rejected`, was added
-> 2026-10-04 by FAR-1308) — manifest tracked it but `build/runs.md` lagged;
+> 2026-10-04 by FAR-1308) – manifest tracked it but `build/runs.md` lagged;
 > behaviour line + citations added. `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-09-30):** closed the feature-graph gap left by
 > chunk 9a (FAR-961 evidence retention/cleanup + FAR-957 advisory author
-> warnings, commit `e64ddac0e`) — a whole evidence subsystem that shipped with
+> warnings, commit `e64ddac0e`) – a whole evidence subsystem that shipped with
 > no product-map home, invisible to the feature graph and to Assistant's
 > `search_documentation` indexer. New behaviour tracker
 > `feat-core-evidence-store` (`core/evidence-store.md`) covers the append-only
@@ -901,7 +901,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-10-01):** closed the sub-surface gap left by
 > FAR-1336 (delivery-signal provenance/confidence, `#1154`) and FAR-1373
 > (agent-reported streak-outcome qualifier, `#1158`; vocabulary renamed from
-> `self_reported` by FAR-1388) — shipped behaviour neither
+> `self_reported` by FAR-1388) – shipped behaviour neither
 > product-map layer described. The run-outcome delivery signal had no home at
 > all: the terminal `run_classification` record (value/reason/`delivered_pr_urls`
 > + FAR-1336 `pr_url_provenance` + `delivery_confidence`), the fail-closed
@@ -919,7 +919,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `SettingsTriggersView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
 >
 > **Closed this walk (2026-10-01):** closed `feat-guardrails`'s last tracked
-> deferral — the missing in-page Import control on `/settings/guardrails`
+> deferral – the missing in-page Import control on `/settings/guardrails`
 > (`configure/guardrails.md`). The page now ships an admin-gated "Import
 > Config" control wired to the existing
 > `POST /api/v1/guardrails/config/import` surface (dialog + in-dialog error
@@ -931,9 +931,9 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-10-02):** closed the `feat-audit` persona-journey
 > gap (`audit/audit-trail.md`). The persona scenario "Marcus verifies the
-> audit log is append-only" (`personas/marcus-ciso.feature`) — pinned
+> audit log is append-only" (`personas/marcus-ciso.feature`) – pinned
 > `@awaiting-implementation` since 2026-08 while the feature shipped underneath
-> it — now executes against the REAL application-layer append-only guard
+> it – now executes against the REAL application-layer append-only guard
 > (`register_append_only_guard` + the SQLAlchemy `before_update` /
 > `before_delete` listeners) via new steps in `steps/test_personas.py`: a real
 > `AuditEvent` row persisted in an in-memory engine, both UPDATE and DELETE
@@ -945,19 +945,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 
 > **Closed this walk (2026-10-02):** closed the `feat-auth` persona-journey
 > gap (`auth/auth.md`). The persona scenario "Marcus confirms offboarding
-> immediately revokes access" (`personas/marcus-ciso.feature`) — pinned
+> immediately revokes access" (`personas/marcus-ciso.feature`) – pinned
 > `@awaiting-implementation` since 2026-08 while the ADR 047 feature shipped
-> underneath it — now executes against the REAL seams via new steps in
+> underneath it – now executes against the REAL seams via new steps in
 > `steps/test_personas.py`: a real in-memory aiosqlite DB seeded with actual
 > `Account` / `Organisation` / `OrgMembership` / `TokenFamily` rows, REAL
 > minted access + refresh tokens (`create_access_token` /
 > `create_refresh_token` in `modulo/auth/jwt.py`), and the real ADR 047
 > live-role re-reads. With an active `operator` membership the token resolves
-> (`get_current_tenant_user` returns the live role — the pre-removal
+> (`get_current_tenant_user` returns the live role – the pre-removal
 > baseline); soft-deactivating the membership row (`deactivated_at` set) makes
 > the SAME token 401 on the next call via `_verify_identity`
 > (`OrganisationMembershipNotFound`), the `get_current_tenant_user_or_api_key`
-> JWT branch that `pipeline.list` / `run.list` mount rejects before any
+> JWT (JSON Web Token) branch that `pipeline.list` / `run.list` mount rejects before any
 > handler runs (cannot list pipelines or view runs), and the real
 > `_advance_refresh_sequence` refresh seam 401s
 > ("Account no longer has access to this organisation") BEFORE the token-family
@@ -967,7 +967,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-10-03):** reconciled four human-readable trackers
 > with behaviour the manifest registry carries but the feature-graph entries
-> lagged behind — shipped behaviour that a reader of the graph (or Assistant's
+> lagged behind – shipped behaviour that a reader of the graph (or Assistant's
 > docs indexer) could not find. `feat-analytics` (`analytics/analytics.md`):
 > the FAR-1421 claim→dispatch latency metric (`avg_dispatch_latency_ms` with
 > the `started_at` fallback and NULL-never-0 semantics, provenance copied onto
@@ -987,15 +987,15 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > AND the per-visit "Show work items" checkbox, default OFF), citing
 > `LifecycleMapView.spec.ts`. `_ORPHANED_BDD_FEATURES` stays empty.
 >
-> **Closed this walk (2026-10-05):** closed four untracked sub-surface gaps —
+> **Closed this walk (2026-10-05):** closed four untracked sub-surface gaps –
 > shipped behaviour that neither product-map layer described, all merged after
 > the 2026-10-03 walk. `feat-infra-health` (`infra/health-checks.md`): the
-> FAR-1446 readiness-degradation email alert — the `health_readiness_alert`
+> FAR-1446 readiness-degradation email alert – the `health_readiness_alert`
 > system cron (every 5 min, `unique=True`) emails `ALERT_EMAIL_TO` on a
 > hysteresis-confirmed degraded/unavailable transition plus one recovery email,
 > evaluating the SAME `evaluate_readiness` implementation the `/healthz/ready`
 > route now delegates to, with Redis-backed edge state and quiet-when-
-> unconfigured semantics (`core/health_alerts.py`, `core/saq_worker.py`) — plus
+> unconfigured semantics (`core/health_alerts.py`, `core/saq_worker.py`) – plus
 > the out-of-process Gatus sentinel the compose deployment ships
 > (`deploy/watchdog/*`, PR #1260), the full-outage leg the in-band cron
 > deliberately does not cover. `feat-audit` (`audit/audit-trail.md`, FAR-1471):
@@ -1013,10 +1013,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-10-05):** reconciled the graph with shipped
 > behaviour and removed stale/ill-formed manifest deferrals. `feat-library`
 > (`library/library.md`) gained the FAR-1380 composite library-primitive
-> credential-masking surface — the shared
+> credential-masking surface – the shared
 > `LibraryPrimitiveResponse._mask_composite_graph_credentials` validator on every
 > read surface, the MCP `modulo://library/{type}/{slug}` mask, and the FAR-1374
-> sentinel refusal on the library write surfaces — with the
+> sentinel refusal on the library write surfaces – with the
 > `test_library_primitive_masking.py` citation. The manifest `feat-pipelines`
 > deferral that still claimed the library-primitive surface was "excluded ...
 > pending FAR-1380" was removed (the same control statement in
@@ -1030,11 +1030,11 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `_ORPHANED_BDD_FEATURES` stays empty.
 
 > **Closed this walk (2026-10-05):** tracked `feat-evals`'s FAR-967 chunk 10
-> policy-gate operator-control + pin-integrity surface —
+> policy-gate operator-control + pin-integrity surface –
 > `PATCH /api/v1/evals/{eval_id}/policy-gate/toggle` (admin-only, symmetric
 > `enabled_at`/`disabled_at` stamping, `policy_gate.toggled` audit, break-glass
 > deny), the run-start `policy_gate_pins_fingerprint` re-verification, and the
-> pin-governed evaluation universe (`_resolve_governed_gate`) — in the manifest
+> pin-governed evaluation universe (`_resolve_governed_gate`) – in the manifest
 > feature registry and `improve/evals.md`. Also normalised the
 > `EvalEditorView` policy-gate surface and three `PageHeader` titles from the
 > `data-test-id` typo to `data-testid`, registered the now-visible testids in
@@ -1046,16 +1046,16 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > **Closed this walk (2026-10-06):** closed two untracked sub-surfaces under
 > `feat-infra-health` (`infra/health-checks.md`). (1) The in-process
 > worker-liveness watchdog (ADR 021 worker-resilience,
-> `core/watchdog/worker_liveness.py`) had no product-map home at all — it
+> `core/watchdog/worker_liveness.py`) had no product-map home at all – it
 > carries no `feat-*` reference and the tracker cited neither it nor its
 > `test_worker_liveness.py` suite; tracked with its sustained-edge alerting,
 > boot grace, multi-machine atomic claim (`SET NX` / `GETDEL`) and isolated
 > multi-channel fan-out (webhook / Teams / email), all default-off and
 > fail-open on Redis errors. (2) The FAR-1495 / FAR-1499 shared operator-alert
-> context (`core/alert_context.py`) — every readiness-cron and watchdog alert
+> context (`core/alert_context.py`) – every readiness-cron and watchdog alert
 > now names the deployment environment and carries the operator's
 > `ALERT_CONTEXT` across email, webhook and Teams through one bounded, escaped
-> renderer — tracked and cited with `test_alert_context.py`. Also corrected the
+> renderer – tracked and cited with `test_alert_context.py`. Also corrected the
 > stale `docs/configuration-reference.md` claim that readiness / worker-liveness
 > emails carry no environment line (they do since FAR-1495), documented the
 > previously-undocumented `ALERT_CONTEXT` setting there and in
@@ -1063,12 +1063,12 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-10-06):** tracked two untracked, recently-shipped
 > sub-surfaces. `feat-mcp` (`configure/mcp.md`): the FAR-1502 MCP/run_ws error
-> vocabulary — `_tool_error(msg, *, code)` requiring a keyword-only branchable
+> vocabulary – `_tool_error(msg, *, code)` requiring a keyword-only branchable
 > code, the shared `_tool_exception_error` classifier (insufficient_scope /
 > validation_failed / session_contract_error / conflict / migration_required /
 > database_unavailable with server_error as the only reserved catch-all), and
 > the run WebSocket control-frame alignment to the same codes via the shared
-> `db_error_handling` session-contract payload — with code/unit-test citations
+> `db_error_handling` session-contract payload – with code/unit-test citations
 > and the manifest `feat-mcp` registry line. `feat-audit`
 > (`audit/audit-trail.md`): the FAR-1516 actor-less `audited_system` variant
 > for pre-auth and webhook routes (no fabricated actor; `SYSTEM_ACTOR` marker +
@@ -1079,7 +1079,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 >
 > **Closed this walk (2026-10-07):** closed three untracked sub-surfaces merged
 > after the 2026-10-06 walk. `feat-audit` (`audit/audit-trail.md`): (1) FAR-1549
-> audited the background/cron/boot write paths — the new shared
+> audited the background/cron/boot write paths – the new shared
 > `core/audit_logger/background.py` helper (`append_background_audit_event` /
 > `record_run_state_change_audits`) appends SYSTEM-actor events (NULL actor +
 > `SYSTEM_ACTOR` marker + `actor_source`, org RLS inside its own transaction,
@@ -1113,7 +1113,7 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > empty.
 
 > **Closed this walk (2026-10-07, follow-up):** closed the `feat-pipelines`
-> untracked sub-surface for FAR-1530 — the **per-pipeline Paused execution
+> untracked sub-surface for FAR-1530 – the **per-pipeline Paused execution
 > state** (PR #1367), which shipped after the first 2026-10-07 walk and was
 > described by neither product-map layer (that walk's FAR-1528 entry covered
 > only archived / soft-deleted pipelines). A pipeline is now PRESENT and

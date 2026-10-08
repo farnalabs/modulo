@@ -2,14 +2,14 @@
 
 **Audience:** Self-hosting platform engineers and SREs with direct Postgres
 access. This guide covers emergency procedures for inspecting and modifying
-LangGraph checkpoint data at the database level — bypassing the application
+LangGraph checkpoint data at the database level – bypassing the application
 layer entirely.
 
 **Prerequisite reading:**
-- `docs/deployment-security.md` — deployment security baseline
-- `docs/security/secret-management.md` — Fernet key management
-- `docs/operations/backup.md` — backup/restore procedures
-- `docs/operations/self-hosted-admin.md` — broader self-hosted emergency procedures (password reset, key recovery, auth bypass)
+- `docs/deployment-security.md` – deployment security baseline
+- `docs/security/secret-management.md` – Fernet key management
+- `docs/operations/backup.md` – backup/restore procedures
+- `docs/operations/self-hosted-admin.md` – broader self-hosted emergency procedures (password reset, key recovery, auth bypass)
 
 ---
 
@@ -520,7 +520,7 @@ if __name__ == "__main__":
 
 ### 5.1 Bypass breaks audit chain invariants
 
-The application-level audit log uses cryptographic chaining — each entry
+The application-level audit log uses cryptographic chaining – each entry
 includes the SHA-256 hash of the previous entry. Direct database writes
 create no audit entries. After a bypass operation:
 
@@ -528,15 +528,15 @@ create no audit entries. After a bypass operation:
   the audit log chain, not the checkpoint tables).
 - There is no record of who changed what unless you manually create one
   (see §6).
-- Rollback is dependent on your own transaction logging — the application
+- Rollback is dependent on your own transaction logging – the application
   does not version checkpoint rows.
 
 ### 5.2 Orphaned data risk
 
 - Writing a checkpoint row without the corresponding blobs leaves the
-  checkpoint in an unreadable state — LangGraph will fail on `aget_tuple`.
+  checkpoint in an unreadable state – LangGraph will fail on `aget_tuple`.
 - Deleting a checkpoint row does not cascade to `checkpoint_blobs` or
-  `checkpoint_writes` — you must clean them separately (§4.3).
+  `checkpoint_writes` – you must clean them separately (§4.3).
 - Modifying `parent_checkpoint_id` breaks the linear checkpoint chain and
   may cause the runtime to fail on traversal.
 
@@ -612,7 +612,7 @@ pg_restore -d "$DATABASE_URL" /tmp/pre-bypass-*.dump
 | INSERT into `checkpoints` | Yes | 90 days |
 | DELETE from `checkpoint_blobs` / `checkpoint_writes` | Yes | 90 days |
 | Bulk re-encrypt of blobs | Yes | 180 days |
-| DDL (ALTER TABLE, DROP) | **Never** — escalate to engineering | N/A |
+| DDL (ALTER TABLE, DROP) | **Never** – escalate to engineering | N/A |
 
 ---
 
