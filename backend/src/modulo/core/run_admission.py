@@ -35,7 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS
-from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -67,27 +67,6 @@ _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pip
 # terminal-failed once claim_count EXCEEDS the budget. A zero-node run is
 # always safe to re-dispatch (nothing can double-execute); the budget absorbs a
 # transient dispatch wobble so a task that never started is not lost.
-
-
-def _is_row_lock_timeout(exc: BaseException) -> bool:
-    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
-
-    FAR-1592: both periodic sweeps in this module write the hot ``runs`` table
-    under the transaction-scoped ``db.crud.row_lock.
-    set_mutation_row_lock_timeout`` bound (``Settings.
-    mutation_row_lock_timeout_ms``), so a contended row lock can wait at most
-    that long — never silently past the Fly HAProxy 30-minute session window
-    (the unbounded wait that got prod connections culled mid-operation;
-    FAR-1524 O11 / FAR-1584).
-
-    :func:`modulo.db.sqlstates.sqlstate_of` walks the whole chain
-    (``.orig``/``__cause__``/``__context__``, incl. savepoint-rollback
-    wrappers), so both the raw-driver and SQLAlchemy-wrapped shapes are
-    recognised. Same predicate FAR-1584's ``core.dispatch.
-    _is_row_lock_timeout`` uses. Any OTHER failure is not a lock timeout and
-    keeps propagating to the sweep's failure contract.
-    """
-    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
 
 
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -356,7 +335,7 @@ async def park_expired_hitl_runs(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if not _is_row_lock_timeout(exc):
+                if not is_row_lock_timeout(exc):
                     raise
                 # FAR-1592: bounded-wait expiry (55P03). The org transaction
                 # rolled back whole, so NONE of its runs moved out of
@@ -540,7 +519,7 @@ async def reconcile_pipeline_slots(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if not _is_row_lock_timeout(exc):
+                if not is_row_lock_timeout(exc):
                     raise
                 # FAR-1592: the bounded wait expired (55P03) — a live writer
                 # (executor heartbeat / claim) holds a row this org's sweep

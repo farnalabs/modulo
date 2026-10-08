@@ -16,7 +16,7 @@ from saq.queue.redis import RedisQueue
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -75,27 +75,6 @@ def _open_session() -> AsyncSession:
 def _new_claim_token() -> str:
     """DISTINCT per-claim token — never identical to the deterministic SAQ job id."""
     return uuid.uuid4().hex
-
-
-def _is_row_lock_timeout(exc: BaseException) -> bool:
-    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
-
-    FAR-1584: every dispatch-path write on the hot ``runs`` row runs under a
-    transaction-scoped ``lock_timeout`` (``db.crud.row_lock.
-    set_mutation_row_lock_timeout``), so a contended row lock can wait at most
-    ``Settings.mutation_row_lock_timeout_ms`` — never silently past the Fly
-    HAProxy 30-minute session window (the unbounded wait that got prod
-    connections culled mid-operation; FAR-1524 O11).
-
-    When the bound fires, Postgres raises ``lock_not_available``, surfacing as
-    a SQLAlchemy ``OperationalError`` wrapping asyncpg's
-    ``LockNotAvailableError``. :func:`modulo.db.sqlstates.sqlstate_of` walks
-    the whole chain (``.orig``/``__cause__``/``__context__``, incl. savepoint
-    rollback wrappers), so both the driver-error and wrapped shapes are
-    recognised — dialect-tolerant, no exception-class import here. Any OTHER
-    failure is not a lock timeout and must keep propagating.
-    """
-    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
 
 
 async def _capacity_deferred(session: AsyncSession, run_id: uuid.UUID) -> bool:
@@ -462,7 +441,7 @@ async def _mark_enqueue_failed_session(run_id: uuid.UUID, org_id: uuid.UUID) -> 
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if not _is_row_lock_timeout(exc):
+        if not is_row_lock_timeout(exc):
             raise
         _log.warning(
             "dispatch_run: row-lock timeout (SQLSTATE 55P03) stamping "
@@ -499,7 +478,7 @@ async def _record_saq_job_session(run_id: uuid.UUID, org_id: uuid.UUID, job_id: 
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if not _is_row_lock_timeout(exc):
+        if not is_row_lock_timeout(exc):
             raise
         _log.warning(
             "dispatch_run: row-lock timeout (SQLSTATE 55P03) recording "
@@ -682,7 +661,7 @@ async def dispatch_run(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if not _is_row_lock_timeout(exc):
+        if not is_row_lock_timeout(exc):
             raise
         # FAR-1584: the bounded lock_timeout fired (e.g. on the org-cap demote
         # write). The transaction rolled back — nothing was enqueued, nothing
@@ -716,7 +695,7 @@ async def dispatch_run(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        if not _is_row_lock_timeout(exc):
+        if not is_row_lock_timeout(exc):
             raise
         # FAR-1584: the O11 statement's own bounded wait expired. The UPDATE
         # rolled back, so the run stays ``pending`` + ``dispatched_at IS NULL``
