@@ -287,9 +287,11 @@ def _require_pipeline(pipeline: Pipeline | None) -> Pipeline:
     return pipeline
 
 
-async def _get_pipeline_or_404(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline:
-    """Fetch a pipeline, raising 404 when it does not exist."""
-    return _require_pipeline(await get_pipeline(session, pipeline_id))
+async def _get_pipeline_or_404(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline:
+    """Fetch a pipeline (scoped to *organisation_id* when given), raising 404 when it does not exist."""
+    return _require_pipeline(await get_pipeline(session, pipeline_id, organisation_id=organisation_id))
 
 
 @dataclass(frozen=True)
@@ -2707,6 +2709,7 @@ async def list_pipelines_endpoint(
                 cursor=cursor,
                 include_archived=include_archived,
                 folder_id=folder_id,
+                organisation_id=principal.organisation_id,
             )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
@@ -2842,7 +2845,7 @@ async def get_pipeline_graph_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            graph = await get_pipeline_graph(session, pipeline_id)
+            graph = await get_pipeline_graph(session, pipeline_id, organisation_id=principal.organisation_id)
             if graph is not None and include_schema_warnings:
                 # FAR-900: resolve each node's provider so the design-time
                 # report includes provider-specific strips (not just advisory).
@@ -3037,7 +3040,7 @@ async def replace_pipeline_graph_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            pipeline = await _get_pipeline_or_404(session, pipeline_id)
+            pipeline = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
             # FAR-1181: the graph READ masks envVars/contextFiles/parameter
             # values; a full-replace write round-tripping that masked read must
             # not persist the mask literals over the stored secrets. Echoes are
@@ -3367,7 +3370,7 @@ async def _maybe_audit_autonomy_change(
     fields = [f for f in _AUTONOMY_LEVEL_FIELDS if f in updates]
     if not fields:
         return
-    previous = await get_pipeline(session, pipeline_id)
+    previous = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
     for field in fields:
         # getattr with a default: stand-in rows may lack the newer column.
         prev_value = getattr(previous, field, None) if previous is not None else None
@@ -3402,7 +3405,7 @@ async def _apply_graph_update(
 ) -> None:
     """Apply a graph replacement shipped inside a PATCH update payload."""
     node_data, edge_data, validator_graph, graph_bindings = _prepare_graph_write(graph_json)
-    existing = await get_pipeline(session, pipeline_id)
+    existing = await get_pipeline(session, pipeline_id, organisation_id=org_id)
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
     effective_owner_team_id = updates.get("owner_team_id", existing.owner_team_id)
@@ -3501,7 +3504,7 @@ async def update_pipeline_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            current = await _get_pipeline_or_404(session, pipeline_id)
+            current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
             # FAR-1184: raising or clearing the spend limit requires
             # cost.manage (the same permission as the breaker reset). Lowering
             # or setting where none exists keeps pipeline.update. Raised
@@ -3679,7 +3682,9 @@ async def delete_pipeline_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            deleted = await soft_delete_pipeline(session, pipeline_id, deleted_by=principal.account_id)
+            deleted = await soft_delete_pipeline(
+                session, pipeline_id, deleted_by=principal.account_id, organisation_id=principal.organisation_id
+            )
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
 
@@ -3764,7 +3769,7 @@ async def restore_pipeline_endpoint(
             # restore_pipeline loads the row via ``UPDATE ... RETURNING(Pipeline)``,
             # so the DB-computed ``updated_at`` is eager-loaded from the returned
             # row and is not expired after commit -> no Pydantic lazy-load, no 422.
-            pipeline = await restore_pipeline(session, pipeline_id)
+            pipeline = await restore_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
     except ProgrammingError as exc:
         _raise_db_migration_error(exc)
     if pipeline is None:
@@ -4005,7 +4010,7 @@ async def _clone_pipeline_into_org(
     the copy write (``_clone_pipeline_config`` + edges + snapshots), which is
     the window the in-txn re-check exists to close.
     """
-    source = await get_pipeline(session, pipeline_id)
+    source = await get_pipeline(session, pipeline_id, organisation_id=org_id)
     if source is None:
         logger.warning("Copy aborted: source pipeline %s not found", pipeline_id)
         raise HTTPException(
@@ -4224,7 +4229,7 @@ async def save_as_composite_endpoint(
         async with session.begin():
             await _set_rls_context(session, principal)
 
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline.id)
@@ -4360,7 +4365,7 @@ async def trigger_quality_report(
         async with session.begin():
             await _set_rls_context(session, principal)
 
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
 
@@ -4556,7 +4561,7 @@ async def list_snapshot_endpoint(
     try:
         async with session.begin():
             await _set_rls_context(session, principal)
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
             snapshots, total = await list_snapshots(session, pipeline_id, page=page, page_size=page_size)
@@ -4610,7 +4615,7 @@ async def save_edit_snapshot_endpoint(
             # the write, and is the FIRST lock of the transaction (so the
             # bounded ``lock_timeout`` it sets covers every later one).
             await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            pipeline = await get_pipeline(session, pipeline_id)
+            pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
             if pipeline is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
             snapshot = await create_snapshot_edit(

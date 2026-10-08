@@ -2394,7 +2394,9 @@ async def install_collection_endpoint(
             installed_pipeline_id = (install.resolved_manifest or {}).get("pipeline_id")
             if installed_pipeline_id:
                 # str() accepts both the real str id and a UUID instance.
-                installed_pipeline = await get_pipeline(session, uuid.UUID(str(installed_pipeline_id)))
+                installed_pipeline = await get_pipeline(
+                    session, uuid.UUID(str(installed_pipeline_id)), organisation_id=org_id
+                )
                 await _enforce_imported_connector_team_gate(
                     session,
                     org_id=org_id,

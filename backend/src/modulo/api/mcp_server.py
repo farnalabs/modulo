@@ -2193,7 +2193,9 @@ async def list_pipelines_tool(
 
         lim = max(1, min(limit, 100))
         async with _session(org_id) as s:
-            result = await list_pipelines(s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val())
+            result = await list_pipelines(
+                s, cursor=cursor, page_size=lim, team_id=_ctx_team_id_val(), organisation_id=org_id
+            )
         return {
             "data": [
                 {
@@ -2527,7 +2529,7 @@ async def set_pipeline_circuit_breaker(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            current = await get_pipeline(s, pid)
+            current = await get_pipeline(s, pid, organisation_id=org_id)
             # FAR-1184: raising/clearing the spend limit requires cost.manage;
             # lowering or setting where none exists keeps pipeline.update.
             # Raised BEFORE the mutation; the denial audits fresh + returns a
@@ -3300,7 +3302,7 @@ async def get_pipeline_graph_tool(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            result = await get_pipeline_graph(s, pid)
+            result = await get_pipeline_graph(s, pid, organisation_id=org_id)
 
         if result is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -3566,7 +3568,7 @@ async def _replace_pipeline_graph_txn(
         # mutation endpoints use).
         await set_mutation_row_lock_timeout(s)
 
-        pipeline = await get_pipeline(s, pid)
+        pipeline = await get_pipeline(s, pid, organisation_id=org_id)
         if pipeline is None:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
@@ -4106,7 +4108,7 @@ async def _create_manual_run(
     from modulo.db.crud.run import create_run
 
     uid = _ctx_user_id_val()
-    pipeline = await get_pipeline(s, pid)
+    pipeline = await get_pipeline(s, pid, organisation_id=org_id)
     if pipeline is None:
         return None, None, {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
     if _team_scoped_key_mismatch(pipeline.owner_team_id):
@@ -5485,7 +5487,7 @@ async def _get_pipeline_reviews_impl(pipeline_id: str) -> dict[str, Any]:
         owner_team_id = await _pipeline_owner_team_id(s, pid)
         if _team_scoped_key_mismatch(owner_team_id):
             return _team_scope_error("pipeline", pipeline_id)
-        result = await get_pipeline_graph(s, pid)
+        result = await get_pipeline_graph(s, pid, organisation_id=org_id)
     if result is None:
         return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
     _nodes, edges = result
@@ -7522,7 +7524,7 @@ async def delete_pipeline(
             owner_team_id = await _pipeline_owner_team_id(s, pid)
             if _team_scoped_key_mismatch(owner_team_id):
                 return _team_scope_error("pipeline", pipeline_id)
-            deleted = await soft_delete_pipeline(s, pid)
+            deleted = await soft_delete_pipeline(s, pid, organisation_id=org_id)
 
         if not deleted:
             return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
@@ -10300,7 +10302,7 @@ async def resource_pipelines() -> str:
 
     org_id = _ctx_org_id_val()
     async with _session(org_id) as s:
-        result = await list_pipelines(s, page=1, page_size=50, team_id=_ctx_team_id_val())
+        result = await list_pipelines(s, page=1, page_size=50, team_id=_ctx_team_id_val(), organisation_id=org_id)
     lines = [f"- {p.name} (id={p.id}, visibility={p.visibility})" for p in result.items]
     return f"Pipelines ({result.total} total):\n" + "\n".join(lines)
 
@@ -10343,7 +10345,7 @@ async def resource_pipeline_runs(pipeline_id: str) -> str:
     except ValueError:
         return f"error: Invalid UUID format: {pipeline_id}"
     async with _session(org_id) as s:
-        pipeline = await get_pipeline(s, pid)
+        pipeline = await get_pipeline(s, pid, organisation_id=org_id)
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
@@ -10383,7 +10385,7 @@ async def resource_pipeline_detail(pipeline_id: str) -> str:
     except ValueError:
         return f"error: Invalid UUID format: {pipeline_id}"
     async with _session(org_id) as s:
-        pipeline = await get_pipeline(s, pid)
+        pipeline = await get_pipeline(s, pid, organisation_id=org_id)
         if pipeline is None:
             return f"Pipeline {pipeline_id} not found."
         if _team_scoped_key_mismatch(pipeline.owner_team_id):
