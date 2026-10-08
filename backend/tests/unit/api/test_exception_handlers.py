@@ -292,6 +292,15 @@ class TestUnionAllowHeader:
         request = _scope_request({"/api/v1/libraries": {"get": {}}})
         assert union_allow_header(request) == "GET"
 
+    def test_document_entry_without_http_methods_yields_none(self) -> None:
+        """A path present in the document but declaring no verb advertises nothing.
+
+        Path-level keys such as ``parameters`` are not HTTP methods, so the
+        intersection is empty and the caller keeps the original header.
+        """
+        request = _scope_request({"/api/v1/libraries": {"parameters": []}})
+        assert union_allow_header(request) is None
+
     def test_path_parameter_template_resolves_through_the_matched_route(self) -> None:
         """The template of the route that matched — not the literal request path."""
         paths = {"/api/v1/libraries/{primitive_id}": {"get": {}, "delete": {}}}
