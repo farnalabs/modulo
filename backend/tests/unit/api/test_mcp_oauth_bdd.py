@@ -917,6 +917,7 @@ class TestTokenEndpointRefreshGrant:
             patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
             patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
             patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
+            patch("modulo.auth.oauth.rotate_oauth_token_family", new=AsyncMock(return_value=("family_1", 1))),
         ):
             mock_sf.return_value = _make_mock_session_factory()
             mock_validate.return_value = _make_mock_client()
@@ -1019,6 +1020,7 @@ class TestRefreshEndpoint:
             patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
             patch("modulo.auth.oauth.create_oauth_access_token") as mock_create_token,
             patch("modulo.auth.oauth.create_oauth_refresh_token") as mock_create_refresh,
+            patch("modulo.auth.oauth.rotate_oauth_token_family", new=AsyncMock(return_value=("family_1", 1))),
         ):
             mock_sf.return_value = _make_mock_session_factory()
             mock_validate.return_value = _make_mock_client()
@@ -1086,6 +1088,107 @@ class TestRefreshEndpoint:
 
         assert resp.status_code == 400
         assert resp.json()["error"] == "invalid_grant"
+
+
+# ---------------------------------------------------------------------------
+# Scenario: refresh token binding + DB-backed rotation (#1173, #1174)
+# ---------------------------------------------------------------------------
+
+
+class _FakeFamily:
+    """Stand-in for an OAuthTokenFamily row, driven by the real rotate helper."""
+
+    def __init__(self, max_sequence: int = 0, is_blacklisted: bool = False) -> None:
+        self.family_id = "family_1"
+        self.max_sequence = max_sequence
+        self.is_blacklisted = is_blacklisted
+        self.blacklisted_at = None
+
+
+class TestRefreshBindingAndRotation:
+    ENDPOINT = "/mcp/oauth/refresh"
+
+    @staticmethod
+    def _mint(client_id: str = "oauth_client_1", org_id: uuid.UUID = _ORG_ID, sequence: int = 0) -> str:
+        return create_oauth_refresh_token(
+            client_id,
+            _VALID_32,
+            organisation_id=str(org_id),
+            account_id=str(_USER_ID),
+            scopes=["trigger:run"],
+            token_family="family_1",
+            token_sequence=sequence,
+        )
+
+    def _post(self, admin_client: TestClient, refresh_token: str, family: _FakeFamily | None) -> Any:
+        with (
+            patch.object(RateLimiterRegistry, "check", AsyncMock(return_value=True)),
+            patch("modulo.api.mcp_server._get_session_factory") as mock_sf,
+            patch("modulo.api.mcp_server.get_settings", return_value=_make_settings()),
+            patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
+            patch("modulo.auth.oauth.verify_live_role_covers_scopes", new=AsyncMock(return_value="admin")),
+            patch("modulo.auth.oauth._get_token_family", new=AsyncMock(return_value=family)),
+            patch("modulo.auth.oauth.create_oauth_access_token", return_value="new_access") as mock_access,
+        ):
+            mock_sf.return_value = _make_mock_session_factory()
+            mock_validate.return_value = _make_mock_client()
+            resp = admin_client.post(
+                self.ENDPOINT,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": "oauth_client_1",
+                    "client_secret": "correct_secret",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        self.minted = mock_access.call_count
+        return resp
+
+    def test_happy_path_advances_family_sequence(self, admin_client: TestClient) -> None:
+        family = _FakeFamily(max_sequence=0)
+        resp = self._post(admin_client, self._mint(sequence=0), family)
+        assert resp.status_code == 200, resp.text
+        assert family.max_sequence == 1
+        claims = decode_oauth_refresh_token(resp.json()["refresh_token"], _VALID_32)
+        assert claims.token_sequence == 1
+
+    def test_token_for_other_client_is_rejected_without_minting(self, admin_client: TestClient) -> None:
+        family = _FakeFamily(max_sequence=0)
+        resp = self._post(admin_client, self._mint(client_id="other_client"), family)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert self.minted == 0
+        assert family.max_sequence == 0
+
+    def test_token_for_other_org_is_rejected_without_minting(self, admin_client: TestClient) -> None:
+        other_org = uuid.UUID("00000000-0000-0000-0000-0000000000ff")
+        family = _FakeFamily(max_sequence=0)
+        resp = self._post(admin_client, self._mint(org_id=other_org), family)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert self.minted == 0
+
+    def test_replayed_token_is_rejected_and_family_blacklisted(self, admin_client: TestClient) -> None:
+        family = _FakeFamily(max_sequence=1)
+        resp = self._post(admin_client, self._mint(sequence=0), family)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert self.minted == 0
+        assert family.is_blacklisted is True
+
+    def test_blacklisted_family_cannot_refresh(self, admin_client: TestClient) -> None:
+        family = _FakeFamily(max_sequence=0, is_blacklisted=True)
+        resp = self._post(admin_client, self._mint(sequence=0), family)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert self.minted == 0
+
+    def test_unknown_family_cannot_refresh(self, admin_client: TestClient) -> None:
+        resp = self._post(admin_client, self._mint(sequence=0), None)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert self.minted == 0
 
 
 # ---------------------------------------------------------------------------

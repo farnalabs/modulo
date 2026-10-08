@@ -98,6 +98,7 @@ def _make_mock_client(
     c = MagicMock()
     c.id = uuid.uuid4()
     c.client_id = client_id
+    c.organisation_id = ORG_ID
     c.client_secret_hash = "a" * 64
     c.name = name
     c.scopes = scopes or "trigger:run hitl:review"
@@ -442,6 +443,10 @@ def refresh_token_flow(gt: str, rt: str, cid: str, secret: str, client, request)
         patch("modulo.auth.oauth.validate_client_secret") as mock_validate,
         patch("modulo.auth.oauth.decode_oauth_refresh_token") as mock_decode,
         patch("modulo.auth.oauth.verify_live_role_covers_scopes") as mock_verify,
+        patch(
+            "modulo.auth.oauth.rotate_oauth_token_family",
+            new=AsyncMock(return_value=("family_1", 1)),
+        ),
         patch("modulo.auth.oauth.create_oauth_access_token", return_value="jwt_access_token_def"),
         patch("modulo.auth.oauth.create_oauth_refresh_token", return_value="jwt_refresh_token_def"),
     ):
