@@ -72,6 +72,7 @@ from modulo.db.models.run import (
     Run,
 )
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import (
     MAX_NODE_TIMEOUT_SECONDS,
     SAQ_SETUP_GRACE_DEFAULT_SECONDS,
@@ -6214,6 +6215,18 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         never a false success, never a silent no-op. The OUTER deadline
         semantics are unchanged: it still fires only when the tick as a whole
         exceeds ``dispatcher_reconcile_budget_seconds``.
+      * BOUNDED ROW-LOCK WAITS (FAR-1601): each per-org transaction issues the
+        transaction-scoped ``lock_timeout`` bound —
+        ``set_mutation_row_lock_timeout`` from ``db.crud.row_lock``, value
+        ``mutation_row_lock_timeout_ms`` — as its FIRST statement, before the
+        first lock, so no contended hot ``runs`` row can stall the tick
+        silently past the Fly HAProxy 30-minute session window (the FAR-1524
+        class). A bounded wait that
+        expires (SQLSTATE 55P03) is NOT a sweep failure: that org's
+        transaction rolled back whole, so its counts and compensating-fact ids
+        are unwound, the org is SKIPPED with a ``WARNING`` + full chain, and
+        the loop CONTINUES — its rows are re-selected by the same predicates
+        on the next 60s tick. Never a silent no-op, never a lost recovery.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
@@ -6507,6 +6520,39 @@ async def _dispatcher_reconcile_body(
                     org_id,
                 )
                 continue
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not _is_row_lock_timeout(exc):
+                    raise
+                # FAR-1601: the transaction-scoped bound at the top of
+                # _reconcile_org fired (SQLSTATE 55P03) — a live writer
+                # (executor claim/heartbeat/gate decision) holds a ``runs`` row
+                # this org's sweep needed. The org transaction rolled back
+                # WHOLE, so NOT ONE of its terminalizations or repairs
+                # committed: unwind its counts and compensating-fact ids exactly
+                # like the per-org time bound above (a rolled-back org must
+                # contribute neither counters nor facts), skip this org with a
+                # WARNING + full chain, and CONTINUE — the same rows are
+                # re-selected by the reconcile predicates on the next 60s tick.
+                # Idempotent sweep: never a silent no-op, never a lost
+                # recovery. The TICK itself is not a failure (the remaining
+                # orgs, record_facts and the compensating sweeps all still run),
+                # so the health heartbeat stays untouched. Every OTHER failure
+                # keeps its contract and propagates to the outer failure
+                # heartbeat above.
+                summary.clear()
+                summary.update(summary_before)
+                del terminalized_run_ids[terminalized_len_before:]
+                _log.warning(
+                    "dispatcher_reconcile.org_lock_timeout org=%s (SQLSTATE 55P03 from "
+                    "the bounded mutation_row_lock_timeout_ms wait) — org transaction "
+                    "rolled back with NO rows terminalized or repaired; the same rows "
+                    "are re-selected by the reconcile predicates on the next 60s tick",
+                    org_id,
+                    exc_info=True,
+                )
+                continue
             rows_processed += summary["scanned"] - rows_before
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
@@ -6605,6 +6651,27 @@ def _dispatcher_summary() -> dict[str, Any]:
     return summary
 
 
+def _is_row_lock_timeout(exc: BaseException) -> bool:
+    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
+
+    FAR-1601: every hot ``runs`` write inside one ``_reconcile_org`` org
+    transaction runs under a transaction-scoped bound issued as that
+    transaction's first statement: ``set_mutation_row_lock_timeout`` (from
+    ``db.crud.row_lock``, value ``mutation_row_lock_timeout_ms``). So a
+    contended row lock waits at most that long — never silently past the Fly
+    HAProxy 30-minute session window (the unbounded wait that got prod
+    connections culled mid-operation; FAR-1524 O11 / FAR-1584).
+
+    :func:`modulo.db.sqlstates.sqlstate_of` walks the whole chain
+    (``.orig``/``__cause__``/``__context__``, incl. savepoint-rollback
+    wrappers), so both the raw-driver and SQLAlchemy-wrapped shapes are
+    recognised — the same predicate ``core.dispatch._is_row_lock_timeout``
+    uses (FAR-1584). Any OTHER failure is not a lock timeout and keeps its own
+    contract.
+    """
+    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
+
+
 async def _reconcile_org(
     *,
     factory: async_sessionmaker[AsyncSession],
@@ -6647,11 +6714,50 @@ async def _reconcile_org(
     above rolls back at its safe boundary and the caller unwinds the counts
     and terminalizer ids this pass recorded; direct callers (tests) remain
     unbounded, exactly as before.
+
+    LOCK BOUND (FAR-1601): this transaction is the ONE boundary for every
+    periodic-sweep write this module makes on the hot ``runs`` table, so the
+    transaction-scoped ``lock_timeout`` is issued as its FIRST statement,
+    before the first lock — via ``set_mutation_row_lock_timeout`` from
+    ``db.crud.row_lock`` (value: the ``mutation_row_lock_timeout_ms`` setting).
+    ``set_config`` takes no lock itself, so it cannot disturb lock ordering.
+    It bounds ALL of: the five batch
+    terminalizers (the nodeless router's chokepoint writes,
+    ``_MID_GRAPH_WEDGE_SQL``, the claim-cap sweep, the expired-HITL sweep, the
+    missing-HITL sweep), the enqueue-failed TTL backstop
+    (``_fail_run_dispatch_failed``), the previous-attempt marker clear
+    (``_clear_previous_attempt_marker``) and the capacity-defer stamp
+    (``_capacity_defer_pending_run``) — everything the per-row loop writes
+    runs in this same transaction.
+
+    A bounded wait that expires (SQLSTATE 55P03) is NOT a sweep failure: this
+    pass is an idempotent periodic sweep whose every write re-selects its
+    target rows by predicate on the next 60s tick, so the org transaction
+    rolling back whole LOSES NOTHING. The reconcile body (see
+    ``_dispatcher_reconcile_body``) skips that org with a ``WARNING`` + full
+    chain — never a silent no-op, never a lost recovery — unwinds its counts
+    and continues with the remaining orgs; every OTHER failure keeps its
+    existing contract (read phase logs ``read failed`` and skips the org;
+    row-loop failures propagate to the tick's failure heartbeat). No wait in
+    this transaction MUST complete: there is no lock here whose loss cannot be
+    re-acquired next tick.
     """
     from modulo.db.models.pipeline import Pipeline
     from modulo.db.models.run import Run
 
     async with factory() as session, session.begin():
+        # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the
+        # transaction's opening statement, before any lock. ``set_config``
+        # takes no lock itself, so it cannot disturb lock ordering. Every hot
+        # ``runs`` write below shares this ONE transaction, so one bound covers
+        # them all: the five batch terminalizers, the enqueue-failed TTL
+        # backstop, the previous-attempt marker clear and the capacity-defer
+        # stamp. An unbounded wait here is the FAR-1524 class: silent past the
+        # Fly HAProxy 30-minute session window, which got prod connections
+        # culled mid-operation.
+        from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+        await set_mutation_row_lock_timeout(session)
         await _set_rls_org(session, org_id)
         try:
             # DB-only org-scoped batch terminalizers (B4 age-bound mid-graph
@@ -6737,7 +6843,15 @@ async def _reconcile_org(
             rows = (await session.execute(row_select)).all()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            if _is_row_lock_timeout(exc):
+                # FAR-1601: the bounded wait expired while a terminalizer (or
+                # the row select's locking read) held a contended ``runs`` row.
+                # Propagate OUT of the org transaction (which rolls back at the
+                # ``async with``) to the reconcile body's org-level 55P03 skip —
+                # WARNING + unwind + next-tick re-process — instead of
+                # mislabelling expected sweep contention as a read failure.
+                raise
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
             return enqueue_failed_redispatched
 
