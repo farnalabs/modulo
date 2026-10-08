@@ -453,6 +453,8 @@ class _JenkinsTestDouble(JenkinsConnector):
         self._builds: list[dict[str, Any]] = []
         self._jobs: list[dict[str, Any]] = []
         self._nodes: list[dict[str, Any]] = []
+        #: Monotonic build number so each id is `job_name/build_number` (FAR-1141 run-id contract).
+        self._build_seq = 0
 
     def _client(self) -> httpx.AsyncClient:
         raise RuntimeError("Test double has no HTTP client")
@@ -466,8 +468,15 @@ class _JenkinsTestDouble(JenkinsConnector):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        # Run-id contract (FAR-1141): emit `job_name/build_number` - the exact
+        # form _split_build_run_id (and therefore get_run_status/get_run_logs)
+        # consumes; the trailing segment must be a digit. Validate the job name
+        # exactly as the real producer does, so an id the real parser would
+        # reject is never handed back.
+        _reject_unsafe_job_name(pipeline_id, f"pipeline_id {pipeline_id!r}")
+        self._build_seq += 1
         run = CIRun(
-            id=f"{self._uuid.uuid4()}",
+            id=f"{pipeline_id}/{self._build_seq}",
             pipeline_id=pipeline_id,
             status=CIRunStatus.QUEUED,
             branch=branch,
@@ -491,10 +500,12 @@ class _JenkinsTestDouble(JenkinsConnector):
         status: CIRunStatus | None = None,
         _limit: int = 20,
     ) -> list[CIRun]:
+        resolved = pipeline_id or "my-job"
+        self._build_seq += 1
         return [
             CIRun(
-                id=f"{self._uuid.uuid4()}",
-                pipeline_id=pipeline_id or "my-job",
+                id=f"{resolved}/{self._build_seq}",
+                pipeline_id=resolved,
                 status=status or CIRunStatus.SUCCESS,
             ),
         ]

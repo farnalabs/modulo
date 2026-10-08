@@ -394,8 +394,15 @@ class _GitHubActionsTestDouble(GitHubActionsCIRunner):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        # Run-id contract (FAR-1141): emit `owner/repo/run_id`, the exact form
+        # get_run_status/get_run_logs parse - a bare id is rejected there, so
+        # the double must never hand one back. The owner/repo is derived the
+        # same way the real producer derives it.
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required")
+        owner_repo = self._split_pipeline_id(pipeline_id)[0]
         run = CIRun(
-            id=f"{self._uuid.uuid4()}",
+            id=f"{owner_repo}/{self._uuid.uuid4()}",
             pipeline_id=pipeline_id,
             status=CIRunStatus.QUEUED,
             branch=branch,
@@ -420,10 +427,12 @@ class _GitHubActionsTestDouble(GitHubActionsCIRunner):
         status: CIRunStatus | None = None,
         _limit: int = 20,
     ) -> list[CIRun]:
+        resolved = pipeline_id or "test/workflow.yml"
+        owner_repo = self._split_pipeline_id(resolved)[0]
         return [
             CIRun(
-                id="run-1",
-                pipeline_id=pipeline_id or "test/workflow.yml",
+                id=f"{owner_repo}/run-1",
+                pipeline_id=resolved,
                 status=status or CIRunStatus.SUCCESS,
             ),
         ]

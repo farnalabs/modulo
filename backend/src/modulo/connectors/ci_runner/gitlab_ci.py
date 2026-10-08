@@ -280,8 +280,13 @@ class _GitLabCITestDouble(GitLabCIRunner):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        # Run-id contract (FAR-1141): emit `project_id/pipeline_id` - the exact
+        # form get_run_status/get_run_logs parse (single slash, partitioned on
+        # the first one). A bare id is rejected there.
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required")
         run = CIRun(
-            id=f"{self._uuid.uuid4()}",
+            id=f"{pipeline_id}/{self._uuid.uuid4()}",
             pipeline_id=pipeline_id,
             status=CIRunStatus.QUEUED,
             branch=branch,
@@ -306,10 +311,11 @@ class _GitLabCITestDouble(GitLabCIRunner):
         status: CIRunStatus | None = None,
         _limit: int = 20,
     ) -> list[CIRun]:
+        resolved = pipeline_id or "12345"
         return [
             CIRun(
-                id="pipeline-1",
-                pipeline_id=pipeline_id or "12345",
+                id=f"{resolved}/pipeline-1",
+                pipeline_id=resolved,
                 status=status or CIRunStatus.SUCCESS,
             ),
         ]

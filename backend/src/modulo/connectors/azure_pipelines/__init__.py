@@ -403,8 +403,13 @@ class _AzurePipelinesTestDouble(AzurePipelinesConnector):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        # Run-id contract (FAR-1141): emit `pipeline_id/run_id` - the exact
+        # form _split_run_id (and therefore get_run_status/get_run_logs)
+        # consumes (split on the LAST slash). A bare id is rejected there.
+        if not pipeline_id:
+            raise ValueError("pipeline_id is required")
         run = CIRun(
-            id=f"{self._uuid.uuid4()}",
+            id=f"{pipeline_id}/{self._uuid.uuid4()}",
             pipeline_id=pipeline_id,
             status=CIRunStatus.QUEUED,
             branch=branch,
@@ -429,10 +434,11 @@ class _AzurePipelinesTestDouble(AzurePipelinesConnector):
         status: CIRunStatus | None = None,
         _limit: int = 20,
     ) -> list[CIRun]:
+        resolved = pipeline_id or "1"
         return [
             CIRun(
-                id="1",
-                pipeline_id=pipeline_id or "1",
+                id=f"{resolved}/101",
+                pipeline_id=resolved,
                 status=status or CIRunStatus.SUCCESS,
             ),
         ]

@@ -325,6 +325,8 @@ class _BuildkiteTestDouble(BuildkiteConnector):
         self._status: CIRunStatus = CIRunStatus.QUEUED
         self._run_logs: list[str] = []
         self._triggered: list[dict[str, Any]] = []
+        #: Monotonic build number so each triggered id is `org/slug/<n>` (FAR-1141 run-id contract).
+        self._build_seq = 0
 
     def _client(self) -> httpx.AsyncClient:
         raise RuntimeError("Test double has no HTTP client")
@@ -338,8 +340,18 @@ class _BuildkiteTestDouble(BuildkiteConnector):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
+        # Run-id contract (FAR-1141): emit `org/pipeline_slug/build_number`
+        # (TWO slashes) - the exact form get_run_status/get_run_logs parse. A
+        # bare id is rejected there, so validate the pipeline_id the same way
+        # the real producer does before building the id.
+        org, _, pipeline_slug = pipeline_id.partition("/")
+        if not pipeline_slug:
+            raise ValueError(
+                f"Invalid pipeline_id format: {pipeline_id!r}. Expected 'org/pipeline_slug'.",
+            )
+        self._build_seq += 1
         run = CIRun(
-            id=f"{self._uuid.uuid4()}",
+            id=f"{org}/{pipeline_slug}/{self._build_seq}",
             pipeline_id=pipeline_id,
             status=CIRunStatus.QUEUED,
             branch=branch,
@@ -364,10 +376,12 @@ class _BuildkiteTestDouble(BuildkiteConnector):
         status: CIRunStatus | None = None,
         _limit: int = 20,
     ) -> list[CIRun]:
+        resolved = pipeline_id or "my-org/my-pipeline"
+        self._build_seq += 1
         return [
             CIRun(
-                id="build-1",
-                pipeline_id=pipeline_id or "my-org/my-pipeline",
+                id=f"{resolved}/{self._build_seq}",
+                pipeline_id=resolved,
                 status=status or CIRunStatus.SUCCESS,
             ),
         ]
