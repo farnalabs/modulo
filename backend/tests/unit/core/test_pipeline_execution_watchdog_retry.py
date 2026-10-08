@@ -1006,12 +1006,9 @@ def _sweep_engine(statements: list[str], params: list[dict[str, object]]):
             return self._rows
 
     class _AsyncConn:
-        def get_bind(self) -> SimpleNamespace:
-            """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-            Non-postgres double: the helper's documented safe no-op branch.
-            """
-            return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+        # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+        # reads ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``).
+        dialect = SimpleNamespace(name="sqlite")
 
         async def __aenter__(self) -> Self:
             return self

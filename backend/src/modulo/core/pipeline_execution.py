@@ -31,12 +31,12 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from langgraph.errors import NodeCancelledError
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
@@ -330,28 +330,38 @@ _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
 async def _bound_hot_runs_row_lock(conn: AsyncConnection) -> None:
     """FAR-1601: bound this module's hot-``runs`` row-lock waits.
 
-    Issues the shared transaction-scoped ``SET LOCAL lock_timeout``
-    (``Settings.mutation_row_lock_timeout_ms``, default 5 s) via
-    ``db.crud.row_lock.set_mutation_row_lock_timeout`` — the same bound the
-    dispatch writers carry (FAR-1584 / FAR-1592) — so a contended ``runs``
-    row can never park an executor-path writer in an unbounded wait past the
-    Fly HAProxy 30-minute session window (FAR-1524). Call at the TOP of the
-    writer's transaction, BEFORE its first locking statement; the bound is
-    transaction-local and reverts on COMMIT/ROLLBACK, never onto a pooled
-    connection.
+    Issues the same transaction-scoped ``SET LOCAL lock_timeout`` the
+    dispatch writers carry via ``db.crud.row_lock.set_mutation_row_lock_timeout``
+    (FAR-1584 / FAR-1592): the value comes from
+    ``Settings.mutation_row_lock_timeout_ms`` (default 5 s) and
+    ``set_config(..., is_local => true)`` makes it transaction-scoped — it
+    reverts on COMMIT/ROLLBACK and never leaks onto a pooled connection.
+    Call at the TOP of the writer's transaction, BEFORE its first locking
+    statement. On expiry the next statement raises SQLSTATE 55P03
+    (``lock_not_available``); each writer below owns its own non-silent 55P03
+    contract (skip + WARN + re-process, or fail visibly) — this wrapper only
+    sets the bound.
 
-    On expiry the statement raises SQLSTATE 55P03 (``lock_not_available``).
-    Each writer below owns its own non-silent 55P03 contract (skip + WARN +
-    re-process, or fail visibly) — this helper only sets the bound.
+    These writers hold raw ``AsyncConnection``s, whose dialect is the
+    connection's own ``.dialect`` — NOT ``session.get_bind()`` (that is the
+    ``AsyncSession`` API; a real ``AsyncConnection`` has no ``get_bind``, so
+    routing it through the ``AsyncSession``-annotated shared helper would
+    crash at the FIRST statement of every executor-path write). FAR-1592
+    PR #1429 widens that helper to accept connections too, but this wrapper
+    deliberately does NOT depend on that landing: it issues the identical
+    bound statement itself, so the executor path is correct either way.
 
-    The shared helper is annotated ``AsyncSession`` but only uses the
-    ``get_bind()`` / ``execute()`` surface both session types share — these
-    writers hold raw ``AsyncConnection``s, so the cast lives HERE once instead
-    of at every call site.
+    POSTGRES-ONLY (the same safe no-op gate as the shared helper): SQLite /
+    MariaDB take no ``lock_timeout``, and the unit fixtures run on SQLite
+    connection doubles.
     """
-    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
-
-    await set_mutation_row_lock_timeout(cast(AsyncSession, conn))
+    if conn.dialect.name != "postgresql":
+        return
+    lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
+    await conn.execute(
+        text("SELECT set_config('lock_timeout', :val, true)"),
+        {"val": f"{lock_timeout_ms}ms"},
+    )
 
 
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
@@ -2310,12 +2320,14 @@ async def _sweep_org_stale_runs(
     instead of parking the sweep (and its transaction's row locks) unbounded.
     A 55P03 PROPAGATES out of this helper and out of
     ``stale_run_recovery_sweep``'s per-org loop into that sweep's existing
-    failure handler — the whole org's transaction rolls back, the failure is
-    logged, returned as ``error: sweep_failed (...)`` AND surfaced through the
-    cron job's failure heartbeat (the health-alert sweeps key on sweep
-    FAILURES, so failing loudly is the alerting path — a skip-and-continue
-    would hide it behind a WARNING only). Recovery: the sweep is periodic and
-    idempotent — the next tick re-runs the same UPDATE set from scratch.
+    failure handler — the failing org's transaction rolls back (its counts
+    are discarded; counts from earlier, COMMITTED orgs are preserved in the
+    returned stats), the failure is logged, returned as
+    ``error: sweep_failed (...)`` AND surfaced through the cron job's failure
+    heartbeat (the health-alert sweeps key on sweep FAILURES, so failing
+    loudly is the alerting path — a skip-and-continue would hide it behind a
+    WARNING only). Recovery: the sweep is periodic and idempotent — the next
+    tick re-runs the same UPDATE set from scratch.
     """
     # FAR-1601: bound FIRST — before the RLS set_config and before any of the
     # four UPDATEs take their row locks.
@@ -2532,7 +2544,13 @@ async def stale_run_recovery_sweep(
     settings = get_settings()
     nd_window = never_dispatched_window if never_dispatched_window is not None else settings.saq_never_dispatched_window
     wl_window = worker_lost_window if worker_lost_window is not None else settings.saq_worker_lost_window
+    never_count = 0
+    lost_count = 0
+    capacity_timeout_count = 0
     stranded_rows: list[Any] = []
+    # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
+    # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
+    terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
     try:
         # Collect all org ids FIRST in system context (organisations is the
         # root table — the app role owns it, owner bypasses RLS). The sweep's
@@ -2553,12 +2571,6 @@ async def stale_run_recovery_sweep(
                 "redispatch_outcomes": {},
             }
 
-        never_count = 0
-        lost_count = 0
-        capacity_timeout_count = 0
-        # Runs terminalised to ``failed`` by this sweep — (run_id, org_id) —
-        # whose journeys must advance once the UPDATEs commit (FAR-143 follow-up).
-        terminalised_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
         for org_id in org_ids:
             async with async_engine.connect() as conn, conn.begin():
                 never_delta, capacity_delta, lost_delta = await _sweep_org_stale_runs(
@@ -2608,10 +2620,16 @@ async def stale_run_recovery_sweep(
         raise
     except Exception as exc:
         _log.exception("Stale run recovery sweep failed")
+        # FAR-1601: preserve the counts from orgs whose transactions COMMITTED
+        # before the failing org — a mid-loop failure must not undercount the
+        # sweep's already-done work. Stranded rows are NOT re-dispatched on the
+        # error path (and any collected by the rolled-back org tx are discarded
+        # with it), so both stranded keys stay 0; the next tick re-runs the
+        # whole sweep from scratch.
         return {
-            "never_dispatched_swept": 0,
-            "worker_lost_swept": 0,
-            "capacity_timeout_swept": 0,
+            "never_dispatched_swept": never_count,
+            "worker_lost_swept": lost_count,
+            "capacity_timeout_swept": capacity_timeout_count,
             "stranded_capacity_redispatched": 0,
             "redispatch_outcomes": {},
             "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],

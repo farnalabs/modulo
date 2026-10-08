@@ -5,10 +5,10 @@ heartbeat / ``mark_complete`` / ``fail_run_terminal`` / the node-deadline
 watchdog-firing counter / the stale-run recovery sweep) used to wait
 UNBOUNDED on a contended ``runs`` row lock — the silent-wait class that let
 FAR-1524's prod sessions reach the Fly HAProxy 30-minute cull window. They
-now issue the shared transaction-scoped ``SET LOCAL lock_timeout``
-(``Settings.mutation_row_lock_timeout_ms`` via
-``db.crud.row_lock.set_mutation_row_lock_timeout``) at the top of their
-transaction, exactly like the dispatch writers (FAR-1584 / FAR-1592).
+now issue the transaction-scoped ``SET LOCAL lock_timeout``
+(``Settings.mutation_row_lock_timeout_ms`` — the same bound
+``db.crud.row_lock.set_mutation_row_lock_timeout`` issues for the dispatch
+writers, FAR-1584 / FAR-1592) at the top of their transaction.
 
 These tests pin, per writer:
 
@@ -16,9 +16,12 @@ These tests pin, per writer:
    writer's ``UPDATE runs`` takes its row lock, carries ``is_local => true``
    (transaction-scoped, never leaks onto a pooled connection), and its value
    comes from the operator knob — a postgresql-reporting connection double
-   takes the helper's LIVE branch, so the real bound statement is recorded.
+   takes the bound's LIVE branch, so the real bound statement is recorded.
    Without the source change no bound statement exists and every ordering
-   assertion fails.
+   assertion fails. The doubles are FAITHFUL ``AsyncConnection`` shapes
+   (``.dialect``; NO fabricated ``get_bind`` — that session-only method on a
+   connection double is exactly what hid the review CRITICAL where the real
+   connection crashed the bound at its first statement).
 2. **The 55P03 contract**, chosen per path: idempotent/recovery writers skip
    + WARN + re-process (claim, resume claim, heartbeat beat, mark_complete);
    the best-effort watchdog counter skips + WARN (its existing fail-soft);
@@ -43,6 +46,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 import modulo.core.pipeline_execution as pe
 from modulo.core.pipeline_execution import (
@@ -83,12 +87,18 @@ class _PgResult:
 class _PgRecordingConn:
     """Async connection double reporting the postgresql dialect, recording SQL.
 
-    Takes the LIVE branch of ``set_mutation_row_lock_timeout``'s dialect gate
-    (``get_bind().dialect.name == "postgresql"``), so the real bound statement
-    is recorded alongside each writer's UPDATE for ORDER/value assertions.
-    ``raise_on_contains`` raises a 55P03 lock-timeout error when the named
-    statement fragment is executed (the bound statement itself never matches).
+    Faithful ``AsyncConnection`` shape: the dialect is the connection's own
+    ``.dialect`` (a real AsyncConnection has NO ``get_bind`` — fabricating
+    that session-only method on a connection double is exactly what hid the
+    FAR-1601 review CRITICAL). A postgresql-reporting double takes the
+    bound's LIVE branch, so the real ``set_config('lock_timeout', ...)``
+    statement is recorded alongside each writer's UPDATE for ORDER/value
+    assertions. ``raise_on_contains`` raises a 55P03 lock-timeout error when
+    the named statement fragment is executed (the bound statement itself
+    never matches).
     """
+
+    dialect = SimpleNamespace(name="postgresql")
 
     def __init__(
         self,
@@ -104,9 +114,6 @@ class _PgRecordingConn:
         self._org_rows = org_rows or []
         self._stranded_row = stranded_row
         self._raise_on_contains = raise_on_contains
-
-    def get_bind(self) -> SimpleNamespace:
-        return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
 
     async def __aenter__(self) -> Self:
         return self
@@ -168,11 +175,13 @@ def _assert_bound_precedes_update(conn: _PgRecordingConn, update_marker: str) ->
     return bound_at[0]
 
 
-def _patched_row_lock_settings() -> Any:
-    return patch(
-        "modulo.db.crud.row_lock.get_settings",
-        return_value=MagicMock(mutation_row_lock_timeout_ms=5000),
-    )
+def _settings_with_bound(**extra: Any) -> MagicMock:
+    """``pe.get_settings`` mock carrying the FAR-1601 lock-bound knob.
+
+    The wrapper reads the knob from this module's own ``get_settings`` AFTER
+    its ``conn.dialect`` gate, so every LIVE-bound test patches it here.
+    """
+    return MagicMock(mutation_row_lock_timeout_ms=5000, **extra)
 
 
 # ---------------------------------------------------------------------------
@@ -183,41 +192,42 @@ def _patched_row_lock_settings() -> Any:
 class TestWritersBoundTheirRowLockWait:
     async def test_claim_run_async_bounds_before_the_claim_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
-        with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()), _patched_row_lock_settings():
+        monkeypatch.setattr(
+            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
+        )
+        with patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()):
             token = await claim_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is not None
         _assert_bound_precedes_update(conn, "UPDATE runs SET status='running'")
 
     async def test_claim_resume_run_async_bounds_before_the_claim_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
-        with _patched_row_lock_settings():
-            token = await claim_resume_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
+        monkeypatch.setattr(
+            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
+        )
+        token = await claim_resume_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is not None
         _assert_bound_precedes_update(conn, "UPDATE runs SET status='running'")
 
-    async def test_heartbeat_once_bounds_before_the_heartbeat_update(self) -> None:
+    async def test_heartbeat_once_bounds_before_the_heartbeat_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        with _patched_row_lock_settings():
-            await heartbeat_once(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        await heartbeat_once(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         _assert_bound_precedes_update(conn, "UPDATE runs SET heartbeat_at=now()")
 
-    async def test_mark_complete_bounds_before_the_complete_update(self) -> None:
+    async def test_mark_complete_bounds_before_the_complete_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        with (
-            patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
-            _patched_row_lock_settings(),
-        ):
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        with patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock):
             await mark_complete(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         _assert_bound_precedes_update(conn, "UPDATE runs SET status='complete'")
 
-    async def test_fail_run_terminal_bounds_before_the_failed_update(self) -> None:
+    async def test_fail_run_terminal_bounds_before_the_failed_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
         with (
             patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock),
             patch.object(pe, "_record_fact_for_terminal_failed_run", new_callable=AsyncMock),
-            _patched_row_lock_settings(),
         ):
             ok = await fail_run_terminal(  # type: ignore[arg-type]
                 _PgEngine(conn),
@@ -229,10 +239,10 @@ class TestWritersBoundTheirRowLockWait:
         assert ok is True
         _assert_bound_precedes_update(conn, "UPDATE runs SET status='failed'")
 
-    async def test_watchdog_firing_counter_bounds_before_its_update(self) -> None:
+    async def test_watchdog_firing_counter_bounds_before_its_update(self, monkeypatch: pytest.MonkeyPatch) -> None:
         conn = _PgRecordingConn()
-        with _patched_row_lock_settings():
-            await _record_node_deadline_watchdog_firing(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        await _record_node_deadline_watchdog_firing(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         _assert_bound_precedes_update(
             conn, "node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1"
         )
@@ -242,9 +252,8 @@ class TestWritersBoundTheirRowLockWait:
     ) -> None:
         org_id = uuid.uuid4()
         conn = _PgRecordingConn(org_rows=[(org_id,)])
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock())
-        with _patched_row_lock_settings():
-            result = await stale_run_recovery_sweep(_PgEngine(conn))  # type: ignore[arg-type]
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        result = await stale_run_recovery_sweep(_PgEngine(conn))  # type: ignore[arg-type]
         assert "error" not in result
         _assert_bound_precedes_update(conn, "never_dispatched")
 
@@ -263,11 +272,12 @@ class TestLockTimeoutHandling:
         """The claim 55P03s → returns None (the existing not-claimable outcome),
         leaving the run claimable for dispatcher_reconcile; WARNING, never silent."""
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='running'")
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
+        monkeypatch.setattr(
+            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
+        )
         with (
             patch.object(pe, "_maybe_alert_retry_storm", new=AsyncMock()),
             caplog.at_level("WARNING", logger=_LOGGER),
-            _patched_row_lock_settings(),
         ):
             token = await claim_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is None
@@ -281,22 +291,24 @@ class TestLockTimeoutHandling:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='running'")
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
-        with caplog.at_level("WARNING", logger=_LOGGER), _patched_row_lock_settings():
+        monkeypatch.setattr(
+            pe, "get_settings", lambda: _settings_with_bound(run_claim_stale_seconds=450, saq_run_claim_cap=20)
+        )
+        with caplog.at_level("WARNING", logger=_LOGGER):
             token = await claim_resume_run_async(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert token is None
         assert any("resume_claim_lock_timeout" in message for message in caplog.messages)
 
-    async def test_heartbeat_once_propagates_lock_timeout(self) -> None:
+    async def test_heartbeat_once_propagates_lock_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The heartbeat writer stays DUMB (FAR-1584 style): 55P03 propagates
         to ``_heartbeat_round``, which owns the contract."""
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET heartbeat_at=now()")
-        with _patched_row_lock_settings(), pytest.raises(OperationalError):
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        with pytest.raises(OperationalError):
             await heartbeat_once(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
 
     async def test_heartbeat_round_skips_the_beat_without_counting_a_strike(
         self,
-        monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A 55P03 beat is contention, not a health failure: the round keeps
@@ -340,6 +352,7 @@ class TestLockTimeoutHandling:
 
     async def test_mark_complete_lock_timeout_skips_without_advancing(
         self,
+        monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A 55P03 completion write is SKIPPED (run left ``running`` for the
@@ -347,19 +360,20 @@ class TestLockTimeoutHandling:
         that never committed — and never raise into the SAQ job (whose
         after_process would task_failure a run that genuinely completed)."""
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='complete'")
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
         with (
             patch.object(pe, "_advance_journeys_from_stored_refs", new_callable=AsyncMock) as advance,
             caplog.at_level("WARNING", logger=_LOGGER),
-            _patched_row_lock_settings(),
         ):
             await mark_complete(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         advance.assert_not_awaited()
         assert any("mark_complete lock timeout" in message for message in caplog.messages)
 
-    async def test_mark_complete_non_lock_failure_still_propagates(self) -> None:
+    async def test_mark_complete_non_lock_failure_still_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Only 55P03 is handled; any other DB failure keeps today's visible
         job-failure path."""
         conn = _PgRecordingConn()
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
         original_execute = conn.execute
 
         async def _execute(stmt: object, params: dict[str, Any] | None = None) -> _PgResult:
@@ -371,12 +385,13 @@ class TestLockTimeoutHandling:
         with pytest.raises(RuntimeError, match="connection reset"):
             await mark_complete(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
 
-    async def test_fail_run_terminal_lock_timeout_propagates(self) -> None:
+    async def test_fail_run_terminal_lock_timeout_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The terminal-fail writer FAILS VISIBLY on 55P03 — never a silent
         skip (a skipped terminal-fail would leave the run ``running`` with no
         error code while the caller believes it classified)."""
         conn = _PgRecordingConn(raise_on_contains="UPDATE runs SET status='failed'")
-        with _patched_row_lock_settings(), pytest.raises(OperationalError):
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        with pytest.raises(OperationalError):
             await fail_run_terminal(  # type: ignore[arg-type]
                 _PgEngine(conn),
                 "run-1",
@@ -406,6 +421,7 @@ class TestLockTimeoutHandling:
 
     async def test_watchdog_firing_counter_lock_timeout_is_fail_soft(
         self,
+        monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Best-effort counter: 55P03 lands in the existing fail-soft WARNING —
@@ -413,7 +429,8 @@ class TestLockTimeoutHandling:
         conn = _PgRecordingConn(
             raise_on_contains="node_deadline_watchdog_fired_count = node_deadline_watchdog_fired_count + 1",
         )
-        with caplog.at_level("WARNING", logger=_LOGGER), _patched_row_lock_settings():
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        with caplog.at_level("WARNING", logger=_LOGGER):
             await _record_node_deadline_watchdog_firing(_PgEngine(conn), "run-1", "org-1")  # type: ignore[arg-type]
         assert any("watchdog_firing_record_failed" in message for message in caplog.messages)
 
@@ -428,8 +445,8 @@ class TestLockTimeoutHandling:
         sweep FAILURES), and the next tick re-runs the same UPDATE set."""
         org_id = uuid.uuid4()
         conn = _PgRecordingConn(org_rows=[(org_id,)], raise_on_contains="never_dispatched")
-        monkeypatch.setattr(pe, "get_settings", lambda: MagicMock())
-        with caplog.at_level("ERROR", logger=_LOGGER), _patched_row_lock_settings():
+        monkeypatch.setattr(pe, "get_settings", lambda: _settings_with_bound())
+        with caplog.at_level("ERROR", logger=_LOGGER):
             result = await stale_run_recovery_sweep(_PgEngine(conn))  # type: ignore[arg-type]
         assert "error" in result
         assert str(result["error"]).startswith("sweep_failed")
@@ -455,3 +472,23 @@ class TestPhaseWriterAlreadyBounded:
         assert default_ms is not None
         assert default_ms > pe.PHASE_WRITE_TIMEOUT_SECONDS * 1000
         assert pe.PHASE_WRITE_TIMEOUT_SECONDS == 2.0
+
+
+class TestBoundWorksOnARealConnection:
+    async def test_bound_resolves_the_dialect_from_a_real_asyncconnection(self) -> None:
+        """The review CRITICAL: a REAL ``AsyncConnection`` has NO ``get_bind``
+        (that is the ``AsyncSession`` API), so routing it through the
+        session-annotated shared helper crashed with AttributeError at the
+        FIRST statement of every executor-path write. The bound must resolve
+        the dialect from ``conn.dialect`` and no-op cleanly off Postgres —
+        exercised here against a real aiosqlite connection, no doubles."""
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine("sqlite+aiosqlite://")
+        try:
+            async with engine.connect() as conn:
+                assert isinstance(conn, AsyncConnection)
+                assert not hasattr(conn, "get_bind"), "a real AsyncConnection has no get_bind — do not fake it"
+                await pe._bound_hot_runs_row_lock(conn)  # no crash; sqlite takes the no-op gate
+        finally:
+            await engine.dispose()

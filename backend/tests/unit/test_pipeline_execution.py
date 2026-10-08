@@ -119,13 +119,10 @@ class _AsyncConnRow:
         self._row = row
         self.statements: list[str] = []
 
-    def get_bind(self) -> SimpleNamespace:
-        """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-        Non-postgres double: the helper's documented safe no-op branch. Tests
-        that need the LIVE bound use a postgresql-reporting double.
-        """
-        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound reads
+    # ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``); a
+    # non-postgres double takes the bound's documented no-op branch.
+    dialect = SimpleNamespace(name="sqlite")
 
     async def __aenter__(self) -> Self:
         return self
@@ -210,16 +207,11 @@ class TestClaimRunAsync:
         calls: list[dict[str, object]] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -260,16 +252,11 @@ class TestClaimRunAsync:
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -561,16 +548,11 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -605,16 +587,11 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -643,16 +620,11 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -694,16 +666,11 @@ class TestHeartbeat:
         executed: list[tuple[str, dict[str, Any]]] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -835,16 +802,11 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -905,16 +867,11 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -963,16 +920,11 @@ class TestStaleRunRecoverySweep:
                 return [org_row] if self._is_org else []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1027,16 +979,11 @@ class TestStaleRunRecoverySweep:
         _rows: list[Any] = []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1098,16 +1045,11 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1154,16 +1096,11 @@ class TestStaleRunRecoverySweep:
         org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1204,16 +1141,11 @@ class TestStaleRunRecoverySweep:
         org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1265,16 +1197,11 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1337,16 +1264,11 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1400,16 +1322,11 @@ class TestStaleRunRecoverySweep:
                 return [org_row] if self._is_org else []
 
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self
@@ -1445,16 +1362,11 @@ class TestStaleRunRecoverySweep:
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
-            def get_bind(self) -> SimpleNamespace:
-                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-                The bound writers call ``db.crud.row_lock.set_mutation_row_lock_timeout``,
-                whose shared ``get_dialect_name`` reads ``conn.get_bind()``. A
-                non-postgres double takes the helper's documented safe no-op
-                branch (SQLite/MySQL take no ``lock_timeout``); tests that need
-                the LIVE bound use a postgresql-reporting double.
-                """
-                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
 
             async def __aenter__(self) -> Self:
                 return self

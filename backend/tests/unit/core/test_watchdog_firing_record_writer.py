@@ -45,13 +45,11 @@ class _FakeConn:
     def __init__(self, engine: _FakeEngine) -> None:
         self._engine = engine
 
-    def get_bind(self) -> SimpleNamespace:
-        """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
-
-        Non-postgres double: the helper's documented safe no-op branch, so the
-        recorded statement count stays at two (RLS set_config + increment).
-        """
-        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+    # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound reads
+    # ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``); a
+    # non-postgres double takes the bound's no-op branch, so the recorded
+    # statement count stays at two (RLS set_config + increment).
+    dialect = SimpleNamespace(name="sqlite")
 
     async def __aenter__(self) -> Self:
         return self
