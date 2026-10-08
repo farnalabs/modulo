@@ -1989,3 +1989,143 @@ class TestLockTimeoutHandling:
             pytest.raises(RuntimeError, match="connection lost"),
         ):
             await dispatch.dispatch_run(RUN_ID, ORG_ID)
+
+
+class TestLockTimeoutWrappersCancellationAndPassthrough:
+    """FAR-1584: the two single-session wrappers and ``dispatch_run`` itself.
+
+    ``asyncio.CancelledError`` inherits from ``BaseException`` (not
+    ``Exception``), so every handler re-raises it UNCONDITIONALLY — a cancelled
+    dispatch must never be mistaken for a handled lock timeout, and the
+    ``finally`` still closes the session. The targeted handler must equally
+    keep re-raising every NON-lock failure: the optimisation is scoped to
+    55P03 and nothing broader.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mark_enqueue_failed_session_reraises_cancelled_error(self) -> None:
+        with (
+            _rls_patch(),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_mark_enqueue_failed",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch._mark_enqueue_failed_session(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+    @pytest.mark.asyncio
+    async def test_mark_enqueue_failed_session_reraises_non_lock_error(self) -> None:
+        with (
+            _rls_patch(),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_mark_enqueue_failed",
+                new_callable=AsyncMock,
+                side_effect=_non_lock_db_error(),
+            ),
+            patch.object(dispatch, "_expire_webhook_dedup", new_callable=AsyncMock),
+            pytest.raises(OperationalError),
+        ):
+            await dispatch._mark_enqueue_failed_session(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID))
+
+    @pytest.mark.asyncio
+    async def test_record_saq_job_session_reraises_cancelled_error(self) -> None:
+        with (
+            _rls_patch(),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_saq_job",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch._record_saq_job_session(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID), JOB_ID)
+
+    @pytest.mark.asyncio
+    async def test_record_saq_job_session_reraises_non_lock_error(self) -> None:
+        with (
+            _rls_patch(),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_saq_job",
+                new_callable=AsyncMock,
+                side_effect=_non_lock_db_error(),
+            ),
+            pytest.raises(OperationalError),
+        ):
+            await dispatch._record_saq_job_session(uuid.UUID(RUN_ID), uuid.UUID(ORG_ID), JOB_ID)
+
+    @pytest.mark.asyncio
+    async def test_dispatch_run_admission_reraises_cancelled_error(self) -> None:
+        """A cancellation inside the admission transaction propagates — it is
+        not a bounded-lock expiry, and no enqueue attempt is made."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(
+                dispatch,
+                "_org_capacity_deferred",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            _enqueue_patch() as enqueue,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+        enqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_run_admission_reraises_non_lock_error(self) -> None:
+        """A NON-lock DB failure in the admission transaction still propagates:
+        the deferred-return branch is scoped to 55P03 only, never to every
+        database error."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(
+                dispatch,
+                "_org_capacity_deferred",
+                new_callable=AsyncMock,
+                side_effect=_non_lock_db_error(),
+            ),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            _enqueue_patch() as enqueue,
+            pytest.raises(OperationalError),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+        enqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_run_dispatched_write_reraises_cancelled_error(self) -> None:
+        """A cancellation while writing dispatched_at propagates — the run must
+        be reported as not-dispatched by the caller's cancellation handling,
+        and the queue is never touched."""
+        with (
+            patch.object(dispatch, "get_settings", return_value=_make_settings()),
+            _rls_patch(),
+            patch.object(dispatch, "_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_org_capacity_deferred", new_callable=AsyncMock, return_value=False),
+            patch.object(dispatch, "_open_session", return_value=_MockSession()),
+            patch.object(
+                dispatch,
+                "_record_dispatched",
+                new_callable=AsyncMock,
+                side_effect=asyncio.CancelledError(),
+            ),
+            _enqueue_patch() as enqueue,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dispatch.dispatch_run(RUN_ID, ORG_ID)
+        enqueue.assert_not_awaited()
