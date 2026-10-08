@@ -8,6 +8,7 @@ code:
   - backend/src/modulo/api/routes/error_forwarder_config.py
   - backend/src/modulo/api/routes/admin_monitor_config.py
   - backend/src/modulo/api/routes/error_notification_rules.py
+  - backend/src/modulo/api/models/problem.py
   - backend/src/modulo/core/error_tracking/
   - backend/src/modulo/otel_bridge/
   - backend/src/modulo/db/crud/error_tracking.py
@@ -19,8 +20,10 @@ code:
   - frontend/src/views/SettingsMonitorConfigView.vue
   - frontend/src/views/AdminErrorsView.vue
   - frontend/src/views/AdminErrorDetailView.vue
+  - frontend/src/lib/api/formatError.ts
 unit-tests:
   - backend/tests/unit/api/test_observability_routes.py
+  - backend/tests/unit/api/models/test_problem.py
   - backend/tests/unit/api/test_error_forwarder_config.py
   - backend/tests/unit/api/test_admin_monitor_config.py
   - backend/tests/unit/api/test_error_notification_rules_route.py
@@ -119,6 +122,20 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
       parent/child wiring), connector callbacks stamp no credential fields in
       span attributes, and a telemetry-disabled provider (no span processor)
       exports no spans at all
+- [x] HTTP errors carry route-specific RFC 9457 problem types (FAR-1545): the
+      wire `type` becomes `urn:problem:modulo:<code>` for route error codes that
+      name a genuinely distinct problem (`invalid_token`, `token_mismatch`,
+      `already_configured`, `encryption_config_error`, `encryption_error`,
+      `update_failed`) while the `code` extension member keeps the same value;
+      the code→type map is deliberately sparse per RFC §4 (a plain resource 404
+      and `database_error`/`conflict`/`internal_error`/`migration_required`
+      stay status-derived — same type, so no minting), each type's `status`
+      equals the HTTP status the raising route declares (§3.1.2) and carries a
+      short per-type title (§3.1.3), and the frontend error formatter mirrors
+      the per-type titles so a surfaced problem title matches the backend
+      (`backend/src/modulo/api/models/problem.py`,
+      `backend/tests/unit/api/models/test_problem.py`,
+      `frontend/src/lib/api/formatError.ts`)
 
 ## Known Gaps
 
@@ -129,6 +146,14 @@ from git history when re-enabling. See FAR-547 (error forwarders) and FAR-543
   unit/BDD-verified at the API layer only.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1545 sub-surface (route-specific RFC 9457 problem types, merged in PR
+  #1375): the specific `urn:problem:modulo:<code>` problem types shipped while
+  neither the manifest `feat-observability` registry nor this tracker mentioned
+  the error-envelope contract. Added the checked behaviour line plus the
+  `api/models/problem.py` / `formatError.ts` / `test_problem.py` citations, and
+  recorded the deliberate no-mint guards (status-derived generics) so the sparse
+  code→type map is auditable.
 - 2026-10-07: **FAR-1556 follow-up to FAR-1547 (PR #1353)** — registered the
   instance-errors surface the feature PR's allowlist excluded: the three
   system-admin sentinel-partition read routes (`GET /api/v1/errors/instance`,

@@ -12,6 +12,9 @@ code:
   - backend/src/modulo/core/trigger_engine/slack_app_mention.py
   - backend/src/modulo/core/trigger_streak.py
   - backend/src/modulo/core/cron_helpers.py
+  - backend/src/modulo/api/team_scope.py
+  - backend/src/modulo/db/crud/team_scope.py
+  - backend/src/modulo/db/crud/row_lock.py
   - backend/src/modulo/db/models/trigger.py
   - backend/src/modulo/db/models/trigger_event.py
   - frontend/src/views/SettingsTriggersView.vue
@@ -30,6 +33,9 @@ unit-tests:
   - backend/tests/unit/api/test_webhooks_endpoint.py
   - backend/tests/unit/api/test_webhook_replay.py
   - backend/tests/unit/api/test_trigger_config_secrets.py
+  - backend/tests/unit/api/test_team_scope_dependencies.py
+  - backend/tests/unit/api/test_triggers_routes_coverage.py
+  - backend/tests/integration/test_trigger_run_team_gate.py
   - frontend/src/__tests__/SettingsTriggersView.spec.ts
 bdd:
   - backend/tests/bdd/features/triggers/manual.feature
@@ -134,6 +140,29 @@ rate-limited by the `TriggerEngine`.
       wording appears only when the backend reports the deactivated state
       (FAR-1405; `SettingsTriggersView.vue`,
       `frontend/src/__tests__/SettingsTriggersView.spec.ts`)
+- [x] Trigger mutation against a team-private pipeline enforces the team gate
+      (FAR-1513): access derives from the trigger's owning pipeline (triggers
+      carry no team columns of their own — same derivation as runs, ADR 038) via
+      `resolve_trigger_team_scope`, which INNER JOINs pipelines so RLS parity is
+      free (a non-member of a team-private pipeline sees the trigger as absent →
+      404, never a boundary/enumeration signal). The single `evaluate_team_gate`
+      matrix (shared by the REST `require_team_membership_or_admin` dependency
+      and the MCP per-row trigger guards) evaluates absent row → 404, org admin
+      → allowed, org/team-private row → allowed, a team-scoped API-key bound to
+      the wrong team → 403 boundary, and a user principal with no membership row
+      in the owning team → 403 membership (an unset identity denies — it cannot
+      prove membership, matching the RLS unknown-user posture). The check is
+      re-run INSIDE the mutation transaction with the row FOR UPDATE (no TOCTOU)
+      and a bounded `set_mutation_row_lock_timeout` row-lock wait. A soft-deleted
+      PIPELINE denies; a soft-deleted TRIGGER still resolves so
+      `POST /triggers/{id}/restore` reaches the gate — a team-private trigger
+      must not become restorable by deletion (`api/team_scope.py`
+      `evaluate_team_gate` / `resolve_trigger_team_scope`,
+      `db/crud/team_scope.py`, `db/crud/row_lock.py`;
+      `unit-tests: test_team_scope_dependencies.py,
+      test_triggers_routes_coverage.py`,
+      `integration: test_trigger_run_team_gate.py`,
+      `bdd: features/teams/team_pipeline_visibility.feature`)
 
 ## Known Gaps
 
@@ -142,6 +171,16 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1513 sub-surface (team-gate trigger create/update/delete/toggle/restore
+  against a team-private pipeline, merged in PR #1376): the trigger team-gate
+  shipped with NO coverage in either product-map layer — the manifest
+  `feat-triggers` registry and this tracker both predated it. Added the checked
+  behaviour line (owning-pipeline derivation, the single `evaluate_team_gate`
+  matrix, the in-transaction FOR UPDATE re-check, the restore-resolution rule)
+  plus the `api/team_scope.py` / `db/crud/team_scope.py` / `db/crud/row_lock.py`
+  code citations and the unit/integration/BDD citations.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-03: **Improve Architecture product-map walk** – closed the
   `feat-triggers` tracker lag left by FAR-1387 (cron no-delivery streak
   engine, merged 2026-09-26) and FAR-1405 (no-delivery streak badge,

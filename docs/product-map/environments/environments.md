@@ -83,15 +83,37 @@ into the Runners page as redirects.)
       (`/admin/runners/concurrency`); the legacy `/environment-profiles*` and
       `/admin/environments` deep links redirect to the profiles tab – testids
       enumerated in the product map
+- [x] The environment-profile create/edit form offers the `kubernetes` provider
+      as a first-class option (FAR-1559): the provider select renders the three
+      manually-creatable provider types — `local_docker`, `e2b` and `kubernetes`
+      (labelled "External Runner (Kubernetes)") — while `local` and
+      `runner_docker` stay system-seeded and are deliberately NOT offered for
+      manual creation; the form drives the single backend `provider_type`
+      vocabulary (`PROVIDER_TYPES` = `{local_docker, e2b, local, runner_docker,
+      kubernetes}`, FAR-595) with the provider-is-required validation and tier
+      hint preserved (`frontend/src/views/environment-profiles/
+      EnvironmentProfileForm.vue`, `frontend/src/__tests__/environment-profiles/
+      EnvironmentProfileForm.spec.ts`, `backend/src/modulo/core/runtime_provider/
+      k8s.py`)
 
 ## Known Gaps
 
-- Provider catalogue is fixed at `local_docker` + `e2b`; hub registration is
-  env-driven and no plugin surface exists for third-party runtime providers.
+- Provider catalogue is fixed at `local_docker` + `e2b` + `kubernetes` (the
+  `kubernetes` provider is env-gated on the `kubernetes-asyncio` SDK, FAR-1051);
+  hub registration is env-driven and no plugin surface exists for third-party
+  runtime providers.
 - The sandbox test endpoint is contract-level (echo/exec only); it does not run the
   actual agent graph inside the workspace before release.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1559 sub-surface (kubernetes provider type in the environment-profile
+  form, merged in PR #1404): the form shipped the `kubernetes` provider while
+  the manifest `feat-environments` registry and this tracker still listed the
+  provider catalogue as "local_docker + e2b" only. Added the checked behaviour
+  line (the three manually-creatable provider types, `local`/`runner_docker`
+  excluded) and corrected the stale Known Gap to name the env-gated `kubernetes`
+  provider instead of asserting a closed two-provider catalogue.
 - 2026-09-12: **product-map review pass**: registered the shared
   plan-entitlement gate surface (`components/FeatureGate.vue` + `LockIcon.vue` static
   testids `feature-gate*` / `lock-icon`) in the manifest `elements:` inventory for `/admin/runners/concurrency`, `/admin/runners/profiles`
