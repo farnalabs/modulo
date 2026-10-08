@@ -5,7 +5,11 @@ decision), ``core.pipeline_engine.node_runner`` (the marker-savepoint
 failure classification) and ``api.db_error_handling`` (the ``55P03`` lock
 timeout -> 409 mapping) all consume :func:`sqlstate_of` and the vocabularies
 below — previously two forked copies existed (``crud.run._sqlstate_of`` and
-``node_runner._MARKER_TXN_ABORTING_SQLSTATES``). Deliberately leaf (imports
+``node_runner._MARKER_TXN_ABORTING_SQLSTATES``). :func:`is_row_lock_timeout`
+(``55P03``) is here for the same reason: ``core.dispatch`` and
+``core.run_admission`` both gate the hot ``runs`` row's lock bound on it, and
+two byte-identical private copies is exactly the drift this module prevents.
+Deliberately leaf (imports
 nothing from modulo) so both consumers import it without a cycle; the model
 module (:mod:`modulo.db.models.run_node_outputs`) hosts other shared
 constants, but this is DB-layer, not schema — a sibling leaf keeps the
@@ -32,6 +36,7 @@ __all__ = [
     "LOCK_NOT_AVAILABLE_SQLSTATE",
     "MARKER_TXN_ABORTING_SQLSTATES",
     "SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES",
+    "is_row_lock_timeout",
     "sqlstate_of",
 ]
 
@@ -153,3 +158,27 @@ def sqlstate_of(exc: BaseException) -> str | None:
         context_or_cause = (getattr(node, "__context__", None), getattr(node, "__cause__", None))
         queue.extend(child for child in context_or_cause if child is not None)
     return fallback
+
+
+def is_row_lock_timeout(exc: BaseException) -> bool:
+    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
+
+    The single definition shared by both sweeps of the hot ``runs`` row:
+    the dispatch path (``core.dispatch``) and the periodic reconciliation
+    sweeps (``core.run_admission``). Every write there runs under the
+    transaction-scoped ``lock_timeout`` set by
+    ``db.crud.row_lock.set_mutation_row_lock_timeout`` (FAR-1584 / FAR-1592),
+    so a contended row lock can wait at most
+    ``Settings.mutation_row_lock_timeout_ms`` — never silently past the Fly
+    HAProxy 30-minute session window (the unbounded wait that got prod
+    connections culled mid-operation; FAR-1524 O11). Deliberately one
+    predicate: a forked copy in each sweep is how a future bound change would
+    drift out of sync.
+
+    :func:`sqlstate_of` walks the whole chain (``.orig``/``__cause__``/
+    ``__context__``, incl. savepoint-rollback wrappers), so both the
+    raw-driver and SQLAlchemy-wrapped shapes are recognised — dialect-tolerant,
+    no exception-class import. Any OTHER failure is not a lock timeout and must
+    keep propagating.
+    """
+    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE

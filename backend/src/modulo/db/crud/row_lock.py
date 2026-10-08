@@ -1,4 +1,4 @@
-"""Mutation row-lock bound — shared by pipelines and triggers route slices.
+"""Mutation row-lock bound — shared by route slices and core sweeps.
 
 Idle-in-transaction lock waits are bounded at the application level with a
 transaction-scoped ``lock_timeout`` (FAR-1313 / FAR-1279). The helper lives in
@@ -10,13 +10,13 @@ blocking finding and the cross-route edge is exactly the cycle this avoids.
 from __future__ import annotations
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from modulo.db.crud.run import get_dialect_name
 from modulo.settings import get_settings
 
 
-async def set_mutation_row_lock_timeout(session: AsyncSession) -> None:
+async def set_mutation_row_lock_timeout(session: AsyncSession | AsyncConnection) -> None:
     """Bound every row-lock wait taken for the REST of the current transaction.
 
     FAR-1313: the bound used to be set only inside
@@ -37,9 +37,10 @@ async def set_mutation_row_lock_timeout(session: AsyncSession) -> None:
     bounded by its own copy of this statement - see
     ``db.crud.pipeline._read_clone_source_snapshot``).
 
-    POSTGRES-ONLY (the shared ``db.crud.run.get_dialect_name`` dialect gate -
-    the same helper ``core.hitl_manager.gate_coalescing`` and ``db/rls.py``
-    use, rather than another local bind dance): SQLite has no ``set_config``,
+    POSTGRES-ONLY (the shared dialect gate in :func:`_dialect_name`, which
+    reaches the same ``db.crud.run.get_dialect_name`` helper
+    ``core.hitl_manager.gate_coalescing`` and ``db/rls.py`` use, rather than
+    another local bind dance): SQLite has no ``set_config``,
     and the unit fixtures run on SQLite mocks. A bind that does not positively
     report ``postgresql`` skips the statement: the lock bound this sets is a
     safety improvement, never a correctness requirement, so the safe direction
@@ -47,10 +48,33 @@ async def set_mutation_row_lock_timeout(session: AsyncSession) -> None:
 
     The bound itself is ``Settings.mutation_row_lock_timeout_ms`` (FAR-1279):
     read at the call site so an operator can relax it without a code change.
+
+    Accepts an ``AsyncConnection`` as well as an ``AsyncSession`` (FAR-1592):
+    the periodic sweeps in ``core.run_admission`` drive their per-org
+    transaction off ``engine.connect()``, not a session, and a sweep's
+    multi-row ``UPDATE runs`` is exactly the kind of hot-table write this
+    bound exists for. The dialect gate resolves through the connection's own
+    ``dialect`` attribute for that shape — ``AsyncConnection`` does not proxy
+    ``get_bind()`` (SQLAlchemy generates proxies for the listed ATTRIBUTES
+    only, and ``get_bind`` is a method), while ``AsyncSession`` does.
     """
-    if await get_dialect_name(session) == "postgresql":
+    if await _dialect_name(session) == "postgresql":
         lock_timeout_ms = get_settings().mutation_row_lock_timeout_ms
         await session.execute(
             text("SELECT set_config('lock_timeout', :val, true)"),
             {"val": f"{lock_timeout_ms}ms"},
         )
+
+
+async def _dialect_name(session: AsyncSession | AsyncConnection) -> str:
+    """Dialect name of *session* or *connection* (the FAR-1592 sweep seam).
+
+    Mirrors ``db.crud.run.get_dialect_name`` for the session shape (same
+    coroutine-tolerant bind dance) and reads the proxied ``dialect`` attribute
+    for the connection shape, where ``get_bind()`` does not exist. The caller
+    only ever asks "is this postgresql?", so both paths answer the same
+    question from the same underlying ``Engine.dialect``.
+    """
+    if isinstance(session, AsyncConnection):
+        return session.dialect.name
+    return await get_dialect_name(session)
