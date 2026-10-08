@@ -396,7 +396,7 @@ class TestScopeChangeBindingGuard:
     @staticmethod
     def _install_session(
         *,
-        profile: MagicMock,
+        profile: MagicMock | None,
         bound: list[MagicMock],
         queries: list[str],
     ) -> None:
@@ -435,7 +435,7 @@ class TestScopeChangeBindingGuard:
         client: TestClient,
         body: dict[str, Any],
         *,
-        profile: MagicMock,
+        profile: MagicMock | None,
         bound: list[MagicMock],
         queries: list[str],
     ) -> tuple[Any, MagicMock]:
@@ -566,6 +566,29 @@ class TestScopeChangeBindingGuard:
         # The guard does not refuse it (org arm), and the CRUD stub accepts it.
         assert resp.status_code == 200, resp.text
         mock_update.assert_called_once()
+        assert not any("from pipelines" in q.lower() for q in queries), queries
+
+    def test_scope_change_on_a_missing_profile_defers_to_the_update_404(self, client: TestClient) -> None:
+        """A scope change for a profile that does not exist is not the guard's
+        job: it returns early and the update path raises the 404.
+
+        The guard only refuses a scope change that would STRAND an existing
+        binding; when the profile row is absent there is nothing to strand, so
+        it must not raise the binding-mismatch 422 (nor run the team-blind
+        pipeline scan) — the following update produces the canonical 404.
+        """
+        queries: list[str] = []
+        resp, mock_update = self._put(
+            client,
+            {"visibility": "team", "owner_team_id": str(self._TEAM_A)},
+            profile=None,
+            bound=[self._pipeline_row(self._TEAM_B)],
+            queries=queries,
+        )
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == "Environment profile not found"
+        mock_update.assert_called_once()
+        # Early return BEFORE the binding scan: the pipelines query never ran.
         assert not any("from pipelines" in q.lower() for q in queries), queries
 
 
