@@ -18,6 +18,8 @@ import pytest
 from sqlalchemy.dialects import postgresql, sqlite
 
 from modulo.core.analytics.builder import (
+    _DIMENSION_COLUMNS,
+    _DIMENSION_KEY_ATTR,
     CAPACITY_ERROR_CODES,
     CONCURRENCY_MAX_RAW_ROWS,
     HOUR_GROUPBY_MAX_RANGE_DAYS,
@@ -40,6 +42,7 @@ from modulo.core.analytics.builder import (
     resolve_group_by,
     to_utc_aware,
 )
+from modulo.db.models.run_daily_facts import RunDailyFact
 
 _ORG = uuid.UUID("11111111-1111-4111-8111-111111111111")
 
@@ -1700,3 +1703,70 @@ class TestOngoingTriggerType:
         # The value is a bound param, never interpolated into the SQL.
         assert "ongoing" not in sql.lower()
         assert any(str(v) == "ongoing" for v in params.values()), f"expected an 'ongoing' bound param, got {params}"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 / ADR-042 — execution_origin as an analytics dimension
+# ---------------------------------------------------------------------------
+
+
+class TestExecutionOriginDimension:
+    """A dispatched run must be separable in AGGREGATE, not just run by run.
+
+    ADR-042's conformance criterion applies to the analytics surface the same
+    way it applies to the REST/MCP ones: a series that cannot split dispatched
+    runs from Modulo-executed ones reads the two populations as one."""
+
+    def test_dimension_parses_from_its_wire_value(self) -> None:
+        """``?dimension=execution_origin`` must construct — FastAPI and the MCP
+        ``query_analytics`` tool both coerce the query string through this enum,
+        so an unmapped member would 422 / ``invalid_params`` rather than query."""
+        assert AnalyticsDimension("execution_origin") is AnalyticsDimension.EXECUTION_ORIGIN
+
+    def test_dimension_maps_to_the_fact_column(self) -> None:
+        """The allowlist dict is the ONLY path from a dimension to SQL — an
+        unmapped member raises KeyError at query time, so both maps must carry
+        it (column to GROUP BY, attribute to read the bucket key off)."""
+        assert _DIMENSION_COLUMNS[AnalyticsDimension.EXECUTION_ORIGIN] is RunDailyFact.execution_origin
+        assert _DIMENSION_KEY_ATTR[AnalyticsDimension.EXECUTION_ORIGIN] == "execution_origin"
+
+    def test_query_selects_the_raw_key_for_bucket_rows(self) -> None:
+        """``bucket_rows`` resolves each bucket's key from a SELECTED column —
+        present only in GROUP BY it never reaches the row and every bucket
+        collapses under key=None (the PR #740 round-3 regression)."""
+        stmt, _ = build_facts_query(_query(dimension=AnalyticsDimension.EXECUTION_ORIGIN))
+        keys = {k.name for k in stmt.selected_columns}
+        assert "execution_origin" in keys
+        # No snapshot label exists for the origin column — raw key only.
+        assert "key_label" not in keys
+
+    def test_dispatched_and_executed_runs_bucket_separately(self) -> None:
+        rows = [
+            _row(date(2026, 8, 5), count=2, execution_origin="dispatched"),
+            _row(date(2026, 8, 5), count=5, execution_origin=None),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.EXECUTION_ORIGIN,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        by_key = {b["key"]: b["count"] for b in out}
+        # Pre-column / Modulo-executed rows read None — the two classes must
+        # never merge into a single bucket.
+        assert by_key == {"dispatched": 2, None: 5}
+
+    def test_null_origin_bucket_does_not_break_the_sort(self) -> None:
+        """A NULL key must coexist with str keys through the final sort —
+        mixed key types are exactly what the normalised ``str | None`` bucket
+        key guards."""
+        out = bucket_rows(
+            [_row(date(2026, 8, 5), count=1, execution_origin=None)],
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=AnalyticsDimension.EXECUTION_ORIGIN,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["key"] is None
+        assert out[0]["count"] == 1

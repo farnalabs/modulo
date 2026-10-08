@@ -518,6 +518,38 @@ describe('DashboardView', () => {
     expect(wrapper.findAll('a[href="/runs/run-4"]').length).toBe(1)
   })
 
+  // FAR-1141: the backend's `_load_recent_runs` returns execution_origin, so a
+  // dispatched run must not read indistinguishably from one Modulo executed
+  // itself on the dashboard's claim-ready run surface.
+  it('badges only dispatched recent runs with the provenance badge', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/dashboard/summary') {
+        return Promise.resolve({
+          data: {
+            ...mockSummaryData,
+            recent_runs: [
+              { ...mockSummaryData.recent_runs[0], execution_origin: 'dispatched' },
+              { ...mockSummaryData.recent_runs[1], execution_origin: null },
+            ],
+          },
+          error: undefined,
+        })
+      }
+      if (url === '/api/v1/admin/feature-flags') return Promise.resolve({ data: mockFlagData, error: undefined })
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+
+    const badges = wrapper.findAll('[data-testid^="dashboard-dispatched-"]')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].attributes('data-testid')).toBe('dashboard-dispatched-run-1')
+    expect(badges[0].text()).toBe('Dispatched')
+    expect(wrapper.find('[data-testid="dashboard-dispatched-run-2"]').exists()).toBe(false)
+  })
+
   it('shows no eval data for null pass rate', async () => {
     setupEmptyMocks()
     const wrapper = mount(DashboardView)

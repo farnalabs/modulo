@@ -117,6 +117,17 @@ async def test_trigger_run_invalid_id_raises(bk_runner):
         await bk_runner.trigger_run(pipeline_id="bogus")
 
 
+@respx.mock
+async def test_trigger_run_unusable_response_fails_loud(bk_runner):
+    """A trigger response with no build number must fail loud — never an id
+    get_run_status would reject while the build already runs."""
+    respx.post(f"{_BUILDKITE_API}/organizations/my-org/pipelines/my-pipeline/builds").mock(
+        return_value=httpx.Response(201, json={"state": "scheduled"}),
+    )
+    with pytest.raises(ValueError, match="did not yield a consumable run id"):
+        await bk_runner.trigger_run(pipeline_id="my-org/my-pipeline")
+
+
 # ---------------------------------------------------------------------------
 # get_run_status
 # ---------------------------------------------------------------------------
@@ -142,7 +153,7 @@ async def test_get_run_status_success(bk_runner):
     )
     run = await bk_runner.get_run_status("my-org/my-pipeline/42")
     assert run.status == CIRunStatus.SUCCESS
-    assert run.id == "42"
+    assert run.id == "my-org/my-pipeline/42"
     assert run.pipeline_id == "my-pipeline"
 
 

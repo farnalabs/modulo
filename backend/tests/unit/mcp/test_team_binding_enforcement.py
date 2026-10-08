@@ -276,3 +276,50 @@ class TestBindConnectorToNodeEnforcement:
 
         assert result.get("status") == "bound"
         assert result.get("error") is None
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.connector_instance.get_connector_instance")
+    async def test_bound_response_echoes_operation_and_dispatch_action(
+        self,
+        mock_get_connector: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-1141: the bind response echoes the verb/action the caller named."""
+        pipeline_id = uuid.uuid4()
+        node_id = uuid.uuid4()
+        connector_id = uuid.uuid4()
+        connector = MagicMock(
+            id=connector_id,
+            organisation_id=_ORG_ID,
+            name="ci",
+            visibility="org",
+            owner_team_id=None,
+            connector_type_id="github_actions_ci",
+        )
+        mock_get_connector.return_value = connector
+
+        session = AsyncMock()
+        pipeline = MagicMock(
+            id=pipeline_id,
+            owner_team_id=None,
+            graph_nodes_json=[{"id": str(node_id), "node_type": "dispatch"}],
+        )
+        execute_result = MagicMock()
+        execute_result.scalar_one_or_none.return_value = pipeline
+        session.execute = AsyncMock(return_value=execute_result)
+        mock_session.return_value.__aenter__.return_value = session
+
+        result = await bind_connector_to_node(
+            pipeline_id=str(pipeline_id),
+            node_id=str(node_id),
+            connector_type="github_actions_ci",
+            connector_instance_id=str(connector_id),
+            operation="dispatch",
+            dispatch_action="get_run_status",
+        )
+
+        assert result["status"] == "bound"
+        assert result["operation"] == "dispatch"
+        assert result["dispatch_action"] == "get_run_status"

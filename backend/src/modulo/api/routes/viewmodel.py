@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,9 +94,28 @@ class RunSummary(BaseModel):
     pipeline_id: uuid.UUID
     status: str
     trigger_type: str
+    # FAR-1141 / ADR-042: ``/viewmodel/current`` is a claim-ready run surface, so
+    # it carries the run's execution origin ('dispatched' / NULL) exactly like the
+    # REST list and detail. Additive + nullable: pre-column rows and runs Modulo
+    # executed itself read NULL.
+    execution_origin: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_validator("execution_origin", mode="before")
+    @classmethod
+    def _coerce_execution_origin(cls, value: Any) -> str | None:
+        """Degrade a non-string stand-in to ``None`` (FAR-1141).
+
+        Mirrors ``api.routes.runs._optional_str``: unit tests hand this model a
+        ``MagicMock`` run whose unset attribute resolves to a mock, which must
+        validate as NULL instead of failing response validation. A deferred
+        import keeps the route->route edge out of module import order.
+        """
+        from modulo.api.routes.runs import _optional_str
+
+        return _optional_str(value)
 
 
 class PendingHitlReview(BaseModel):

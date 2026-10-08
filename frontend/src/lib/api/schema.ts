@@ -10412,7 +10412,7 @@ export interface components {
          * AnalyticsDimension
          * @enum {string}
          */
-        AnalyticsDimension: "trigger_type" | "trigger_id" | "status" | "pipeline" | "folder" | "team" | "error_code";
+        AnalyticsDimension: "trigger_type" | "trigger_id" | "status" | "pipeline" | "folder" | "team" | "error_code" | "execution_origin";
         /**
          * AnalyticsExportItem
          * @description One raw fact row — all fact columns, serialised to JSON-safe values.
@@ -10500,6 +10500,8 @@ export interface components {
             dispatch_phase_entered_at?: string | null;
             /** Node Deadline Watchdog Fired Count */
             node_deadline_watchdog_fired_count?: number | null;
+            /** Execution Origin */
+            execution_origin?: string | null;
             /** Created At */
             created_at: string;
         };
@@ -11553,6 +11555,18 @@ export interface components {
              * Format: uuid
              */
             instance_id: string;
+            /**
+             * Operation
+             * @default query
+             * @enum {string}
+             */
+            operation: "query" | "write" | "dispatch";
+            /**
+             * Dispatch Action
+             * @default trigger_run
+             * @enum {string}
+             */
+            dispatch_action: "trigger_run" | "get_run_status" | "get_run_logs" | "list_runs";
         };
         /** ConnectorCreate */
         ConnectorCreate: {
@@ -13971,6 +13985,8 @@ export interface components {
             completed_at?: string | null;
             /** Provenance */
             provenance?: string | null;
+            /** Execution Origin */
+            execution_origin?: string | null;
         };
         /**
          * JourneySelfReportRequest
@@ -15834,7 +15850,7 @@ export interface components {
              * @default agent
              * @enum {string}
              */
-            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join";
+            node_type: "agent" | "manual" | "composite" | "sandbox_agent" | "router" | "hitl" | "join" | "dispatch";
             /** Agent Id */
             agent_id?: string | null;
             position: components["schemas"]["GraphPosition"];
@@ -16028,6 +16044,17 @@ export interface components {
             workspace_inputs?: {
                 [key: string]: unknown;
             }[] | null;
+            /**
+             * Await Completion
+             * @description dispatch nodes only, dispatch_action='trigger_run': after firing the job ONCE, poll get_run_status until the substrate reports a terminal status. False (default) = fire-and-forget: the node completes as soon as the job ref returns. Only meaningful with dispatch_action='trigger_run'.
+             * @default false
+             */
+            await_completion: boolean;
+            /**
+             * Wait Timeout
+             * @description dispatch nodes only: seconds to wait for a terminal substrate status when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry raises the terminal dispatch.wait_timeout error — never retried, because a retry would fire a second job on the customer's substrate. Keep it below the node's timeout_seconds so this error (not the node deadline) is what fires.
+             */
+            wait_timeout?: number | null;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {
@@ -17584,6 +17611,8 @@ export interface components {
             } | null;
             /** Trigger Type */
             trigger_type?: string | null;
+            /** Execution Origin */
+            execution_origin?: string | null;
             /** Trigger Actor */
             trigger_actor?: string | null;
             /** Trigger Id */
@@ -17627,6 +17656,8 @@ export interface components {
             status: string;
             /** Trigger Type */
             trigger_type: string;
+            /** Execution Origin */
+            execution_origin?: string | null;
             /**
              * Created At
              * Format: date-time

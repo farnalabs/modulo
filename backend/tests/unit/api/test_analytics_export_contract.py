@@ -29,6 +29,12 @@ _INTERNAL_FACT_COLUMNS = frozenset({"id", "organisation_id", "updated_at"})
 # this guard.
 _PROVENANCE_COLUMNS = frozenset({"trigger_id", "dispatch_phase", "dispatch_phase_entered_at"})
 
+# FAR-1141 / ADR-042: run execution origin. An export is a claim-ready run
+# surface, so the raw facts must carry provenance exactly like the bucketed
+# series, the runs API and the MCP tools do — pinned here so a future
+# enrichment cannot drop it from either list.
+_RUN_PROVENANCE_COLUMNS = frozenset({"execution_origin"})
+
 
 class TestExportColumnContract:
     def test_every_fact_column_is_exported(self) -> None:
@@ -54,3 +60,13 @@ class TestExportColumnContract:
         exported = set(EXPORT_COLUMN_NAMES)
         assert exported >= _PROVENANCE_COLUMNS
         assert set(AnalyticsExportItem.model_fields) >= _PROVENANCE_COLUMNS
+
+    def test_run_execution_origin_is_exported(self) -> None:
+        """FAR-1141 / ADR-042: the raw-facts export must be provenance-typed.
+
+        Without it an operator exporting runs to audit them could not tell a
+        dispatched run from one Modulo executed — the exact conformance gap the
+        runs list, run detail, MCP tools and analytics dimension already close.
+        """
+        assert set(EXPORT_COLUMN_NAMES) >= _RUN_PROVENANCE_COLUMNS
+        assert set(AnalyticsExportItem.model_fields) >= _RUN_PROVENANCE_COLUMNS

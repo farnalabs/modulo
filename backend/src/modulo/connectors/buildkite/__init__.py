@@ -73,16 +73,32 @@ class BuildkiteConnector(ConnectorBase):
     def _client(self) -> httpx.AsyncClient:
         return pinned_async_client_sync(_BUILDKITE_API, base_url=_BUILDKITE_API, headers=self._headers(), timeout=30)
 
-    def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+    def _parse_run(self, raw: dict[str, Any], org: str = "", pipeline_slug: str = "") -> CIRun:
+        """Parse a build payload into a :class:`CIRun`.
+
+        The id is qualified into ``org/pipeline_slug/build_number`` — the exact
+        form ``get_run_status``/``get_run_logs`` consume (see the run-id
+        contract on ``CIRunnerBase``). ``org`` comes from the caller (the build
+        payload carries no organisation); the slug prefers the payload and
+        falls back to the caller's. A payload with neither yields ``""``.
+        """
         raw_state = raw.get("state", "")
         status = _STATUS_MAP.get(raw_state, CIRunStatus.UNKNOWN)
         pipeline = raw.get("pipeline")
+        payload_slug = pipeline.get("slug", "") if isinstance(pipeline, dict) else ""
+        slug = payload_slug or pipeline_slug
         creator = raw.get("creator")
         number = raw.get("number", "")
+        if number is None or number == "":
+            run_id = ""
+        elif org and slug:
+            run_id = f"{org}/{slug}/{number}"
+        else:
+            run_id = str(number)
         web_url = raw.get("web_url", "")
         return CIRun(
-            id=str(number),
-            pipeline_id=pipeline.get("slug", "") if isinstance(pipeline, dict) else "",
+            id=run_id,
+            pipeline_id=payload_slug,
             status=status,
             url=web_url,
             branch=raw.get("branch", ""),
@@ -204,7 +220,17 @@ class BuildkiteConnector(ConnectorBase):
             )
             r.raise_for_status()
             data: dict[str, Any] = r.json()
-            return self._parse_run(data)
+            run = self._parse_run(data, org=org, pipeline_slug=pipeline_slug)
+            # The id must be exactly what get_run_status/get_run_logs consume:
+            # 'org/pipeline_slug/build_number' (TWO slashes). A payload that
+            # cannot be read that way fails loud here — never an id the next
+            # call rejects while the build already runs.
+            if run.id.count("/") != 2:
+                raise ValueError(
+                    f"Buildkite accepted the build request for {pipeline_id!r} but the response "
+                    "did not yield a consumable run id — refusing to return an unusable run id",
+                )
+            return run
 
     async def get_run_status(self, run_id: str) -> CIRun:
         parts = run_id.split("/", 2)
@@ -218,7 +244,7 @@ class BuildkiteConnector(ConnectorBase):
                 f"/organizations/{org}/pipelines/{pipeline_slug}/builds/{build_number}",
             )
             r.raise_for_status()
-            return self._parse_run(r.json())
+            return self._parse_run(r.json(), org=org, pipeline_slug=pipeline_slug)
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
         parts = run_id.split("/", 2)
@@ -285,7 +311,7 @@ class BuildkiteConnector(ConnectorBase):
             )
             r.raise_for_status()
             raw_runs: list[dict[str, Any]] = r.json()
-            return [self._parse_run(run) for run in raw_runs[:limit]]
+            return [self._parse_run(run, org=org, pipeline_slug=pipeline_slug) for run in raw_runs[:limit]]
 
 
 class _BuildkiteTestDouble(BuildkiteConnector):

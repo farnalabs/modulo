@@ -237,7 +237,44 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
     body_json = resp.json()
     assert body_json["status"] == "accepted"
     assert body_json["run_id"] == str(_RUN_ID)
+    # FAR-1141 / ADR-042: the ack is a claim-ready run surface, so it carries
+    # the run's execution origin. This stand-in never set the attribute, so it
+    # must read NULL — present as a key, never a repr of the mock.
+    assert body_json["execution_origin"] is None
     m.assert_awaited_once()
+
+
+def test_app_mention_ack_carries_dispatched_execution_origin(client: TestClient) -> None:
+    """A dispatched run's Slack ack must read ``dispatched``, never
+    indistinguishably from a run Modulo executed itself."""
+    body = _event_body()
+    ts = str(int(time.time()))
+    run_mock = MagicMock()
+    run_mock.id = _RUN_ID
+    run_mock.execution_origin = "dispatched"
+
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch(
+            "modulo.api.routes.slack.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+    ):
+        snap_mock = MagicMock()
+        snap_mock.id = uuid.uuid4()
+        snap.return_value = snap_mock
+        m.return_value = (run_mock, None, {})
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json()["execution_origin"] == "dispatched"
 
 
 def test_app_mention_bad_signature_returns_401(client: TestClient) -> None:

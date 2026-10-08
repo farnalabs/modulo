@@ -6,7 +6,7 @@ write's ``SELECT ... FOR UPDATE`` (``replace_pipeline_graph``, whose FIRST
 statement is that lock) ran with NO ``lock_timeout`` at all: a contended MCP
 graph write parked a pooled connection on the row lock until the holder
 committed - exactly the unbounded wait the REST mutation endpoints refuse
-(``_set_mutation_row_lock_timeout``, FAR-1313).
+(``set_mutation_row_lock_timeout`` (db.crud.row_lock), FAR-1313).
 
 Four things are pinned here against a session double reporting the
 ``postgresql`` dialect (so the helper's dialect gate takes its live branch):

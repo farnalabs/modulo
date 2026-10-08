@@ -10,10 +10,11 @@ from __future__ import annotations
 import re
 import uuid
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
+from modulo.connectors.base import connector_binding_operation
 from modulo.core.stdout_retention import StdoutRetentionValidatorMixin
 
 API_VERSION_PREFIX = "modulo.dev/v"
@@ -213,6 +214,17 @@ class ApplyGraphConnectorBinding(BaseModel):
 
     type: str = Field(min_length=1, max_length=100)
     instance_id: uuid.UUID
+    # FAR-1141: connector-binding operation verb (API ConnectorBinding twin).
+    # Declared explicitly because extra="forbid" would reject the key the API
+    # now stores — a silently-dropped declarative field would create plan drift.
+    operation: Literal["query", "write", "dispatch"] = "query"
+    # FAR-1141: for operation="dispatch", the CI-runner method to call.
+    dispatch_action: Literal[
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    ] = "trigger_run"
 
 
 class ApplyGraphSchemaPin(BaseModel):
@@ -260,7 +272,7 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
     agent: str | None = None
     position: ApplyGraphPosition
     connector_binding: ApplyGraphConnectorBinding | None = None
@@ -330,12 +342,67 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # real saved graph; value rules are enforced by the REAL API node model when the
     # executor normalises the resolved payload through it.
     workspace_inputs: list[dict[str, Any]] | None = None
+    # FAR-1141 slice 2: dispatch wait semantics (API PipelineGraphNode twin).
+    # Declared here so the CLI does NOT reject it loudly as an unknown field on a
+    # real saved graph. The range mirrors the API model (``wait_timeout`` > 0 and
+    # <= 3600 s) so a bad value fails at LOAD time, before anything is applied;
+    # the dispatch-only / bool rules are enforced by the REAL API node model when
+    # the payload is applied.
+    await_completion: bool = False
+    wait_timeout: float | None = Field(default=None, gt=0, le=3600)
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
     def _default_commands_concatenation_string(cls, v: Any) -> Any:
         """Normalise absent/empty/null joiner to the runtime default (API twin)."""
         return v if isinstance(v, str) and v else " && "
+
+    @model_validator(mode="after")
+    def _default_dispatch_binding_operation(self) -> ApplyGraphNode:
+        """FAR-1141 (MAJOR 3): a dispatch node's binding routes the dispatch verb.
+
+        ``ApplyGraphConnectorBinding.operation`` defaults to ``"query"`` — the
+        generic default every other node type needs, mirrored from the API —
+        and ``api_node_payload`` always serialises it. A config that omitted
+        the key would therefore send an EXPLICIT ``"query"``, which the API now
+        rejects (and which pre-rejection persisted a node that silently ran a
+        query instead of firing a job).
+
+        FAR-1141 FIX 6: the default is no longer restated here as
+        ``node_type == "dispatch" -> "dispatch"``; it is DERIVED from
+        ``connector_binding_operation`` — the declared single source of truth
+        for "which verb does this node route to" — so the CLI, the API model and
+        the engine cannot drift apart on what the fallback is. The probe omits
+        the unset ``operation`` key so the resolver sees the same absence the
+        engine will, not this model's ``"query"`` field default. An EXPLICIT
+        non-dispatch verb is left alone: the API model is the single authority
+        that rejects it, so the CLI fails at apply with the server's message.
+        """
+        if self.node_type != "dispatch" or self.connector_binding is None:
+            return self
+        if "operation" in self.connector_binding.model_fields_set:
+            return self
+        raw = self.connector_binding.model_dump(mode="json")
+        raw.pop("operation", None)
+        # The cast is sound, not a bypass: the guard above pins
+        # ``node_type == "dispatch"``, which ``node_routes_binding_to_connector``
+        # always routes once the (required, non-empty) binding is present, and
+        # the probe carried no explicit ``operation`` — so the resolver can only
+        # reach its ``node_type`` fallback and answer ``"dispatch"``, a member of
+        # this field's Literal vocabulary.
+        self.connector_binding.operation = cast(
+            Literal["query", "write", "dispatch"],
+            connector_binding_operation(
+                {
+                    "node_type": self.node_type,
+                    # A dispatch node never references an agent (the API rejects
+                    # that combination), so the routing gate reads it as routed.
+                    "agent_id": None,
+                    "connector_binding": raw,
+                },
+            ),
+        )
+        return self
 
     def api_node_payload(self) -> dict[str, Any]:
         """Config node -> API node dict (without agent resolution)."""

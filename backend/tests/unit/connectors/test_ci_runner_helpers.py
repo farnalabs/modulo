@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import httpx
@@ -70,12 +71,19 @@ async def test_latest_dispatched_run_finds_run():
         request=httpx.Request("GET", "https://api.github.com/repos/acme/widgets/actions/runs"),
         json={"workflow_runs": [{"id": 12345, "status": "completed"}]},
     )
-    run = await r._latest_dispatched_run(client, "acme/widgets", "ci.yml", "main")
+    run = await r._latest_dispatched_run(
+        client,
+        "acme/widgets",
+        "ci.yml",
+        "main",
+        datetime(2026, 1, 1, tzinfo=UTC),
+    )
     assert run is not None
-    assert run.id == "12345"
+    assert run.id == "acme/widgets/12345"
     params = client.get.call_args.kwargs["params"]
     assert params["workflow_id"] == "ci.yml"
     assert params["branch"] == "main"
+    assert params["created"] == ">=2026-01-01T00:00:00Z"
 
 
 async def test_latest_dispatched_run_none_when_empty():
@@ -86,5 +94,11 @@ async def test_latest_dispatched_run_none_when_empty():
         request=httpx.Request("GET", "https://api.github.com/repos/acme/widgets/actions/runs"),
         json={"workflow_runs": []},
     )
-    run = await r._latest_dispatched_run(client, "acme/widgets", "", "main")
+    run = await r._latest_dispatched_run(
+        client,
+        "acme/widgets",
+        "",
+        "main",
+        datetime(2026, 1, 1, tzinfo=UTC),
+    )
     assert run is None

@@ -171,6 +171,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import type { components } from "../../lib/api/schema";
 import {
   MEASURES,
   RUN_STATUSES,
@@ -212,13 +213,23 @@ const groupByOptions = [
   { value: "week" as const, labelKey: "views.AnalyticsView.group_by_week" },
 ];
 
-const dimensions: { value: AnalyticsDimension; labelKey: string }[] = [
+// FAR-1141: the dimension picker offers the BACKEND's `AnalyticsDimension`
+// vocabulary (schema.ts), which is wider than the store's `AnalyticsDimension`
+// union - `execution_origin` shipped server-side in FAR-1141 but the store
+// type predates it. Typing the option list against the generated API type
+// keeps the picker honest about what `/analytics` accepts without widening a
+// shared type from this component; `onDimensionChange` already narrows to the
+// store's union at the emit boundary, so the filter type is untouched.
+type PickerDimension = components["schemas"]["AnalyticsDimension"];
+
+const dimensions: { value: PickerDimension; labelKey: string }[] = [
   { value: "trigger_type", labelKey: "views.AnalyticsView.dimension_trigger_type" },
   { value: "status", labelKey: "views.AnalyticsView.dimension_status" },
   { value: "pipeline", labelKey: "views.AnalyticsView.dimension_pipeline" },
   { value: "folder", labelKey: "views.AnalyticsView.dimension_folder" },
   { value: "team", labelKey: "views.AnalyticsView.dimension_team" },
   { value: "error_code", labelKey: "views.AnalyticsView.dimension_error_code" },
+  { value: "execution_origin", labelKey: "views.AnalyticsView.dimension_execution_origin" },
 ];
 
 const measures = MEASURES;

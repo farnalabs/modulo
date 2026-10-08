@@ -584,6 +584,9 @@ async def _load_recent_runs(session: AsyncSession, org_id: uuid.UUID) -> list[di
             Run.status,
             Run.created_at,
             Run.trigger_type,
+            # FAR-1141 / ADR-042: the dashboard is a claim-ready run surface, so
+            # a dispatched run must not read like one Modulo executed itself.
+            Run.execution_origin,
         )
         .join(Pipeline, Run.pipeline_id == Pipeline.id)
         .where(
@@ -602,6 +605,9 @@ async def _load_recent_runs(session: AsyncSession, org_id: uuid.UUID) -> list[di
             "status": row.status,
             "created_at": row.created_at.isoformat(),
             "trigger_type": row.trigger_type,
+            # Nullable column: pre-FAR-1141 rows and Modulo-executed runs read
+            # NULL, dispatched runs read 'dispatched' — never omitted.
+            "execution_origin": row.execution_origin,
         }
         for row in recent_runs_rows
     ]

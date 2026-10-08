@@ -10,6 +10,7 @@ code:
   - backend/src/modulo/core/mcp/scope_validator.py
   - backend/src/modulo/api/routes/mcp_oauth.py
   - backend/src/modulo/api/routes/mcp_setup.py
+  - backend/src/modulo/api/routes/oauth_metadata.py
   - frontend/src/views/SettingsMcpView.vue
   - frontend/src/components/settings/McpOauthClientsCard.vue
 unit-tests:
@@ -21,6 +22,7 @@ unit-tests:
   - backend/tests/unit/mcp/test_team_binding_enforcement.py
   - backend/tests/unit/mcp/test_mcp_tool_exception_error.py
   - backend/tests/unit/mcp/test_mcp_session_contract_errors.py
+  - backend/tests/unit/api/test_oauth_metadata.py
   - backend/tests/unit/api/test_run_ws.py
   - backend/tests/unit/test_mcp_security.py
   - backend/tests/unit/test_mcp_structural_coverage.py
@@ -229,6 +231,36 @@ applications. Built on the auth + model-backend core.
       `backend/tests/architecture/test_mcp_error_codes.py` structurally forbids
       the `internal_error` payload in both sources and keeps `_tool_error`'s
       `code` keyword-only with no default
+- [x] OAuth discovery metadata (2026-10-07, FAR-1476): two unauthenticated
+      `/.well-known/` documents let a stock MCP harness bootstrap OAuth from a
+      bare Modulo URL – the RFC 8414 authorization-server metadata
+      (`/.well-known/oauth-authorization-server`: issuer, the
+      `/mcp/oauth/authorize` + `/mcp/oauth/token` endpoints, `code` response
+      type, `authorization_code` / `refresh_token` grants, PKCE `S256`,
+      client-secret auth methods) and the RFC 9728 protected-resource metadata
+      (`/.well-known/oauth-protected-resource` plus its `/mcp` path-suffix
+      variant, which MCP clients ask for too: resource `/mcp/`,
+      `authorization_servers`, header bearer methods) – with `scopes_supported`
+      derived from the single source of truth `auth.oauth.VALID_SCOPES`
+      (`trigger:run` / `hitl:review` / `library:browse`) in both documents.
+      They are pre-auth and org-less by design: a harness must read them before
+      it holds any credential, so they cannot consult the per-org `mcp_server`
+      kill switch, which stays enforced where it always was – at `/mcp`
+      (`McpAuthMiddleware` -> `_call_next_if_feature_enabled`) and inside the
+      `/mcp/oauth/{authorize,token,refresh}` protocol endpoints; discovery
+      describes the server, it grants nothing. The routes are registered ahead
+      of the SPA fallback mount, so `/.well-known/*` can no longer answer
+      `index.html`, and stay out of `openapi.json` (`include_in_schema=False`).
+      Every unauthenticated MCP `401` now carries
+      `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource"`
+      while `403`/policy denials and `5xx` do not (an authenticated principal
+      told "not allowed" must not be invited to re-authenticate). No
+      `registration_endpoint` is advertised: there is no RFC 7591 dynamic
+      client registration, so a client is configured with an explicit
+      client id rather than sent down a 404 path
+      (`backend/src/modulo/api/routes/oauth_metadata.py`,
+      `backend/src/modulo/api/mcp_server.py`, `backend/src/modulo/api/main.py`;
+      `backend/tests/unit/api/test_oauth_metadata.py`)
 
 ## Known Gaps
 
@@ -239,6 +271,19 @@ applications. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-10-07: **Spec-accuracy pass** – FAR-1476 shipped the OAuth discovery
+  surface (RFC 8414 authorization-server + RFC 9728 protected-resource
+  documents, the `WWW-Authenticate` challenge on unauthenticated MCP `401`s, the
+  `/.well-known/` proxy rules in the five deploy configs) but no product-map
+  layer described it. Added the `code:` / `unit-tests:` citations
+  (`api/routes/oauth_metadata.py`, `tests/unit/api/test_oauth_metadata.py`) and
+  the checked behaviour line above. Known Gaps reviewed and unchanged: the
+  session-bearing protocol-endpoint gap and the SSE-only transport gap both
+  still stand. The `frontend/src/manifest.yaml` `feat-mcp` registry is untouched
+  – its `behaviours:` list is a curated subset (the base mount/auth/scope and
+  trigger-dispatch behaviours are tracker-only), and neither the feature
+  description nor any route `product_map` ref changes for a pre-auth endpoint
+  with no UI surface.
 - 2026-10-06: **Improve Architecture product-map walk** — closed the untracked
   FAR-1502 surface: the MCP tool-error vocabulary that the consuming agent
   branches on shipped (specific, branchable codes via the required-keyword

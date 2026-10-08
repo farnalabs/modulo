@@ -100,6 +100,7 @@ from modulo.api.routes.metrics_ingest import router as metrics_ingest_router
 from modulo.api.routes.model_backends import router as model_backends_router
 from modulo.api.routes.node_categories import router as node_categories_router
 from modulo.api.routes.notifications import router as notifications_router
+from modulo.api.routes.oauth_metadata import router as oauth_metadata_router
 from modulo.api.routes.observability import router as observability_router
 from modulo.api.routes.onboarding import router as onboarding_router
 from modulo.api.routes.org_login import router as org_login_router
@@ -1254,6 +1255,15 @@ app.include_router(audit_router)
 app.include_router(library_router)
 app.include_router(community_library_router)
 app.include_router(lifecycle_maps_router)
+# OAuth discovery metadata (RFC 8414 authorization-server, RFC 9728
+# protected-resource) -- unauthenticated and org-less, so it deliberately
+# carries no mcp_server plan-feature gate: a harness must be able to read it
+# before it holds any credential. The kill switch stays enforced at /mcp
+# (McpAuthMiddleware -> _call_next_if_feature_enabled) and inside the OAuth
+# protocol endpoints. Registered with the other routers, i.e. BEFORE the /mcp
+# sub-app and the SPA fallback mount below, so the SPA static fallback can
+# never shadow /.well-known/* with index.html.
+app.include_router(oauth_metadata_router)
 app.include_router(mcp_oauth_router)
 app.include_router(mcp_setup_router)
 app.include_router(me_router)

@@ -191,6 +191,19 @@ describe('RunsListView', () => {
     wrapper.unmount()
   })
 
+  it('renders the dispatched provenance badge only for a dispatched run (FAR-1141)', async () => {
+    mockResponses['/api/v1/runs'] = listWith([
+      { ...baseRun, run_id: 'd1', execution_origin: 'dispatched' },
+      { ...baseRun, run_id: 'e1', execution_origin: 'executed' },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+    expect(wrapper.find('[data-testid="runs-list-dispatched-d1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="runs-list-dispatched-e1"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders empty state when no runs exist', async () => {
     const wrapper = mountView()
     await flushPromises()

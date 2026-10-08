@@ -722,6 +722,32 @@ def test_connector_node_compiles():
     assert compiled is not None
 
 
+def test_dispatch_node_compiles():
+    """FAR-1141: a dispatch node with a binding compiles; bogus types still raise."""
+    graph: dict[str, Any] = {
+        "nodes": [
+            {
+                "id": "dispatch",
+                "node_type": "dispatch",
+                "connector_binding": {
+                    "instance_id": str(uuid.uuid4()),
+                    "type": "github_actions_ci",
+                    "operation": "dispatch",
+                    "dispatch_action": "trigger_run",
+                },
+            },
+        ],
+        "edges": [],
+    }
+    compiled = build_graph_from_json(graph)
+    assert compiled is not None
+
+    # the acceptance is ADDITIVE — an unknown node_type is still rejected
+    bogus: dict[str, Any] = {"nodes": [{"id": "a", "node_type": "bogus"}], "edges": []}
+    with pytest.raises(ValueError, match="Unknown node_type"):
+        build_graph_from_json(bogus)
+
+
 def test_loop_edge_defaults_to_first_normal_target():
     """A loop edge without default_target falls back to the first normal target."""
     graph: dict[str, Any] = {

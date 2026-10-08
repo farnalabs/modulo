@@ -23,9 +23,29 @@ class CIRunnerBase(ConnectorBase):
     """Abstract base for CI system connectors (GitHub Actions, GitLab CI, etc.).
 
     The four abstract methods below (trigger_run, get_run_status, get_run_logs,
-    list_runs) form the capability contract that CI-runners implement.  They are
-    **not** reachable from the pipeline engine — the engine dispatches only
-    ``query`` / ``write`` — so connector bindings cannot route to them yet.
+    list_runs) form the capability contract that CI-runners implement. They ARE
+    reachable from the pipeline engine: a ``dispatch`` node routes
+    ``connector_binding.operation="dispatch"`` to the method named by its
+    ``dispatch_action``, and ``await_completion=True`` polls ``get_run_status``
+    with the id ``trigger_run`` returned until the substrate reports a terminal
+    status.
+
+    **Run-id contract (FAR-1141).** The ``CIRun.id`` a connector PRODUCES in
+    ``trigger_run`` / ``list_runs`` / ``get_run_status`` is the exact string
+    its own ``get_run_status`` / ``get_run_logs`` CONSUME — for every provider:
+
+    * GitHub Actions — ``owner/repo/run_id``
+    * GitLab CI — ``project_id/pipeline_id``
+    * CircleCI — the pipeline UUID
+    * Buildkite — ``org/pipeline_slug/build_number``
+    * Jenkins — ``job_name/build_number`` (or ``job_name/queue/queue_id`` while
+      the triggered build is still resolving through the queue)
+    * TeamCity — the build id
+    * Azure Pipelines — ``pipeline_id/run_id``
+
+    A connector must never hand back an id its own readers reject (a bare or
+    empty id that fails the next call is a contract breach): when no usable id
+    can be resolved, ``trigger_run`` raises instead of returning it.
     """
 
     @property
@@ -39,11 +59,15 @@ class CIRunnerBase(ConnectorBase):
         branch: str = "",
         variables: dict[str, str] | None = None,
     ) -> CIRun:
-        """Trigger a CI pipeline run and return the created run descriptor."""
+        """Trigger a CI pipeline run and return the created run descriptor.
+
+        The returned ``CIRun.id`` must satisfy the run-id contract above —
+        it is the key ``await_completion`` polls ``get_run_status`` with.
+        """
 
     @abstractmethod
     async def get_run_status(self, run_id: str) -> CIRun:
-        """Fetch the current status of a CI run."""
+        """Fetch the current status of a CI run (``run_id`` per the contract)."""
 
     @abstractmethod
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:

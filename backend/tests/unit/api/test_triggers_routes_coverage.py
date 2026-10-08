@@ -19,13 +19,16 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.triggers import _require_team_gate_in_txn
+from modulo.api.team_scope import TeamGateDenial
 from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.settings import Settings, get_settings
 
@@ -100,6 +103,12 @@ def _happy_patches() -> list:
         patch(f"{_PREFIX}clear_trigger_streak_after_reenable", new_callable=AsyncMock),
         patch(f"{_PREFIX}get_trigger_streak_status", new=AsyncMock(return_value=dict(_STREAK))),
         patch(f"{_PREFIX}_count_ongoing_runs", new_callable=AsyncMock, return_value=0),
+        # FAR-1513: the in-txn team gate re-reads the pipeline FOR UPDATE; the
+        # mocked sessions here do not model that read. The gate's allow/deny
+        # matrix is exercised by test_team_scope_dependencies.py and the
+        # integration team-gate suite, so stub it here to keep these route
+        # coverage tests focused on the DB error conventions.
+        patch(f"{_PREFIX}_require_team_gate_in_txn", new_callable=AsyncMock),
     ]
 
 
@@ -689,6 +698,9 @@ def test_delete_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]
     http, _session = client
     for exc, expected in [(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)]:
         ctxs = list(_happy_patches())
+        # FAR-1513: deletion now pre-reads the trigger (for its pipeline's team
+        # gate) before soft-deleting, so the happy load must succeed.
+        ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger())))
         ctxs.append(patch(f"{_CRUD_TRIGGER}.soft_delete_trigger", new=AsyncMock(side_effect=exc)))
         for c in ctxs:
             c.__enter__()
@@ -703,6 +715,7 @@ def test_delete_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]
 def test_delete_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock]) -> None:
     http, _session = client
     ctxs = list(_happy_patches())
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=_make_trigger())))
     ctxs.append(patch(f"{_CRUD_TRIGGER}.soft_delete_trigger", new=AsyncMock(return_value=None)))
     for c in ctxs:
         c.__enter__()
@@ -716,7 +729,10 @@ def test_delete_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock]
 
 
 def test_restore_trigger_assert_error_matrix(client: tuple[TestClient, AsyncMock]) -> None:
-    http, _session = client
+    http, session = client
+    # FAR-1513: restore now reads the soft-deleted trigger first (to resolve
+    # its pipeline's team gate); model that read returning the row.
+    session.execute = AsyncMock(return_value=_trigger_result([_make_trigger()]))
     for exc, expected in [(_PROG, 501), (_SQL, 503), (_RUNTIME, 500)]:
         ctxs = list(_happy_patches())
         ctxs.append(patch(f"{_CRUD_TRIGGER}.restore_trigger", new=AsyncMock(side_effect=exc)))
@@ -746,13 +762,15 @@ def test_restore_trigger_unknown_returns_404(client: tuple[TestClient, AsyncMock
 
 
 def test_restore_trigger_ongoing_happy_path_reanchors(client: tuple[TestClient, AsyncMock]) -> None:
-    http, _session = client
+    http, session = client
     anchor_mock = AsyncMock()
     clear_mock = AsyncMock()
+    restore = _make_trigger(trigger_type="ongoing")
+    # FAR-1513: the pre-delete trigger read (for the pipeline team gate).
+    session.execute = AsyncMock(return_value=_trigger_result([restore]))
     ctxs = list(_happy_patches())
     ctxs.append(patch(f"{_PREFIX}anchor_trigger_streak_epoch", new=anchor_mock))
     ctxs.append(patch(f"{_PREFIX}clear_trigger_streak_after_reenable", new=clear_mock))
-    restore = _make_trigger(trigger_type="ongoing")
     ctxs.append(patch(f"{_CRUD_TRIGGER}.restore_trigger", new=AsyncMock(return_value=restore)))
     for c in ctxs:
         c.__enter__()
@@ -1045,3 +1063,59 @@ def test_list_pipeline_triggers_happy_path_with_type_filter(client: tuple[TestCl
     body = resp.json()
     assert len(body["items"]) == 2
     assert body["items"][0]["created_at"] == _NOW.isoformat()
+
+
+def _tenant_principal() -> TenantPrincipal:
+    return TenantPrincipal(
+        username="admin@test",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+
+
+def _pipeline_result(pipeline: MagicMock | None) -> MagicMock:
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=pipeline)
+    return result
+
+
+class TestRequireTeamGateInTxn:
+    """FAR-1513: the in-txn re-verification guard's own deny/allow branches.
+
+    The route coverage matrix stubs this helper, so its two deny arms (absent
+    pipeline -> 404, shared-matrix denial -> denial status) are exercised here
+    directly against a mocked session.
+    """
+
+    async def test_absent_pipeline_raises_404(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_pipeline_result(None))
+
+        with (
+            patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
+            patch(f"{_PREFIX}set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await _require_team_gate_in_txn(session, _tenant_principal(), _PIPELINE_ID)
+
+        assert exc.value.status_code == 404
+
+    async def test_shared_matrix_denial_raises_with_denial_status(self) -> None:
+        pipeline = MagicMock()
+        pipeline.owner_team_id = uuid.uuid4()
+        pipeline.visibility = "team"
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=_pipeline_result(pipeline))
+        denial = TeamGateDenial(kind="membership", status_code=403, detail="Not a member")
+
+        with (
+            patch(f"{_PREFIX}set_rls_user_context", new_callable=AsyncMock),
+            patch(f"{_PREFIX}set_mutation_row_lock_timeout", new_callable=AsyncMock),
+            patch(f"{_PREFIX}evaluate_team_gate", AsyncMock(return_value=denial)),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await _require_team_gate_in_txn(session, _tenant_principal(), _PIPELINE_ID)
+
+        assert exc.value.status_code == 403
+        assert exc.value.detail == "Not a member"

@@ -13,6 +13,10 @@ remaining hot-reloadable keys use so a runtime override
 - :func:`get_public_url` — keyed bridge for ``MODULO_PUBLIC_URL`` (FAR-1159):
   every URL-anchoring consumer resolves through it so a runtime override
   wins over the boot-time Settings value.
+- :func:`public_url_is_configured` — the single "is ``MODULO_PUBLIC_URL`` a
+  real origin" test (falsy or the ``http://localhost:8000`` placeholder),
+  shared by the OAuth flow and the discovery documents so they cannot
+  disagree.
 - :func:`get_e2b_api_key` — keyed bridge for ``MODULO_E2B_API_KEY``
   (FAR-1159): the provider-registration gate and the node-runner
   enforcement check both resolve through it, fail-closed.
@@ -99,6 +103,26 @@ def get_public_url(settings: Settings) -> str:
     (``PUT /api/v1/admin/runtime-config``) wins only when one is set.
     """
     return override_or("MODULO_PUBLIC_URL", settings.modulo_public_url)
+
+
+#: The Settings/runtime-store default for ``MODULO_PUBLIC_URL``. It is a
+#: placeholder, not a configured public origin, so every consumer that needs
+#: a *real* origin must treat it as unset.
+_DEFAULT_PUBLIC_URL = "http://localhost:8000"
+
+
+def public_url_is_configured(settings: Settings) -> bool:
+    """Whether ``MODULO_PUBLIC_URL`` names a real public origin.
+
+    ``http://localhost:8000`` is the Settings and runtime-config-store
+    default — a placeholder, not a configured origin — and the OAuth flow
+    refuses it (``register_oauth_client``, ``_oauth_authorize_settings_error``
+    and the token endpoint all answer ``500``). This is the single source of
+    truth for that test, so the discovery documents can never advertise an
+    origin the flow would reject (review feedback on PR #1384).
+    """
+    public_url = get_public_url(settings)
+    return bool(public_url) and public_url != _DEFAULT_PUBLIC_URL
 
 
 def get_e2b_api_key() -> str | None:

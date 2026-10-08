@@ -495,7 +495,7 @@ class TestRestThresholdPermission:
         )
         # Team-gate membership leg for non-admin principals (the gate's other
         # legs are stubbed by the strict session's pipeline-row default).
-        _enter([patch("modulo.api.dependencies.team_membership_exists", new=AsyncMock(return_value=True))])
+        _enter([patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=True))])
         resp = client.patch(f"/api/v1/pipelines/{_PIPELINE_ID}", json={"circuit_breaker_threshold": sent})
         return resp, update, denial_audit
 

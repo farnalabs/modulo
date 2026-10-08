@@ -2002,7 +2002,15 @@ describe('PipelineEditorView — dialogs', () => {
     const post = vi.mocked(api.POST).mock.calls[0]
     expect(post[0]).toBe('/api/v1/pipelines/{pipeline_id}/nodes/{node_id}/convert-to-agent')
     expect((post[1] as any).body.agent_id).toBe('agent-1')
-    expect((post[1] as any).body.connector_binding).toEqual({ type: 'slack', instance_id: 'conn-1' })
+    // FAR-1141: ConnectorBinding now carries `operation` / `dispatch_action`
+    // on the wire (previously silently dropped); a converted agent node sends
+    // the API defaults explicitly rather than relying on them.
+    expect((post[1] as any).body.connector_binding).toEqual({
+      type: 'slack',
+      instance_id: 'conn-1',
+      operation: 'query',
+      dispatch_action: 'trigger_run',
+    })
     expect((post[1] as any).body.model_backend_id).toBe('mb-1')
     expect(vm.showAgentPicker).toBe(false)
     wrapper.unmount()

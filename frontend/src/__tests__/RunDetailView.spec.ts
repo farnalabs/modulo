@@ -2581,6 +2581,22 @@ describe('RunDetailView rendering extras', () => {
     wrapper.unmount()
   })
 
+  it('renders the dispatched provenance badge only for a dispatched run (FAR-1141)', async () => {
+    const dispatched = await mountWith(
+      { ...baseDetail(), execution_origin: 'dispatched' },
+      { outputs_json: null },
+    )
+    expect(dispatched.find('[data-testid="run-detail-dispatched"]').exists()).toBe(true)
+    dispatched.unmount()
+
+    const executed = await mountWith(
+      { ...baseDetail(), execution_origin: 'executed' },
+      { outputs_json: null },
+    )
+    expect(executed.find('[data-testid="run-detail-dispatched"]').exists()).toBe(false)
+    executed.unmount()
+  })
+
   it('still renders the run detail when lease duration data is supplied but the panel is gone', async () => {
     mockWorkspaceLease = { status: 'completed', duration_seconds: 45 }
     const wrapper = await mountWith(baseDetail(), { outputs_json: null })

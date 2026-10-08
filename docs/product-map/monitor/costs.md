@@ -22,6 +22,7 @@ unit-tests:
   - backend/tests/unit/core/cost_controller/test_cost_components_crud.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize.py
   - backend/tests/unit/core/cost_controller/test_cost_finalize_ceiling.py
+  - backend/tests/unit/core/cost_controller/test_circuit_breaker.py
   - backend/tests/unit/db/crud/test_spend_anomaly.py
 bdd:
   - backend/tests/bdd/features/costs/cost_controls.feature
@@ -68,7 +69,18 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
       (`cost_controller/finalize.py`, `cost_controls.feature`)
 - [x] Pipeline cost circuit breaker (§8.10): a pipeline crossing its monthly spend
       threshold trips the breaker and permanently pauses triggers until an admin
-      re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`
+      re-enables it via `POST /circuit-breaker/{pipeline_id}/reset`. Since FAR-1530 the
+      trip also FOLDS INTO the unified per-pipeline Paused execution state — it sets
+      `run_enabled=false, run_disabled_reason='circuit_breaker', run_disabled_at` only
+      when the pipeline is not already disabled (a first-cause operator pause keeps
+      its `'operator'` reason), while `circuit_breaker_tripped(_at)` stays the
+      breaker's witness. The reset clears the unified state ONLY when its reason is
+      `'circuit_breaker'` (an operator pause survives a reset) and re-activates the
+      pipeline's non-deleted triggers; an operator
+      `POST /api/v1/pipelines/{id}/resume` is REFUSED 409 while the witness holds, so
+      a resume can never revive a tripped pipeline
+      (`backend/tests/unit/core/cost_controller/test_circuit_breaker.py`,
+      `backend/tests/unit/api/test_pipelines_routes_coverage.py`)
 - [x] The breaker threshold is user-configurable and Community-tier (FAR-1182):
       `circuit_breaker_threshold` (USD, `null` = disabled, `> 0` when set) is
       settable on pipeline create / `PATCH /api/v1/pipelines/{id}` and read back on
@@ -135,6 +147,14 @@ side. Surfaces: `/admin/costs`, `/admin/costs/limits`, `/admin/costs/controls`,
   implemented from `runs` (per-pipeline sums of `total_cost_usd`).
 
 ## QA History
+- 2026-10-07: **Improve Architecture product-map walk** – tracked the FAR-1530
+  unified per-pipeline Paused execution state fold into the cost circuit breaker
+  (`feat-costs`): a trip now sets the unified `run_enabled` state when the
+  pipeline is not already disabled (first-cause reason preserved), the admin
+  reset clears it only for a `'circuit_breaker'` cause, and an operator resume
+  409s while the witness holds. Manifest `feat-costs` registry + this tracker
+  updated, citing `core/cost_controller/__init__.py` and
+  `test_circuit_breaker.py`.
 - 2026-09-20: **product-map review pass** — closed the "No BDD for
   the ceiling / scheduled-report / anomaly / cost-component surfaces" gap.
   `cost_controls.feature` gained executing scenarios for the FAR-391 `/ceiling`

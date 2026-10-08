@@ -184,18 +184,23 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       (`core/pipeline_execution.py`, `db/models/run.py`,
       `test_watchdog_firing_record_writer.py`,
       `test_pipeline_execution_watchdog_retry.py`)
-- [x] A run is refused for a pipeline that may not run (FAR-1528): `create_run`
-      raises `PipelineNotRunnableError` when the pipeline is archived or
-      soft-deleted, and every REST entry point that can reach it (manual
-      trigger, rerun, test trigger, webhook, replay, slack, variant runs,
-      feedback correction) maps the refusal to 409 Conflict through the shared
-      `pipeline_not_runnable_http` helper naming the pipeline id and state —
-      never a generic 500 — while the cron/polling/ongoing fire jobs handle the
-      same refusal without crashing. A pipeline that does not exist is still
-      refused upstream by the route's own 404 entry filter, so the state gate
-      only ever turns an existing-but-not-runnable pipeline into a 409
-      (`api/routes/runs.py`, `core/exceptions.py`, `test_runs_endpoint.py`,
-      `test_runs_rerun_endpoint.py`, `test_pipeline_state_gate_rls.py`)
+- [x] A run is refused for a pipeline that may not run (FAR-1528, extended by
+      FAR-1530): `create_run` raises `PipelineNotRunnableError` when the
+      pipeline is archived, soft-deleted OR paused (`run_enabled=false` — the
+      FAR-1530 Paused execution state), and every REST entry point that can
+      reach it (manual trigger, rerun, test trigger, webhook, replay, slack,
+      variant runs, feedback correction) maps the refusal to 409 Conflict
+      through the shared `pipeline_not_runnable_http` helper naming the pipeline
+      id and state — never a generic 500 — while the cron/polling/ongoing fire
+      jobs handle the same refusal without crashing. The archived / soft-deleted
+      / paused precedence is resolved by the shared state classifier (deleted
+      outranks archived outranks paused) and the state gate reads org-scoped and
+      is RLS-fenced. A pipeline that does not exist is still refused upstream by
+      the route's own 404 entry filter, so the state gate only ever turns an
+      existing-but-not-runnable pipeline into a 409 (`api/routes/runs.py`,
+      `db/crud/run.py` state classifier, `core/exceptions.py`,
+      `test_runs_endpoint.py`, `test_runs_rerun_endpoint.py`,
+      `test_pipeline_state_gate.py`, `test_pipeline_state_gate_rls.py`)
 - _Output Diff (`/runs/diff`, `POST /runs/diff`, `core/line_diff.py`) deferred from the
   MVP nav (hidden via `visibility: private_preview`). Behaviour detail removed for the
   MVP cut – restore from git history when re-enabling. See FAR-542._
@@ -210,6 +215,15 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 
 ## QA History
 
+- 2026-10-07: **Improve Architecture product-map walk (follow-up)** – closed the
+  `feat-runs` tracker gap for FAR-1530: the manifest `feat-runs` registry entry
+  was extended to name the `paused` state (`run_enabled=false`), but this
+  tracker still described only archived / soft-deleted pipelines. Extended the
+  checked behaviour line to include the paused refusal, the
+  deleted-outranks-archived-outranks-paused state classifier
+  (`db/crud/run.py`), the RLS-fenced org-scoped state gate, and the
+  `test_pipeline_state_gate.py` citation, matching the manifest layer.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
   FAR-1528 sub-surface: `create_run` now refuses an archived or soft-deleted
   pipeline with a typed `PipelineNotRunnableError` mapped to 409 Conflict

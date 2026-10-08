@@ -46,6 +46,7 @@ from sqlalchemy import Boolean, Uuid, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+from modulo.connectors.base import node_fires_dispatch_job
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import (
     SYSTEM_ACTOR,
@@ -233,6 +234,19 @@ def _sanitize_detail(detail: Any, limit: int | None = 5000) -> str:
     via ``str()`` and is a NO-OP for clean strings.
     """
     return sanitize_error_text(detail, limit)
+
+
+def _optional_run_str(value: Any) -> str | None:
+    """Coerce a run attribute to a plain ``str`` or ``None`` (FAR-1141).
+
+    Core-local twin of ``api.routes.runs._optional_str`` — the import-linter
+    ``core-does-not-import-api`` contract forbids importing the API layer here.
+    The run row is a plain ORM entity in production, but unit tests pass
+    ``MagicMock`` run stand-ins whose unset attribute resolves to a mock — that
+    must degrade to ``None`` (origin not recorded) instead of leaking a repr
+    into an immutable, hash-linked audit payload.
+    """
+    return value if isinstance(value, str) else None
 
 
 async def _safe_pipeline_name(
@@ -880,6 +894,17 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
     treated as idempotent so old graphs keep their retry behaviour unchanged.
     Returns False when ANY node is non-idempotent — a retry re-executes the
     whole run, so a single side-effecting node makes re-running the run unsafe.
+
+    FAR-1141 (CRITICAL 1): the graph itself is also non-idempotent when it
+    contains a binding that FIRES an external job — ``operation="dispatch"`` +
+    ``dispatch_action="trigger_run"`` — regardless of the stored ``idempotent``
+    flag. The flag is a write-path side effect of the REST model, so an
+    MCP-authored or hand-written graph could carry ``idempotent=true`` (or omit
+    it) on a job-firing node and silently re-arm BOTH retry paths; the binding
+    is the durable, writer-independent truth, keyed on the same
+    ``connector_binding_operation`` the engine routes and the run classifier
+    reads. Read-only dispatch actions (``get_run_status`` / ``get_run_logs`` /
+    ``list_runs``) stay idempotent — re-running a read fires nothing.
     """
     if not isinstance(graph_json, dict):
         return True
@@ -887,6 +912,8 @@ def _graph_is_idempotent(graph_json: dict[str, Any] | None) -> bool:
         if not isinstance(node, dict):
             continue
         if node.get("idempotent") is False:
+            return False
+        if node_fires_dispatch_job(node):
             return False
     return True
 
@@ -2211,6 +2238,13 @@ class PipelineExecutor:
             )
             payload: dict[str, Any] = {
                 "pipeline_id": str(pipeline_id),
+                # FAR-1141 / ADR-042: the run-keyed audit payload carries the
+                # run's execution origin ('dispatched' / NULL) so the audit log
+                # can tell a dispatched run from one Modulo executed. The
+                # coercion mirrors api.routes.runs._optional_str (core may not
+                # import the API layer): a MagicMock/partial run stand-in whose
+                # attribute is not a plain string degrades to NULL, never a repr.
+                "execution_origin": _optional_run_str(getattr(running_run, "execution_origin", None)),
                 "summary": compose_run_started_summary(
                     await _safe_pipeline_name(session, pipeline_id, org_id, run_id),
                     pipeline_id,
@@ -3831,6 +3865,23 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1141 / ADR-042: the run's execution origin travels with this
+            # run-keyed payload so the audit log can tell a dispatched run from
+            # one Modulo executed. Best-effort and read INSIDE this audit's own
+            # transaction: a read failure degrades the field to NULL (logged)
+            # and never suppresses the audit event itself.
+            execution_origin: str | None = None
+            try:
+                origin_run = await get_run(session, run_id)
+                execution_origin = _optional_run_str(getattr(origin_run, "execution_origin", None))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning(
+                    "audit.eval_blocked_origin_unavailable",
+                    extra={"run_id": str(run_id)},
+                    exc_info=True,
+                )
             try:
                 await append_audit_event(
                     session,
@@ -3840,6 +3891,7 @@ class PipelineExecutor:
                     resource_id=run_id,
                     payload_json={
                         "pipeline_id": str(pipeline_id),
+                        "execution_origin": execution_origin,
                         "error_detail": _sanitize_detail(error_detail, limit=None),
                         "actor": SYSTEM_ACTOR,
                         "summary": f"Guardrail eval blocked the run (pipeline {short_id(pipeline_id)})",
