@@ -4,7 +4,12 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/connectors.py
+  - backend/src/modulo/api/routes/pipelines.py
+  - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/api/routes/library.py
   - backend/src/modulo/core/connector_hub
+  - backend/src/modulo/core/team_visibility.py
+  - backend/src/modulo/db/crud/team_scope.py
   - backend/src/modulo/connectors/rest
   - frontend/src/views/AdminConnectorsView.vue
 unit-tests:
@@ -13,6 +18,11 @@ unit-tests:
   - backend/tests/unit/connectors/test_connector_credential_redaction.py
   - backend/tests/unit/connectors/test_connector_egress_gate.py
   - backend/tests/unit/connector_hub/test_connector_hub.py
+  - backend/tests/unit/api/test_pipeline_team_visibility.py
+  - backend/tests/unit/core/test_team_visibility.py
+  - backend/tests/unit/mcp/test_team_binding_enforcement.py
+  - backend/tests/unit/db/crud/test_team_scope.py
+  - backend/tests/integration/test_pipeline_team_gate_parity.py
 bdd:
   - backend/tests/bdd/features/connectors/connector_health.feature
   - backend/tests/bdd/features/connectors/github_connector.feature
@@ -213,6 +223,38 @@ and per-destination rate limiting.
       ACL-denial semantics in comments only and does not read the predicate;
       `unit-tests: test_acl.py, test_connectors_endpoint.py,
       test_guardrail_conformance_midrun.py`)
+- [x] A connector binding that crosses a team boundary is refused at graph
+      save with 409 `connector_team_mismatch` (FAR-1515, PRD §9.3). A
+      team-private connector (`visibility: team`) is only usable by a pipeline
+      owned by the SAME team, and — the reverse direction — a TEAM pipeline may
+      not pin an org-only connector (`visibility: org`): a run whose
+      `owner_team_id` is set is team-scoped and `ConnectorACL.check` fails
+      closed on team-scoped access to an org-only connector (FAR-516), so the
+      save must refuse a graph whose every run would die at the connector gate
+      (org pipelines keep org-wide connectors and never mismatch). The
+      candidate rows are read team-blind but org-scoped
+      (`db.crud.team_scope.team_blind_org_scope`) because the
+      `rls_team_isolation` policy would otherwise hide another team's
+      team-private row from the caller's session — the very binding under
+      judgement would look absent and the save would pass; with that widened
+      read an absent id is DEFINITIVE and fails CLOSED as the same named
+      `connector_team_mismatch` (`ConnectorBindingMissingError`), never a
+      silent skip (FAR-1515 CRITICAL 1). The shared predicate and wire-code
+      constants live in `core/team_visibility.py` and are enforced at every
+      write path that can create the binding: the REST graph save /
+      node-conversion chokepoint (`_enforce_connector_team_bindings`), the MCP
+      graph-update tool, the workflow import confirm, the library collection
+      install, and a connector visibility/owner re-scope
+      (`_reject_re_scope_that_breaks_a_bound_pipeline`), each raising the
+      shared 409 detail (`backend/src/modulo/core/team_visibility.py`,
+      `backend/src/modulo/db/crud/team_scope.py`,
+      `backend/src/modulo/api/routes/pipelines.py`,
+      `backend/src/modulo/api/mcp_server.py`,
+      `backend/src/modulo/api/routes/library.py`,
+      `backend/src/modulo/api/routes/connectors.py`;
+      `unit-tests: test_pipeline_team_visibility.py,
+      test_team_visibility.py, test_team_binding_enforcement.py,
+      test_team_scope.py`; `integration: test_pipeline_team_gate_parity.py`)
 
 ## Known Gaps
 
@@ -220,6 +262,16 @@ and per-destination rate limiting.
   OTel spans shipped in v1).
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1515 sub-surface (cross-team connector binding enforcement at graph save,
+  merged in PR #1377): the team-scope rule for connector bindings shipped while
+  neither the manifest `feat-connectors` registry nor this tracker named it, so
+  the 409 `connector_team_mismatch` refusal, the reverse org-only direction, the
+  team-blind (FAR-1515 CRITICAL 1) read that makes an unresolvable binding fail
+  closed, and the every-write-path coverage were invisible to Assistant's docs
+  indexer and to the graph. Added the checked behaviour line plus the
+  `core/team_visibility.py` / `db/crud/team_scope.py` code and unit/integration
+  test citations; the model-backend mirror is tracked under `feat-model-backends`.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1564 sub-surface (empty `allowed_operations` means unrestricted, not
   deny-all, merged in PR #1399): the operation-scope semantics shipped with NO

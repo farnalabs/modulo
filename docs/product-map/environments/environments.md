@@ -4,15 +4,22 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/environment_profiles.py
+  - backend/src/modulo/api/routes/pipelines.py
   - backend/src/modulo/db/crud/environment_profile.py
+  - backend/src/modulo/db/crud/pipeline_snapshot.py
+  - backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py
   - backend/src/modulo/core/runtime_provider
+  - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/api/routes/admin.py
   - frontend/src/views/runners
   - frontend/src/views/environment-profiles
+  - frontend/src/views/PipelineEditorView.vue
   - frontend/src/stores/environmentProfiles.ts
 unit-tests:
   - backend/tests/integration/crud/test_environment_profiles.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
+  - backend/tests/unit/api/test_pipeline_environment_profile_binding.py
+  - backend/tests/integration/test_environment_profile_scope_rls_guard.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
 bdd:
   - backend/tests/bdd/features/environments/environment_profiles.feature
@@ -95,6 +102,39 @@ into the Runners page as redirects.)
       EnvironmentProfileForm.vue`, `frontend/src/__tests__/environment-profiles/
       EnvironmentProfileForm.spec.ts`, `backend/src/modulo/core/runtime_provider/
       k8s.py`)
+- [x] The pipeline to environment-profile binding is settable per pipeline
+      (FAR-1558): `PATCH /api/v1/pipelines/{pipeline_id}` accepts
+      `environment_profile_id` (omit to leave unchanged, explicit `null` clears
+      and restores the default route), validated in the route against the
+      EFFECTIVE post-update owner team — the profile must exist in the caller's
+      organisation and be either org-visible or a team profile owned by that
+      team; a foreign or cross-team id is 422 (never 404, which would confirm it
+      exists) and a team/visibility change re-validates a STORED binding so a
+      move can never strand an ineligible profile. The binding is frozen onto
+      every snapshot created afterwards
+      (`db/crud/pipeline_snapshot.create_snapshot_from_live_graph`), which is the
+      value dispatch reads; `NULL` keeps the historical default behaviour. The
+      team rule is enforced at ALL THREE writers of the invariant (bind time, a
+      pipeline scope change, and a profile scope change — the profile side
+      refuses a `PUT` that would strand an existing binding with 422
+      `environment_profile_binding_team_mismatch` BEFORE any write), through ONE
+      shared predicate + shared wire-code constants in `core/team_visibility.py`
+      so the three cannot drift; the profile-side bound-pipelines scan runs
+      team-blind (`db.crud.team_scope.team_blind_org_scope`, the FAR-1515
+      CRITICAL 1 mechanism) because a non-admin operator cannot see another
+      team's team-private pipeline in their own RLS context. The editor binds or
+      clears the profile from a labelled Environment profile select that renders
+      only while the `environment_profiles` plan feature is on, labels each
+      option with its provider tier, sends nothing for an untouched select, and
+      reverts on a refused/failed write with an alert region
+      (`backend/src/modulo/api/routes/pipelines.py`,
+      `backend/src/modulo/api/routes/environment_profiles.py`,
+      `backend/src/modulo/core/team_visibility.py`,
+      `backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py`,
+      `frontend/src/views/PipelineEditorView.vue`;
+      `unit-tests: test_pipeline_environment_profile_binding.py,
+      test_environment_profiles_routes.py,
+      test_environment_profile_scope_rls_guard.py`)
 
 ## Known Gaps
 
@@ -106,6 +146,16 @@ into the Runners page as redirects.)
   actual agent graph inside the workspace before release.
 
 ## QA History
+- 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1558 sub-surface (per-pipeline environment-profile binding, slices 1 and 2
+  merged in PRs #1396 and #1406): the binding shipped in the manifest
+  `feat-environments` registry but this human-readable tracker never mirrored
+  it, so a reader of the feature graph could not see the PATCH
+  `environment_profile_id` contract, the three-writer team-scope invariant, the
+  snapshot freeze, or the editor select. Added the checked behaviour line plus
+  the `pipelines.py` / `environment_profiles.py` / `core/team_visibility.py` /
+  migration `0289` / `PipelineEditorView.vue` and unit- and integration-test
+  citations.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1559 sub-surface (kubernetes provider type in the environment-profile
   form, merged in PR #1404): the form shipped the `kubernetes` provider while
