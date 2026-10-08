@@ -72,7 +72,7 @@ from modulo.db.models.run import (
     Run,
 )
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
-from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import (
     MAX_NODE_TIMEOUT_SECONDS,
     SAQ_SETUP_GRACE_DEFAULT_SECONDS,
@@ -6523,7 +6523,7 @@ async def _dispatcher_reconcile_body(
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                if not _is_row_lock_timeout(exc):
+                if not is_row_lock_timeout(exc):
                     raise
                 # FAR-1601: the transaction-scoped bound at the top of
                 # _reconcile_org fired (SQLSTATE 55P03) — a live writer
@@ -6649,27 +6649,6 @@ def _dispatcher_summary() -> dict[str, Any]:
     # parallel edit here.
     summary.update(_terminalizer_stats_defaults())
     return summary
-
-
-def _is_row_lock_timeout(exc: BaseException) -> bool:
-    """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
-
-    FAR-1601: every hot ``runs`` write inside one ``_reconcile_org`` org
-    transaction runs under a transaction-scoped bound issued as that
-    transaction's first statement: ``set_mutation_row_lock_timeout`` (from
-    ``db.crud.row_lock``, value ``mutation_row_lock_timeout_ms``). So a
-    contended row lock waits at most that long — never silently past the Fly
-    HAProxy 30-minute session window (the unbounded wait that got prod
-    connections culled mid-operation; FAR-1524 O11 / FAR-1584).
-
-    :func:`modulo.db.sqlstates.sqlstate_of` walks the whole chain
-    (``.orig``/``__cause__``/``__context__``, incl. savepoint-rollback
-    wrappers), so both the raw-driver and SQLAlchemy-wrapped shapes are
-    recognised — the same predicate ``core.dispatch._is_row_lock_timeout``
-    uses (FAR-1584). Any OTHER failure is not a lock timeout and keeps its own
-    contract.
-    """
-    return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
 
 
 async def _reconcile_org(
@@ -6844,7 +6823,7 @@ async def _reconcile_org(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if _is_row_lock_timeout(exc):
+            if is_row_lock_timeout(exc):
                 # FAR-1601: the bounded wait expired while a terminalizer (or
                 # the row select's locking read) held a contended ``runs`` row.
                 # Propagate OUT of the org transaction (which rolls back at the
