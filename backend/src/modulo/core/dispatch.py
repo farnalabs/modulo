@@ -285,8 +285,9 @@ async def _record_dispatched(session: AsyncSession, run_id: uuid.UUID) -> None:
     ``lock_timeout`` bound (FAR-1584): a contended row lock waits at most
     ``Settings.mutation_row_lock_timeout_ms`` (default 5 s), never the
     unbounded wait that let a silent session reach the HAProxy 30-minute
-    cull window. The bound is issued as this transaction's FIRST statement,
-    before the row lock is taken. On expiry the caller sees SQLSTATE 55P03
+    cull window. The bound is issued before the FIRST row lock this
+    transaction takes (the RLS ``set_config`` calls that precede it take no
+    locks). On expiry the caller sees SQLSTATE 55P03
     and handles it (``dispatch_run`` logs it and leaves the run pending for
     the next ``dispatcher_reconcile`` tick); this writer stays a dumb
     statement — no swallowing here.
