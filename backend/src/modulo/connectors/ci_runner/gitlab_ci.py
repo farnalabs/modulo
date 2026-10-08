@@ -60,15 +60,26 @@ class GitLabCIRunner(CIRunnerBase):
             timeout=30,
         )
 
-    def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+    def _parse_run(self, raw: dict[str, Any], project_ref: str = "") -> CIRun:
+        """Parse a pipeline payload into a :class:`CIRun`.
+
+        The id is qualified into ``project_id/pipeline_id`` — the exact form
+        ``get_run_status``/``get_run_logs`` consume (see the run-id contract on
+        ``CIRunnerBase``). The payload's own ``project_id`` wins (GitLab returns
+        it numerically even when the caller addressed the project by path);
+        ``project_ref`` is the caller's fallback. A payload with neither
+        yields ``""``, which trigger_run refuses to return.
+        """
         raw_status = raw.get("status", "")
         status = _STATUS_MAP.get(raw_status, CIRunStatus.UNKNOWN)
         duration = raw.get("duration")
         user = raw.get("user")
         raw_id = raw.get("id")
         raw_project_id = raw.get("project_id")
+        project = str(raw_project_id) if raw_project_id is not None else project_ref
+        run_id = "" if raw_id is None or not project else f"{project}/{raw_id}"
         return CIRun(
-            id=str(raw_id) if raw_id is not None else "",
+            id=run_id,
             pipeline_id=str(raw_project_id) if raw_project_id is not None else "",
             status=status,
             url=raw.get("web_url", ""),
@@ -115,7 +126,18 @@ class GitLabCIRunner(CIRunnerBase):
                 r = await client.post(f"/projects/{project_id}/pipeline", json=body)
                 r.raise_for_status()
                 data: dict[str, Any] = r.json()
-                return self._parse_run(data)
+                run = self._parse_run(data, project_ref=project_id)
+                # The id must be exactly what get_run_status/get_run_logs
+                # consume: 'project_id/pipeline_id' with a SINGLE slash (their
+                # parser partitions on the first one). A payload that cannot be
+                # read that way fails loud here — never an id the next call
+                # rejects while the pipeline already runs.
+                if run.id.count("/") != 1:
+                    raise ValueError(
+                        f"GitLab accepted the pipeline request for {project_id!r} but the response "
+                        "did not yield a consumable run id — refusing to return an unusable run id",
+                    )
+                return run
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:
@@ -131,7 +153,7 @@ class GitLabCIRunner(CIRunnerBase):
             async with self._client() as client:
                 r = await client.get(f"/projects/{project_id}/pipelines/{pipeline_id}")
                 r.raise_for_status()
-                return self._parse_run(r.json())
+                return self._parse_run(r.json(), project_ref=project_id)
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:
@@ -226,7 +248,7 @@ class GitLabCIRunner(CIRunnerBase):
                 r = await client.get(f"/projects/{pipeline_id}/pipelines", params=params)
                 r.raise_for_status()
                 raw_runs: list[dict[str, Any]] = r.json()
-                return [self._parse_run(run) for run in raw_runs]
+                return [self._parse_run(run, project_ref=pipeline_id) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:

@@ -41,6 +41,7 @@ from modulo.api.mcp_server import (
     _parse_mcp_datetime,
     _parse_uuid_param,
     _quantize_mcp_cost_rollup,
+    _reject_unsupported_dispatch_bindings,
     _resolve_run_node_output,
     _run_status_base,
     _run_status_detail,
@@ -922,6 +923,283 @@ class TestApplyNodeConnectorBinding:
         pipeline = SimpleNamespace(graph_nodes_json=None)
         result = _apply_node_connector_binding(pipeline, uuid.uuid4(), "missing", "github", "conn-1")
         assert result is not None
+
+    # FAR-1141 (MAJOR 9): the binding is PATCHED, never rebuilt from scratch.
+
+    def test_bind_preserves_an_existing_dispatch_action_and_input(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [
+            {
+                "id": str(nid),
+                "node_type": "connector",
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": "conn-0",
+                    "operation": "dispatch",
+                    "dispatch_action": "get_run_status",
+                    "input": {"run_id": "r-1"},
+                },
+            }
+        ]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        # only the instance changes: operation / dispatch_action are omitted
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
+        assert result is None
+        binding = nodes[0]["connector_binding"]
+        assert binding["instance_id"] == "conn-1"
+        assert binding["dispatch_action"] == "get_run_status"
+        assert binding["input"] == {"run_id": "r-1"}
+        assert binding["operation"] == "dispatch"
+
+    def test_bind_forces_non_idempotent_for_a_job_firing_binding(self) -> None:
+        """Parity with the REST model: a ``trigger_run`` binding is persisted
+        ``idempotent=false`` whatever the node's type."""
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "connector"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "github_actions_ci",
+            "conn-1",
+            operation="dispatch",
+            dispatch_action="trigger_run",
+        )
+        assert result is None
+        assert nodes[0]["idempotent"] is False
+
+    def test_bind_rejects_a_query_verb_on_a_dispatch_node(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "operation"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_rejects_a_non_ci_connector_for_a_dispatch_binding(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "linear",
+            "conn-1",
+            operation="dispatch",
+            connector_supports_dispatch=False,
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "connector_type"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_defaults_a_dispatch_node_verb_from_the_node_type(self) -> None:
+        """No explicit ``operation``: the stored graph records the verb the
+        engine will actually route, never an unstated default."""
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github_actions_ci", "conn-1")
+        assert result is None
+        assert nodes[0]["connector_binding"]["operation"] == "dispatch"
+
+    # FAR-1141 FIX 2: a dispatch verb on a node the engine never routes to a
+    # connector is REJECTED, never silently coerced to the resolver's "query".
+
+    @pytest.mark.parametrize(
+        ("node_type", "node_extra"),
+        [
+            ("sandbox_agent", {}),
+            ("agent", {"agent_id": str(uuid.uuid4())}),
+        ],
+    )
+    def test_bind_rejects_a_dispatch_verb_on_a_node_the_engine_never_routes(
+        self,
+        node_type: str,
+        node_extra: dict[str, Any],
+    ) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": node_type, **node_extra}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "github_actions_ci",
+            "conn-1",
+            operation="dispatch",
+            dispatch_action="trigger_run",
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "operation"
+        # rejected BEFORE anything is persisted - no coerced "query" survives.
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_rejects_an_unknown_operation_value(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(pipeline, nid, str(nid), "github", "conn-1", operation="bogus")
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "operation"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_rejects_an_unknown_dispatch_action_value(self) -> None:
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "dispatch"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline,
+            nid,
+            str(nid),
+            "github_actions_ci",
+            "conn-1",
+            operation="dispatch",
+            dispatch_action="bogus",
+        )
+        assert result is not None
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "dispatch_action"
+        assert "connector_binding" not in nodes[0]
+
+    def test_bind_still_accepts_a_query_verb_on_a_non_routed_node(self) -> None:
+        """The rejection is scoped to ``dispatch``: ``query``/``write`` on the
+        same shapes stay valid (the convert-to-agent endpoint persists one)."""
+        nid = uuid.uuid4()
+        nodes = [{"id": str(nid), "node_type": "sandbox_agent"}]
+        pipeline = SimpleNamespace(graph_nodes_json=nodes)
+        result = _apply_node_connector_binding(
+            pipeline, nid, str(nid), "github_actions_ci", "conn-1", operation="query"
+        )
+        assert result is None
+        assert nodes[0]["connector_binding"]["operation"] == "query"
+
+
+# ─── Instance-level dispatch capability on the full-graph write ────
+# FAR-1141 FIX 2: the MCP full-graph write validated only the caller-declared
+# ``binding.type``; REST resolves the bound INSTANCE's own type instead.
+
+
+def _session_returning_instances(rows: list[Any]) -> AsyncMock:
+    session = AsyncMock()
+
+    async def _execute(_statement: Any, *_args: Any, **_kwargs: Any) -> MagicMock:
+        scaler = MagicMock()
+        scaler.all.return_value = rows
+        result = MagicMock()
+        result.scalars.return_value = scaler
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _instance_row(cid: uuid.UUID, type_id: str) -> MagicMock:
+    instance = MagicMock()
+    instance.id = cid
+    instance.name = f"conn-{cid}"
+    instance.connector_type_id = type_id
+    return instance
+
+
+def _dispatch_graph(cid: uuid.UUID, type_id: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(uuid.uuid4()),
+            "node_type": "dispatch",
+            "connector_binding": {
+                "type": type_id,  # caller-declared: not authoritative
+                "instance_id": str(cid),
+                "operation": "dispatch",
+                "dispatch_action": "trigger_run",
+            },
+        }
+    ]
+
+
+class TestRejectUnsupportedDispatchBindings:
+    async def test_a_dispatch_binding_to_a_non_ci_instance_is_rejected(self) -> None:
+        cid = uuid.uuid4()
+        nodes = _dispatch_graph(cid, "github_actions_ci")
+        session = _session_returning_instances([_instance_row(cid, "linear")])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is not None
+        assert err["error"] == "validation_failed"
+        assert err["field"] == "connector_type"
+        assert "linear" in err["detail"]
+
+    async def test_a_dispatch_binding_to_a_ci_instance_is_accepted(self) -> None:
+        cid = uuid.uuid4()
+        nodes = _dispatch_graph(cid, "github_actions_ci")
+        session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
+    async def test_a_graph_without_a_dispatch_binding_issues_no_query(self) -> None:
+        nodes = [
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "router",
+                "connector_binding": {
+                    "type": "github",
+                    "instance_id": str(uuid.uuid4()),
+                    "operation": "query",
+                },
+            }
+        ]
+        session = _session_returning_instances([])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+        session.execute.assert_not_called()
+
+    async def test_an_unresolvable_instance_is_left_to_the_ordinary_checks(self) -> None:
+        cid = uuid.uuid4()
+        nodes = _dispatch_graph(cid, "github_actions_ci")
+        session = _session_returning_instances([])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
+
+    async def test_malformed_and_bindingless_nodes_are_skipped(self) -> None:
+        """A binding-less dispatch node, a non-dispatch node and a dispatch node
+        with an unparseable instance id are all skipped on BOTH passes — they
+        are the ordinary binding checks' business, never a guessed rejection."""
+        cid = uuid.uuid4()
+        nodes = [
+            _dispatch_graph(cid, "github_actions_ci")[0],
+            {"id": str(uuid.uuid4()), "node_type": "dispatch"},
+            {"id": str(uuid.uuid4()), "node_type": "agent"},
+            {
+                "id": str(uuid.uuid4()),
+                "node_type": "dispatch",
+                "connector_binding": {
+                    "type": "github_actions_ci",
+                    "instance_id": "not-a-uuid",
+                    "operation": "dispatch",
+                    "dispatch_action": "trigger_run",
+                },
+            },
+        ]
+        session = _session_returning_instances([_instance_row(cid, "github_actions_ci")])
+
+        err = await _reject_unsupported_dispatch_bindings(session, uuid.uuid4(), nodes)
+
+        assert err is None
 
 
 # ─── Parse eval ref ids ────────────────────────────────────────────

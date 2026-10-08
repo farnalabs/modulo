@@ -170,7 +170,7 @@ async def test_trigger_run(connector):
     )
     run = await connector.trigger_run(f"{_ORG}/{_PIPELINE}", branch="main")
     assert isinstance(run, CIRun)
-    assert run.id == "3"
+    assert run.id == "myorg/my-pipeline/3"
     assert run.pipeline_id == _PIPELINE
     assert run.status == CIRunStatus.IN_PROGRESS
     assert run.triggered_by == "alice"
@@ -193,7 +193,7 @@ async def test_get_run_status(connector):
         return_value=httpx.Response(200, json=body),
     )
     run = await connector.get_run_status(f"{_ORG}/{_PIPELINE}/3")
-    assert run.id == "3"
+    assert run.id == "myorg/my-pipeline/3"
     assert run.status == CIRunStatus.SUCCESS
 
 

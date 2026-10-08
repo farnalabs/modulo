@@ -1,5 +1,6 @@
 """GitHub Actions CI runner — triggers and observes workflow runs via the GitHub API."""
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -15,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
+
+#: Attempts to resolve a freshly-dispatched run through the latest-runs
+#: lookup. GitHub's runs listing is eventually consistent right after a
+#: dispatch accepts (204 No Content), so a single immediate miss must not be
+#: read as "no run exists".
+_LATEST_RUN_LOOKUP_ATTEMPTS = 3
+
+#: Pause between the bounded latest-runs lookup attempts. Module-level (never
+#: inlined) so tests patch it to zero instead of sleeping in wall-clock time.
+_LATEST_RUN_LOOKUP_RETRY_SECONDS = 1.0
 
 _STATUS_MAP: dict[str, CIRunStatus] = {
     "queued": CIRunStatus.QUEUED,
@@ -78,7 +89,15 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 return None
         return None
 
-    def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+    def _parse_run(self, raw: dict[str, Any], owner_repo: str = "") -> CIRun:
+        """Parse a workflow-run payload into a :class:`CIRun`.
+
+        ``owner_repo`` qualifies the id into the ``owner/repo/run_id`` form this
+        connector's ``get_run_status``/``get_run_logs`` consume — every
+        production call site passes the owner/repo it addressed the request
+        against (see the run-id contract on ``CIRunnerBase``). Without it the
+        raw payload id is returned for corrupt-payload hardening callers only.
+        """
         status: CIRunStatus
         raw_status = raw.get("status", "") or ""
         raw_conclusion = raw.get("conclusion")
@@ -92,8 +111,14 @@ class GitHubActionsCIRunner(CIRunnerBase):
 
         raw_id = raw.get("id")
         actor = raw.get("actor")
+        if raw_id is None:
+            run_id = ""
+        elif owner_repo:
+            run_id = f"{owner_repo}/{raw_id}"
+        else:
+            run_id = str(raw_id)
         return CIRun(
-            id=str(raw_id) if raw_id is not None else "",
+            id=run_id,
             pipeline_id=raw.get("workflow_id", ""),
             status=status,
             url=raw.get("html_url", ""),
@@ -155,9 +180,32 @@ class GitHubActionsCIRunner(CIRunnerBase):
         owner_repo: str,
         workflow_filename: str,
         branch: str,
+        dispatched_after: datetime,
     ) -> CIRun | None:
-        """Fetch the most recent run for a just-dispatched workflow, or None."""
-        params: dict[str, Any] = {"per_page": 1, "branch": branch or "main"}
+        """Fetch the run created for a just-dispatched workflow, or None.
+
+        GitHub answers a dispatch with 204 No Content and materialises the run
+        asynchronously, so the id can only come from this listing — and the
+        listing is NEWEST-FIRST with no time bound of its own. On a repository
+        with history an unbounded ``per_page=1`` lookup therefore resolves to
+        the PREVIOUS run while the new one is not visible yet, and that stale id
+        was handed to ``await_completion``, which then watched an unrelated job.
+
+        The lookup is bounded to runs created at/after *dispatched_after* —
+        captured BEFORE the dispatch POST, floored to the second by the ISO-8601
+        format — via GitHub's documented ``created`` search qualifier
+        (``>=YYYY-MM-DDTHH:MM:SSZ``), so a pre-dispatch run can never be
+        returned. An empty page means the new run is not visible YET: the
+        caller's bounded retry re-asks, then fails loud if it never appears.
+        (A local clock more than ~1 s AHEAD of GitHub's would exclude even the
+        new run — the failure is loud "no run id could be resolved", never a
+        wrong id.)
+        """
+        params: dict[str, Any] = {
+            "per_page": 1,
+            "branch": branch or "main",
+            "created": f">={dispatched_after:%Y-%m-%dT%H:%M:%SZ}",
+        }
         if workflow_filename:
             params["workflow_id"] = workflow_filename
         workflows_r = await client.get(
@@ -167,7 +215,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         workflows_r.raise_for_status()
         runs = _safe_records(workflows_r.json(), "workflow_runs")
         if runs:
-            return self._parse_run(runs[0])
+            return self._parse_run(runs[0], owner_repo=owner_repo)
         return None
 
     async def trigger_run(
@@ -180,21 +228,39 @@ class GitHubActionsCIRunner(CIRunnerBase):
             raise ValueError("pipeline_id is required")
         owner_repo, workflow_filename = self._split_pipeline_id(pipeline_id)
 
+        # Captured BEFORE the dispatch: the lower bound that keeps the
+        # post-dispatch listing from answering with a PREVIOUS run (see
+        # _latest_dispatched_run). One timestamp, floored to the second by the
+        # format, so it can only ever include the run we are about to fire.
+        dispatched_after = datetime.now(UTC)
         try:
             async with self._client() as client:
                 r = await self._post_dispatch(client, owner_repo, workflow_filename, branch, variables)
                 r.raise_for_status()
 
-                if r.status_code == 204:
-                    latest = await self._latest_dispatched_run(client, owner_repo, workflow_filename, branch)
-                    if latest is not None:
+                # GitHub's dispatch endpoints answer 204 No Content — the run
+                # is created asynchronously, so its id can only come from the
+                # latest-runs lookup. Retry that (eventually consistent) lookup
+                # a bounded number of times, then FAIL LOUD: an id the next
+                # get_run_status call would reject is never handed back.
+                attempts = _LATEST_RUN_LOOKUP_ATTEMPTS
+                for attempt in range(attempts):
+                    latest = await self._latest_dispatched_run(
+                        client,
+                        owner_repo,
+                        workflow_filename,
+                        branch,
+                        dispatched_after,
+                    )
+                    if latest is not None and latest.id:
                         return latest
-
-                return CIRun(
-                    id="",
-                    pipeline_id=pipeline_id,
-                    status=CIRunStatus.PENDING,
-                    url=f"https://github.com/{owner_repo}/actions",
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(_LATEST_RUN_LOOKUP_RETRY_SECONDS)
+                raise ValueError(
+                    f"GitHub accepted the dispatch for {owner_repo} but no run id could be resolved "
+                    f"(looked up the latest run {attempts} times, bounded to created>="
+                    f"{dispatched_after:%Y-%m-%dT%H:%M:%SZ}) — refusing to return an unusable run id; "
+                    f"check https://github.com/{owner_repo}/actions",
                 )
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
@@ -212,7 +278,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
             async with self._client() as client:
                 r = await client.get(f"/repos/{owner_repo}/actions/runs/{run_id_str}")
                 r.raise_for_status()
-                return self._parse_run(r.json())
+                return self._parse_run(r.json(), owner_repo=owner_repo)
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:
@@ -297,7 +363,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 r = await client.get(f"/repos/{owner_repo}/actions/runs", params=params)
                 r.raise_for_status()
                 raw_runs = _safe_records(r.json(), "workflow_runs")
-                return [self._parse_run(run) for run in raw_runs]
+                return [self._parse_run(run, owner_repo=owner_repo) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
             raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
         except httpx.HTTPError as exc:

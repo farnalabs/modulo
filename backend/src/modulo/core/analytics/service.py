@@ -737,6 +737,11 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     # FAR-1463: node-deadline watchdog firings — appended so an operator can
     # see a firing per run (re-dispatch AND terminal-fail) without log access.
     RunDailyFact.node_deadline_watchdog_fired_count,
+    # FAR-1141 / ADR-042: the run's execution origin ('dispatched' / NULL).
+    # An export is a claim-ready run surface — the CSV/NDJSON an auditor pulls
+    # must be able to separate runs whose work happened on the customer's
+    # substrate from ones Modulo executed, exactly like the bucketed series.
+    RunDailyFact.execution_origin,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)

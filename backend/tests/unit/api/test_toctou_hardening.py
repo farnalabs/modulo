@@ -664,7 +664,7 @@ class TestTeamGateBoundedLockWait:
         tuned = MagicMock()
         tuned.mutation_row_lock_timeout_ms = 1234
 
-        with patch("modulo.api.routes.pipelines.get_settings", return_value=tuned):
+        with patch("modulo.db.crud.row_lock.get_settings", return_value=tuned):
             await _reapply_team_gate_inside_mutation_txn(session, _admin_principal(), _PIPELINE)
 
         timeout_calls = [params for sql, params in log if "lock_timeout" in sql]

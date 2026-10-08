@@ -1112,6 +1112,24 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > stale Known Gap and restored `status: covered`. `_ORPHANED_BDD_FEATURES` stays
 > empty.
 
+> **Closed this walk (2026-10-07, follow-up):** closed the `feat-pipelines`
+> untracked sub-surface for FAR-1530 — the **per-pipeline Paused execution
+> state** (PR #1367), which shipped after the first 2026-10-07 walk and was
+> described by neither product-map layer (that walk's FAR-1528 entry covered
+> only archived / soft-deleted pipelines). A pipeline is now PRESENT and
+> VISIBLE but NON-EXECUTING via the unified `run_enabled` /
+> `run_disabled_reason` (`operator` | `circuit_breaker`) / `run_disabled_at`
+> columns (migration 0286), settable through `POST /pipelines/{id}/pause` and
+> cleared through `.../resume` (REFUSED 409 while the spend circuit breaker's
+> witness holds; unarchive lands in Paused, not Active), and enforced at
+> `create_run` for every origin via `PipelineNotRunnableError` state `paused`
+> → 409. Tracked in the manifest `feat-pipelines` registry +
+> `pipelines/pipelines.md`; the `feat-runs` FAR-1528 line was extended to name
+> the `paused` state, and `feat-apply` / `feat-costs` gained the declarative
+> pause (`run_enabled: false`, one-way) and the breaker's fold into the unified
+> state (an operator pause survives a breaker reset). `_ORPHANED_BDD_FEATURES`
+> stays empty.
+
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
 - [feat-plugins](admin/plugins.md) => PRD N/A

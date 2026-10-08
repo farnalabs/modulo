@@ -79,6 +79,25 @@
     }
 
     # -------------------------------------------------------------------------
+    # OAuth Discovery Metadata — RFC 8414 / RFC 9728 (pre-auth, JSON)
+    # -------------------------------------------------------------------------
+    # Must reach the backend: the frontend catch-all at the bottom of this file
+    # would otherwise answer /.well-known/* with the SPA shell (text/html) and
+    # stock MCP clients could not bootstrap OAuth against the remote MCP server.
+    # Placed above the catch-all so it wins; Caddy handles its own
+    # /.well-known/acme-challenge before any user handler, so ACME is unaffected.
+    @wellknown {
+        path /.well-known/*
+    }
+    handle @wellknown {
+        reverse_proxy {$BACKEND_HOST:localhost:8000} {
+            header_up X-Real-IP       {http.request.remote.host}
+            header_up X-Forwarded-For {http.request.remote.host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # -------------------------------------------------------------------------
     # MCP SSE Endpoint — server-sent events (no response buffering)
     # -------------------------------------------------------------------------
     @mcp {

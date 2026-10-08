@@ -11,8 +11,10 @@ each resource's ``owner_team_id`` and rejecting access to pipelines/runs owned
 by a different team with a ``team_boundary_violation`` error.
 """
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +23,7 @@ import pytest
 from modulo.api.mcp_server import (
     _ctx_team_id,
     _ctx_team_id_val,
+    _pipeline_team_gate,
     _team_scope_error,
     _team_scoped_key_mismatch,
     bind_connector_to_node,
@@ -50,6 +53,7 @@ from modulo.api.mcp_server import (
     update_pipeline_graph,
     update_trigger,
 )
+from modulo.api.team_scope import TeamGateDenial, evaluate_team_gate
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
@@ -689,9 +693,10 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         _ctx_team_id.set(_TEAM_A)
         pipeline_id = uuid.uuid4()
         session = AsyncMock()
+        scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="org")
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
         ):
             mock_session.return_value = _make_session_context(session)
             result = await create_trigger(pipeline_id=str(pipeline_id))
@@ -740,9 +745,10 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         trigger.pipeline_id = uuid.uuid4()
         session = AsyncMock()
         session.execute.return_value = _make_execute_result(trigger)
+        scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="team")
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
         ):
             mock_session.return_value = _make_session_context(session)
             result = await update_trigger(trigger_id=str(trigger_id))
@@ -757,9 +763,10 @@ class TestTriggerTeamScope(_OperatorAuthContext):
         trigger.pipeline_id = uuid.uuid4()
         session = AsyncMock()
         session.execute.return_value = _make_execute_result(trigger)
+        scope = SimpleNamespace(owner_team_id=_TEAM_B, visibility="team")
         with (
             patch("modulo.api.mcp_server._session") as mock_session,
-            patch("modulo.api.mcp_server._pipeline_owner_team_id", AsyncMock(return_value=_TEAM_B)),
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
             patch("modulo.db.crud.trigger.soft_delete_trigger", AsyncMock()) as mock_delete,
         ):
             mock_session.return_value = _make_session_context(session)
@@ -1301,3 +1308,292 @@ class TestCrudTeamFilterSQL:
         sql = self._compile(captured[0])
         assert "pipelines.owner_team_id IS NULL" in sql, "org-level pipelines must stay visible"
         assert f"pipelines.owner_team_id = '{team}'" in sql, "own-team pipelines must be visible"
+
+
+class TestUserTeamPrivateDenial:
+    """Direct unit tests for the FAR-1513 user-leg gate (via evaluate_team_gate).
+
+    The user-JWT leg of ``_pipeline_team_gate`` denies a user principal that is
+    not a member of the team owning a team-private pipeline. The matrix lives
+    in ``modulo.api.team_scope.evaluate_team_gate`` (the pipeline graph gate
+    shares it), so the denial scenarios are asserted against that helper
+    directly. It must fail closed: an unrecognised visibility value or a
+    degraded (unset) user context is a denial, never a bypass.
+
+    A team-scoped key is NOT represented here: keys are bounded above the
+    gate by ``_team_scoped_key_mismatch`` (see TestTriggerTeamScope), so the
+    gate itself never sees a key identity — covered by the caller tests.
+    """
+
+    async def _deny(
+        self,
+        *,
+        owner: uuid.UUID | None,
+        role: str | None = "operator",
+        visibility: str | None = "team",
+        member: bool = False,
+        user_id: uuid.UUID | None = _PLACEHOLDER_USER_ID,
+    ) -> TeamGateDenial | None:
+        session = AsyncMock()
+        with (
+            patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=member)),
+        ):
+            return await evaluate_team_gate(
+                session,
+                row_present=True,
+                owner_team_id=owner,
+                visibility=visibility,
+                account_id=user_id,
+                org_role=role,
+                team_key_id=None,
+            )
+
+    async def test_org_level_pipeline_passes(self) -> None:
+        assert await self._deny(owner=None) is None
+
+    async def test_org_admin_bypasses(self) -> None:
+        assert await self._deny(owner=_TEAM_A, role="admin") is None
+
+    async def test_org_visible_pipeline_passes(self) -> None:
+        assert await self._deny(owner=_TEAM_A, visibility="org") is None
+
+    async def test_null_visibility_pipeline_passes(self) -> None:
+        assert await self._deny(owner=_TEAM_A, visibility=None) is None
+
+    async def test_team_member_passes(self) -> None:
+        assert await self._deny(owner=_TEAM_A, visibility="team", member=True) is None
+
+    async def test_non_member_denied(self) -> None:
+        denial = await self._deny(owner=_TEAM_A, visibility="team", member=False)
+        assert denial is not None
+        assert denial.kind == "membership"
+
+    async def test_unknown_visibility_fails_closed(self) -> None:
+        # An unrecognised visibility value must NOT skip the membership gate.
+        denial = await self._deny(owner=_TEAM_A, visibility="legacy", member=False)
+        assert denial is not None
+        assert denial.kind == "membership"
+        assert "Not a member" in denial.detail
+
+    async def test_unset_user_context_denied(self) -> None:
+        # Fail closed: a degraded (unset) user context must not bypass the gate.
+        denial = await self._deny(owner=_TEAM_A, visibility="team", user_id=None)
+        assert denial is not None
+        assert denial.kind == "membership"
+
+
+class TestTriggerUserTeamGate(_OperatorAuthContext):
+    """FAR-1513: the user-JWT leg must not bypass the pipeline team gate.
+
+    ``_AuthContext.setup_method`` leaves ``_ctx_team_id`` unset (None), so the
+    team-scoped-key checks pass and the user-leg gate is what must deny a
+    non-member against a team-private pipeline.
+    """
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_create_trigger_denied_for_non_member(self, mock_validate_auth: AsyncMock) -> None:
+        pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
+            patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=False)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await create_trigger(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+        assert "not a member" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_update_trigger_denied_for_non_member(self, mock_validate_auth: AsyncMock) -> None:
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(trigger)
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
+            patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=False)),
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await update_trigger(trigger_id=str(trigger_id))
+
+        assert result["error"] == "team_boundary_violation"
+        assert "not a member" in result["detail"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_delete_trigger_denied_for_non_member(self, mock_validate_auth: AsyncMock) -> None:
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(trigger)
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
+            patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=False)),
+            patch("modulo.db.crud.trigger.soft_delete_trigger", new_callable=AsyncMock) as mock_delete,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await delete_trigger(trigger_id=str(trigger_id))
+
+        assert result["error"] == "team_boundary_violation"
+        mock_delete.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_delete_trigger_allowed_for_team_member(self, mock_validate_auth: AsyncMock) -> None:
+        trigger_id = uuid.uuid4()
+        trigger = MagicMock()
+        trigger.pipeline_id = uuid.uuid4()
+        session = AsyncMock()
+        session.execute.return_value = _make_execute_result(trigger)
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with (
+            patch("modulo.api.mcp_server._session") as mock_session,
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope)),
+            patch("modulo.api.team_scope.team_membership_exists", AsyncMock(return_value=True)),
+            patch("modulo.db.crud.trigger.soft_delete_trigger", new_callable=AsyncMock) as mock_delete,
+        ):
+            mock_session.return_value = _make_session_context(session)
+            result = await delete_trigger(trigger_id=str(trigger_id))
+
+        mock_delete.assert_awaited_once()
+        assert result["deleted"] is True
+
+
+class TestTriggerUserMembershipGate(_OperatorAuthContext):
+    """A USER principal (not a team-scoped key) creating a trigger on another
+    team's pipeline via MCP must go through the shared ``evaluate_team_gate``
+    membership matrix (FAR-1513 CRITICAL fix).
+
+    The gate input is the TEAM-BLIND scope read
+    (``pipeline_team_scope_team_blind``) — these tests patch that read and the
+    membership query, never the caller-facing owner lookup the old fail-open
+    pair used, so a hidden row cannot re-enter as an allow.
+    """
+
+    def _patches(self, owner: uuid.UUID, *, membership: bool) -> "contextlib.ExitStack[object]":
+        """Patches: team-blind scope read is user-visible enough to evaluate,
+        membership query resolves to the given boolean."""
+        scope = SimpleNamespace(owner_team_id=owner, visibility="team")
+        stack = contextlib.ExitStack()
+        stack.enter_context(
+            patch("modulo.db.crud.team_scope.pipeline_team_scope_team_blind", AsyncMock(return_value=scope))
+        )
+        stack.enter_context(
+            patch(
+                "modulo.api.team_scope.team_membership_exists",
+                AsyncMock(return_value=membership),
+            )
+        )
+        stack.enter_context(
+            patch("modulo.api.mcp_server._session", MagicMock(return_value=_make_session_context(AsyncMock())))
+        )
+        return stack
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_user_non_member_cannot_create_trigger_on_other_teams_private_pipeline(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from modulo.api.mcp_server import _MSG_USER_NOT_TEAM_MEMBER
+
+        pipeline_id = uuid.uuid4()
+        with self._patches(_TEAM_B, membership=False):
+            result = await create_trigger(pipeline_id=str(pipeline_id))
+
+        assert result["error"] == "team_boundary_violation"
+        assert result["detail"] == _MSG_USER_NOT_TEAM_MEMBER
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_user_member_can_create_trigger_on_other_teams_private_pipeline(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        pipeline_id = uuid.uuid4()
+        with (
+            self._patches(_TEAM_B, membership=True),
+            patch(
+                "modulo.api.mcp_server._validate_ongoing_trigger_create",
+                AsyncMock(return_value=(_datetime.now(_UTC), None)),
+            ),
+            patch("modulo.api.mcp_server._streak_status_for", AsyncMock(return_value="ok")),
+        ):
+            result = await create_trigger(pipeline_id=str(pipeline_id))
+
+        assert "error" not in result
+        assert result["pipeline_id"] == str(pipeline_id)
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    async def test_user_role_admin_bypasses_membership_for_other_teams_pipeline(
+        self, mock_validate_auth: AsyncMock
+    ) -> None:
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        from modulo.api.mcp_server import _ctx_role
+
+        pipeline_id = uuid.uuid4()
+        _ctx_token = _ctx_role.set("admin")
+        try:
+            with (
+                self._patches(_TEAM_B, membership=False),
+                patch(
+                    "modulo.api.mcp_server._validate_ongoing_trigger_create",
+                    AsyncMock(return_value=(_datetime.now(_UTC), None)),
+                ),
+                patch("modulo.api.mcp_server._streak_status_for", AsyncMock(return_value="ok")),
+            ):
+                result = await create_trigger(pipeline_id=str(pipeline_id))
+
+            assert "error" not in result
+            assert result["pipeline_id"] == str(pipeline_id)
+        finally:
+            _ctx_role.reset(_ctx_token)
+
+    # NOTE: an unset user identity is unreachably below create_trigger — the
+    # tool resolves _ctx_user_id_val() BEFORE the gate and raises
+    # McpAuthContextError — so the fail-closed unset-user row is asserted at
+    # the matrix level (TestUserTeamPrivateDenial::test_unset_user_context_denied).
+
+
+class TestPipelineTeamGateHelper(_AuthContext):
+    """Direct unit coverage of ``_pipeline_team_gate`` (FAR-1513).
+
+    The tool-level tests patch ``pipeline_team_scope_team_blind`` and assert on
+    the tools; these assert the helper's own resolved-row branches: an absent
+    row yields the ``pipeline_not_found`` envelope, and a team-scoped key on
+    its own team's row passes (returned owner, no denial) without consulting
+    the membership matrix.
+    """
+
+    async def test_absent_row_returns_pipeline_not_found(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",
+            AsyncMock(return_value=None),
+        ):
+            owner, denial = await _pipeline_team_gate(session, uuid.uuid4())
+
+        assert owner is None
+        assert denial is not None
+        assert denial["error"] == "pipeline_not_found"
+
+    async def test_team_scoped_key_on_own_team_row_passes(self) -> None:
+        _ctx_team_id.set(_TEAM_A)
+        session = AsyncMock()
+        scope = SimpleNamespace(owner_team_id=_TEAM_A, visibility="team")
+        with patch(
+            "modulo.db.crud.team_scope.pipeline_team_scope_team_blind",
+            AsyncMock(return_value=scope),
+        ):
+            owner, denial = await _pipeline_team_gate(session, uuid.uuid4())
+
+        assert owner == _TEAM_A
+        assert denial is None

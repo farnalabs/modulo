@@ -23,6 +23,7 @@ unit-tests:
   - backend/tests/unit/cli/test_apply_trigger.py
   - backend/tests/unit/cli/test_apply_drift.py
   - backend/tests/unit/cli/test_apply_git_content.py
+  - backend/tests/unit/cli/test_apply_run_enabled.py
   - backend/tests/unit/core/test_git_content.py
   - backend/tests/unit/pipeline_engine/test_sandbox_git_content.py
   - backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py
@@ -167,10 +168,34 @@ schemas, model-backends, pipelines and triggers features.
       (`backend/src/modulo/cli/apply/models.py`,
       `backend/src/modulo/cli/apply/pipeline_apply.py`,
       `backend/tests/unit/cli/test_apply_models.py`)
+- [x] Pipeline Paused execution state (FAR-1530): `modulo apply` can PAUSE a
+      pipeline declaratively with a declared `run_enabled: false` — an opt-in,
+      one-way management. `run_enabled: true` and an explicit `null` are rejected
+      at config load with an actionable message (a config may pause, never
+      force-resume, so a live operator / circuit-breaker cause is never
+      clobbered), an omitted key leaves a live pause untouched, and the PATCH
+      payload never carries `run_enabled` because the
+      `POST /api/v1/pipelines/{id}/pause` route is the only writer of the
+      run-state columns. A declared `false` is hashed into the canonical managed
+      view so `--diff` reports drift against a running pipeline and converges by
+      calling `POST .../pause` AFTER the create/PATCH; a dry-run never pauses and
+      an already-paused pipeline is `unchanged` with no writes
+      (`backend/src/modulo/cli/apply/models.py`
+      `_run_enabled_may_only_pause` / `manages_run_enabled`,
+      `backend/src/modulo/cli/apply/pipeline_apply.py`,
+      `backend/tests/unit/cli/test_apply_run_enabled.py`)
 
 ## Known Gaps
 
 ## QA History
+- 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
+  `feat-apply` sub-surface for FAR-1530: `modulo apply` gained declarative
+  pipeline pausing (`run_enabled: false`) in PR #1367 but neither the manifest
+  `feat-apply` registry nor this tracker described it. Added the behaviour line
+  to both layers, citing `cli/apply/models.py` (load-time rejection of `true`
+  / `null`, `manages_run_enabled` gating, managed-view hash) and
+  `cli/apply/pipeline_apply.py` (pause-after-write convergence, no
+  `run_enabled` on the PATCH payload), plus `test_apply_run_enabled.py`.
 - 2026-09-30: **Improve Architecture product-map walk** – closed the
   `feat-apply` sub-surface gap for FAR-1294: `modulo apply` gained the two
   pipeline runtime limits (`node_timeout_seconds` / `max_duration_seconds`)

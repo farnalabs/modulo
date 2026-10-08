@@ -55,7 +55,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import select
@@ -71,6 +71,7 @@ from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
+from modulo.db.models.trigger import Trigger
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,99 @@ class TeamScopedResource:
 
 
 TeamScopeProvider = Callable[[Request, AsyncSession], Awaitable[TeamScopedResource | None]]
+
+
+@dataclass(frozen=True)
+class TeamGateDenial:
+    """A resolved team-gate denial, surfaced kind-first so each caller maps it
+    to its own error idiom.
+
+    ``kind`` is one of: ``not_found`` (row absent or soft-deleted — REST maps
+    to 404, MCP to a ``pipeline_not_found`` envelope), ``boundary`` (a
+    team-scoped key touching another team's resource — both map to a
+    team-boundary message), ``membership`` (a user principal with no
+    membership in the owning team of a team-private row — REST 403, MCP a
+    ``team_boundary_violation`` envelope). Every field is fail-closed: the
+    evaluator never returns None for a state it cannot resolve.
+    """
+
+    kind: Literal["not_found", "boundary", "membership"]
+    status_code: int
+    detail: str
+    owner_team_id: uuid.UUID | None = None
+
+
+async def evaluate_team_gate(
+    session: AsyncSession,
+    *,
+    row_present: bool = True,
+    owner_team_id: uuid.UUID | None = None,
+    visibility: str | None = None,
+    account_id: uuid.UUID | None = None,
+    org_role: str | None = None,
+    team_key_id: uuid.UUID | None = None,
+) -> TeamGateDenial | None:
+    """The single-sourced team-gate matrix (RLS parity, FAR-1513).
+
+    One body for the REST ``require_team_membership_or_admin`` dependency and
+    the MCP per-row trigger guards so the visibility/membership matrix cannot
+    drift:
+
+    1. absent row → ``not_found`` (must be evaluated FIRST — a missing row
+       denies before any principal rule can allow it);
+    2. ``org_role == 'admin'`` → allowed (RLS parity: the org-admin sees every
+       team-scoped row);
+    3. non-team-private rows (``visibility`` org/NULL or no owning team) →
+       allowed (org-role floor enforced separately by the route's permission
+       dependency);
+    4. team-private: a team-scoped key is bounded to its own team
+       (``boundary`` denial when the owner differs — note this is the REST
+       semantic, evaluated ONLY on team-private rows; MCP bounds keys on any
+       owned row before calling this evaluator and passes ``team_key_id=None``);
+    5. team-private: a user principal must hold a membership row in the owning
+       team (``membership`` denial), and an unset user identity denies — it
+       cannot prove membership (fail closed, mirroring the RLS unknown-user
+       posture and the KeyError-cannot-pass soft-delete guard).
+    """
+    if not row_present:
+        return TeamGateDenial(
+            kind="not_found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resource not found",
+        )
+    if org_role == "admin":
+        return None
+    is_team_private = visibility not in ("org", None)
+    if not is_team_private or owner_team_id is None:
+        return None
+    if team_key_id is not None:
+        if owner_team_id == team_key_id:
+            return None
+        return TeamGateDenial(
+            kind="boundary",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"This API key is scoped to team {team_key_id} and cannot access "
+                f"resources owned by team {owner_team_id}"
+            ),
+            owner_team_id=owner_team_id,
+        )
+    if account_id is None:
+        return TeamGateDenial(
+            kind="membership",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of the team that owns this resource",
+            owner_team_id=owner_team_id,
+        )
+    is_member = await team_membership_exists(session, account_id=account_id, team_id=owner_team_id)
+    if not is_member:
+        return TeamGateDenial(
+            kind="membership",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of the team that owns this resource",
+            owner_team_id=owner_team_id,
+        )
+    return None
 
 
 async def team_membership_exists(
@@ -178,6 +272,64 @@ async def resolve_trigger_run_team_scope(
     stmt = select(Pipeline.owner_team_id, Pipeline.visibility).where(Pipeline.id == obj_id)
     if hasattr(Pipeline, "deleted_at"):
         stmt = stmt.where(Pipeline.deleted_at.is_(None))
+    result = await session.execute(stmt)
+    row = result.first()
+    if row is None:
+        return None
+    return TeamScopedResource(owner_team_id=row[0], visibility=row[1])
+
+
+async def resolve_trigger_team_scope(
+    request: Request,
+    session: AsyncSession,
+) -> TeamScopedResource | None:
+    """Resolve team scope from a ``trigger_id`` path param via its owning pipeline.
+
+    FAR-1513: trigger rows carry no team columns of their own, so a trigger's
+    access derives from its parent pipeline (same derivation as ``runs``,
+    ADR 038). The INNER JOIN to ``pipelines`` gives RLS parity for free: when
+    the caller cannot see the pipeline (team-private, non-member), the SELECT
+    returns no row and the dependency raises 404 — the documented runs-gate
+    behaviour. Runs inside the dependency's ``set_rls_org`` transaction, so
+    cross-org rows are already filtered.
+
+    A soft-deleted PIPELINE denies (row filtered → 404); a soft-deleted
+    TRIGGER still resolves so ``POST /triggers/{id}/restore`` reaches the
+    gate (a team-private trigger must not become restorable by being deleted).
+    The SELECT opts out of the global soft-delete auto-filter with the
+    documented ``execution_options(include_deleted=True)`` equivalent form -
+    without it the ``Trigger``-join side silently drops soft-deleted rows
+    and restore 404s before the gate runs. The pipeline side is still
+    deleted-filtered by the explicit ``Pipeline.deleted_at.is_(None)``
+    predicate.
+
+    Denial-naming divergence (FAR-1513 QA note): naming a row is per-consumer.
+    REST routes surface this resolver's missing row as the flat 404
+    ("Resource not found") — the endpoint would 404 on the same id anyway.
+    MCP trigger tools surface the SAME hidden-row state as a
+    ``pipeline_not_found`` envelope and re-evaluate hidden rows through the
+    team-blind read (``pipeline_team_scope_team_blind``) before denying, so
+    the two surfaces coincide on ALLOW/DENY but not on the denial's name.
+    Do not "reconcile" them by moving MCP to REST's detail string — the MCP
+    envelope names are the established client contract.
+    """
+    raw = request.path_params.get("trigger_id")
+    if raw is None:
+        return None
+    try:
+        trigger_id = uuid.UUID(str(raw))
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid trigger_id path parameter",
+        ) from None
+    stmt = (
+        select(Pipeline.owner_team_id, Pipeline.visibility)
+        .join(Trigger, Trigger.pipeline_id == Pipeline.id)
+        .where(Trigger.id == trigger_id)
+        .execution_options(include_deleted=True)
+        .where(Pipeline.deleted_at.is_(None))
+    )
     result = await session.execute(stmt)
     row = result.first()
     if row is None:

@@ -14,6 +14,16 @@
           <div class="flex items-center gap-3">
             <PageHeader :title="$t('views.RunDetailView.run_detail')" />
             <span :class="statusBadgeClass" :title="runStatusDescription(run.status, t, run.error_code)" :aria-label="runStatusDescription(run.status, t, run.error_code)" :data-testid="isSupersededRun(run.status, run.error_code) ? 'run-detail-status-superseded' : undefined"><span :class="isSupersededRun(run.status, run.error_code) ? '' : 'capitalize'">{{ isSupersededRun(run.status, run.error_code) ? $t('views.RunsListView.status_superseded') : runStatusLabel(run.status) }}</span></span>
+            <!-- FAR-1141: run provenance — a dispatched run (part of its work
+                 ran outside Modulo) must never read indistinguishably from one
+                 Modulo executed itself. Static label, so the visible text is
+                 the accessible name; no role/aria-live on a badge. -->
+            <span
+              v-if="isDispatchedRun(run.execution_origin)"
+              data-testid="run-detail-dispatched"
+              :title="$t('common.execution_origin.dispatched_hint')"
+              class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+            >{{ $t('common.execution_origin.dispatched') }}</span>
           </div>
           <p class="mt-1 text-sm text-muted-foreground">
             {{ $t('views.RunDetailView.pipeline_label') }} <span class="font-medium text-foreground">{{ formatRun(run) }}</span>
@@ -878,7 +888,7 @@ import Button from 'primevue/button'
 import { formatApiError } from '../lib/api/formatError'
 import { requestRunCancellation, requestRunRerun } from '../lib/api/runs'
 import { isHitlActionableStatus, isTerminalStatus } from '../constants/runStatuses'
-import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel, queuedCapacityReason, isSupersededRun, type RunCapacity } from '../utils/runUtils'
+import { triggerTypeLabel, heartbeatAgeSeconds, isHeartbeatStale, formatHeartbeatAge, runStatusLabel, runStatusDescription, cancelReasonLabel, queuedCapacityReason, isDispatchedRun, isSupersededRun, type RunCapacity } from '../utils/runUtils'
 import { shortId, formatRun } from '../utils/format'
 import { prettyPrintLog, stripAnsi, hasAnsiSequences } from '../utils/logTransforms'
 import { formatMoney } from '../lib/money'

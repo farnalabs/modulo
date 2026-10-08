@@ -596,6 +596,50 @@ def test_sandbox_agent_failed_is_known_non_retryable():
 
 
 # ---------------------------------------------------------------------------
+# FAR-1141 — dispatch.wait_timeout (a wait timeout is NEVER retried into a
+# second external job)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_wait_timeout_registered_and_never_retryable():
+    """``dispatch.wait_timeout`` is a registry entry with ``retryable=False``.
+
+    The ADR contract: a dispatch node's ``await_completion`` window expiring is
+    terminal — the job already exists on the customer's substrate, so a retry
+    would fire a SECOND external job. ``retryable=False`` is what every
+    registry-driven consumer (retry defaults, alert matcher, notifier) reads."""
+    assert "dispatch.wait_timeout" in known_error_codes()
+    spec = ERROR_CODE_REGISTRY["dispatch.wait_timeout"]
+    assert spec.error_class == "node"
+    assert spec.retryable is False
+    assert spec.alert_severity == "warning"
+    assert spec.guidance
+    assert is_retryable("dispatch.wait_timeout") is False
+
+
+def test_dispatch_wait_timeout_exception_class_maps_to_dotted_code():
+    """The executor's generic catch publishes ``type(exc).__name__`` — the raw
+    class name must resolve to the dotted code (never the ``harness.unknown``
+    fallback), and every spelling of it must be NON-retryable."""
+    raw_name = "DispatchWaitTimeoutError"
+    assert map_legacy_code(raw_name) == "dispatch.wait_timeout"
+    assert map_legacy_code("dispatch.wait_timeout") == "dispatch.wait_timeout"
+    assert is_retryable(raw_name) is False
+    assert is_retryable("dispatch.wait_timeout") is False
+    assert class_for(raw_name) == "node"
+    variants = expand_code_variants("dispatch.wait_timeout")
+    assert raw_name in variants
+    assert "dispatch.wait_timeout" in variants
+
+
+def test_dispatch_wait_timeout_alias_target_is_registered():
+    """Alias -> registry integrity for the FAR-1141 code (also covered by the
+    global conflict guard, pinned here so a drift in either map fails loudly)."""
+    assert LEGACY_ALIASES["DispatchWaitTimeoutError"] == "dispatch.wait_timeout"
+    assert not error_code_map_conflicts()
+
+
+# ---------------------------------------------------------------------------
 # FAR-589 D3b � bare-name uniqueness guard + unmapped-fallback signal
 # ---------------------------------------------------------------------------
 

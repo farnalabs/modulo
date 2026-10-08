@@ -71,6 +71,7 @@ from modulo.api.middleware.sensitive_mask import (
 )
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
+from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
 from modulo.auth.api_key import (
     ApiKeyGrantsUnavailableError,
@@ -161,7 +162,7 @@ from modulo.core.mcp.scope_validator import (
 )
 from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_error
 from modulo.core.rate_limiter import TokenBucketRegistry
-from modulo.core.runtime_config.key_bridge import get_public_url
+from modulo.core.runtime_config.key_bridge import public_url_is_configured
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
@@ -214,6 +215,7 @@ _MSG_ERROR_TOKEN_REVOKED = "error: Token revoked or expired - re-authenticate"  
 _MSG_DB_MIGRATION_REQUIRED = "Database migration required. Run `alembic upgrade head`."
 _MSG_DB_MIGRATION_REQUIRED_HEADS = "Database migration required. Run alembic upgrade heads."
 _MSG_TRIGGER_NOT_FOUND = "Trigger not found"
+_MSG_USER_NOT_TEAM_MEMBER = "You are not a member of the team that owns this pipeline"
 _MSG_UUID_PARSE_FAILED = "UUID parse failed"
 _MSG_EVAL_DEF_CREATE_FAILED = "create_eval_definition failed"
 _MSG_EVAL_DEF_UPDATE_FAILED = "update_eval_definition failed"
@@ -613,6 +615,69 @@ async def _run_owner_team_id(session: AsyncSession, run: Run) -> uuid.UUID | Non
     if run.owner_team_id is not None:
         return run.owner_team_id
     return await _pipeline_owner_team_id(session, run.pipeline_id)
+
+
+async def _pipeline_team_gate(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+) -> tuple[uuid.UUID | None, dict[str, Any] | None]:
+    """Fail-closed team gate for MCP trigger mutations (FAR-1513 CRITICAL fix).
+
+    Replaces the fail-open pair ``(caller-facing owner read +
+    _user_team_private_denial on the RLS-hidden visibility)``: a caller-facing
+    read returns NOTHING for a team-private pipeline the principal cannot see,
+    so ``owner → None`` passed the key-boundary check (no owned team = no
+    boundary) and the unknown visibility passed the membership matrix. The
+    principal's real denial was invisible because the inputs to the decision
+    were themselves team-filtered.
+
+    This gate resolves the row through ``pipeline_team_scope_team_blind`` (a
+    ONE-read team-blind flip of ``app.execution_context``) and re-evaluates on
+    the RESOLVED row:
+
+    1. row absent (or soft-deleted) in the org → ``pipeline_not_found``
+       envelope — a hidden row is a denial, never an allow;
+    2. team-scoped key boundary applied on the RESOLVED owner (MCP semantics:
+       the boundary applies to any owned pipeline, org-visible included —
+       unlike the REST dependency, which bounds keys only on team-private
+       rows);
+    3. key principals pass (their memberships are irrelevant);
+    4. user principals run the shared ``evaluate_team_gate`` matrix
+       (admin bypass / org-visible allow / membership-or-deny, fail closed on
+       an unset user identity).
+
+    Returns ``(owner_team_id, denial)``: ``owner_team_id`` is the resolved
+    effective owner (None for an org-level pipeline); ``denial`` is the
+    envelope the caller MUST return (and never mutate) when the principal may
+    not proceed.
+    """
+    from modulo.api.constants import MSG_PIPELINE_NOT_FOUND
+    from modulo.api.team_scope import evaluate_team_gate
+    from modulo.db.crud.team_scope import pipeline_team_scope_team_blind
+
+    scope = await pipeline_team_scope_team_blind(session, pipeline_id)
+    if scope is None:
+        return None, {"error": "pipeline_not_found", "detail": MSG_PIPELINE_NOT_FOUND}
+    if _team_scoped_key_mismatch(scope.owner_team_id):
+        return scope.owner_team_id, _team_scope_error("pipeline", str(pipeline_id))
+    if _ctx_team_id_val() is not None:
+        # A team-scoped key that passed the boundary has no membership matrix.
+        return scope.owner_team_id, None
+    denial = await evaluate_team_gate(
+        session,
+        row_present=True,
+        owner_team_id=scope.owner_team_id,
+        visibility=scope.visibility,
+        account_id=_ctx_user_id_val(),
+        org_role=_ctx_role_val() or "",
+        team_key_id=None,  # keys were bounded above with MCP's row-independent semantics
+    )
+    if denial is not None:
+        return scope.owner_team_id, {
+            "error": "team_boundary_violation",
+            "detail": _MSG_USER_NOT_TEAM_MEMBER,
+        }
+    return scope.owner_team_id, None
 
 
 # PRD §7.18: MCP trigger_pipeline is limited to 60 calls/min per client. All
@@ -1139,11 +1204,48 @@ async def validate_current_auth() -> bool:
         return False
 
 
+def _resource_metadata_challenge(request: Request) -> dict[str, str]:
+    """``WWW-Authenticate`` challenge pointing at the RFC 9728 metadata.
+
+    A stock MCP harness (Claude Code 2.1.290 observed) learns where to start
+    OAuth from this header on the MCP ``401``: without it the client has no
+    way to discover ``/.well-known/oauth-protected-resource`` and falls back
+    to a manual override, which is exactly the friction FAR-1476 removes.
+
+    ONLY unauthenticated ``401`` responses carry it. ``403``/policy denials
+    come from an authenticated principal that is being told "not allowed" —
+    inviting it to re-authenticate would be wrong — so they never get it.
+    """
+    return {
+        "WWW-Authenticate": f'Bearer resource_metadata="{protected_resource_metadata_url(request)}"',
+    }
+
+
+def _with_resource_metadata(response: Response, request: Request) -> Response:
+    """Attach the RFC 9728 challenge to a ``401``; leave any other status alone.
+
+    The token-family failures are built by ``_verify_oauth_token_family``,
+    which is deliberately request-less (it documents that it is called
+    without a request object), so it cannot build the absolute
+    ``resource_metadata`` URL itself. The header is attached here instead, at
+    the middleware boundary where ``request`` is in scope. ``403``/policy
+    denials and ``5xx`` pass through untouched — only an *unauthenticated*
+    ``401`` should invite the client to fetch OAuth metadata — and the
+    ``WWW-Authenticate`` presence check keeps the operation idempotent should
+    the helper ever set it itself.
+    """
+    if response.status_code == 401 and "WWW-Authenticate" not in response.headers:
+        response.headers.update(_resource_metadata_challenge(request))
+    return response
+
+
 def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None]:
     """Extract the Bearer token from the Authorization header.
 
     Returns ``(token, None)`` on success or ``(None, error_response)`` when the
-    header is missing or not a Bearer token.
+    header is missing or not a Bearer token. The ``401`` carries the RFC 9728
+    ``WWW-Authenticate`` challenge so an unauthenticated client can discover
+    the OAuth metadata it needs to connect.
     """
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -1151,6 +1253,7 @@ def _extract_bearer_token(request: Request) -> tuple[str | None, Response | None
             '{"error":"unauthorized","detail":"Bearer token required"}',
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
+            headers=_resource_metadata_challenge(request),
         )
     token = auth_header[len("Bearer ") :].strip()
     return token, None
@@ -1379,6 +1482,7 @@ async def _authenticate_api_key(
             '{"error":"unauthorized","detail":"Invalid or revoked API key"}',
             status_code=401,
             media_type=_CT_APPLICATION_JSON,
+            headers=_resource_metadata_challenge(request),
         )
     except ApiKeyGrantsUnavailableError:
         # FAR-1477: grant flag unreadable -> fail closed as 503 (retryable), not 401.
@@ -1433,6 +1537,7 @@ async def _authenticate_oauth_jwt(
                     '{"error":"unauthorized","detail":"Invalid or expired access token"}',
                     status_code=401,
                     media_type=_CT_APPLICATION_JSON,
+                    headers=_resource_metadata_challenge(request),
                 ),
                 None,
             )
@@ -1714,10 +1819,13 @@ class McpAuthMiddleware(BaseHTTPMiddleware):
             await _set_authz_enforce(_ctx_org_id.get())
             return await gated_next(request)
 
-        # Verify token family is not blacklisted.
+        # Verify token family is not blacklisted. That helper is deliberately
+        # request-less, so the RFC 9728 challenge is attached here (every
+        # other 401 below is built by a helper that has `request` in scope
+        # and sets the header itself).
         family_err = await _verify_oauth_token_family(token, claims)
         if family_err is not None:
-            return family_err
+            return _with_resource_metadata(family_err, request)
 
         return await _finalize_oauth_principal(request, token, claims, gated_next)
 
@@ -2542,6 +2650,8 @@ async def set_pipeline_owners(
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
     own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
@@ -2551,6 +2661,12 @@ def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str,
         "pipeline_id": str(r.pipeline_id),
         "status": r.status,
         "trigger_type": r.trigger_type,
+        # FAR-1141 / ADR-042: a dispatched run must never read
+        # indistinguishably from one Modulo executed. ``getattr`` degrades a
+        # partial run stand-in (no column loaded) to ``None``; ``_optional_str``
+        # then degrades a ``MagicMock``'s unset attribute the same way
+        # ``cancel_reason`` does on the REST list item.
+        "execution_origin": _optional_str(getattr(r, "execution_origin", None)),
         "run_number": r.run_number,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "started_at": r.started_at.isoformat() if r.started_at else None,
@@ -2909,7 +3025,10 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
         "and error_code for filtering/grouping by failure code. `dimension` groups the "
         "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "
-        "`team` or `error_code` — which is how per-trigger latency is read. The result "
+        "`team`, `error_code` or `execution_origin` — which is how per-trigger latency is "
+        "read, and how a dispatched run is told apart from one Modulo executed "
+        "(`execution_origin` groups on the FAR-1141 run provenance column: `dispatched` "
+        "vs NULL). The result "
         "also carries a `deep_link` to the /analytics view pre-filtered with the same "
         "parameters — share that link instead of dumping the raw buckets. Requires "
         "the analytics.query permission and the analytics_page plan feature."
@@ -3230,6 +3349,91 @@ def _validate_graph_update(nodes: list[dict[str, Any]], edges: list[dict[str, An
     return None
 
 
+async def _reject_unsupported_dispatch_bindings(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """FAR-1141 FIX 2: instance-level CI-runner capability check for MCP graph writes.
+
+    ``_validate_graph_update`` only ever inspects the caller-DECLARED
+    ``connector_binding.type`` string, which a caller controls independently of
+    what it is bound to. REST additionally runs
+    ``GraphValidator._check_dispatch_binding_capabilities`` against the bound
+    INSTANCE's own ``connector_type_id`` on every graph save, and
+    ``bind_connector_to_node`` was fixed to resolve it from the instance row
+    too — so the MCP FULL-GRAPH write was the one surface that could persist a
+    dispatch binding to a Linear/Slack instance and defer the failure to run
+    time as an ``AttributeError``-shaped error after the job should have fired.
+
+    Same posture as the validator: a node whose binding routes the ``dispatch``
+    verb is checked; an instance that cannot be resolved, or one with an unset
+    ``connector_type_id``, is SKIPPED (the team gate / ordinary binding checks
+    cover those shapes); a type we cannot prove implements the four operations
+    fails CLOSED. Returns a standard ``validation_failed`` envelope, or ``None``
+    to let the write proceed. No query is issued when no dispatch binding exists.
+    """
+    from sqlalchemy import select
+
+    from modulo.connectors.base import connector_binding_operation, connector_type_supports_dispatch
+    from modulo.db.models.connector_instance import ConnectorInstance
+
+    target_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+            continue
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            continue
+        try:
+            target_ids.add(uuid.UUID(str(binding.get("instance_id"))))
+        except (TypeError, ValueError):
+            continue
+    if not target_ids:
+        return None
+
+    rows = (
+        (
+            await s.execute(
+                select(ConnectorInstance).where(
+                    ConnectorInstance.organisation_id == org_id,
+                    ConnectorInstance.id.in_(target_ids),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    found: dict[uuid.UUID, Any] = {row.id: row for row in rows}
+
+    for node in nodes:
+        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+            continue
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            continue
+        try:
+            cid = uuid.UUID(str(binding.get("instance_id")))
+        except (TypeError, ValueError):
+            continue
+        instance = found.get(cid)
+        if instance is None:
+            continue
+        type_id = str(instance.connector_type_id or "").strip()
+        if not type_id or connector_type_supports_dispatch(type_id):
+            continue
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": (
+                f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) has type "
+                f"{type_id!r}, which does not implement the CI-runner operations "
+                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires"
+            ),
+        }
+    return None
+
+
 async def _replace_pipeline_graph_txn(
     org_id: uuid.UUID,
     pid: uuid.UUID,
@@ -3247,7 +3451,6 @@ async def _replace_pipeline_graph_txn(
     envelope (``pipeline_not_found`` / team-scope / connector-team-mismatch)
     when the write must not proceed.
     """
-    from modulo.api.routes.pipelines import _set_mutation_row_lock_timeout
     from modulo.core.team_visibility import (
         CONNECTOR_TEAM_MISMATCH,
         ConnectorBindingMissingError,
@@ -3256,6 +3459,7 @@ async def _replace_pipeline_graph_txn(
         find_connector_team_mismatches,
     )
     from modulo.db.crud.pipeline import get_pipeline, replace_pipeline_graph
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 
     async with _session(org_id) as s:
         # FAR-1361: bound every row-lock wait in this transaction BEFORE its
@@ -3269,7 +3473,7 @@ async def _replace_pipeline_graph_txn(
         # COMMIT/ROLLBACK and is a no-op off Postgres; the bound itself is
         # ``Settings.mutation_row_lock_timeout_ms`` (the same one the REST
         # mutation endpoints use).
-        await _set_mutation_row_lock_timeout(s)
+        await set_mutation_row_lock_timeout(s)
 
         pipeline = await get_pipeline(s, pid)
         if pipeline is None:
@@ -3302,6 +3506,13 @@ async def _replace_pipeline_graph_txn(
                 "error": CONNECTOR_TEAM_MISMATCH,
                 "detail": connector_team_mismatch_detail(mismatches),
             }
+        # FAR-1141 FIX 2: the MCP full-graph write runs the SAME instance-level
+        # CI-runner capability check REST's GraphValidator runs on save, so a
+        # dispatch binding to a non-CI instance is rejected HERE rather than
+        # deferred to a run-time failure.
+        dispatch_err = await _reject_unsupported_dispatch_bindings(s, org_id, nodes)
+        if dispatch_err is not None:
+            return dispatch_err
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".
@@ -3374,7 +3585,35 @@ async def _update_pipeline_graph_impl(
     if validation_err is not None:
         return validation_err
 
+    from pydantic import ValidationError as _PydanticValidationError
+
+    from modulo.api.routes.pipelines import PipelineGraphUpdate
+
     try:
+        graph_update = PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-1141 (CRITICAL 1): PERSIST THE VALIDATED node objects. The old call
+    # validated and then DISCARDED the result, keeping the raw dicts, so every
+    # model-side effect was thrown away — the forced ``idempotent=false`` on a
+    # job-firing dispatch binding never reached an MCP-authored graph, and MCP
+    # was the one write surface where "never retried into a second external job"
+    # did not hold. ``model_dump(mode="json")`` is exactly what REST's
+    # ``_prepare_graph_write`` serialises, so REST and MCP now land the SAME
+    # graph: declared fields take the validated value (defaults filled, side
+    # effects applied), undeclared keys are dropped on both paths rather than
+    # surviving on one (a field only one writer persists is plan drift, not
+    # configuration).
+    nodes = [node.model_dump(mode="json") for node in graph_update.nodes]
+
+    try:
+        # The validated ``nodes`` above (FAR-1141) are what the transaction
+        # persists; the helper owns the session, the bounded row-lock wait, the
+        # masked-graph round-trip and the connector/team gate (FAR-1361/FAR-1181).
         outcome = await _replace_pipeline_graph_txn(
             org_id,
             pid,
@@ -3499,14 +3738,55 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+# FAR-1141: connector-binding operation verbs and CI dispatch selectors the API
+# model enforces via Literal — MCP writes raw graph dicts, so it validates the
+# same vocabulary itself instead of persisting a value the read path rejects.
+_BIND_OPERATIONS = ("query", "write", "dispatch")
+_BIND_DISPATCH_ACTIONS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
+
+
 def _apply_node_connector_binding(
     pipeline: Any,
     nid: uuid.UUID,
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
+    *,
+    connector_supports_dispatch: bool | None = None,
 ) -> dict[str, Any] | None:
-    """Bind the connector onto the matching node. Returns an error dict, or None."""
+    """Bind the connector onto the matching node. Returns an error dict, or None.
+
+    FAR-1141 (MAJOR 9): the binding is PATCHED, never rebuilt. The old code
+    constructed ``{type, instance_id, operation?, dispatch_action?}`` from
+    scratch, so a bind that only carried ``operation`` silently DROPPED an
+    existing ``dispatch_action`` / ``input`` — a read-only node could become a
+    ``trigger_run`` job-firer (or lose its configured action) without anyone
+    asking. Keys the caller does not mention keep their stored value; the
+    caller's values win only for the keys it names.
+
+    Dispatch invariants are applied with the SAME single helpers the REST path
+    and the engine use (``graph_validator.connector_binding_operation`` /
+    ``node_fires_dispatch_job``): a ``dispatch`` node must route the dispatch
+    verb, a dispatch binding must target a connector whose type implements the
+    CI-runner contract (the caller resolves that from the instance row —
+    ``None`` means the caller did not resolve it and the check is skipped), and
+    a job-firing binding is persisted ``idempotent=false`` exactly as the REST
+    model forces it.
+    """
+    if operation is not None and operation not in _BIND_OPERATIONS:
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": f"operation must be one of {list(_BIND_OPERATIONS)}, got {operation!r}",
+        }
+    if dispatch_action is not None and dispatch_action not in _BIND_DISPATCH_ACTIONS:
+        return {
+            "error": "validation_failed",
+            "field": "dispatch_action",
+            "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
+        }
     nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
     target = None
     for node in nodes:
@@ -3516,10 +3796,73 @@ def _apply_node_connector_binding(
     if target is None:
         return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
 
-    target["connector_binding"] = {
-        "type": connector_type,
-        "instance_id": connector_instance_id,
-    }
+    from modulo.connectors.base import (
+        connector_binding_operation,
+        node_fires_dispatch_job,
+        node_routes_binding_to_connector,
+    )
+
+    existing = target.get("connector_binding")
+    binding: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    binding["type"] = connector_type
+    binding["instance_id"] = connector_instance_id
+    if operation is not None:
+        binding["operation"] = operation
+    if dispatch_action is not None:
+        binding["dispatch_action"] = dispatch_action
+    probe = {**target, "connector_binding": binding}
+
+    # FAR-1141 FIX 2: a DECLARED ``dispatch`` verb on a node the engine does
+    # NOT route to a connector (an ``agent`` node with an ``agent_id``, a
+    # ``sandbox_agent``) must be REJECTED, never silently coerced to the
+    # resolver's ``query`` fallback — the resolver answers "query" for those
+    # shapes because the engine will never read the binding, so persisting its
+    # verdict would record a dispatch the caller asked for as a query nobody
+    # asked for, with nothing ever firing. The Pydantic model rejects the same
+    # shape on the full-graph write (and REST); this bind path writes raw node
+    # dicts, so it enforces the rule itself.
+    if binding.get("operation") == "dispatch" and not node_routes_binding_to_connector(probe):
+        node_kind = str(target.get("node_type") or "agent")
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": (
+                f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so "
+                "operation='dispatch' would never fire — use a dispatch or connector node for the "
+                "dispatch binding"
+            ),
+        }
+
+    # Resolve the verb exactly as the engine will route it, delegating to the
+    # SHARED resolver (FAR-1141 FIX 6: ``connectors.base.connector_binding_operation``
+    # is the single source of truth for the explicit-value-wins /
+    # node-type-fallback default — never a second copy of the rule here), then
+    # persist the resolution so the stored graph never relies on a
+    # reader-specific default.
+    effective_operation = connector_binding_operation(probe)
+    binding["operation"] = effective_operation
+    # ...and the dispatch node's own requirement, also expressed through that
+    # resolver's verdict rather than a re-derived default.
+    if str(target.get("node_type") or "") == "dispatch" and effective_operation != "dispatch":
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
+            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
+        }
+    if effective_operation == "dispatch" and connector_supports_dispatch is False:
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
+            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
+        }
+    if node_fires_dispatch_job(probe):
+        # Parity with the REST model's forced ``idempotent=false``: the binding
+        # fires a job on the customer's substrate, so the node is never safe to
+        # re-run (and the executor now derives this from the binding too).
+        target["idempotent"] = False
+    target["connector_binding"] = binding
     pipeline.graph_nodes_json = nodes
     return None
 
@@ -3527,7 +3870,11 @@ def _apply_node_connector_binding(
 @mcp.tool(
     description="Bind a connector instance to a pipeline node. "
     "Updates the node's connector_binding in the pipeline graph. "
-    "The connector must already exist in the organisation."
+    "The connector must already exist in the organisation. "
+    "Optional operation ('query' | 'write' | 'dispatch') selects the binding "
+    "verb; optional dispatch_action ('trigger_run' | 'get_run_status' | "
+    "'get_run_logs' | 'list_runs') selects the CI-runner method for a dispatch "
+    "binding (FAR-1141)."
 )
 @mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
@@ -3536,6 +3883,8 @@ async def bind_connector_to_node(
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -3606,18 +3955,40 @@ async def bind_connector_to_node(
                     ),
                 }
 
-            bind_error = _apply_node_connector_binding(pipeline, nid, node_id, connector_type, connector_instance_id)
+            # FAR-1141 (MAJOR 8/9): resolve the CI-runner capability from the
+            # INSTANCE row (the authoritative connector type) so a dispatch
+            # binding to a Linear/Slack connector is rejected here, at bind
+            # time, instead of failing at run time with an AttributeError-shaped
+            # error. Passed through so the same invariant the REST graph-save
+            # validator enforces also holds on this write path.
+            from modulo.connectors.base import connector_type_supports_dispatch
+
+            bind_error = _apply_node_connector_binding(
+                pipeline,
+                nid,
+                node_id,
+                connector_type,
+                connector_instance_id,
+                operation=operation,
+                dispatch_action=dispatch_action,
+                connector_supports_dispatch=connector_type_supports_dispatch(connector.connector_type_id),
+            )
             if bind_error is not None:
                 return bind_error
             await s.flush()
 
-        return {
+        response: dict[str, Any] = {
             "pipeline_id": pipeline_id,
             "node_id": node_id,
             "connector_type": connector_type,
             "connector_instance_id": connector_instance_id,
             "status": "bound",
         }
+        if operation is not None:
+            response["operation"] = operation
+        if dispatch_action is not None:
+            response["dispatch_action"] = dispatch_action
+        return response
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -3811,11 +4182,18 @@ async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
 
 
 def _run_status_base(run: Run) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     result: dict[str, Any] = {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
         "status": run.status,
         "trigger_type": run.trigger_type,
+        # FAR-1141 / ADR-042: ``get_run_status`` is a claim-ready surface, so
+        # it carries the run's execution origin ('dispatched' / NULL) exactly
+        # like the REST detail. ``getattr`` + ``_optional_str`` degrade a
+        # partial run stand-in and a ``MagicMock`` to ``None``.
+        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
         "created_at": run.created_at.isoformat(),
     }
     if run.started_at:
@@ -6425,9 +6803,13 @@ async def _create_trigger_impl(
         raise RuntimeError("_create_trigger_impl: validate returned no error and no pipeline id")
 
     async with _session(org_id) as s:
-        owner_team_id = await _pipeline_owner_team_id(s, pid)
-        if _team_scoped_key_mismatch(owner_team_id):
-            return _team_scope_error("pipeline", pipeline_id)
+        # FAR-1513 CRITICAL fix: gate on the team-blind read (see
+        # _pipeline_team_gate) so an RLS-hidden team-private pipeline is
+        # DENIED, never allowed (the caller-facing owner read returned None,
+        # which passed every old boundary/membership check).
+        _, gate_denial = await _pipeline_team_gate(s, pid)
+        if gate_denial:
+            return gate_denial
         next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
             s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
         )
@@ -6583,14 +6965,26 @@ def _validate_trigger_update_inputs(
     return tid, None
 
 
-async def _load_trigger_for_update(s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID) -> Any | None:
-    """Load the trigger row for update; None if not found, _TEAM_SCOPE_ERROR if team-scope mismatch."""
+async def _load_trigger_for_update(
+    s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Load the trigger row for update plus its pipeline's team-gate denial.
+
+    Returns ``(trigger, denial)``: `(None, None)` when the trigger row itself
+    is absent (caller renders ``_MSG_TRIGGER_NOT_FOUND``), `(trigger, None)`
+    when the gate allows, and `(None, envelope)`/`(trigger, envelope)` when
+    the gate denies — FAR-1513 fix: the gate evaluates the pipeline through
+    the team-blind read, so an RLS-hidden team-private pipeline denies
+    instead of falling through the key mismatch that consumed the old
+    ``_TEAM_SCOPE_ERROR`` sentinel.
+    """
     trigger = await _load_trigger_row(s, org_id, tid)
     if trigger is None:
-        return None
-    if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-        return _TEAM_SCOPE_ERROR
-    return trigger
+        return None, None
+    _, denial = await _pipeline_team_gate(s, trigger.pipeline_id)
+    if denial is not None:
+        return None, denial
+    return trigger, None
 
 
 async def _validate_ongoing_config_change(
@@ -6764,9 +7158,14 @@ async def _update_trigger_txn(
     the commit.
     """
     async with _session(org_id) as s:
-        trigger = await _load_trigger_for_update(s, org_id, tid)
-        if trigger is _TEAM_SCOPE_ERROR:
-            return _team_scope_error("pipeline", str(tid))
+        # FAR-1513 CRITICAL fix: the team gate now runs inside
+        # _load_trigger_for_update against the team-blind-resolved pipeline;
+        # a denial envelope is returned verbatim (never re-mapped through the
+        # team-scope sentinel, which would misname a membership/not-found
+        # denial as a key-boundary message).
+        trigger, gate_denial = await _load_trigger_for_update(s, org_id, tid)
+        if gate_denial is not None:
+            return gate_denial
         if trigger is None:
             return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
 
@@ -6922,8 +7321,13 @@ async def delete_trigger(trigger_id: str) -> dict[str, Any]:
             ).scalar_one_or_none()
             if trigger is None:
                 return {"error": "not_found", "detail": _MSG_TRIGGER_NOT_FOUND}
-            if _team_scoped_key_mismatch(await _pipeline_owner_team_id(s, trigger.pipeline_id)):
-                return _team_scope_error("pipeline", str(trigger.pipeline_id))
+            # FAR-1513 CRITICAL fix: the team-blind gate re-evaluates the
+            # RLS-hidden pipeline row, so a team-private pipeline the caller
+            # cannot see is denied instead of silently allowed (the old
+            # caller-facing owner read returned None and passed every check).
+            _, gate_denial = await _pipeline_team_gate(s, trigger.pipeline_id)
+            if gate_denial:
+                return gate_denial
             deleted = await soft_delete_trigger(s, tid)
 
         if deleted is None:
@@ -10494,8 +10898,7 @@ def _oauth_authorize_param_errors(params: Mapping[str, str]) -> JSONResponse | N
 
 def _oauth_authorize_settings_error(settings: Any) -> JSONResponse | None:
     """Return an error response when the public URL is unconfigured."""
-    public_url = get_public_url(settings)
-    if not public_url or public_url == "http://localhost:8000":
+    if not public_url_is_configured(settings):
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,
@@ -10830,8 +11233,7 @@ async def _oauth_token_impl(request: Request) -> JSONResponse:
         return cred_err
 
     settings = get_settings()
-    public_url = get_public_url(settings)
-    if not public_url or public_url == "http://localhost:8000":
+    if not public_url_is_configured(settings):
         return JSONResponse(
             {"error": "server_error", "detail": "MODULO_PUBLIC_URL must be configured"},
             status_code=500,

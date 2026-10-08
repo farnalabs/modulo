@@ -79,7 +79,16 @@ class AzurePipelinesConnector(ConnectorBase):
     def _pipelines_base(self) -> str:
         return f"/{self._organization}/{self._project}/_apis/pipelines"
 
-    def _parse_run(self, raw: dict[str, Any]) -> CIRun:
+    def _parse_run(self, raw: dict[str, Any], pipeline_ref: str = "") -> CIRun:
+        """Parse a run payload into a :class:`CIRun`.
+
+        The id is qualified into ``pipeline_id/run_id`` — the exact form
+        ``_split_run_id`` (and therefore ``get_run_status``/``get_run_logs``)
+        consumes (see the run-id contract on ``CIRunnerBase``). The payload's
+        own ``pipeline.id`` wins; ``pipeline_ref`` is the caller's fallback. A
+        payload with neither yields ``""``, which trigger_run refuses to
+        return.
+        """
         raw_id = raw.get("id")
         raw_state = raw.get("state", "unknown")
         raw_result = raw.get("result", "")
@@ -94,11 +103,19 @@ class AzurePipelinesConnector(ConnectorBase):
         branch = ref_name.replace("refs/heads/", "") if ref_name else ""
         template_parameters = raw.get("templateParameters")
         pipeline = raw.get("pipeline")
+        pipeline_id_field = str(pipeline.get("id") or "") if isinstance(pipeline, dict) else ""
+        qualifier = pipeline_id_field or pipeline_ref
+        if raw_id is None:
+            run_id = ""
+        elif qualifier:
+            run_id = f"{qualifier}/{raw_id}"
+        else:
+            run_id = str(raw_id)
         links = raw.get("_links")
         web = links.get("web") if isinstance(links, dict) else None
         return CIRun(
-            id=str(raw_id) if raw_id is not None else "",
-            pipeline_id=str(pipeline.get("id") or "") if isinstance(pipeline, dict) else "",
+            id=run_id,
+            pipeline_id=pipeline_id_field,
             status=status,
             url=web.get("href", "") if isinstance(web, dict) else "",
             branch=branch,
@@ -158,7 +175,19 @@ class AzurePipelinesConnector(ConnectorBase):
             )
             r.raise_for_status()
             data: dict[str, Any] = r.json()
-            return self._parse_run(data)
+            run = self._parse_run(data, pipeline_ref=pipeline_id)
+            # The id must be exactly what _split_run_id (and therefore
+            # get_run_status/get_run_logs) consumes. A payload that cannot be
+            # read that way fails loud here — never an id the next call
+            # rejects while the pipeline already runs.
+            try:
+                self._split_run_id(run.id)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Azure Pipelines accepted the run request for {pipeline_id!r} but the response "
+                    "did not yield a consumable run id — refusing to return an unusable run id",
+                ) from exc
+            return run
 
     async def get_run_status(self, run_id: str) -> CIRun:
         pipeline_id, run_identifier = self._split_run_id(run_id)
@@ -168,16 +197,22 @@ class AzurePipelinesConnector(ConnectorBase):
                 params={"api-version": "7.0"},
             )
             r.raise_for_status()
-            return self._parse_run(r.json())
+            return self._parse_run(r.json(), pipeline_ref=pipeline_id)
 
     @staticmethod
     def _split_run_id(run_id: str) -> tuple[str, str]:
-        """Split a ``pipeline_id/run_id`` composite into its two parts."""
-        parts = run_id.split("/", 1)
+        """Split a ``pipeline_id/run_id`` composite into its two parts.
+
+        Splits on the LAST slash: the run identifier is the trailing segment,
+        so a pipeline whose name contains slashes round-trips.
+        """
+        parts = run_id.rsplit("/", 1)
         pipeline_id = parts[0] if len(parts) == 2 else ""
         if not pipeline_id:
             raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
         run_identifier = parts[1] if len(parts) == 2 else run_id
+        if not run_identifier:
+            raise ValueError(f"Invalid run_id format: {run_id!r}. Expected 'pipeline_id/run_id'.")
         return pipeline_id, run_identifier
 
     async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
@@ -242,7 +277,7 @@ class AzurePipelinesConnector(ConnectorBase):
             r.raise_for_status()
             data = r.json()
             raw_runs: list[dict[str, Any]] = _safe_records(data, "value")
-            runs = [self._parse_run(run) for run in raw_runs]
+            runs = [self._parse_run(run, pipeline_ref=pipeline_id) for run in raw_runs]
             if status:
                 runs = [r for r in runs if r.status == status]
             return runs[:limit]

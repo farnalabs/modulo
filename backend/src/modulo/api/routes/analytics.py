@@ -290,6 +290,11 @@ class AnalyticsExportItem(BaseModel):
     # FAR-1463: node-deadline watchdog firings per run — the raw per-run
     # counterpart of the bucket's summed metric.
     node_deadline_watchdog_fired_count: int | None = None
+    # FAR-1141 / ADR-042: the run's execution origin ('dispatched' / NULL) —
+    # an export is a claim-ready run surface, so the raw facts an auditor pulls
+    # must be provenance-typed like every other run read surface. Nullable:
+    # pre-column rows and runs Modulo executed itself read NULL.
+    execution_origin: str | None = None
     created_at: str
 
 

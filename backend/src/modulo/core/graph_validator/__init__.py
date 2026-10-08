@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo import settings
+from modulo.connectors.base import connector_binding_operation, connector_type_supports_dispatch
 from modulo.core.graph_validator._types import (
     ValidationIssue,
     ValidationResult,
@@ -459,7 +460,7 @@ def _check_composite_sub_nodes(
                 node_id=node_id,
             )
         node_type = sub.get("node_type", "agent")
-        if node_type not in ("agent", "manual", "composite", "sandbox_agent"):
+        if node_type not in ("agent", "manual", "composite", "sandbox_agent", "dispatch"):
             result.error(
                 "COMPOSITE_SUBGRAPH_INVALID_TYPE",
                 f"Node '{node_id}': CompositeTemplate '{template.id}' sub-node '{sid}' has "
@@ -1461,7 +1462,7 @@ class GraphValidator:
         await self._check_node_send_budget_bindings(graph_json, connector_bindings or [], session, result)
         self._check_parallel_run_context_writes(graph_json, result)
         self._check_schema_compatibility(graph_json, result)
-        await self._check_connector_bindings(connector_bindings or [], session, result)
+        await self._check_connector_bindings(connector_bindings or [], session, result, graph_json=graph_json)
         await self._check_model_backends(model_backend_pins or [], session, result)
         await self._check_environment_capabilities(
             environment_profile_id,
@@ -1565,7 +1566,12 @@ class GraphValidator:
         self._check_parallel_run_context_writes(snapshot.graph_json, result)
 
         # Connector and backend checks.
-        await self._check_connector_bindings(snapshot.connector_bindings_json, session, result)
+        await self._check_connector_bindings(
+            snapshot.connector_bindings_json,
+            session,
+            result,
+            graph_json=snapshot.graph_json,
+        )
         await self._check_model_backends(snapshot.model_backend_pins_json, session, result)
 
         # Environment capability check.
@@ -2516,6 +2522,8 @@ class GraphValidator:
         bindings: list[dict[str, Any]],
         session: AsyncSession,
         result: ValidationResult,
+        *,
+        graph_json: dict[str, Any] | None = None,
     ) -> None:
         if not bindings:
             return
@@ -2531,6 +2539,15 @@ class GraphValidator:
             .all()
         )
         found: dict[uuid.UUID, ConnectorInstance] = {r.id: r for r in rows}
+
+        # FAR-1141 (MAJOR 8): a dispatch binding must target a connector whose
+        # TYPE implements the CI-runner contract. Runs off the GRAPH (the
+        # binding's ``operation`` / ``dispatch_action`` only live on the node —
+        # ``extract_connector_bindings`` carries instance ids alone), against
+        # the INSTANCE's own ``connector_type_id`` (the authoritative type, not
+        # the binding's free-form ``type`` echo). Checked before the per-binding
+        # loop so a dispatch binding is never validated as an ordinary one.
+        self._check_dispatch_binding_capabilities(graph_json, found, result)
 
         for binding in bindings:
             node_id: str | None = str(binding.get("node_id")) if binding.get("node_id") else None
@@ -2560,6 +2577,56 @@ class GraphValidator:
                     f"Connector {cid} missing operations: {missing}",
                     node_id,
                 )
+
+    @staticmethod
+    def _check_dispatch_binding_capabilities(
+        graph_json: dict[str, Any] | None,
+        found: dict[uuid.UUID, ConnectorInstance],
+        result: ValidationResult,
+    ) -> None:
+        """FAR-1141 (MAJOR 8): a dispatch binding needs a CI-runner connector.
+
+        Every node whose binding routes the ``dispatch`` verb — any
+        ``node_type``, decided by :func:`connector_binding_operation` — must be
+        bound to a connector instance whose type implements the four
+        CI-runner operations. Binding ``operation="dispatch"`` to a Linear or
+        Slack connector otherwise fails at run time with an
+        ``AttributeError``-shaped error AFTER the run has started; here it is a
+        save-time rejection naming the node and the offending type.
+
+        A graph we cannot read, a node whose instance id did not resolve (the
+        ``CONNECTOR_NOT_FOUND`` arm of the caller reports that), or an instance
+        with an unset ``connector_type_id`` is SKIPPED rather than guessed —
+        the ordinary binding checks cover those shapes.
+        """
+        if not isinstance(graph_json, dict):
+            return
+        nodes = graph_json.get("nodes")
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+                continue
+            binding = node.get("connector_binding")
+            if not isinstance(binding, dict):
+                continue
+            cid_obj = try_parse_uuid(binding.get("instance_id"))
+            if cid_obj is None:
+                continue
+            instance = found.get(cid_obj)
+            if instance is None:
+                continue
+            type_id = str(instance.connector_type_id or "").strip()
+            if not type_id or connector_type_supports_dispatch(type_id):
+                continue
+            result.error(
+                "CONNECTOR_DISPATCH_UNSUPPORTED",
+                f"Node '{node.get('id')}': connector instance {cid_obj} ({instance.name!r}) has type "
+                f"{type_id!r}, which does not implement the CI-runner operations "
+                f"(trigger_run / get_run_status / get_run_logs / list_runs) a "
+                f"dispatch binding requires",
+                str(node.get("id")) if node.get("id") else None,
+            )
 
     # ------------------------------------------------------------------
     # Model backend health

@@ -47,7 +47,7 @@ from modulo.auth.oauth import (
     validate_redirect_uri,
 )
 from modulo.core.audit_coverage import audited
-from modulo.core.runtime_config.key_bridge import get_public_url
+from modulo.core.runtime_config.key_bridge import public_url_is_configured
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -109,8 +109,7 @@ async def register_oauth_client(
             detail="Only admin or operator users can register OAuth clients",
         )
 
-    public_url = get_public_url(settings)
-    if not public_url or public_url == "http://localhost:8000":
+    if not public_url_is_configured(settings):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="MODULO_PUBLIC_URL must be configured for OAuth flow",

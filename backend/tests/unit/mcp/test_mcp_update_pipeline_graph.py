@@ -414,3 +414,79 @@ class TestMcpGraphMaskingParity:
         written = mock_replace_graph.await_args.kwargs["nodes"]
         # The unverifiable mask echo is dropped, never persisted as a value.
         assert "RABBITMQ_URL" not in written[0]["env_vars"]
+
+
+class TestUpdatePipelineGraphDispatchAndValidation:
+    """FAR-1141: the full-graph write runs the instance-level dispatch check, and
+    a Pydantic failure is surfaced as ``validation_failed`` (never a 500)."""
+
+    def setup_method(self) -> None:
+        _set_ctx(role="operator")
+
+    def teardown_method(self) -> None:
+        _clear_ctx()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.pipeline.get_pipeline")
+    @patch("modulo.core.team_visibility.find_connector_team_mismatches", return_value=[])
+    @patch("modulo.api.mcp_server._reject_unsupported_dispatch_bindings")
+    async def test_a_dispatch_binding_to_a_non_ci_instance_blocks_the_write(
+        self,
+        mock_reject: AsyncMock,
+        mock_find_mismatches: AsyncMock,
+        mock_get_pipeline: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        pipeline_id = uuid.uuid4()
+        mock_get_pipeline.return_value = MagicMock(id=pipeline_id, owner_team_id=None, graph_nodes_json=[])
+        mock_session.return_value.__aenter__.return_value = AsyncMock()
+        mock_reject.return_value = {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": "instance type does not implement the CI-runner operations",
+        }
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "dispatch",
+            "position": {"x": 0, "y": 0},
+            "connector_binding": {
+                "type": "github_actions_ci",
+                "instance_id": str(uuid.uuid4()),
+                "operation": "dispatch",
+                "dispatch_action": "trigger_run",
+            },
+        }
+
+        result = await update_pipeline_graph(pipeline_id=str(pipeline_id), nodes=[node], edges=[])
+
+        assert result["error"] == "validation_failed"
+        assert result["field"] == "connector_type"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._validate_graph_update", return_value=None)
+    @patch("modulo.api.mcp_server._session")
+    async def test_a_pydantic_validation_failure_is_surfaced(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_graph: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        # ``_validate_graph_update`` is stubbed to None so the redundant second
+        # Pydantic validation is what rejects — proving the error envelope is
+        # returned, never raised as a 500.
+        node = {
+            "id": str(uuid.uuid4()),
+            "node_type": "dispatch",
+            "connector_binding": {
+                "type": "github_actions_ci",
+                "instance_id": str(uuid.uuid4()),
+                "operation": "query",
+            },
+        }
+
+        result = await update_pipeline_graph(pipeline_id=str(uuid.uuid4()), nodes=[node], edges=[])
+
+        assert result["error"] == "validation_failed"
+        assert "Graph validation failed" in result["detail"]

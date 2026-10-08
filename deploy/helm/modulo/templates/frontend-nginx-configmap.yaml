@@ -35,6 +35,26 @@ data:
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
+        # OAuth discovery metadata (RFC 8414 / RFC 9728) - unauthenticated,
+        # must reach the backend as JSON. Without this the `location /` SPA
+        # fallback answers /.well-known/* with index.html (text/html) and stock
+        # MCP clients cannot connect. nginx picks the LONGEST prefix, and none
+        # of these paths match the static-extension regex below, so
+        # `location /` never wins here.
+        location /.well-known/ {
+            proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_request_buffering on;
+            proxy_connect_timeout 10;
+            proxy_send_timeout 30;
+            proxy_read_timeout 125;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
         # WebSocket
         location /ws {
             proxy_pass http://{{ include "modulo.fullname" . }}-backend:{{ .Values.backend.service.port }};

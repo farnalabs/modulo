@@ -173,7 +173,7 @@ def make_client() -> Generator[Callable[..., tuple[TestClient, _ResolverRow]], N
 
 def _get(client: TestClient, *, membership: bool) -> int:
     with (
-        patch("modulo.api.dependencies.team_membership_exists", new=AsyncMock(return_value=membership)),
+        patch("modulo.api.team_scope.team_membership_exists", new=AsyncMock(return_value=membership)),
         patch(
             "modulo.api.routes.pipelines.get_pipeline",
             new=AsyncMock(return_value=_make_pipeline(owner_team_id=_TEAM_A, visibility="team")),

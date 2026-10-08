@@ -507,7 +507,7 @@ def _pre_auth_client() -> Generator[TestClient, None, None]:
     """
     with (
         patch("modulo.core.rate_limiter.RateLimiterRegistry.check", new=AsyncMock(return_value=True)),
-        patch("modulo.api.mcp_server.get_public_url", return_value="https://modulo.example.com"),
+        patch("modulo.api.mcp_server.public_url_is_configured", return_value=True),
     ):
         yield TestClient(app)
 

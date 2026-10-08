@@ -64,6 +64,9 @@ export function layoutNodes(
       const startX = (total - 1) * (w + xPad) / -2
       return {
         id,
+        // node_type passes through unchanged, so a `dispatch` node keeps its
+        // own canvas type (FAR-1141) instead of collapsing into the generic
+        // `agent` node; only an ABSENT node_type falls back to `agent`.
         type: n?.node_type || 'agent',
         position: { x: startX + ni * (w + xPad), y: li * (h + yPad) },
         data: { label: n?.label || id },

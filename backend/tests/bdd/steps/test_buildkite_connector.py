@@ -102,7 +102,7 @@ def buildkite_get_run_status(build: str, ctx: dict) -> None:
         )
         run = asyncio.run(ctx["connector"].get_run_status(f"my-org/my-pipeline/{build}"))
     assert run.status == CIRunStatus.IN_PROGRESS, run
-    assert run.id == build, run
+    assert run.id == f"my-org/my-pipeline/{build}", run
     ctx["run"] = run
 
 
@@ -167,7 +167,7 @@ def buildkite_health_result(status: str, ctx: dict) -> None:
 def buildkite_build_created(ctx: dict) -> None:
     run = ctx["run"]
     assert run is not None, "No triggered run"
-    assert run.id == "42", run
+    assert run.id == "my-org/my-pipeline/42", run
     assert run.pipeline_id == "my-pipeline", run
     assert run.branch == "main", run
 
@@ -178,7 +178,7 @@ def buildkite_build_status(ctx: dict) -> None:
 
     run = ctx["run"]
     assert run is not None, "No run status"
-    assert run.id == "42", run
+    assert run.id == "my-org/my-pipeline/42", run
     assert run.status == CIRunStatus.IN_PROGRESS, run
 
 

@@ -607,7 +607,7 @@ async def test_evals_arm_helpers_guard_session_contract() -> None:
 
 
 async def test_mcp_oauth_arms_guard_session_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(mcp_oauth, "get_public_url", lambda settings: "https://app.example.com")
+    monkeypatch.setattr(mcp_oauth, "public_url_is_configured", lambda settings: True)
     monkeypatch.setattr(mcp_oauth, "normalize_scopes", lambda joined: joined.split())
     monkeypatch.setattr(mcp_oauth, "normalize_redirect_uris", lambda uris: uris)
     principal = _tenant()
