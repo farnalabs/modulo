@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -743,6 +744,13 @@ class TestExecuteResumeWrappers:
         for the failed run — a setup-failed run must be visible in analytics."""
 
         class _FakeConn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 

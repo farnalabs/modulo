@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,6 +45,14 @@ class TestMaybeAlertRetryStorm:
         row_result.first.return_value = (5,)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -69,6 +78,14 @@ class TestMaybeAlertRetryStorm:
         row_result.first.return_value = None
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -91,6 +108,14 @@ class TestMaybeAlertRetryStorm:
         """CancelledError must not be swallowed."""
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -119,6 +144,14 @@ class TestClaimRunAsyncException:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -266,6 +299,14 @@ class TestReadCurrentClaimToken:
         row_result.first.return_value = ("tok-abc",)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -287,6 +328,14 @@ class TestReadCurrentClaimToken:
         row_result.first.return_value = (None,)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -496,6 +545,14 @@ class TestReadRunStatus:
         row_result.first.return_value = ("running",)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -517,6 +574,14 @@ class TestReadRunStatus:
         row_result.first.return_value = None
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -546,6 +611,14 @@ class TestKillSandboxBestEffort:
         row_result.first.return_value = (None,)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -567,6 +640,14 @@ class TestKillSandboxBestEffort:
         """CancelledError must not be swallowed."""
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -589,6 +670,14 @@ class TestKillSandboxBestEffort:
         row_result.first.return_value = ("sb-123",)
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -717,6 +806,14 @@ class TestStaleRunRecoverySweepEdgeCases:
         """When there are no orgs, the sweep returns zero counts immediately."""
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -753,6 +850,14 @@ class TestStaleRunRecoverySweepEdgeCases:
         """CancelledError from the org enumeration must propagate."""
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -826,6 +931,14 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -854,6 +967,14 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -880,6 +1001,14 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1055,6 +1184,14 @@ class TestClaimRunAsyncCancelled:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            def get_bind(self) -> SimpleNamespace:
+                """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+                Non-postgres double: the helper's documented safe no-op branch.
+                Tests that need the LIVE bound use a postgresql-reporting double.
+                """
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def __aenter__(self) -> Self:
                 return self
 

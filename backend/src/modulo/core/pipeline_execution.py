@@ -31,15 +31,16 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from langgraph.errors import NodeCancelledError
 from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 _log = logging.getLogger(__name__)
 
@@ -95,6 +96,14 @@ DURABLE_PHASES: frozenset[str] = frozenset(
 # Bound on a single durable phase write. The instrumentation is best-effort:
 # a write that exceeds this is abandoned (connection cancelled back to the
 # pool) rather than ever delaying the run.
+#
+# FAR-1601: this writer is DELIBERATELY not given the shared transaction-scoped
+# ``lock_timeout`` bound (``_bound_hot_runs_row_lock`` below) — the app-level
+# 2 s wait is already tighter than the default ``mutation_row_lock_timeout_ms``
+# (5 s), so the DB-side bound could never fire first; and if an operator ever
+# lowers the knob below this bound, the resulting 55P03 lands in ``_drain``'s
+# existing fail-soft handler (WARNING + dropped, never raised into the run) —
+# the exact contract this writer already promises. N/A, no change.
 PHASE_WRITE_TIMEOUT_SECONDS = 2.0
 
 # FAR-1088 (W2): the single guarded UPDATE for a post-claim phase entry.
@@ -316,6 +325,34 @@ RUN_CLAIM_STALE_SECONDS = 450
 
 # RLS org-context SQL applied at the start of each run transaction (S1192).
 _SQL_SET_ORG_ID = "SELECT set_config('app.organisation_id', :val, true)"
+
+
+async def _bound_hot_runs_row_lock(conn: AsyncConnection) -> None:
+    """FAR-1601: bound this module's hot-``runs`` row-lock waits.
+
+    Issues the shared transaction-scoped ``SET LOCAL lock_timeout``
+    (``Settings.mutation_row_lock_timeout_ms``, default 5 s) via
+    ``db.crud.row_lock.set_mutation_row_lock_timeout`` — the same bound the
+    dispatch writers carry (FAR-1584 / FAR-1592) — so a contended ``runs``
+    row can never park an executor-path writer in an unbounded wait past the
+    Fly HAProxy 30-minute session window (FAR-1524). Call at the TOP of the
+    writer's transaction, BEFORE its first locking statement; the bound is
+    transaction-local and reverts on COMMIT/ROLLBACK, never onto a pooled
+    connection.
+
+    On expiry the statement raises SQLSTATE 55P03 (``lock_not_available``).
+    Each writer below owns its own non-silent 55P03 contract (skip + WARN +
+    re-process, or fail visibly) — this helper only sets the bound.
+
+    The shared helper is annotated ``AsyncSession`` but only uses the
+    ``get_bind()`` / ``execute()`` surface both session types share — these
+    writers hold raw ``AsyncConnection``s, so the cast lives HERE once instead
+    of at every call site.
+    """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(cast(AsyncSession, conn))
+
 
 # DB heartbeat cadence (F4). Must stay well below the 300s SAQ sweep threshold.
 RUN_HEARTBEAT_SECONDS = 30
@@ -606,6 +643,10 @@ async def claim_run_async(
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
+            # FAR-1601: bound the row-lock wait BEFORE the claim takes its lock
+            # (the RLS set_config below takes none). On expiry the claim
+            # 55P03s instead of parking this worker unbounded (FAR-1524).
+            await _bound_hot_runs_row_lock(c)
             # LIVE-BUG FIX (C3): the claim UPDATE runs on a raw connection — the
             # RLS policy ``organisation_id = current_setting('app.organisation_id')``
             # matches ZERO rows unless the org context is set on this connection
@@ -624,7 +665,21 @@ async def claim_run_async(
         return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1601: row-lock timeout (the bound firing). The claim is an
+            # idempotent "try to take ownership" write — returning None (the
+            # existing not-claimable outcome) leaves the run exactly as it was
+            # (pending / stale-running), and ``dispatcher_reconcile`` re-dispatches
+            # it on its next tick once the job hash expires. Non-silent: WARNING
+            # with the full exception chain, never a swallowed error.
+            _log.warning(
+                "pipeline_execution.claim_lock_timeout run=%s — row-lock wait exceeded "
+                "mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
+                run_id,
+                exc_info=True,
+            )
+            return None
         _log.exception("pipeline_execution.claim_failed run=%s", run_id)
         return None
 
@@ -741,12 +796,20 @@ async def heartbeat_once(
     :class:`ClaimSupersededError` and aborts. ``job.update()`` only runs when
     the write actually landed (rowcount > 0), so a superseded or terminalised
     executor never touches the successor's / dead run's job hash.
+
+    FAR-1601: the write runs under the transaction-scoped ``lock_timeout``
+    bound (``_bound_hot_runs_row_lock``). This writer stays dumb — a 55P03
+    expiry propagates to ``_heartbeat_round``, which owns the contract (skip
+    the beat + WARNING + re-process next round; see there for the rationale).
     """
     params: dict[str, Any] = {"rid": run_id, _HEARTBEAT_ACTIVE_STATUSES: sorted(ACTIVE_RUN_STATUSES)}
     if claim_token is not None:
         params["tok"] = claim_token
     updated = False
     async with aeng.connect() as c:
+        # FAR-1601: bound FIRST (autobegin starts here, so the bound, the RLS
+        # set_config and the UPDATE share one transaction until commit()).
+        await _bound_hot_runs_row_lock(c)
         await c.execute(
             text(_SQL_SET_ORG_ID),
             {"val": org_id},
@@ -829,7 +892,9 @@ async def _heartbeat_round(
     event is set first) or the fail-closed threshold of three consecutive
     failures was reached. A transient failure counts toward
     *consecutive_failures* (reset to ``0`` on success); CancelledError
-    propagates unchanged.
+    propagates unchanged. A row-lock timeout (SQLSTATE 55P03 — the FAR-1601
+    bound firing) is contention on a reachable row, NOT a health failure: the
+    beat is skipped with a WARNING and NOT counted (see the handler below).
     """
     try:
         await asyncio.sleep(interval_seconds)
@@ -845,7 +910,30 @@ async def _heartbeat_round(
         return False, consecutive_failures
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1601: the row-lock bound firing (55P03) is CONTENTION on a
+            # reachable row, not a DB/network failure — skip this beat and
+            # re-process on the next round instead of counting it toward the
+            # 3-strikes fail-closed threshold (which would kill a healthy run's
+            # sandbox for someone else's lock hold). Why skipping is safe: the
+            # beat is idempotent (it only stamps ``heartbeat_at=now()``), and
+            # the split-brain the fail-closed threshold protects against needs
+            # a SUCCESSOR to claim — but ``heartbeat_at`` can only age past the
+            # claim-stale window if NO beat has landed for 450 s, i.e. the row
+            # (or the DB) has been unreachable that whole time; a locked row
+            # makes the successor's own BOUNDED claim 55P03 too, and a dead DB
+            # raises connection errors, which still count toward fail-closed
+            # below. Non-silent: WARNING with the full exception chain every
+            # skipped beat.
+            _log.warning(
+                "pipeline_execution.heartbeat_lock_timeout run=%s — row-lock wait exceeded "
+                "mutation_row_lock_timeout_ms; beat skipped (not counted toward the fail-closed "
+                "health threshold), re-processed next round",
+                run_id,
+                exc_info=True,
+            )
+            return True, consecutive_failures
         consecutive_failures = _heartbeat_failure(consecutive_failures, health_failed, run_id)
         return consecutive_failures < 3, consecutive_failures
 
@@ -891,22 +979,51 @@ async def mark_complete(
     (no read-then-write window). Rowcount 0 means the run was superseded (a
     successor rotated the token), cancelled, or already terminal — the write is
     skipped with a warning and the caller proceeds as a no-op.
+
+    FAR-1601 (row-lock bound, 55P03 contract): the write runs under the
+    transaction-scoped ``lock_timeout`` bound. On expiry the completion write
+    is SKIPPED with a WARNING and the run is left ``running`` — never raised
+    into the caller. Justification: an exception here would fail the SAQ job,
+    whose ``after_process`` hook then ``task_failure``s a run that genuinely
+    COMPLETED (a wrong terminal outcome for a successful run); the unbounded
+    wait the bound replaces could only ever end the same way (job timeout →
+    same hook) or hang past the HAProxy cull window. The truthful state
+    (``running``, frozen heartbeat) is exactly what ``dispatcher_reconcile``'s
+    running+stale branch re-dispatches — re-execution from the checkpoint
+    completes again and re-runs this write. Re-raise any NON-lock failure
+    unchanged (connection loss etc. keeps today's visible job-failure path).
     """
-    async with aeng.connect() as c, c.begin():
-        await c.execute(
-            text(_SQL_SET_ORG_ID),
-            {"val": org_id},
-        )
-        result = await c.execute(
-            text(
-                "UPDATE runs SET status='complete', completed_at=now() "
-                "WHERE id=:rid AND status='running' AND cancellation_requested = false "
-                "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
-                "RETURNING id"
-            ),
-            {"rid": run_id, "tok": claim_token},
-        )
-        completed = result.fetchone() is not None
+    try:
+        async with aeng.connect() as c, c.begin():
+            # FAR-1601: bound FIRST, before the terminal write takes the lock.
+            await _bound_hot_runs_row_lock(c)
+            await c.execute(
+                text(_SQL_SET_ORG_ID),
+                {"val": org_id},
+            )
+            result = await c.execute(
+                text(
+                    "UPDATE runs SET status='complete', completed_at=now() "
+                    "WHERE id=:rid AND status='running' AND cancellation_requested = false "
+                    "AND (CAST(:tok AS text) IS NULL OR claim_token = CAST(:tok AS text)) "
+                    "RETURNING id"
+                ),
+                {"rid": run_id, "tok": claim_token},
+            )
+            completed = result.fetchone() is not None
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            _log.warning(
+                "mark_complete lock timeout for run %s — row-lock wait exceeded "
+                "mutation_row_lock_timeout_ms; completion not written, run left running "
+                "for dispatcher_reconcile's running+stale re-dispatch",
+                run_id,
+                exc_info=True,
+            )
+            return
+        raise
     if not completed:
         _log.warning(
             "mark_complete skipped for run %s (claim superseded, cancelled, or not running)",
@@ -936,8 +1053,26 @@ async def fail_run_terminal(
     ``False`` when the guards reject the write (already terminal, superseded,
     capacity-deferred back to ``pending``, or cancelled) — a superseded
     original cannot fail the run out from under a successor.
+
+    FAR-1601 (row-lock bound, 55P03 contract): the write runs under the
+    transaction-scoped ``lock_timeout`` bound, and a 55P03 expiry PROPAGATES —
+    fail visibly, never a silent skip. Justification: a skipped terminal-fail
+    would leave the caller believing the run was classified while the row stays
+    ``running`` with no error code — exactly the silent-wait class this sweep
+    exists to remove. The propagation has designed recovery at every caller:
+    the heartbeat-loss path already retries via
+    ``_fail_run_terminal_with_retry`` (55P03's driver class
+    ``LockNotAvailableError`` is in the transient vocabulary, so it gets the
+    bounded 3-attempt retry), and every other caller's exception fails the SAQ
+    job visibly — whose ``after_process`` hook ``task_failure``s the run, with
+    the reconciliation sweep as the documented backstop (the pre-FAR-604
+    escape behaviour this function's retry wrapper was built around).
     """
+    # No except-clause here by design (FAR-1601): the bound's 55P03 — like any
+    # other DB failure — propagates to the caller (fail visibly; see docstring).
     async with aeng.connect() as c, c.begin():
+        # FAR-1601: bound FIRST, before the terminal write takes the lock.
+        await _bound_hot_runs_row_lock(c)
         await c.execute(
             text(_SQL_SET_ORG_ID),
             {"val": org_id},
@@ -1348,9 +1483,18 @@ async def _record_node_deadline_watchdog_firing(
     reaching a terminal state (same contract as the durable phase writer).
     ``asyncio.CancelledError`` is re-raised — worker/job shutdown is not ours
     to swallow.
+
+    FAR-1601 (row-lock bound): the increment runs under the transaction-scoped
+    ``lock_timeout`` bound; a 55P03 expiry falls into the fail-soft handler
+    below — this counter is best-effort instrumentation (the watchdog must
+    always reach its terminal write), so the path-appropriate contract is
+    skip + WARNING with the full exception chain, then proceed.
     """
     try:
         async with aengine.connect() as c:
+            # FAR-1601: bound FIRST (autobegin starts here; bound, RLS
+            # set_config and the increment share one transaction until commit).
+            await _bound_hot_runs_row_lock(c)
             # RLS org context — the runs policy matches zero rows without it.
             await c.execute(
                 text(_SQL_SET_ORG_ID),
@@ -2159,7 +2303,23 @@ async def _sweep_org_stale_runs(
     and ``terminalised_run_ids`` in place so the caller can post-process them once
     the transaction commits. Extracted from :func:`stale_run_recovery_sweep` to keep
     that function's control flow shallow.
+
+    FAR-1601 (row-lock bound, 55P03 contract): the bound is issued FIRST in
+    the org transaction, so every one of the four ``UPDATE runs`` branches
+    below waits at most ``mutation_row_lock_timeout_ms`` for a contended row
+    instead of parking the sweep (and its transaction's row locks) unbounded.
+    A 55P03 PROPAGATES out of this helper and out of
+    ``stale_run_recovery_sweep``'s per-org loop into that sweep's existing
+    failure handler — the whole org's transaction rolls back, the failure is
+    logged, returned as ``error: sweep_failed (...)`` AND surfaced through the
+    cron job's failure heartbeat (the health-alert sweeps key on sweep
+    FAILURES, so failing loudly is the alerting path — a skip-and-continue
+    would hide it behind a WARNING only). Recovery: the sweep is periodic and
+    idempotent — the next tick re-runs the same UPDATE set from scratch.
     """
+    # FAR-1601: bound FIRST — before the RLS set_config and before any of the
+    # four UPDATEs take their row locks.
+    await _bound_hot_runs_row_lock(conn)
     await conn.execute(
         text(_SQL_SET_ORG_ID),
         {"val": str(org_id)},
@@ -2581,6 +2741,10 @@ async def claim_resume_run_async(
     claim_token = uuid.uuid4().hex
     try:
         async with aengine.connect() as c, c.begin():
+            # FAR-1601: bound the row-lock wait BEFORE the claim takes its lock
+            # (same contract as ``claim_run_async``; the RLS set_config below
+            # takes none).
+            await _bound_hot_runs_row_lock(c)
             # LIVE-BUG FIX (C3): same RLS org-context requirement as
             # ``claim_run_async`` — without it the resume claim UPDATE matches
             # ZERO rows under a NOBYPASSRLS role and the claim returns None.
@@ -2596,7 +2760,19 @@ async def claim_resume_run_async(
         return claim_token if claimed else None
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1601: same idempotent skip as ``claim_run_async`` — the run
+            # stays awaiting_human/claimed/hitl_parked (or stale-running), and
+            # ``dispatcher_reconcile``'s F6a branch re-dispatches the resume on
+            # its next tick. Non-silent: WARNING with the full chain.
+            _log.warning(
+                "pipeline_execution.resume_claim_lock_timeout run=%s — row-lock wait exceeded "
+                "mutation_row_lock_timeout_ms; run left claimable, dispatcher_reconcile re-dispatches",
+                run_id,
+                exc_info=True,
+            )
+            return None
         _log.exception("pipeline_execution.resume_claim_failed run=%s", run_id)
         return None
 

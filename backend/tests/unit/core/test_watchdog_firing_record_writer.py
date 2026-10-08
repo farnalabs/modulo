@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, Self
 
 import pytest
@@ -43,6 +44,14 @@ class _FakeResult:
 class _FakeConn:
     def __init__(self, engine: _FakeEngine) -> None:
         self._engine = engine
+
+    def get_bind(self) -> SimpleNamespace:
+        """Dialect gate input for ``set_mutation_row_lock_timeout`` (FAR-1601).
+
+        Non-postgres double: the helper's documented safe no-op branch, so the
+        recorded statement count stays at two (RLS set_config + increment).
+        """
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
 
     async def __aenter__(self) -> Self:
         return self
