@@ -166,5 +166,5 @@ async def test_bare_by_contract_ids() -> None:
 
     assert "/" not in circle.id
     assert "/" not in teamcity.id
-    assert len(circle.id) > 0
-    assert len(teamcity.id) > 0
+    assert circle.id
+    assert teamcity.id
