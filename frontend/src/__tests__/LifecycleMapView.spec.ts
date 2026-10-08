@@ -24,6 +24,7 @@ import LifecycleMapRenderer from '../components/lifecycle-map/LifecycleMapRender
 import Select from '../components/shared/AppSelect.vue'
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
+import type { JourneyDetail, JourneyRunHistoryItem } from '../types/lifecycleMap'
 
 const routerPushMock = vi.fn()
 
@@ -404,6 +405,60 @@ describe('LifecycleMapView journey flag gating (FAR-654)', () => {
     await flushPromises()
 
     expect(wrapper.find('[aria-label="Journey details"]').exists()).toBe(true)
+  })
+
+  // FAR-1141: a journey's run history is a claim-ready run surface, so a
+  // dispatched run must not read like one Modulo executed itself.
+  it('badges only dispatched journey run rows with the provenance badge', async () => {
+    seedPlan({ lifecycle_map_journeys: true })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="lifecycle-map-show-work-items"]').setValue(true)
+    await flushPromises()
+
+    const store = useLifecycleMapsStore()
+    store.selectedJourneyKey = 'run:run-1'
+    await flushPromises()
+
+    // The shared JourneyRunHistoryItem carries execution_origin (FAR-1141);
+    // typing the fixture against it is what keeps the view and the shared
+    // type in lockstep — an untyped local array would hide the column going
+    // missing again. Both shapes are covered: a dispatched run and one
+    // Modulo executed itself (null).
+    const runs: JourneyRunHistoryItem[] = [
+      {
+        run_id: 'r-1',
+        status: 'complete',
+        completed_at: '2026-01-01T00:00:00Z',
+        provenance: 'derived',
+        execution_origin: 'dispatched',
+      },
+      {
+        run_id: 'r-2',
+        status: 'complete',
+        completed_at: '2026-01-01T00:00:00Z',
+        provenance: 'derived',
+        execution_origin: null,
+      },
+    ]
+    store.journeyDetail = {
+      kind: 'run',
+      ref: 'run-1',
+      canonical_work_item_id: 'run-1',
+      current_stage: null,
+      status: 'complete',
+      provenance: 'derived',
+      run_count: 2,
+      latest_run_id: 'r-1',
+      updated_at: '2026-01-02T00:00:00Z',
+      runs,
+    } as JourneyDetail
+    await flushPromises()
+
+    const badges = wrapper.findAll('[data-testid^="journey-run-dispatched-"]')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].attributes('data-testid')).toBe('journey-run-dispatched-r-1')
+    expect(wrapper.find('[data-testid="journey-run-dispatched-r-2"]').exists()).toBe(false)
   })
 
   it('flag flipping on after mount alone does not fetch; the checkbox completes the gate', async () => {

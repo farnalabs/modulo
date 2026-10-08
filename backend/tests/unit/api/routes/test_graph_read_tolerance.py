@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from tests.unit.api.mock_session import configure_mock_session
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context, get_settings
@@ -33,6 +34,7 @@ from modulo.api.main import app
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 from modulo.api.routes.pipelines import (
     GraphValidationIssue,
+    PipelineGraphNode,
     _graph_response,
 )
 from modulo.auth.dependencies import get_current_user
@@ -89,6 +91,13 @@ def _minimal_node(node_id: uuid.UUID, node_type: str = "agent", **extra: Any) ->
     elif node_type == "join":
         base["collect"] = [{"node": str(uuid.uuid4())}]
         base["aggregate"] = {"kind": "merge_by_key", "key": "result"}
+    elif node_type == "dispatch":
+        base["connector_binding"] = {
+            "type": "github_actions_ci",
+            "instance_id": str(uuid.uuid4()),
+            "operation": "dispatch",
+            "dispatch_action": "trigger_run",
+        }
     base.update(extra)
     return base
 
@@ -284,6 +293,17 @@ class TestGraphNodeTypesTolerantRead:
             "router",
             "hitl",
             "join",
+            "dispatch",
+        ],
+        ids=[
+            "agent",
+            "manual",
+            "composite",
+            "sandbox_agent",
+            "router",
+            "hitl",
+            "join",
+            "dispatch",
         ],
     )
     def test_valid_node_type_round_trips(self, node_type: str) -> None:
@@ -293,6 +313,49 @@ class TestGraphNodeTypesTolerantRead:
         assert len(resp.nodes) == 1
         assert resp.nodes[0].node_type == node_type
         assert not resp.validation_issues
+
+    def test_dispatch_binding_fields_round_trip(self) -> None:
+        """FAR-1141: ``operation`` / ``dispatch_action`` survive the API boundary.
+
+        The write path serialises them through ``ConnectorBinding`` and the read
+        path parses them back — a field dropped at either end would be invisible
+        to the engine (the FAR-963 write-path+read-path round-trip lesson).
+        """
+        nid = uuid.uuid4()
+        node = _minimal_node(nid, "dispatch")
+        resp = _graph_response([node], [])
+        assert len(resp.nodes) == 1
+        assert not resp.validation_issues
+        binding = resp.nodes[0].connector_binding
+        assert binding is not None
+        assert binding.operation == "dispatch"
+        assert binding.dispatch_action == "trigger_run"
+
+    def test_dispatch_node_requires_connector_binding(self) -> None:
+        """The write-path validator rejects a dispatch node without a binding."""
+        nid = uuid.uuid4()
+        node = {
+            "id": str(nid),
+            "node_type": "dispatch",
+            "position": {"x": 0, "y": 0},
+            # connector_binding intentionally omitted
+        }
+        with pytest.raises(ValidationError, match="require a connector_binding"):
+            PipelineGraphNode.model_validate(node)
+
+    def test_dispatch_node_rejects_agent_id(self) -> None:
+        """A dispatch node cannot also reference an agent."""
+        node = _minimal_node(uuid.uuid4(), "dispatch")
+        node["agent_id"] = str(uuid.uuid4())
+        with pytest.raises(ValidationError, match="cannot reference an agent"):
+            PipelineGraphNode.model_validate(node)
+
+    def test_dispatch_node_rejects_sandbox_only_fields(self) -> None:
+        """Sandbox-only fields are rejected on a dispatch node (shared guards)."""
+        node = _minimal_node(uuid.uuid4(), "dispatch")
+        node["agent_commands"] = ["echo hi"]
+        with pytest.raises(ValidationError, match="Only sandbox_agent nodes can set agent_commands"):
+            PipelineGraphNode.model_validate(node)
 
 
 class TestGraphEdgeTypesTolerantRead:

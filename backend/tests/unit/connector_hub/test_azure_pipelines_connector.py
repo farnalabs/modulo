@@ -214,7 +214,7 @@ async def test_trigger_run(connector):
     respx.post(f"{_PIPELINES}/1/runs").mock(return_value=httpx.Response(200, json=created))
     run = await connector.trigger_run("1", branch="main", variables={"K": "V"})
     assert isinstance(run, CIRun)
-    assert run.id == "500"
+    assert run.id == "1/500"
     assert run.pipeline_id == "1"
     assert run.status == CIRunStatus.IN_PROGRESS
     assert run.branch == "main"
@@ -232,7 +232,7 @@ async def test_get_run_status(connector):
     }
     respx.get(f"{_PIPELINES}/1/runs/500").mock(return_value=httpx.Response(200, json=body))
     run = await connector.get_run_status("1/500")
-    assert run.id == "500"
+    assert run.id == "1/500"
     assert run.status == CIRunStatus.SUCCESS
 
 
@@ -311,7 +311,7 @@ async def test_list_runs_filtered_by_status(connector):
     respx.get(f"{_PIPELINES}/1/runs").mock(return_value=httpx.Response(200, json=body))
     runs = await connector.list_runs(pipeline_id="1", status=CIRunStatus.FAILURE)
     assert len(runs) == 1
-    assert runs[0].id == "2"
+    assert runs[0].id == "1/2"
 
 
 async def test_list_runs_without_pipeline_id(connector):

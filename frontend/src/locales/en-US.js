@@ -1059,6 +1059,8 @@ export default {
       "node_router_label": "Router",
       "node_hitl_badge": "HITL",
       "node_hitl_label": "Human-in-the-loop",
+      "node_dispatch_badge": "DISPATCH",
+      "node_dispatch_label": "Dispatch",
       "label_field": "Label",
       "output_schema": "Output Schema",
       "connector": "Connector",
@@ -1446,6 +1448,7 @@ export default {
       "dimension_folder": "Folder",
       "dimension_team": "Team",
       "dimension_error_code": "Error code",
+      "dimension_execution_origin": "Execution origin",
       "filter_folder": "Folder",
       "filter_pipeline": "Pipeline",
       "filter_trigger_type": "Trigger type",
@@ -3528,7 +3531,8 @@ export default {
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
       "name": "Name",
-      "description": "Description"
+      "description": "Description",
+      "node_dispatch_badge": "DISPATCH"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
@@ -4270,6 +4274,10 @@ export default {
     "queue": {
       "waiting_slot": "Queued — waiting for a free slot ({active} active / {limit} limit)",
       "starting_soon": "Queued — starting soon"
+    },
+    "execution_origin": {
+      "dispatched": "Dispatched",
+      "dispatched_hint": "This run's graph contains a dispatch node: part of the work ran outside Modulo rather than being executed by Modulo directly."
     }
   },
   "nav": {

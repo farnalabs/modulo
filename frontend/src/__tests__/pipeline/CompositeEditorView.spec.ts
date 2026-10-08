@@ -25,6 +25,7 @@ vi.mock('@vue-flow/core', () => ({
           <slot v-if="n.type === 'manual'" name="node-manual" :id="n.id" :data="n.data" />
           <slot v-else-if="n.type === 'agent'" name="node-agent" :id="n.id" :data="n.data" />
           <slot v-else-if="n.type === 'composite'" name="node-composite" :id="n.id" :data="n.data" />
+          <slot v-else-if="n.type === 'dispatch'" name="node-dispatch" :id="n.id" :data="n.data" />
         </template>
       </div>`,
   },
@@ -214,6 +215,36 @@ describe('CompositeEditorView', () => {
       expect(label.classes()).toContain('lowercase')
       expect(label.classes()).toContain('tracking-wide')
     }
+    wrapper.unmount()
+  })
+
+  it('renders the dispatch node-kind template and keeps its own canvas type (FAR-1141)', async () => {
+    // A dispatch node inside a composite must render its own DISPATCH badge and
+    // resolveNodeType must not collapse it into the generic `agent` node.
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/composite-templates/{template_id}') {
+        return Promise.resolve({ data: templatePayload(), error: undefined })
+      }
+      if (url === '/api/v1/composite-templates/{template_id}/editor') {
+        return Promise.resolve({
+          data: {
+            nodes: [{ id: 'd1', node_type: 'dispatch', label: 'Fire job', position: { x: 0, y: 0 } }],
+            edges: [],
+          },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.text()).toContain('DISPATCH')
+    expect(wrapper.text()).toContain('Fire job')
+    const vm = wrapper.vm as unknown as Record<string, any>
+    expect(vm.flowNodes).toEqual([
+      { id: 'd1', type: 'dispatch', position: { x: 0, y: 0 }, data: { label: 'Fire job' } },
+    ])
     wrapper.unmount()
   })
 

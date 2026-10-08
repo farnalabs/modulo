@@ -64,6 +64,12 @@ from modulo.auth.permissions import (
     resolve_required,
 )
 from modulo.auth.team_rbac import org_role_level
+from modulo.connectors.base import (
+    connector_binding_operation,
+    connector_type_supports_dispatch,
+    node_fires_dispatch_job,
+    node_routes_binding_to_connector,
+)
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.capability_scope import (
@@ -1070,6 +1076,17 @@ class GraphPosition(BaseModel):
 class ConnectorBinding(BaseModel):
     type: str = Field(min_length=1, max_length=100)
     instance_id: uuid.UUID
+    # FAR-1141: the connector-binding operation verb. Declared here so the API
+    # stops silently DROPPING it on save (extra="ignore" would create permanent
+    # plan drift — the engine would never see the dispatch operation).
+    operation: Literal["query", "write", "dispatch"] = "query"
+    # FAR-1141: for operation="dispatch", the CI-runner method to call.
+    dispatch_action: Literal[
+        "trigger_run",
+        "get_run_status",
+        "get_run_logs",
+        "list_runs",
+    ] = "trigger_run"
 
 
 class SchemaPin(BaseModel):
@@ -1125,7 +1142,7 @@ class CapabilityScope(BaseModel):
 
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
-    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join"] = "agent"
+    node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
     agent_id: uuid.UUID | None = None
     position: GraphPosition
     connector_binding: ConnectorBinding | None = None
@@ -1339,6 +1356,28 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         "(each with dest/ref/url) checked out into the sandbox workspace. Only valid "
         "on sandbox_agent nodes. Validated for safe dest traversal, ref.kind, and URL scheme.",
     )
+    # FAR-1141 slice 2: dispatch wait semantics. Declared on the node (NOT folded
+    # into connector_binding) so the API does not silently DROP them on save — a
+    # dropped field would create permanent plan drift (the engine reads both from
+    # node_def). Valid ONLY on node_type="dispatch"; enforced by
+    # _validate_dispatch_only_fields below.
+    await_completion: StrictBool = Field(
+        default=False,
+        description="dispatch nodes only, dispatch_action='trigger_run': after firing the "
+        "job ONCE, poll get_run_status until the substrate reports a terminal status. "
+        "False (default) = fire-and-forget: the node completes as soon as the job ref "
+        "returns. Only meaningful with dispatch_action='trigger_run'.",
+    )
+    wait_timeout: float | None = Field(
+        default=None,
+        gt=0,
+        le=3600,
+        description="dispatch nodes only: seconds to wait for a terminal substrate status "
+        "when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry "
+        "raises the terminal dispatch.wait_timeout error — never retried, because a "
+        "retry would fire a second job on the customer's substrate. Keep it below the "
+        "node's timeout_seconds so this error (not the node deadline) is what fires.",
+    )
 
     @field_validator("commands_concatenation_string", mode="before")
     @classmethod
@@ -1379,12 +1418,26 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             "router": self._validate_router_node,
             "hitl": self._validate_hitl_node,
             "join": self._validate_join_node,
+            "dispatch": self._validate_dispatch_node,
         }
         node_validators[self.node_type]()
+        # FAR-1141 FIX 2: a ``dispatch`` verb on a node the engine does NOT
+        # route to a connector is dead configuration, not a softer query.
+        # Runs for EVERY node type right after the type validator so a dispatch
+        # node's verb defaulting has already happened.
+        self._validate_dispatch_binding_routing()
+        # FAR-1141 (CRITICAL 1): runs for EVERY node type, immediately after the
+        # type validator so a dispatch node's verb defaulting has already
+        # happened. Keyed on the BINDING's operation, not on ``node_type`` —
+        # a connector / router / hitl node carrying ``operation="dispatch"`` +
+        # ``trigger_run`` fires a real external job exactly like a dispatch node
+        # and must be persisted non-idempotent too.
+        self._validate_dispatch_binding_non_idempotent()
         self._validate_fan_out_cross_checks()
         self._validate_sandbox_only_fields()
         self._validate_stdout_retention()
         self._validate_agent_only_fields()
+        self._validate_dispatch_only_fields()
         self._validate_output_schema_pin_consistency()
         return self
 
@@ -1426,6 +1479,28 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     def _validate_agent_only_fields(self) -> None:
         if self.node_type != "agent" and self.parameter_set_id is not None:
             raise ValueError("Only agent nodes can have parameter_set_id")
+
+    def _validate_dispatch_only_fields(self) -> None:
+        """FAR-1141: ``await_completion`` / ``wait_timeout`` are dispatch-only fields.
+
+        A meaningful value on any other node type would be a declared-but-UNREAD
+        field — the engine reads both only for a dispatch node's dispatch
+        operation — so it is rejected rather than silently ignored (same posture
+        as ``_validate_sandbox_only_fields`` / ``_validate_stdout_retention``).
+
+        Checked by VALUE, not by presence: an absent field and a default-valued
+        one (``false`` / ``null``) are the same state at rest, and a payload that
+        round-trips every key (a form that echoes defaults for every node type)
+        must keep saving. ``await_completion``'s bool requirement is enforced by
+        its ``StrictBool`` field type — a lax-coerced ``"true"`` / ``1`` is
+        rejected at parse time instead of being silently armed.
+        """
+        if self.node_type == "dispatch":
+            return
+        if self.await_completion:
+            raise ValueError("Only dispatch nodes can set await_completion=True")
+        if self.wait_timeout is not None:
+            raise ValueError("Only dispatch nodes can set wait_timeout")
 
     def _validate_stdout_retention(self) -> None:
         """FAR-792: per-node stdout/stderr retention is a sandbox_agent-only surface.
@@ -1546,6 +1621,27 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     def _validate_agent_node(self) -> None:
         if self.agent_id is None:
             raise ValueError("Agent nodes require an agent")
+        # FAR-1141 criterion 4: an agent node runs the LLM node factory — the
+        # engine NEVER routes its binding to a connector (the binding branch in
+        # ``graph_cache._make_node_fn`` is skipped for agent + agent_id), so a
+        # dispatch binding here would be declared-but-unread: nothing fires,
+        # yet the run would be stamped ``dispatched`` and its retries disabled
+        # for a graph that dispatches nothing. Reject at the SAVE boundary so a
+        # stored graph can never disagree with the engine's routing (MCP graph
+        # writes go through this same model).
+        #
+        # A plain ``query`` binding stays valid: it is what the convert-to-agent
+        # endpoint persists (which connector the agent works through, and what
+        # the swappable-binding extraction reads), and the engine legitimately
+        # ignores it there. Only the verb that would fire an external job is
+        # refused.
+        if self.connector_binding is not None and self.connector_binding.operation == "dispatch":
+            raise ValueError(
+                "Agent nodes cannot carry connector_binding.operation='dispatch' — the engine runs an "
+                "agent node through the LLM factory and never routes its binding to a connector, so the "
+                "dispatch would never fire while the run read as dispatched; use a dispatch or connector "
+                "node for the dispatch binding",
+            )
 
     def _validate_join_node(self) -> None:
         # A join node is a pure convergence node — it has no agent, no connector
@@ -1562,6 +1658,180 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
             raise ValueError("Join aggregate merge_by_key requires an explicit 'key'")
         if self.aggregate.kind == "map" and not self.aggregate.map_expression:
             raise ValueError("Join aggregate map requires a 'map_expression'")
+
+    def _validate_dispatch_node(self) -> None:
+        """A dispatch node routes a CI-runner dispatch operation (FAR-1141).
+
+        Requires a ``connector_binding`` (the dispatch target) and forbids an
+        ``agent_id`` (dispatch is not an agent-executed node). Sandbox-only /
+        stdout-retention / agent-only fields are rejected for EVERY non-sandbox
+        / non-agent type by the shared ``_validate_sandbox_only_fields`` /
+        ``_validate_stdout_retention`` / ``_validate_agent_only_fields``
+        checks, so a dispatch node cannot set them either; the dispatch-only
+        wait fields are rejected on every other node type by
+        ``_validate_dispatch_only_fields``.
+
+        FAR-1141 slice 2 + the pre-PR QA defects (CRITICAL 1, MAJOR 3/4/8):
+
+        * **operation (MAJOR 3).** ``ConnectorBinding.operation`` defaults to
+          ``"query"`` (the generic default every other node type needs) and the
+          write path always serialises it — so a dispatch node saved without an
+          explicit verb used to PERSIST ``"query"`` and execute
+          ``connector.query()`` at run time: silently, with no job fired. A
+          payload that simply OMITS the key now inherits the engine's own
+          fallback (``"dispatch"``), and an explicit non-dispatch verb is
+          rejected outright.
+        * **CI-runner capability (MAJOR 8).** The bound connector's declared
+          type must implement the four CI-runner operations, or the dispatch
+          fails at run time with an ``AttributeError``-shaped error. Checked
+          here on the binding's ``type`` (this model runs for REST AND MCP
+          graph writes); the GraphValidator independently checks the bound
+          INSTANCE's ``connector_type_id`` for every node type on REST saves.
+        * **wait-coherence (MAJOR 4).** ``await_completion`` is only read for
+          ``dispatch_action='trigger_run'`` and ``wait_timeout`` only when
+          ``await_completion`` is true — both combinations were validated yet
+          never read, so they are rejected rather than silently no-opping.
+        * **idempotency (CRITICAL 1).** See
+          :meth:`_validate_dispatch_binding_non_idempotent` — the flag is now
+          set for EVERY node type by OPERATION, and the engine derives
+          non-idempotency from the binding itself, so the write-path flag is
+          the convenience rather than the only guard.
+        """
+        if self.connector_binding is None:
+            raise ValueError("Dispatch nodes require a connector_binding")
+        if self.agent_id is not None:
+            raise ValueError("Dispatch nodes cannot reference an agent")
+        binding = self.connector_binding
+        if "operation" not in binding.model_fields_set:
+            # The field default ("query") exists for every OTHER node type.
+            # Inherit the engine's OWN routing verdict instead of persisting a
+            # verb that would silently turn this node into a plain query (MAJOR
+            # 3). FAR-1141 FIX 6: the default is DERIVED from
+            # ``connector_binding_operation`` (the declared single source of
+            # truth for "which verb does this node route to") rather than
+            # restating the ``node_type == "dispatch" -> "dispatch"`` rule here;
+            # the probe omits the unset ``operation`` key so the resolver sees
+            # the same absence the engine will see, not this model's "query"
+            # field default.
+            raw = binding.model_dump(mode="json")
+            raw.pop("operation", None)
+            # The cast is sound, not a bypass: ``_validate_dispatch_node`` only
+            # runs for ``node_type == "dispatch"``, which
+            # ``node_routes_binding_to_connector`` always routes once the
+            # (required, non-empty) binding is present, and the probe carried no
+            # explicit ``operation`` — so the resolver can only reach its
+            # ``node_type`` fallback and answer ``"dispatch"``, a member of this
+            # field's Literal vocabulary.
+            binding.operation = cast(
+                Literal["query", "write", "dispatch"],
+                connector_binding_operation(
+                    {
+                        "node_type": self.node_type,
+                        "agent_id": self.agent_id,
+                        "connector_binding": raw,
+                    },
+                ),
+            )
+        if binding.operation != "dispatch":
+            raise ValueError(
+                "Dispatch nodes require connector_binding.operation='dispatch' "
+                f"(got {binding.operation!r}) — a dispatch node that queries fires no job",
+            )
+        if not connector_type_supports_dispatch(binding.type):
+            raise ValueError(
+                f"connector type {binding.type!r} does not implement the CI-runner operations "
+                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch "
+                "binding requires — bind a CI connector instead",
+            )
+        if self.await_completion and binding.dispatch_action != "trigger_run":
+            raise ValueError(
+                "await_completion=True requires connector_binding.dispatch_action='trigger_run' "
+                f"(got {binding.dispatch_action!r}) — the wait only ever polls after a fired job",
+            )
+        if self.wait_timeout is not None and not self.await_completion:
+            raise ValueError("wait_timeout requires await_completion=True — the window is never read otherwise")
+
+    def _validate_dispatch_binding_routing(self) -> None:
+        """FAR-1141 criterion 4 / FIX 2: reject a dispatch verb the engine cannot route.
+
+        Two shapes carry a ``connector_binding`` the engine NEVER routes to a
+        connector — an ``agent`` node with an ``agent_id`` (LLM factory) and a
+        ``sandbox_agent`` (sandbox factory) — so ``operation="dispatch"`` on
+        either is declared-but-unread: nothing fires, yet the binding reads as a
+        dispatch to every other consumer of the graph. Persisting it would leave
+        a config the engine silently ignores; the resolver would even coerce the
+        verb back to ``query`` on some read paths, which is exactly the "silent
+        coercion" this rejects instead.
+
+        Checked through ``node_routes_binding_to_connector`` — the SAME gate
+        ``node_runner``/``graph_cache`` branch on — so the save rule and the
+        engine's routing can never disagree. Runs on the write path for REST and
+        MCP graph writes alike (both go through this model); graph READS skip it
+        via the ``legacy_read`` context, so a pre-existing stored graph still
+        loads. A ``query``/``write`` binding on the same shapes stays valid: it
+        is what the convert-to-agent endpoint persists and the engine
+        legitimately ignores it there.
+        """
+        binding = self.connector_binding
+        if binding is None or binding.operation != "dispatch":
+            return
+        probe = {
+            "node_type": self.node_type,
+            "agent_id": self.agent_id,
+            "connector_binding": binding.model_dump(mode="json"),
+        }
+        if node_routes_binding_to_connector(probe):
+            return
+        raise ValueError(
+            f"{self.node_type} nodes do not route their connector_binding to a connector, so "
+            "operation='dispatch' would never fire while the run read as dispatched — use a "
+            "dispatch or connector node for the dispatch binding",
+        )
+
+    def _validate_dispatch_binding_non_idempotent(self) -> None:
+        """FAR-1141 (CRITICAL 1): any node whose binding FIRES a job is
+        persisted ``idempotent=false`` — decided by OPERATION, not ``node_type``.
+
+        ``trigger_run`` creates a job on the customer's own substrate, so
+        re-running the graph would fire a SECOND job. Keying this on
+        ``node_type == "dispatch"`` (as it was) left a ``connector`` /
+        ``router`` / ``hitl`` node carrying ``operation="dispatch"`` +
+        ``trigger_run`` persisted ``idempotent=true`` — a real external job
+        that every retry path considered safe to re-run.
+
+        This write-path flag is the CONVENIENCE, not the guarantee:
+        ``executor._graph_is_idempotent`` and ``runtime_retry`` derive
+        non-idempotency from the binding itself, so REST, MCP and hand-written
+        graphs all fail closed even if the flag is missing or overridden. An
+        explicitly-passed ``idempotent=true`` is overridden (and logged); the
+        value would be unsafe to persist, and a payload that round-trips
+        defaults must still save.
+
+        The decision itself is delegated to
+        ``graph_validator.node_fires_dispatch_job`` — the SAME predicate the
+        engine and the run classifier use — so the write path cannot grow its
+        own copy of the rule and drift from the run-time one.
+        """
+        if self.connector_binding is None:
+            return
+        probe = {
+            "node_type": self.node_type,
+            # Carried because the routing gate reads it: an agent node with an
+            # agent_id never routes its binding to a connector, so a probe that
+            # omitted it would ask a different question than the engine does.
+            "agent_id": self.agent_id,
+            "connector_binding": self.connector_binding.model_dump(mode="json"),
+        }
+        if not node_fires_dispatch_job(probe):
+            return
+        if self.idempotent and "idempotent" in self.model_fields_set:
+            logger.warning(
+                "dispatch_node.idempotent_forced_false",
+                extra={"node_id": str(self.id)},
+                # Firing a job on the customer's substrate is never safe to
+                # re-run, so an explicit idempotent=true is overridden.
+            )
+        self.idempotent = False
 
     def _validate_sandbox_env_vars(self) -> None:
         if not self.env_vars:

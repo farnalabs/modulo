@@ -1002,14 +1002,49 @@ class TestRoutes:
         assert resp.status_code == 200
         body = resp.json()
         assert body["kind"] == "github_issue"
+        # FAR-1141: ``execution_origin`` is ALWAYS present on the wire; this
+        # stand-in never had the column set, so it must read NULL (never a
+        # repr of the mock, never an omitted key).
         assert body["runs"] == [
             {
                 "run_id": str(run.id),
                 "status": "complete",
                 "completed_at": "2026-01-05T00:00:00Z",
                 "provenance": "manual",
+                "execution_origin": None,
             }
         ]
+
+    def test_detail_run_history_carries_dispatched_execution_origin(self, mock_session: AsyncMock) -> None:
+        """FAR-1141 / ADR-042: a dispatched run in a journey's history must read
+        as dispatched, never indistinguishably from a Modulo-executed one."""
+        app = _make_app()
+
+        async def override_session() -> AsyncGenerator[AsyncSession, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        journey = _make_journey_mock()
+        run = MagicMock()
+        run.id = uuid.uuid4()
+        run.status = "complete"
+        run.completed_at = datetime(2026, 1, 5, tzinfo=UTC)
+        run.trigger_type = "manual"
+        run.execution_origin = "dispatched"
+        with (
+            patch(
+                "modulo.api.routes.lifecycle_maps.get_lifecycle_map",
+                new=AsyncMock(return_value=_make_map_mock()),
+            ),
+            patch("modulo.api.routes.lifecycle_maps.get_map_journey", new=AsyncMock(return_value=(journey, False))),
+            patch("modulo.api.routes.lifecycle_maps.list_journey_runs", new=AsyncMock(return_value=[run])),
+            TestClient(app) as c,
+        ):
+            resp = c.get(f"/api/v1/lifecycle-maps/{_MAP}/journeys/github_issue/simple-ref")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        assert resp.json()["runs"][0]["execution_origin"] == "dispatched"
 
     def test_detail_empty_run_history(self, mock_session: AsyncMock) -> None:
         app = _make_app()

@@ -19,6 +19,7 @@ import pytest
 
 from modulo.core.cost_controller.finalize import _node_output_dict
 from modulo.core.node_output_split import (
+    DISPATCH_PROVENANCE_FIELDS,
     NODE_TYPE_GATE,
     TELEMETRY_FIELDS,
     extend_node_type_map_from_edges,
@@ -238,6 +239,48 @@ def test_split_connector_without_artifacts_uses_envelope_output() -> None:
     # The outer ``output`` is folded into telemetry losslessly (no artifact to
     # prove it was consumed as the return).
     assert telemetry["output"] is result
+
+
+def test_split_dispatch_failure_preserves_witness_provenance() -> None:
+    """FAR-1141 (MAJOR 6): the failed branch DROPS ``output``, so the stamped
+    witness provenance is lifted out of it first — otherwise a dispatch node
+    that failed after firing an external job reached failure inspection with
+    only the hand-duplicated ``substrate_status`` (and, before the fix, with
+    nothing at all from the stamped output)."""
+    stamped_output = {
+        "id": "job-1",
+        "status": "failure",
+        "witnessed_via": "inst-1",
+        "execution_identity": "customer_substrate",
+        "declared_external_cost": None,
+        "substrate_status": "failure",
+    }
+    envelope = {
+        "artifacts": [{"node_id": "d1", "status": "failed", "error": "failure"}],
+        "output": stamped_output,
+        "substrate_status": "failure",
+    }
+    value, telemetry = split_node_output(envelope, "dispatch", None)
+    assert value is None
+    assert telemetry["status"] == "failed"
+    for key in DISPATCH_PROVENANCE_FIELDS:
+        assert telemetry[key] == stamped_output[key], key
+    # the output itself stays out of the failed branch's telemetry
+    assert "output" not in telemetry
+
+
+def test_split_dispatch_failure_without_provenance_keys_is_a_noop() -> None:
+    """A failed output carrying NO provenance keys must not raise while the
+    splitter lifts the declared set — every key is simply absent."""
+    envelope = {
+        "artifacts": [{"node_id": "d1", "status": "failed", "error": "boom"}],
+        "output": {"foo": 1},
+    }
+    value, telemetry = split_node_output(envelope, "dispatch", None)
+    assert value is None
+    assert telemetry["status"] == "failed"
+    assert telemetry["error"] == "boom"
+    assert "output" not in telemetry
 
 
 # ---------------------------------------------------------------------------

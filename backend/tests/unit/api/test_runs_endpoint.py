@@ -843,6 +843,122 @@ def test_run_response_cancel_reason_degrades_for_non_string_value(client: TestCl
     assert resp.json()["cancel_reason"] is None
 
 
+# ---------------------------------------------------------------------------
+# FAR-1141 / ADR-042 — run-level execution origin
+# ---------------------------------------------------------------------------
+
+
+def test_run_response_exposes_execution_origin(client: TestClient) -> None:
+    """The run DETAIL response carries ``execution_origin='dispatched'`` — the
+    claim-ready surface that stops a run containing externally-dispatched work
+    reading indistinguishably from a run Modulo executed itself."""
+    run = _make_run(status="pending")
+    run.execution_origin = "dispatched"
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["execution_origin"] == "dispatched"
+
+
+def test_run_response_execution_origin_null_for_executed_run(client: TestClient) -> None:
+    """A Modulo-executed (or pre-column legacy) run serves NULL — the field is
+    additive and nullable, so existing consumers see ``null`` not a 4xx/5xx."""
+    run = _make_run(status="complete")
+    run.execution_origin = None
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["execution_origin"] is None
+
+
+def test_run_response_execution_origin_degrades_for_non_string_value(client: TestClient) -> None:
+    """Defensive coercion: the MagicMock stand-in's unset attribute (and any
+    malformed column value) degrades to null instead of failing response
+    validation — the same rule ``cancel_reason`` applies."""
+    run = _make_run(status="pending")
+
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["execution_origin"] is None
+
+
+def test_list_runs_includes_execution_origin(client: TestClient) -> None:
+    """The runs LIST item carries ``execution_origin`` too — provenance must be
+    readable without opening every run's detail page."""
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    run.execution_origin = "dispatched"
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["run_id"] == str(run_id)
+    assert item["execution_origin"] == "dispatched"
+
+
+def test_list_runs_execution_origin_null_when_absent(client: TestClient) -> None:
+    run_id = uuid.uuid4()
+    run = _make_listable_run(run_id)
+    run.execution_origin = None
+
+    with (
+        patch(
+            "modulo.api.routes.runs.db_list_runs",
+            new_callable=AsyncMock,
+            return_value=_make_page([run], 1),
+        ),
+        patch(
+            "modulo.api.routes.runs.get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "modulo.api.routes.runs.get_run_cost_breakdowns",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get("/api/v1/runs")
+
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["execution_origin"] is None
+
+
 def test_cancel_reason_contract_matches_generated_frontend_schema() -> None:
     """Contract round-trip (FAR-1233): the backend response field and the
     generated OpenAPI->TypeScript type carry the SAME name and nullability.

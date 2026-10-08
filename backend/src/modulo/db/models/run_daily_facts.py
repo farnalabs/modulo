@@ -90,6 +90,14 @@ class RunDailyFact(OrgScoped):
         Uuid(), ForeignKey("pipeline_folders.id", ondelete=ONDELETE_SET_NULL), index=True
     )
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    # FAR-1141 / ADR-042: the run's execution origin copied from
+    # ``Run.execution_origin`` at finalize so the analytics read path NEVER
+    # joins ``runs`` (ADR 020) and the marker outlives the 90-day run purge.
+    # ``'dispatched'`` (EXECUTION_ORIGIN_DISPATCHED) = the run's graph
+    # contains at least one ``dispatch`` node; NULL = executed by Modulo /
+    # fact finalized before this shipped. Same additive/no-backfill contract
+    # as the source column (migration 0288).
+    execution_origin: Mapped[str | None] = mapped_column(String(20))
     # FAR-1421: the trigger that fired the run, copied from Run.trigger_id so
     # claim→dispatch latency can be bucketed per trigger WITHOUT joining runs
     # (ADR 020 — facts must stay self-contained and survive the run purge).

@@ -92,6 +92,20 @@ async def test_trigger_run_default(ap_runner):
     run = await ap_runner.trigger_run(pipeline_id="1")
     assert run.pipeline_id == "1"
     assert run.status == CIRunStatus.IN_PROGRESS
+    # the id must be the QUALIFIED 'pipeline_id/run_id' form get_run_status consumes
+    assert run.id == "1/101"
+
+
+@respx.mock
+async def test_trigger_run_unusable_response_fails_loud(ap_runner):
+    """A trigger response with no run id must fail loud — never an id
+    get_run_status would reject while the pipeline already runs."""
+    respx.post(
+        f"{_AZURE_DEVOPS_API}/myorg/myproject/_apis/pipelines/1/runs",
+        params={"api-version": "7.0"},
+    ).mock(return_value=httpx.Response(200, json={"state": "inProgress"}))
+    with pytest.raises(ValueError, match="did not yield a consumable run id"):
+        await ap_runner.trigger_run(pipeline_id="1")
 
 
 @respx.mock
@@ -154,7 +168,7 @@ async def test_get_run_status_success(ap_runner):
     )
     run = await ap_runner.get_run_status("1/101")
     assert run.status == CIRunStatus.SUCCESS
-    assert run.id == "101"
+    assert run.id == "1/101"
 
 
 @respx.mock

@@ -23,8 +23,10 @@ from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 import modulo.core.pipeline_engine.node_runner as nr
+from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError,
     ScriptBudgetKilledError,
@@ -1302,6 +1304,505 @@ async def test_run_connector_action_query_builds_query():
     query = connector.query.await_args.args[0]
     assert query.resource == "search"
     assert query.filters == {"q": "x"}
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141: the `dispatch` connector operation
+# ---------------------------------------------------------------------------
+
+
+class _DispatchStubConnector:
+    """CI-style connector recording every dispatch call (FAR-1141).
+
+    Returns real ``CIRun`` / ``CIRunLog`` dataclasses so the state conversion
+    (dataclass -> plain dict, StrEnum -> str) is exercised end-to-end.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def query(self, q: Any) -> Any:
+        self.calls.append(("query", {"resource": getattr(q, "resource", None)}))
+        return {"records": ["never-returned-for-dispatch"]}
+
+    async def write(self, payload: Any) -> Any:
+        self.calls.append(("write", {"resource": getattr(payload, "resource", None)}))
+        return {"written": True}
+
+    async def trigger_run(
+        self,
+        pipeline_id: str = "",
+        branch: str = "",
+        variables: dict[str, str] | None = None,
+    ) -> Any:
+        self.calls.append(("trigger_run", {"pipeline_id": pipeline_id, "branch": branch, "variables": variables}))
+        return CIRun(id="run-1", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
+
+    async def get_run_status(self, run_id: str) -> Any:
+        self.calls.append(("get_run_status", {"run_id": run_id}))
+        return CIRun(id=run_id, pipeline_id="pl-1", status=CIRunStatus.SUCCESS)
+
+    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> Any:
+        self.calls.append(("get_run_logs", {"run_id": run_id, "cursor": cursor}))
+        return CIRunLog(run_id=run_id, lines=["ok"])
+
+    async def list_runs(
+        self,
+        pipeline_id: str | None = None,
+        status: CIRunStatus | None = None,
+        limit: int = 20,
+    ) -> Any:
+        self.calls.append(("list_runs", {"pipeline_id": pipeline_id, "status": status, "limit": limit}))
+        return [CIRun(id="run-1", pipeline_id=pipeline_id or "pl-1", status=CIRunStatus.SUCCESS)]
+
+
+def _dispatch_node_def(**overrides: Any) -> dict[str, Any]:
+    node_def: dict[str, Any] = {
+        "id": "dispatch-node",
+        "node_type": "dispatch",
+        "connector_binding": {
+            "instance_id": str(uuid.uuid4()),
+            "type": "github_actions_ci",
+            "operation": "dispatch",
+            "dispatch_action": "get_run_status",
+            "filters": {"run_id": "r-42"},
+        },
+    }
+    node_def.update(overrides)
+    return node_def
+
+
+async def test_run_connector_action_dispatch_routes_to_ci_method():
+    connector = _DispatchStubConnector()
+    result = await nr._run_connector_action(
+        connector,
+        "dispatch",
+        "command",
+        {"run_id": "r-42"},
+        {},
+        dispatch_action="get_run_status",
+    )
+    # routed to the CI method — NOT query — and the CIRun became a plain dict
+    assert connector.calls == [("get_run_status", {"run_id": "r-42"})]
+    assert isinstance(result, dict)
+    assert result["id"] == "r-42"
+    assert result["status"] == "success"
+    assert type(result["status"]) is str
+
+
+async def test_run_connector_action_dispatch_unknown_action_raises():
+    connector = _DispatchStubConnector()
+    with pytest.raises(ValueError, match="Unknown dispatch_action"):
+        await nr._run_connector_action(connector, "dispatch", "command", {}, {}, dispatch_action="explode")
+    # fail loud BEFORE any connector call — never a silent fall-through to query
+    assert not connector.calls
+
+
+async def test_dispatch_node_routes_to_get_run_status():
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    connector = _DispatchStubConnector()
+    set_connector_hub(_StubHub(connector=connector))
+    try:
+        fn = make_connector_fn(_dispatch_node_def())
+        result = await fn({"run_context": {"input": {}}})
+    finally:
+        set_connector_hub(None)
+    assert result["artifacts"][0]["status"] == "completed"
+    # called the binding's dispatch_action, not query
+    assert connector.calls == [("get_run_status", {"run_id": "r-42"})]
+    assert result["output"]["status"] == "success"
+
+
+async def test_dispatch_node_defaults_to_dispatch_action_trigger_run():
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    connector = _DispatchStubConnector()
+    set_connector_hub(_StubHub(connector=connector))
+    try:
+        # no explicit ``operation`` -> the dispatch verb; no ``dispatch_action``
+        # -> trigger_run; no pipeline_id input -> the binding's ``resource``.
+        node_def = _dispatch_node_def(
+            connector_binding={
+                "instance_id": str(uuid.uuid4()),
+                "type": "github_actions_ci",
+                "resource": "pl-9",
+            },
+        )
+        fn = make_connector_fn(node_def)
+        result = await fn({"run_context": {"input": {}}})
+    finally:
+        set_connector_hub(None)
+    assert result["artifacts"][0]["status"] == "completed"
+    assert connector.calls == [("trigger_run", {"pipeline_id": "pl-9", "branch": "", "variables": None})]
+
+
+def test_dispatch_node_invalid_dispatch_action_raises():
+    """A bad selector fails at graph build — never a silent fall-through to query."""
+    node_def = _dispatch_node_def(
+        connector_binding={
+            "instance_id": str(uuid.uuid4()),
+            "type": "github_actions_ci",
+            "operation": "dispatch",
+            "dispatch_action": "not_a_method",
+        },
+    )
+    with pytest.raises(ValueError, match="Unknown dispatch_action"):
+        make_connector_fn(node_def)
+
+
+async def test_dispatch_node_bypasses_write_gate(monkeypatch: pytest.MonkeyPatch):
+    """FAR-1141/FAR-458: a dispatch is NOT a write — no gate, no delivery stamp."""
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    gate = AsyncMock(side_effect=AssertionError("dispatch must not enter the write gate"))
+    monkeypatch.setattr(nr, "_connector_write_gate_phase", gate)
+    resolve = AsyncMock()
+    monkeypatch.setattr(nr, "_resolve_connector_write_outcome", resolve)
+    connector = _DispatchStubConnector()
+    set_connector_hub(_StubHub(connector=connector))
+    try:
+        fn = make_connector_fn(_dispatch_node_def(), session_factory=object())
+        result = await fn({"run_context": {"input": {}}, "_run_id": _RUN_ID, "_org_id": _ORG_ID})
+    finally:
+        set_connector_hub(None)
+    assert result["artifacts"][0]["status"] == "completed"
+    assert not gate.called
+    resolve.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 slice 2 — dispatch wait semantics (await_completion / wait_timeout)
+# ---------------------------------------------------------------------------
+
+
+class _WaitStubConnector:
+    """CI connector with a SCRIPTED substrate status sequence (FAR-1141).
+
+    ``trigger_calls`` / ``status_calls`` are the counts the acceptance test
+    asserts on. ``statuses`` is consumed one entry per ``get_run_status`` call
+    until a single entry remains, which then repeats forever — so
+    ``[IN_PROGRESS]`` is a substrate that NEVER goes terminal, and
+    ``[IN_PROGRESS, SUCCESS]`` settles on the second poll. Requires at least one
+    status. Never queries or writes: a dispatch node must do neither.
+    """
+
+    def __init__(self, statuses: list[CIRunStatus]) -> None:
+        if not statuses:
+            raise ValueError("statuses must be non-empty")
+        self.statuses = list(statuses)
+        self.trigger_calls = 0
+        self.status_calls = 0
+
+    async def query(self, q: Any) -> Any:
+        raise AssertionError("dispatch node must never query")
+
+    async def write(self, payload: Any) -> Any:
+        raise AssertionError("dispatch node must never write")
+
+    async def trigger_run(
+        self,
+        pipeline_id: str = "",
+        branch: str = "",
+        variables: dict[str, str] | None = None,
+    ) -> Any:
+        self.trigger_calls += 1
+        return CIRun(id="job-77", pipeline_id=pipeline_id, status=CIRunStatus.QUEUED, branch=branch)
+
+    async def get_run_status(self, run_id: str) -> Any:
+        self.status_calls += 1
+        status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        return CIRun(id=run_id, pipeline_id="pl-1", status=status)
+
+
+def _dispatch_trigger_node_def(**overrides: Any) -> dict[str, Any]:
+    """A dispatch node whose binding FIRES a job (``trigger_run``), FAR-1141."""
+    node_def = _dispatch_node_def(
+        connector_binding={
+            "instance_id": str(uuid.uuid4()),
+            "type": "github_actions_ci",
+            "operation": "dispatch",
+            "dispatch_action": "trigger_run",
+            "resource": "pl-9",
+        },
+    )
+    node_def.update(overrides)
+    return node_def
+
+
+async def _run_dispatch_node(node_def: dict[str, Any], connector: Any) -> dict[str, Any]:
+    """Build + run one dispatch node against *connector* (hub set, then cleared)."""
+    from modulo.core.pipeline_engine.decorator import set_connector_hub
+
+    set_connector_hub(_StubHub(connector=connector))
+    try:
+        fn = make_connector_fn(node_def)
+        return await fn({"run_context": {"input": {}}})
+    finally:
+        set_connector_hub(None)
+
+
+def test_dispatch_status_outcome_map_covers_every_substrate_status():
+    """The ADR-042 mapping-table artefact maps EVERY ``CIRunStatus`` VERBATIM.
+
+    A substrate code missing from the table would be a connector contract
+    breach the wait loop raises on — so completeness is a structural invariant,
+    not a documentation nicety."""
+    assert set(nr.DISPATCH_STATUS_OUTCOME_MAP) == {status.value for status in CIRunStatus}
+
+    def _codes_for(outcome: str) -> set[str]:
+        return {code for code, mapped in nr.DISPATCH_STATUS_OUTCOME_MAP.items() if mapped == outcome}
+
+    assert _codes_for("completed") == {"success"}
+    assert _codes_for("failed") == {"failure", "cancelled", "timed_out"}
+    assert _codes_for("poll") == {"pending", "queued", "in_progress", "unknown"}
+
+
+async def test_dispatch_fire_and_forget_completes_once_without_polling():
+    """``await_completion`` false (default): fire ONCE, return the job ref, done."""
+    connector = _WaitStubConnector([CIRunStatus.QUEUED])
+    node_def = _dispatch_trigger_node_def()
+    result = await _run_dispatch_node(node_def, connector)
+
+    assert result["artifacts"][0]["status"] == "completed"
+    assert connector.trigger_calls == 1
+    assert connector.status_calls == 0  # never waited — fire-and-forget
+    output = result["output"]
+    assert output["substrate_status"] == "queued"
+    assert output["execution_identity"] == "customer_substrate"
+    assert output["declared_external_cost"] is None
+    assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
+
+
+async def test_dispatch_await_completion_polls_until_terminal_then_completes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``await_completion`` true: poll non-terminal statuses, then complete.
+
+    The job is fired EXACTLY ONCE — polling must never re-fire it."""
+    monkeypatch.setattr(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001)
+    connector = _WaitStubConnector([CIRunStatus.IN_PROGRESS, CIRunStatus.SUCCESS])
+    node_def = _dispatch_trigger_node_def(await_completion=True, wait_timeout=5)
+    result = await _run_dispatch_node(node_def, connector)
+
+    assert result["artifacts"][0]["status"] == "completed"
+    assert connector.trigger_calls == 1
+    assert connector.status_calls == 2
+    output = result["output"]
+    assert output["status"] == "success"
+    assert output["substrate_status"] == "success"
+    assert output["execution_identity"] == "customer_substrate"
+    assert output["declared_external_cost"] is None
+
+
+@pytest.mark.parametrize(
+    "failure_status",
+    [CIRunStatus.FAILURE, CIRunStatus.CANCELLED, CIRunStatus.TIMED_OUT],
+)
+async def test_dispatch_await_terminal_failure_returns_failed_envelope_verbatim(
+    failure_status: CIRunStatus,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A terminal substrate failure is RETURNED as a failed artifact envelope —
+    never raised — so the graph's own error routing applies, exactly like every
+    other connector-node failure. ``error`` and ``substrate_status`` carry the
+    substrate's terminal code VERBATIM."""
+    monkeypatch.setattr(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001)
+    connector = _WaitStubConnector([failure_status])
+    node_def = _dispatch_trigger_node_def(await_completion=True, wait_timeout=5)
+    result = await _run_dispatch_node(node_def, connector)
+
+    assert connector.trigger_calls == 1
+    assert result["artifacts"][0]["status"] == "failed"
+    assert result["artifacts"][0]["error"] == str(failure_status)
+    assert result["output"]["substrate_status"] == str(failure_status)
+    # lifted to the envelope too: the splitter's failed branch drops ``output``.
+    assert result["substrate_status"] == str(failure_status)
+
+
+async def test_dispatch_wait_timeout_raises_typed_error_and_fires_trigger_run_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """FAR-1141 acceptance: a wait timeout NEVER fires a second external job.
+
+    The substrate never goes terminal, ``wait_timeout`` is tiny, and the poll
+    interval is patched to a sub-millisecond value — so the test asserts the
+    typed terminal error AND that ``trigger_run`` was called EXACTLY once
+    (every status poll is a read, never a re-trigger)."""
+    monkeypatch.setattr(nr, "_DISPATCH_WAIT_POLL_INTERVAL_SECONDS", 0.001)
+    connector = _WaitStubConnector([CIRunStatus.IN_PROGRESS])
+    node_def = _dispatch_trigger_node_def(await_completion=True, wait_timeout=0.05)
+
+    with pytest.raises(nr.DispatchWaitTimeoutError):
+        await _run_dispatch_node(node_def, connector)
+
+    assert connector.trigger_calls == 1
+    assert connector.status_calls >= 1  # it really polled before giving up
+
+
+def test_dispatch_wait_config_rejected_at_graph_build():
+    """Out-of-range / wrongly-typed / wrongly-placed wait config fails LOUD at
+    graph build (make_connector_fn), never silently at run time."""
+    with pytest.raises(ValueError, match="wait_timeout must be > 0"):
+        make_connector_fn(_dispatch_trigger_node_def(wait_timeout=0))
+    with pytest.raises(ValueError, match="wait_timeout must be > 0 and <="):
+        make_connector_fn(_dispatch_trigger_node_def(wait_timeout=3601))
+    with pytest.raises(ValueError, match="await_completion must be a bool"):
+        make_connector_fn(_dispatch_trigger_node_def(await_completion="true"))
+    # Declared on a binding that does NOT route the dispatch verb: a
+    # declared-but-unread field, rejected rather than ignored.
+    with pytest.raises(ValueError, match="only read by a dispatch node"):
+        make_connector_fn(
+            _dispatch_node_def(
+                connector_binding={
+                    "instance_id": str(uuid.uuid4()),
+                    "type": "github_actions_ci",
+                    "operation": "query",
+                },
+                await_completion=True,
+            )
+        )
+
+
+def test_dispatch_wait_timeout_run_retry_policy_never_redispatches():
+    """Provable non-retry: the run-level ``retry_policy`` matcher alone WOULD
+    match a ``failed`` dispatch wait timeout (the ``failure`` event is
+    code-agnostic), so the structural gate is the dispatch node's
+    ``idempotent=false`` — a non-idempotent graph suppresses EVERY retry path
+    (FAR-295), and the registry marks the code ``retryable=False``."""
+    from modulo.core.pipeline_engine.executor import _retry_after_policy, _retry_policy_applies
+
+    policy = {"max_retries": 3}  # absent `on` = every retryable event (FAR-649)
+    budget = _retry_after_policy(policy, "failed", "DispatchWaitTimeoutError", "wait window expired")
+    assert budget == 3  # the failure event alone WOULD re-dispatch ...
+    # ... but a dispatch node that can fire trigger_run is persisted
+    # idempotent=false, and that flag is what gates the re-dispatch:
+    assert _retry_policy_applies(budget, is_correction_run=False, graph_idempotent=False) is False
+    assert _retry_policy_applies(budget, is_correction_run=False, graph_idempotent=True) is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1141 slice 2 — the dispatch wait config survives the API boundary
+# ---------------------------------------------------------------------------
+
+
+def _api_dispatch_node(**overrides: Any) -> Any:
+    """A minimal API-graph dispatch node payload (POST /pipelines graph shape)."""
+    from modulo.api.routes.pipelines import PipelineGraphNode
+
+    payload: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "node_type": "dispatch",
+        "position": {"x": 0, "y": 0},
+        "connector_binding": {
+            "type": "github_actions_ci",
+            "instance_id": str(uuid.uuid4()),
+            "operation": "dispatch",
+            "dispatch_action": "trigger_run",
+        },
+    }
+    payload.update(overrides)
+    return PipelineGraphNode.model_validate(payload)
+
+
+def test_api_dispatch_wait_fields_survive_the_boundary():
+    """The two node-level wait fields are DECLARED on the API model, so they
+    survive the save (no silent ``extra=ignore`` drop) and reach ``node_def``,
+    where the engine reads them."""
+    node = _api_dispatch_node(await_completion=True, wait_timeout=60.0)
+    dumped = node.model_dump(mode="json")
+    assert dumped["await_completion"] is True
+    assert dumped["wait_timeout"] == 60.0
+    # A dispatch node that can FIRE a job is persisted NON-idempotent: that is
+    # the structural half of "never retried into a second external job".
+    assert node.idempotent is False
+    assert dumped["idempotent"] is False
+
+
+def test_api_dispatch_wait_fields_rejected_off_dispatch_nodes():
+    """A meaningful wait value on any other node type would be declared-but
+    UNREAD (a silent no-op), so it is rejected at save time."""
+    agent_payload = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "position": {"x": 0, "y": 0},
+        "agent_id": str(uuid.uuid4()),
+    }
+    from modulo.api.routes.pipelines import PipelineGraphNode
+
+    with pytest.raises(ValidationError, match="Only dispatch nodes"):
+        PipelineGraphNode.model_validate({**agent_payload, "await_completion": True})
+    with pytest.raises(ValidationError, match="Only dispatch nodes"):
+        PipelineGraphNode.model_validate({**agent_payload, "wait_timeout": 60.0})
+    # A default-valued echo (false / null) must keep saving: it is the same
+    # state at rest as an absent key, and forms round-trip every key.
+    assert PipelineGraphNode.model_validate({**agent_payload, "await_completion": False}).await_completion is False
+
+
+def test_api_dispatch_wait_field_value_rules():
+    """``await_completion`` must be a REAL bool (no lax ``"true"`` arming) and
+    ``wait_timeout`` must be > 0 s and <= the documented 3600 s maximum."""
+    with pytest.raises(ValidationError, match="await_completion"):
+        _api_dispatch_node(await_completion="true")
+    with pytest.raises(ValidationError, match="wait_timeout"):
+        _api_dispatch_node(wait_timeout=0)
+    with pytest.raises(ValidationError, match="wait_timeout"):
+        _api_dispatch_node(wait_timeout=3601)
+    # The wait fields are only read when the binding routes the dispatch verb.
+    with pytest.raises(ValidationError, match="operation='dispatch'"):
+        _api_dispatch_node(
+            connector_binding={
+                "type": "github_actions_ci",
+                "instance_id": str(uuid.uuid4()),
+                "operation": "query",
+            },
+            await_completion=True,
+        )
+    # An explicit idempotent=true on a job-firing dispatch node is unsafe to
+    # persist — it is overridden to false, never stored as-is.
+    assert _api_dispatch_node(idempotent=True).idempotent is False
+
+
+def test_api_agent_node_rejects_a_dispatch_connector_binding():
+    """FAR-1141 criterion 4, at the SAVE boundary: an agent node runs the LLM
+    node factory — the engine never routes its binding to a connector — so a
+    dispatch binding would be declared-but-unread: nothing fires, yet the run is
+    stamped ``dispatched`` and retries are disabled for a graph that dispatches
+    nothing. Rejected here so a stored graph can never disagree with the
+    engine's routing (REST, MCP and ``modulo apply`` all model-validate through
+    this class; the classifier additionally reads such a binding as ``query``)."""
+    from modulo.api.routes.pipelines import PipelineGraphNode
+
+    agent_payload = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "position": {"x": 0, "y": 0},
+        "agent_id": str(uuid.uuid4()),
+    }
+    dispatch_binding = {
+        "type": "github_actions_ci",
+        "instance_id": str(uuid.uuid4()),
+        "operation": "dispatch",
+        "dispatch_action": "trigger_run",
+    }
+    with pytest.raises(ValidationError, match="cannot carry connector_binding"):
+        PipelineGraphNode.model_validate({**agent_payload, "connector_binding": dispatch_binding})
+
+    # The plain query binding the convert-to-agent flow persists keeps saving:
+    # it records which connector the agent works through, and the engine
+    # legitimately ignores it on this node type.
+    node = PipelineGraphNode.model_validate(
+        {**agent_payload, "connector_binding": {**dispatch_binding, "operation": "query"}},
+    )
+    assert node.connector_binding is not None
+    assert node.connector_binding.operation == "query"
+    # An absent operation key is the same default (query) and must keep saving.
+    assert (
+        PipelineGraphNode.model_validate(
+            {**agent_payload, "connector_binding": {"type": "github_actions_ci", "instance_id": str(uuid.uuid4())}},
+        ).connector_binding
+        is not None
+    )
 
 
 def test_guard_connector_secret_output_violation(monkeypatch: pytest.MonkeyPatch):

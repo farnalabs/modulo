@@ -2606,6 +2606,8 @@ async def set_pipeline_owners(
 
 
 def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     child_cost, child_count = child_rollup.get(r.id, (_MCP_COST_ROLLUP_ZERO, 0))
     child_cost = _quantize_mcp_cost_rollup(child_cost)
     own_cost = r.total_cost_usd if r.total_cost_usd is not None else _MCP_COST_ROLLUP_ZERO
@@ -2615,6 +2617,12 @@ def _mcp_run_item(r: Any, child_rollup: dict[Any, tuple[Any, int]]) -> dict[str,
         "pipeline_id": str(r.pipeline_id),
         "status": r.status,
         "trigger_type": r.trigger_type,
+        # FAR-1141 / ADR-042: a dispatched run must never read
+        # indistinguishably from one Modulo executed. ``getattr`` degrades a
+        # partial run stand-in (no column loaded) to ``None``; ``_optional_str``
+        # then degrades a ``MagicMock``'s unset attribute the same way
+        # ``cancel_reason`` does on the REST list item.
+        "execution_origin": _optional_str(getattr(r, "execution_origin", None)),
         "run_number": r.run_number,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "started_at": r.started_at.isoformat() if r.started_at else None,
@@ -2973,7 +2981,10 @@ async def _query_analytics_impl(input: _AnalyticsQueryInput) -> dict[str, Any]:
         "Accepts a repeated pipeline_id for A-vs-B comparisons in a single request, "
         "and error_code for filtering/grouping by failure code. `dimension` groups the "
         "series by a key — `trigger_type`, `trigger_id`, `status`, `pipeline`, `folder`, "
-        "`team` or `error_code` — which is how per-trigger latency is read. The result "
+        "`team`, `error_code` or `execution_origin` — which is how per-trigger latency is "
+        "read, and how a dispatched run is told apart from one Modulo executed "
+        "(`execution_origin` groups on the FAR-1141 run provenance column: `dispatched` "
+        "vs NULL). The result "
         "also carries a `deep_link` to the /analytics view pre-filtered with the same "
         "parameters — share that link instead of dumping the raw buckets. Requires "
         "the analytics.query permission and the analytics_page plan feature."
@@ -3294,6 +3305,91 @@ def _validate_graph_update(nodes: list[dict[str, Any]], edges: list[dict[str, An
     return None
 
 
+async def _reject_unsupported_dispatch_bindings(
+    s: AsyncSession,
+    org_id: uuid.UUID,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """FAR-1141 FIX 2: instance-level CI-runner capability check for MCP graph writes.
+
+    ``_validate_graph_update`` only ever inspects the caller-DECLARED
+    ``connector_binding.type`` string, which a caller controls independently of
+    what it is bound to. REST additionally runs
+    ``GraphValidator._check_dispatch_binding_capabilities`` against the bound
+    INSTANCE's own ``connector_type_id`` on every graph save, and
+    ``bind_connector_to_node`` was fixed to resolve it from the instance row
+    too — so the MCP FULL-GRAPH write was the one surface that could persist a
+    dispatch binding to a Linear/Slack instance and defer the failure to run
+    time as an ``AttributeError``-shaped error after the job should have fired.
+
+    Same posture as the validator: a node whose binding routes the ``dispatch``
+    verb is checked; an instance that cannot be resolved, or one with an unset
+    ``connector_type_id``, is SKIPPED (the team gate / ordinary binding checks
+    cover those shapes); a type we cannot prove implements the four operations
+    fails CLOSED. Returns a standard ``validation_failed`` envelope, or ``None``
+    to let the write proceed. No query is issued when no dispatch binding exists.
+    """
+    from sqlalchemy import select
+
+    from modulo.connectors.base import connector_binding_operation, connector_type_supports_dispatch
+    from modulo.db.models.connector_instance import ConnectorInstance
+
+    target_ids: set[uuid.UUID] = set()
+    for node in nodes:
+        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+            continue
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            continue
+        try:
+            target_ids.add(uuid.UUID(str(binding.get("instance_id"))))
+        except (TypeError, ValueError):
+            continue
+    if not target_ids:
+        return None
+
+    rows = (
+        (
+            await s.execute(
+                select(ConnectorInstance).where(
+                    ConnectorInstance.organisation_id == org_id,
+                    ConnectorInstance.id.in_(target_ids),
+                ),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    found: dict[uuid.UUID, Any] = {row.id: row for row in rows}
+
+    for node in nodes:
+        if not isinstance(node, dict) or connector_binding_operation(node) != "dispatch":
+            continue
+        binding = node.get("connector_binding")
+        if not isinstance(binding, dict):
+            continue
+        try:
+            cid = uuid.UUID(str(binding.get("instance_id")))
+        except (TypeError, ValueError):
+            continue
+        instance = found.get(cid)
+        if instance is None:
+            continue
+        type_id = str(instance.connector_type_id or "").strip()
+        if not type_id or connector_type_supports_dispatch(type_id):
+            continue
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": (
+                f"Node '{node.get('id')}': connector instance {cid} ({instance.name!r}) has type "
+                f"{type_id!r}, which does not implement the CI-runner operations "
+                "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires"
+            ),
+        }
+    return None
+
+
 async def _replace_pipeline_graph_txn(
     org_id: uuid.UUID,
     pid: uuid.UUID,
@@ -3366,6 +3462,13 @@ async def _replace_pipeline_graph_txn(
                 "error": CONNECTOR_TEAM_MISMATCH,
                 "detail": connector_team_mismatch_detail(mismatches),
             }
+        # FAR-1141 FIX 2: the MCP full-graph write runs the SAME instance-level
+        # CI-runner capability check REST's GraphValidator runs on save, so a
+        # dispatch binding to a non-CI instance is rejected HERE rather than
+        # deferred to a run-time failure.
+        dispatch_err = await _reject_unsupported_dispatch_bindings(s, org_id, nodes)
+        if dispatch_err is not None:
+            return dispatch_err
         # FAR-309 PR A review: the guardrail-binding strip guard runs in the
         # service layer (replace_pipeline_graph, under the row lock) — the
         # MCP surface inherits it via caller_type="mcp".
@@ -3438,7 +3541,35 @@ async def _update_pipeline_graph_impl(
     if validation_err is not None:
         return validation_err
 
+    from pydantic import ValidationError as _PydanticValidationError
+
+    from modulo.api.routes.pipelines import PipelineGraphUpdate
+
     try:
+        graph_update = PipelineGraphUpdate.model_validate({"nodes": nodes, "edges": edges})
+    except _PydanticValidationError as exc:
+        return {
+            "error": "validation_failed",
+            "detail": f"Graph validation failed: {exc.errors(include_url=False)}",
+        }
+
+    # FAR-1141 (CRITICAL 1): PERSIST THE VALIDATED node objects. The old call
+    # validated and then DISCARDED the result, keeping the raw dicts, so every
+    # model-side effect was thrown away — the forced ``idempotent=false`` on a
+    # job-firing dispatch binding never reached an MCP-authored graph, and MCP
+    # was the one write surface where "never retried into a second external job"
+    # did not hold. ``model_dump(mode="json")`` is exactly what REST's
+    # ``_prepare_graph_write`` serialises, so REST and MCP now land the SAME
+    # graph: declared fields take the validated value (defaults filled, side
+    # effects applied), undeclared keys are dropped on both paths rather than
+    # surviving on one (a field only one writer persists is plan drift, not
+    # configuration).
+    nodes = [node.model_dump(mode="json") for node in graph_update.nodes]
+
+    try:
+        # The validated ``nodes`` above (FAR-1141) are what the transaction
+        # persists; the helper owns the session, the bounded row-lock wait, the
+        # masked-graph round-trip and the connector/team gate (FAR-1361/FAR-1181).
         outcome = await _replace_pipeline_graph_txn(
             org_id,
             pid,
@@ -3563,14 +3694,55 @@ def _validate_sandbox_nodes(nodes: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+# FAR-1141: connector-binding operation verbs and CI dispatch selectors the API
+# model enforces via Literal — MCP writes raw graph dicts, so it validates the
+# same vocabulary itself instead of persisting a value the read path rejects.
+_BIND_OPERATIONS = ("query", "write", "dispatch")
+_BIND_DISPATCH_ACTIONS = ("trigger_run", "get_run_status", "get_run_logs", "list_runs")
+
+
 def _apply_node_connector_binding(
     pipeline: Any,
     nid: uuid.UUID,
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
+    *,
+    connector_supports_dispatch: bool | None = None,
 ) -> dict[str, Any] | None:
-    """Bind the connector onto the matching node. Returns an error dict, or None."""
+    """Bind the connector onto the matching node. Returns an error dict, or None.
+
+    FAR-1141 (MAJOR 9): the binding is PATCHED, never rebuilt. The old code
+    constructed ``{type, instance_id, operation?, dispatch_action?}`` from
+    scratch, so a bind that only carried ``operation`` silently DROPPED an
+    existing ``dispatch_action`` / ``input`` — a read-only node could become a
+    ``trigger_run`` job-firer (or lose its configured action) without anyone
+    asking. Keys the caller does not mention keep their stored value; the
+    caller's values win only for the keys it names.
+
+    Dispatch invariants are applied with the SAME single helpers the REST path
+    and the engine use (``graph_validator.connector_binding_operation`` /
+    ``node_fires_dispatch_job``): a ``dispatch`` node must route the dispatch
+    verb, a dispatch binding must target a connector whose type implements the
+    CI-runner contract (the caller resolves that from the instance row —
+    ``None`` means the caller did not resolve it and the check is skipped), and
+    a job-firing binding is persisted ``idempotent=false`` exactly as the REST
+    model forces it.
+    """
+    if operation is not None and operation not in _BIND_OPERATIONS:
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": f"operation must be one of {list(_BIND_OPERATIONS)}, got {operation!r}",
+        }
+    if dispatch_action is not None and dispatch_action not in _BIND_DISPATCH_ACTIONS:
+        return {
+            "error": "validation_failed",
+            "field": "dispatch_action",
+            "detail": f"dispatch_action must be one of {list(_BIND_DISPATCH_ACTIONS)}, got {dispatch_action!r}",
+        }
     nodes = list(pipeline.graph_nodes_json) if pipeline.graph_nodes_json else []
     target = None
     for node in nodes:
@@ -3580,10 +3752,73 @@ def _apply_node_connector_binding(
     if target is None:
         return {"error": "node_not_found", "detail": f"Node {node_id} not found in pipeline graph"}
 
-    target["connector_binding"] = {
-        "type": connector_type,
-        "instance_id": connector_instance_id,
-    }
+    from modulo.connectors.base import (
+        connector_binding_operation,
+        node_fires_dispatch_job,
+        node_routes_binding_to_connector,
+    )
+
+    existing = target.get("connector_binding")
+    binding: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    binding["type"] = connector_type
+    binding["instance_id"] = connector_instance_id
+    if operation is not None:
+        binding["operation"] = operation
+    if dispatch_action is not None:
+        binding["dispatch_action"] = dispatch_action
+    probe = {**target, "connector_binding": binding}
+
+    # FAR-1141 FIX 2: a DECLARED ``dispatch`` verb on a node the engine does
+    # NOT route to a connector (an ``agent`` node with an ``agent_id``, a
+    # ``sandbox_agent``) must be REJECTED, never silently coerced to the
+    # resolver's ``query`` fallback — the resolver answers "query" for those
+    # shapes because the engine will never read the binding, so persisting its
+    # verdict would record a dispatch the caller asked for as a query nobody
+    # asked for, with nothing ever firing. The Pydantic model rejects the same
+    # shape on the full-graph write (and REST); this bind path writes raw node
+    # dicts, so it enforces the rule itself.
+    if binding.get("operation") == "dispatch" and not node_routes_binding_to_connector(probe):
+        node_kind = str(target.get("node_type") or "agent")
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": (
+                f"Node {node_id} ({node_kind}) does not route its connector_binding to a connector, so "
+                "operation='dispatch' would never fire — use a dispatch or connector node for the "
+                "dispatch binding"
+            ),
+        }
+
+    # Resolve the verb exactly as the engine will route it, delegating to the
+    # SHARED resolver (FAR-1141 FIX 6: ``connectors.base.connector_binding_operation``
+    # is the single source of truth for the explicit-value-wins /
+    # node-type-fallback default — never a second copy of the rule here), then
+    # persist the resolution so the stored graph never relies on a
+    # reader-specific default.
+    effective_operation = connector_binding_operation(probe)
+    binding["operation"] = effective_operation
+    # ...and the dispatch node's own requirement, also expressed through that
+    # resolver's verdict rather than a re-derived default.
+    if str(target.get("node_type") or "") == "dispatch" and effective_operation != "dispatch":
+        return {
+            "error": "validation_failed",
+            "field": "operation",
+            "detail": "Dispatch nodes require connector_binding.operation='dispatch' "
+            f"(got {effective_operation!r}) — a dispatch node that queries fires no job",
+        }
+    if effective_operation == "dispatch" and connector_supports_dispatch is False:
+        return {
+            "error": "validation_failed",
+            "field": "connector_type",
+            "detail": f"connector type {connector_type!r} does not implement the CI-runner operations "
+            "(trigger_run / get_run_status / get_run_logs / list_runs) a dispatch binding requires",
+        }
+    if node_fires_dispatch_job(probe):
+        # Parity with the REST model's forced ``idempotent=false``: the binding
+        # fires a job on the customer's substrate, so the node is never safe to
+        # re-run (and the executor now derives this from the binding too).
+        target["idempotent"] = False
+    target["connector_binding"] = binding
     pipeline.graph_nodes_json = nodes
     return None
 
@@ -3591,7 +3826,11 @@ def _apply_node_connector_binding(
 @mcp.tool(
     description="Bind a connector instance to a pipeline node. "
     "Updates the node's connector_binding in the pipeline graph. "
-    "The connector must already exist in the organisation."
+    "The connector must already exist in the organisation. "
+    "Optional operation ('query' | 'write' | 'dispatch') selects the binding "
+    "verb; optional dispatch_action ('trigger_run' | 'get_run_status' | "
+    "'get_run_logs' | 'list_runs') selects the CI-runner method for a dispatch "
+    "binding (FAR-1141)."
 )
 @mcp_audited("pipeline_node_connector_bound", "pipeline", fail_closed=False)
 @_RETRY_DB
@@ -3600,6 +3839,8 @@ async def bind_connector_to_node(
     node_id: str,
     connector_type: str,
     connector_instance_id: str,
+    operation: str | None = None,
+    dispatch_action: str | None = None,
 ) -> dict[str, Any]:
     try:
         if not await validate_current_auth():
@@ -3670,18 +3911,40 @@ async def bind_connector_to_node(
                     ),
                 }
 
-            bind_error = _apply_node_connector_binding(pipeline, nid, node_id, connector_type, connector_instance_id)
+            # FAR-1141 (MAJOR 8/9): resolve the CI-runner capability from the
+            # INSTANCE row (the authoritative connector type) so a dispatch
+            # binding to a Linear/Slack connector is rejected here, at bind
+            # time, instead of failing at run time with an AttributeError-shaped
+            # error. Passed through so the same invariant the REST graph-save
+            # validator enforces also holds on this write path.
+            from modulo.connectors.base import connector_type_supports_dispatch
+
+            bind_error = _apply_node_connector_binding(
+                pipeline,
+                nid,
+                node_id,
+                connector_type,
+                connector_instance_id,
+                operation=operation,
+                dispatch_action=dispatch_action,
+                connector_supports_dispatch=connector_type_supports_dispatch(connector.connector_type_id),
+            )
             if bind_error is not None:
                 return bind_error
             await s.flush()
 
-        return {
+        response: dict[str, Any] = {
             "pipeline_id": pipeline_id,
             "node_id": node_id,
             "connector_type": connector_type,
             "connector_instance_id": connector_instance_id,
             "status": "bound",
         }
+        if operation is not None:
+            response["operation"] = operation
+        if dispatch_action is not None:
+            response["dispatch_action"] = dispatch_action
+        return response
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
@@ -3875,11 +4138,18 @@ async def _load_run_for_status(s: AsyncSession, rid: uuid.UUID) -> Any | None:
 
 
 def _run_status_base(run: Run) -> dict[str, Any]:
+    from modulo.api.routes.runs import _optional_str
+
     result: dict[str, Any] = {
         "run_id": str(run.id),
         "pipeline_id": str(run.pipeline_id),
         "status": run.status,
         "trigger_type": run.trigger_type,
+        # FAR-1141 / ADR-042: ``get_run_status`` is a claim-ready surface, so
+        # it carries the run's execution origin ('dispatched' / NULL) exactly
+        # like the REST detail. ``getattr`` + ``_optional_str`` degrade a
+        # partial run stand-in and a ``MagicMock`` to ``None``.
+        "execution_origin": _optional_str(getattr(run, "execution_origin", None)),
         "created_at": run.created_at.isoformat(),
     }
     if run.started_at:

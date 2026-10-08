@@ -203,6 +203,58 @@ async def test_recover_node_with_valid_input():
     assert audit_kwargs["payload_json"]["summary"] == f'Replay recovery applied to node "{_NODE_ID}"'
     assert audit_kwargs["actor_user_id"] == _ACTOR_ID
     assert "actor" not in audit_kwargs["payload_json"]
+    # FAR-1141 / ADR-042: the run-keyed payload carries the run's execution
+    # origin. This stand-in never set the attribute, so it must read NULL —
+    # present as a key, never a repr of the mock (audit payloads are immutable).
+    assert audit_kwargs["payload_json"]["execution_origin"] is None
+
+
+@pytest.mark.asyncio
+async def test_recover_node_audit_carries_dispatched_execution_origin():
+    """A recovery on a dispatched run must be auditable as such — the operator
+    reading the event can tell the work happened outside Modulo."""
+    run = _make_run(status="failed", outputs_json={})
+    run.execution_origin = "dispatched"
+    session = _mock_session()
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.get_run", return_value=run),
+        patch("modulo.core.pipeline_engine.recovery.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.db.crud.run_node_outputs.read_run_blobs", _stub_blob_reader(run)),
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        patch("modulo.db.crud.run.write_run_outputs_from_run", _capturing_store_write({})),
+    ):
+        pipeline_result = MagicMock()
+        pipeline_result.scalar_one.return_value = MagicMock()
+        snapshot_result = MagicMock()
+        snapshot_result.scalar_one_or_none.return_value = _make_snapshot()
+        locked_result = MagicMock()
+        locked_result.scalar_one_or_none.return_value = _RUN_ID
+
+        session.execute = AsyncMock(
+            side_effect=[
+                pipeline_result,  # Pipeline lock
+                snapshot_result,  # Snapshot query
+                locked_result,  # Update RUN ... RETURNING
+            ]
+        )
+
+        result = await recover_node(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            node_id=_NODE_ID,
+            input_data={"review": "approved", "comments": "LGTM"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert result is not None
+    mock_audit.assert_awaited_once()
+    payload = mock_audit.await_args.kwargs["payload_json"]
+    assert payload["execution_origin"] == "dispatched"
+    # additive only — the FAR-728 contract above still holds.
+    assert payload["recovery_action"] == "replay"
+    assert payload["summary"] == f'Replay recovery applied to node "{_NODE_ID}"'
 
 
 @pytest.mark.asyncio

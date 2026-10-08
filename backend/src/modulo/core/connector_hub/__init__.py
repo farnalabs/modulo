@@ -30,6 +30,9 @@ from modulo.connectors.azure_key_vault import AzureKeyVaultConnector
 from modulo.connectors.azure_pipelines import AzurePipelinesConnector
 from modulo.connectors.azure_repos import AzureReposConnector
 from modulo.connectors.base import (
+    CIRun,
+    CIRunLog,
+    CIRunStatus,
     CompensationContext,
     CompensationOperation,
     CompensationResult,
@@ -43,7 +46,7 @@ from modulo.connectors.base import (
 )
 from modulo.connectors.bitbucket import BitbucketConnector
 from modulo.connectors.buildkite import BuildkiteConnector
-from modulo.connectors.ci_runner import GitHubActionsCIRunner, GitLabCIRunner
+from modulo.connectors.ci_runner import CIRunnerBase, GitHubActionsCIRunner, GitLabCIRunner
 from modulo.connectors.circleci import CircleCIConnector
 from modulo.connectors.codeclimate import CodeClimateConnector
 from modulo.connectors.confluence import ConfluenceConnector
@@ -733,6 +736,93 @@ class _TracedConnector(ConnectorBase):
                 payload,
                 extra_attrs={_OTEL_ATTR_CONNECTOR_RESOURCE: payload.resource},
                 acl_operation="write",
+            ),
+        )
+
+    async def trigger_run(
+        self,
+        pipeline_id: str,
+        branch: str = "",
+        variables: dict[str, str] | None = None,
+    ) -> CIRun:
+        """FAR-1141: traced + ACL-gated CI trigger (was reached UNTRACED via ``__getattr__``).
+
+        ``trigger_run`` MUTATES the remote system (it starts a job), so its ACL
+        operation is ``write`` — matching the query→read / write→write
+        convention. Span attributes carry the pipeline id only: never the
+        ``variables`` payload.
+        """
+        ci = cast("CIRunnerBase", self._inner)
+        return cast(
+            "CIRun",
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.trigger_run",
+                "trigger_run",
+                ci.trigger_run,
+                pipeline_id,
+                branch=branch,
+                variables=variables,
+                extra_attrs={"connector.pipeline_id": pipeline_id},
+                acl_operation="write",
+            ),
+        )
+
+    async def get_run_status(self, run_id: str) -> CIRun:
+        """FAR-1141: traced + ACL-gated CI status read."""
+        ci = cast("CIRunnerBase", self._inner)
+        return cast(
+            "CIRun",
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.get_run_status",
+                "get_run_status",
+                ci.get_run_status,
+                run_id,
+                extra_attrs={"connector.run_id": run_id},
+                acl_operation="read",
+            ),
+        )
+
+    async def get_run_logs(self, run_id: str, cursor: str | None = None) -> CIRunLog:
+        """FAR-1141: traced + ACL-gated CI log read.
+
+        The span never carries log body content — only the run id.
+        """
+        ci = cast("CIRunnerBase", self._inner)
+        return cast(
+            "CIRunLog",
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.get_run_logs",
+                "get_run_logs",
+                ci.get_run_logs,
+                run_id,
+                cursor=cursor,
+                extra_attrs={"connector.run_id": run_id},
+                acl_operation="read",
+            ),
+        )
+
+    async def list_runs(
+        self,
+        pipeline_id: str | None = None,
+        status: CIRunStatus | None = None,
+        limit: int = 20,
+    ) -> list[CIRun]:
+        """FAR-1141: traced + ACL-gated CI run listing."""
+        extra_attrs: dict[str, Any] = {"connector.limit": limit}
+        if pipeline_id is not None:
+            extra_attrs["connector.pipeline_id"] = pipeline_id
+        ci = cast("CIRunnerBase", self._inner)
+        return cast(
+            "list[CIRun]",
+            await self._run_with_tracing(
+                f"connector.{self._inner.connector_type}.list_runs",
+                "list_runs",
+                ci.list_runs,
+                pipeline_id=pipeline_id,
+                status=status,
+                limit=limit,
+                extra_attrs=extra_attrs,
+                acl_operation="read",
             ),
         )
 

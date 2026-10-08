@@ -113,6 +113,19 @@ export function triggerTypeLabel(type: string | null | undefined, t: (key: strin
   return key ? t(key) : type
 }
 
+/**
+ * Run execution-origin provenance (FAR-1141). `execution_origin` is
+ * `'dispatched'` when the run's frozen graph contains a dispatch node — part
+ * of the work ran outside Modulo — and `null` for runs Modulo executed itself
+ * (and for runs recorded before the column shipped). One shared predicate so
+ * the runs list and the run detail can never disagree on what counts as a
+ * dispatched run. Accepts `unknown` because the list payload is an untyped
+ * dict on the wire (`RunListItem` extends `Record<string, unknown>`).
+ */
+export function isDispatchedRun(origin: unknown): boolean {
+  return origin === 'dispatched'
+}
+
 export function formatRunDate(dateStr: string | null): string {
   if (!dateStr) return '—'
   const d = toDate(dateStr)
@@ -193,6 +206,17 @@ export function errorCodeDescription(code: string | null | undefined, t: (key: s
   const key = `errorCodeDescriptions.${code}`
   const translated = t(key)
   return translated === key ? errorCodeLabel(code, t) : translated
+}
+
+/** Human-readable label for an analytics `execution_origin` bucket key (e.g.
+ * `dispatched` → "Dispatched"), looked up under `common.execution_origin`.
+ * Mirrors `errorCodeLabel` so a dimensioned analytics table/chart never shows
+ * a raw machine key (I18N-1); an unmapped key falls back to the raw value. */
+export function executionOriginLabel(value: string | null | undefined, t: (key: string) => string): string {
+  if (!value) return '—'
+  const key = `common.execution_origin.${value}`
+  const translated = t(key)
+  return translated === key ? value : translated
 }
 
 export interface RunCapacity {

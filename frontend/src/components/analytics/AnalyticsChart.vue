@@ -27,7 +27,7 @@ import {
   type AnalyticsBucket,
   type AnalyticsMeasure,
 } from "../../stores/analytics";
-import { errorCodeLabel } from "../../utils/runUtils";
+import { errorCodeLabel, executionOriginLabel } from "../../utils/runUtils";
 
 const props = defineProps<{
   series: AnalyticsBucket[];
@@ -53,7 +53,7 @@ const chartOption = computed(() =>
         props.measure,
         props.groupBy,
         props.dimension,
-        (key) => errorCodeLabel(key, t),
+        (key) => (props.dimension === "execution_origin" ? executionOriginLabel(key, t) : errorCodeLabel(key, t)),
       ),
 );
 </script>

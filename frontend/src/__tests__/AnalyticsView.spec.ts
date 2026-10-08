@@ -30,7 +30,9 @@ import {
   previousWindowParams,
   applyQueryParamsToFilters,
   type AnalyticsBucket,
+  type AnalyticsDimension,
 } from '../stores/analytics'
+import type { components } from '../lib/api/schema'
 
 // Fixed UTC instant for deterministic assertions — the ISO literal is always valid.
 const FIXED_NOW = new Date('2026-08-06T12:00:00Z') // nosemgrep: new-date-without-guard
@@ -305,6 +307,39 @@ describe('applyQueryParamsToFilters', () => {
     expect(params.dimension).toBe('error_code')
     expect(params.error_code).toBe('executor_stalled')
   })
+
+  it('keeps a dimension=execution_origin deep link instead of silently dropping it (FAR-1141)', () => {
+    // The literal is typed against the store union: without
+    // `execution_origin` on AnalyticsDimension this line stops type-checking.
+    const origin: AnalyticsDimension = 'execution_origin'
+    const { filters, applied } = applyQueryParamsToFilters({ dimension: origin }, base)
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('execution_origin')
+    // ...and it survives back out into the outbound query params.
+    expect(serializeFilters(filters, FIXED_NOW).dimension).toBe('execution_origin')
+  })
+
+  it('keeps a dimension=trigger_id deep link (same silent-drop defect, found by the structural test)', () => {
+    const triggerId: AnalyticsDimension = 'trigger_id'
+    const { filters, applied } = applyQueryParamsToFilters({ dimension: triggerId }, base)
+    expect(applied).toBe(true)
+    expect(filters.dimension).toBe('trigger_id')
+    expect(serializeFilters(filters, FIXED_NOW).dimension).toBe('trigger_id')
+  })
+
+  it('accepts every dimension the generated API schema exposes', () => {
+    // Structural guard: the store union must be a superset of the generated
+    // `AnalyticsDimension`. `true` is not assignable to `never`, so a backend
+    // dimension the store omits fails vue-tsc here instead of being dropped
+    // from deep links at runtime.
+    const exhaustive: Exclude<
+      components['schemas']['AnalyticsDimension'],
+      AnalyticsDimension
+    > extends never
+      ? true
+      : never = true
+    expect(exhaustive).toBe(true)
+  })
 })
 
 describe('formatBucketDate', () => {
@@ -422,6 +457,19 @@ describe('buildChartOption', () => {
       formatDateShortWithTime('2026-08-06T14:00:00Z'),
       formatDateShortWithTime('2026-08-06T15:00:00Z'),
     ])
+  })
+
+  it('applies the labeler to an execution_origin dimension', () => {
+    const series: AnalyticsBucket[] = [
+      { date: '2026-08-01', key: 'dispatched', count: 2 },
+      { date: '2026-08-01', key: 'direct', count: 1 },
+    ]
+    const option = buildChartOption(series, 'count', 'day', 'execution_origin', (key) =>
+      key === 'dispatched' ? 'Dispatched' : key,
+    ) as {
+      xAxis: { data: string[] }
+    }
+    expect(option.xAxis.data).toEqual(['Dispatched', 'direct'])
   })
 })
 
@@ -921,6 +969,49 @@ describe('AnalyticsView', () => {
     expect(tableText).toContain('Worker failed')
     expect(tableText).not.toContain('agent.stall')
     expect(tableText).not.toContain('harness.worker_failed')
+  })
+
+  it('renders human-readable labels for execution_origin dimension keys in the table (FAR-1141)', async () => {
+    const response = {
+      group_by: 'day',
+      dimension: 'execution_origin',
+      date_from: '2026-07-30',
+      date_to: '2026-08-06',
+      buckets: [
+        { date: '2026-08-01', key: 'dispatched', count: 3 },
+        { date: '2026-08-02', key: 'dispatched', count: 2 },
+      ],
+    }
+    const previousResponse = {
+      group_by: 'day',
+      dimension: 'execution_origin',
+      date_from: '2026-07-23',
+      date_to: '2026-07-29',
+      buckets: [{ date: '2026-07-23', key: 'dispatched', count: 1 }],
+    }
+    let queryCalls = 0
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/analytics/query') {
+        queryCalls += 1
+        return Promise.resolve({ data: queryCalls === 1 ? response : previousResponse, error: undefined })
+      }
+      if (url === '/api/v1/pipeline-folders') return Promise.resolve({ data: [], error: undefined })
+      if (url === '/api/v1/pipelines') {
+        return Promise.resolve({
+          data: { items: [], total: 0, page: 1, page_size: 100, next_cursor: null, has_more: false },
+          error: undefined,
+        })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const store = useAnalyticsStore()
+    store.setFilters({ dimension: 'execution_origin' })
+    const wrapper = mount(AnalyticsView)
+    await flushPromises()
+    const tableText = wrapper.find('[data-testid="analytics-table"]').text()
+    expect(tableText).toContain('Dispatched')
+    // The raw backend machine key must never surface (I18N-1).
+    expect(tableText).not.toContain('dispatched')
   })
 
   it('pre-filters from a deep-link query on mount (e.g. Assistant /analytics link)', async () => {

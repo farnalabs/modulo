@@ -411,6 +411,13 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "pipeline_name": pipeline_name,
             "folder_id": folder_id,
             "trigger_type": run.trigger_type,
+            # FAR-1141: run-level execution origin copied from the run so the
+            # analytics read path never joins ``runs`` (ADR 020) and the
+            # marker outlives the 90-day run purge. getattr for legacy
+            # run-shaped objects (pre-column runs degrade to NULL, not an
+            # error) — the same defensive read trigger_id / dispatch_phase
+            # use further down.
+            "execution_origin": getattr(run, "execution_origin", None),
             "status": run.status,
             "total_cost_usd": run.total_cost_usd,
             "total_tokens": run.total_tokens,
@@ -466,6 +473,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "total_cost_usd": stmt.excluded.total_cost_usd,
                 "total_tokens": stmt.excluded.total_tokens,
                 "trigger_type": stmt.excluded.trigger_type,
+                "execution_origin": stmt.excluded.execution_origin,
                 "team_id": stmt.excluded.team_id,
                 "team_name": stmt.excluded.team_name,
                 "pipeline_id": stmt.excluded.pipeline_id,

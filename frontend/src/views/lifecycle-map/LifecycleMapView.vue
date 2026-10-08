@@ -268,6 +268,17 @@
                   {{ statusLabel(run.status ?? '') }}
                 </span>
                 <ProvenanceBadge :provenance="run.provenance" />
+                <!-- FAR-1141: a journey's run history is a claim-ready run
+                     surface, so a dispatched run must not read like one Modulo
+                     executed itself. Same predicate + key as RunsListView /
+                     DashboardView (see runExecutionOrigin below for why the
+                     read is defensive). -->
+                <span
+                  v-if="isDispatchedJourneyRun(run)"
+                  :data-testid="`journey-run-dispatched-${run.run_id}`"
+                  :title="$t('common.execution_origin.dispatched_hint')"
+                  class="inline-flex items-center rounded-full bg-cyan-500/10 px-2 py-0.5 text-xs font-medium text-cyan-600 dark:bg-cyan-900 dark:text-cyan-300"
+                >{{ $t('common.execution_origin.dispatched') }}</span>
                 <span class="text-muted-foreground">{{ formatRunDate(run.completed_at) }}</span>
               </li>
             </ul>
@@ -354,11 +365,11 @@ import ProvenanceBadge from '../../components/lifecycle-map/ProvenanceBadge.vue'
 import JourneyCard from '../../components/lifecycle-map/JourneyCard.vue'
 import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import FormDialog from '../../components/shared/FormDialog.vue'
-import { formatRunDate } from '../../utils/runUtils'
+import { formatRunDate, isDispatchedRun } from '../../utils/runUtils'
 import { shortId } from '../../utils/format'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
-import type { JourneySummary } from '../../types/lifecycleMap'
+import type { JourneyRunHistoryItem, JourneySummary } from '../../types/lifecycleMap'
 import type { LifecycleMapStage } from '../../stores/lifecycleMaps'
 import Select from '../../components/shared/AppSelect.vue'
 import { formatApiError } from '../../lib/api/formatError'
@@ -636,6 +647,19 @@ function statusLabel(status: string): string {
   const key = `views.LifecycleMapView.journey.status.${status}`
   const translated = t(key)
   return translated === key ? status : translated
+}
+
+/**
+ * FAR-1141: is this journey run row a dispatched run?
+ *
+ * `lifecycle_maps.py` returns `execution_origin` on every journey run-history
+ * row, so the shared `types/lifecycleMap.ts` `JourneyRunHistoryItem` carries
+ * it (the view previously widened the type locally). The predicate itself is
+ * the SAME `isDispatchedRun` the runs list and dashboard use, so the surfaces
+ * can never disagree on what counts as a dispatched run.
+ */
+function isDispatchedJourneyRun(run: JourneyRunHistoryItem): boolean {
+  return isDispatchedRun(run.execution_origin)
 }
 
 function editMap(): void {

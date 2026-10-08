@@ -7,6 +7,15 @@ export interface RunListItem extends Record<string, unknown> {
   pipeline_name: string | null
   status: string
   trigger_type: string
+  /**
+   * FAR-1141 / ADR-042 run provenance: `'dispatched'` when the run's frozen
+   * graph contains a dispatch node (part of the work ran outside Modulo),
+   * `null` for runs Modulo executed itself and for runs recorded before the
+   * column shipped. Typed here so the runs list reads a typed field instead of
+   * reaching through the `Record<string, unknown>` index signature; the run
+   * detail already carries it via the generated schema.
+   */
+  execution_origin: string | null
   run_number: number | null
   created_at: string | null
   started_at: string | null

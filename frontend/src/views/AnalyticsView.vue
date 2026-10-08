@@ -168,7 +168,7 @@ import ErrorAlert from "../components/shared/ErrorAlert.vue";
 import AnalyticsChart from "../components/analytics/AnalyticsChart.vue";
 import AnalyticsFilterBar from "../components/analytics/AnalyticsFilterBar.vue";
 import { formatApiError } from "../lib/api/formatError";
-import { errorCodeLabel } from "../utils/runUtils";
+import { errorCodeLabel, executionOriginLabel } from "../utils/runUtils";
 import {
   useAnalyticsStore,
   computeTrendDelta,
@@ -233,7 +233,9 @@ const tableRows = computed<TableRow[]>(() => {
     const label =
       bucket.key != null && store.filters.dimension === "error_code"
         ? errorCodeLabel(bucket.key, t)
-        : (bucket.key ?? formatBucketDate(bucket.date));
+        : bucket.key != null && store.filters.dimension === "execution_origin"
+          ? executionOriginLabel(bucket.key, t)
+          : (bucket.key ?? formatBucketDate(bucket.date));
     // Windows are equal-length: match dimensioned buckets by key and
     // undimensioned buckets by offset within the window.
     const prev =

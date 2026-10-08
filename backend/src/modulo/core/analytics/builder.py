@@ -118,6 +118,13 @@ class AnalyticsDimension(StrEnum):
     FOLDER = "folder"
     TEAM = "team"
     ERROR_CODE = "error_code"
+    # FAR-1141 / ADR-042: group the daily-facts series on the run's execution
+    # origin ('dispatched' vs NULL) so a run whose work happened on the
+    # customer's substrate can be told apart from one Modulo executed, in
+    # aggregate — not just run by run. Stored verbatim on
+    # ``run_daily_facts.execution_origin`` at finalize; NULL buckets are the
+    # pre-column / Modulo-executed rows and read as a ``None`` bucket key.
+    EXECUTION_ORIGIN = "execution_origin"
 
 
 class AnalyticsTriggerType(StrEnum):
@@ -216,6 +223,7 @@ _DIMENSION_COLUMNS: dict[AnalyticsDimension, Any] = {
     AnalyticsDimension.FOLDER: RunDailyFact.folder_id,
     AnalyticsDimension.TEAM: RunDailyFact.team_id,
     AnalyticsDimension.ERROR_CODE: RunDailyFact.error_code,
+    AnalyticsDimension.EXECUTION_ORIGIN: RunDailyFact.execution_origin,
 }
 
 # Allowlisted dimension → display-label column (snapshot names). Selected via
@@ -1024,4 +1032,5 @@ _DIMENSION_KEY_ATTR: dict[AnalyticsDimension, str] = {
     AnalyticsDimension.FOLDER: "folder_id",
     AnalyticsDimension.TEAM: "team_id",
     AnalyticsDimension.ERROR_CODE: "error_code",
+    AnalyticsDimension.EXECUTION_ORIGIN: "execution_origin",
 }
