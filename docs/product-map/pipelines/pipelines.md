@@ -162,7 +162,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       (`backend/src/modulo/core/graph_validator/__init__.py
       _check_dispatch_binding_capabilities`,
       `backend/src/modulo/core/pipeline_engine/node_runner.py
-      _run_connector_dispatch` / `_wait_for_external_run`,
+      _run_connector_dispatch` / `_await_dispatch_terminal`,
       `backend/src/modulo/connectors/base.py`,
       `backend/src/modulo/connectors/ci_runner/base.py`;
       `unit_test: backend/tests/unit/pipeline_engine/test_dispatch_guards.py,
