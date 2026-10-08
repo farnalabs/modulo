@@ -26,9 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
-    ConnectorPermissionError,
     ConnectorResult,
-    unrestricted_allowed_operations,
 )
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
 from modulo.db.models.trigger import Trigger
@@ -123,32 +121,26 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
     through an instance whose non-empty ``allowed_operations`` excludes
     ``read``, while every other ACL call site in the product denies it.
 
-    The gate is the SAME decision the rest of the product makes:
+    The check itself is delegated to :class:`ConnectorACL` so the polling path
+    makes EXACTLY the same decision as the rest of the product (FAR-1564):
+    ``None``/``[]`` are UNRESTRICTED and pass, a non-empty list must list
+    ``read``, and a malformed value is restricted to nothing (fail closed).
 
-    * ``None`` / ``[]`` are UNRESTRICTED (the unset value every connector
-      created through REST/MCP/UI stores, per ``unrestricted_allowed_operations``)
-      — nothing was configured to restrict, so the read proceeds;
-    * a NON-EMPTY list is an allowlist and is checked through
-      :class:`ConnectorACL` (the canonical enforcement) for ``read``;
-    * a MALFORMED non-list value fails CLOSED — it certifies no grant.
+    Polling is a system-level operation with no caller visibility scope, so an
+    absent/garbage ``visibility`` is normalised to ``org`` rather than raising
+    a ``ValueError`` the callers would surface as a generic build failure —
+    ``visibility`` only tightens an ACL for a team-scoped caller, and a poll
+    has none.
 
     Raises :class:`ConnectorPermissionError` when the read is not permitted.
     """
-    allowed = getattr(connector_instance, "allowed_operations", None)
-    if unrestricted_allowed_operations(allowed):
-        return
-    if not isinstance(allowed, list):
-        raise ConnectorPermissionError(
-            "Polling read denied: allowed_operations is malformed (expected a list); failing closed.",
-        )
     visibility = getattr(connector_instance, "visibility", None)
     if visibility not in ("org", "team"):
-        # Polling is a system-level operation with no caller visibility scope,
-        # so visibility cannot tighten this check. Normalise an absent/garbage
-        # value to what ConnectorACL accepts instead of raising a ValueError
-        # the callers would surface as a generic build failure.
         visibility = "org"
-    ConnectorACL(visibility=visibility, allowed_operations=allowed).check("read")
+    ConnectorACL(
+        visibility=visibility,
+        allowed_operations=getattr(connector_instance, "allowed_operations", None),
+    ).check("read")
 
 
 async def _build_polling_connector_from_instance(

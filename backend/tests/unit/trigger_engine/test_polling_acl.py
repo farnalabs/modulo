@@ -92,8 +92,12 @@ def test_write_only_allowlist_denies_polling_read() -> None:
     ids=["dict-not-list", "str-not-list"],
 )
 def test_malformed_allowed_operations_fails_closed(allowed_operations: Any) -> None:
-    """A malformed value certifies no grant — it must never permit a read."""
-    with pytest.raises(ConnectorPermissionError, match="malformed"):
+    """A malformed value certifies no grant — it must never permit a read.
+
+    ``ConnectorACL`` restricts a malformed ``allowed_operations`` to the EMPTY
+    allowlist (FAR-1564), so the poll is denied with an empty grant list.
+    """
+    with pytest.raises(ConnectorPermissionError, match=r"not in allowed_operations: \[\]"):
         enforce_polling_read_acl(_instance(allowed_operations))
 
 
