@@ -21,6 +21,7 @@ from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
     _capabilities_for_connector,
     build_live_manifest,
+    canonical_capability,
     check_node_start,
     decide_conformance,
     evaluate_conformance,
@@ -57,15 +58,17 @@ def test_decide_present_when_all_confirmed():
 
 
 def test_decide_absent_when_any_missing():
+    # FAR-1582: the decision layer reports the CANONICAL (bare Capability)
+    # spelling regardless of how the claim/manifest entry was written.
     d = decide_conformance(["github.read", "github.write"], {"github.read": True, "github.write": False})
     assert d.state == "absent"
-    assert d.missing == ("github.write",)
+    assert d.missing == ("write",)
 
 
 def test_decide_unknown_when_unreadable():
     d = decide_conformance(["github.read"], {"github.read": None})
     assert d.state == "unknown"
-    assert d.unreadable == ("github.read",)
+    assert d.unreadable == ("read",)
 
 
 def test_decide_no_claim_when_empty_required():
@@ -259,7 +262,9 @@ async def test_build_live_manifest_present_and_absent(monkeypatch: pytest.Monkey
         environment_profile_id=None,
         agent_id=None,
     )
-    assert registered.get("github.read") is True
+    # FAR-1582: the manifest emits the CANONICAL bare Capability vocabulary, so
+    # a legacy-spelled stored allowlist ("github.read") surfaces as "read".
+    assert registered.get("read") is True
 
 
 async def test_build_live_manifest_empty_allowlist_yields_type_capabilities(monkeypatch: pytest.MonkeyPatch):
@@ -431,6 +436,100 @@ async def test_build_live_manifest_inactive_profile_absent(monkeypatch: pytest.M
         agent_id=None,
     )
     assert registered == {}
+
+
+# ---------------------------------------------------------------------------
+# Canonical capability vocabulary + unrestricted/allowlisted parity (FAR-1582)
+# ---------------------------------------------------------------------------
+
+
+async def _manifest_for(monkeypatch: pytest.MonkeyPatch, row: Any) -> dict[str, bool | None]:
+    session = _manifest_session(connectors=[row])
+    _patch_select(monkeypatch, session)
+    return await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[row.id],
+        environment_profile_id=None,
+        agent_id=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        ("read", "read"),
+        ("write", "write"),
+        ("github.read", "read"),
+        ("github.write", "write"),
+        ("linear:create_pr", "create_pr"),
+        ("sandbox.egress", None),
+        ("egress:github.com", None),
+        ("not-a-capability", None),
+    ],
+    ids=[
+        "bare-read",
+        "bare-write",
+        "type-dotted",
+        "type-colon",
+        "type-prefixed-colon",
+        "sandbox-surface-untouched",
+        "agent-egress-untouched",
+        "junk",
+    ],
+)
+def test_canonical_capability_vocabulary(spelling: str, expected: str | None) -> None:
+    """ONE vocabulary: bare ``Capability`` values; non-connector caps pass through."""
+    assert canonical_capability(spelling) == expected
+
+
+async def test_parity_canonical_claim_matches_unrestricted_and_allowlisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonical claim is satisfied identically for EITHER connector branch.
+
+    An UNRESTRICTED instance (``allowed_operations`` unset/empty) surfaces its
+    connector TYPE's bare ``Capability`` set; an ALLOWLISTED one surfaces its
+    declared operations reduced to that same bare spelling. Before FAR-1582
+    the two branches emitted different vocabularies, so a claim spelled the
+    legacy way (``github.read``) matched only one of them.
+    """
+    unrestricted = _row_connector(uuid.uuid4(), [])
+    unrestricted.connector_type_id = "github"
+    allowlisted = _row_connector(uuid.uuid4(), ["read"])
+
+    unrestricted_manifest = await _manifest_for(monkeypatch, unrestricted)
+    allowlisted_manifest = await _manifest_for(monkeypatch, allowlisted)
+
+    for manifest in (unrestricted_manifest, allowlisted_manifest):
+        assert decide_conformance(["read"], manifest).state == "present"
+        # The legacy type-qualified spelling resolves to the same capability.
+        assert decide_conformance(["github.read"], manifest).state == "present"
+
+
+async def test_build_live_manifest_malformed_allowlist_certifies_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed ``allowed_operations`` fails CLOSED — never the type set."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.allowed_operations = {"read": True}
+    row.connector_type_id = "github"
+
+    registered = await _manifest_for(monkeypatch, row)
+
+    assert not registered
+
+
+async def test_build_live_manifest_unrestricted_unknown_type_certifies_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrestricted instance of a type we cannot identify grants nothing."""
+    row = _row_connector(uuid.uuid4(), [])
+    row.connector_type_id = "not-a-real-connector-type"
+
+    registered = await _manifest_for(monkeypatch, row)
+
+    assert not registered
 
 
 # ---------------------------------------------------------------------------
