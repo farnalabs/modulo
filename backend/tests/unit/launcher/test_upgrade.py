@@ -2326,6 +2326,23 @@ def test_fetch_release_assets_rejects_unsafe_version(tmp_path, bad_version):
     assert not (tmp_path / "downloads").exists()
 
 
+def test_fetch_release_assets_rejects_symlinked_tarball_escape(tmp_path):
+    """Defense-in-depth: even a well-formed version segment must not let a
+    pre-existing symlink at the tarball path resolve outside download_dir, so
+    the path-containment guard fires before any fetch (GitHub #1176)."""
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    tarball_name = f"modulo-1.2.3-linux-{upgrade_module._host_arch()}.tar.gz"
+    outside = tmp_path / "outside.tar.gz"
+    outside.write_bytes(b"")
+    (downloads / tarball_name).symlink_to(outside)
+    fetched: list[str] = []
+
+    with pytest.raises(upgrade_module.UpgradeError, match="escapes the download directory"):
+        upgrade_module.fetch_release_assets("1.2.3", downloads, fetch=lambda url, dest: fetched.append(url))
+    assert not fetched
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [("1.2.3", "1.2.3"), ("v1.2.3", "1.2.3"), ("bundle-v1.2.3", "1.2.3"), ("1.2.3-rc.1", "1.2.3-rc.1")],
