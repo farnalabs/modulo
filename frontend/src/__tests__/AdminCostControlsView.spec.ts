@@ -86,6 +86,34 @@ describe('AdminCostControlsView', () => {
     expect(wrapper.find('[data-testid="cc-progress-bar"]').exists()).toBe(true)
   })
 
+  it('styles the remaining budget with the warning-text token when usage is at least 90 percent', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === '/api/v1/admin/costs') {
+        return Promise.resolve({
+          data: {
+            period: 'month',
+            group_by: 'team',
+            items: [],
+            org_total: '95.000000',
+            legacy_total: '0.000000',
+            org_unassigned_components: '0.000000',
+            has_more: false,
+          },
+          error: undefined,
+        })
+      }
+      if (path === '/api/v1/admin/costs/controls') {
+        return Promise.resolve({
+          data: { budget: 100, currency: 'USD', billing_period: 'monthly', alert_thresholds: [50, 75, 90], circuit_breaker_enabled: false },
+          error: undefined,
+        })
+      }
+      return defaultGet(path)
+    })
+    const wrapper = await mountView()
+    expect(wrapper.find('[data-testid="cc-remaining"]').classes()).toContain('text-warning-text')
+  })
+
   it('displays team budget rows', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="cc-team-budget-team-1"]').exists()).toBe(true)

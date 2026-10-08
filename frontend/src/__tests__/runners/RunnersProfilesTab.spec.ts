@@ -160,6 +160,21 @@ describe('RunnersProfilesTab', () => {
     expect(wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`).classes()).toContain('text-destructive')
   })
 
+  it('marks a bundled runner whose image is not pulled', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useEnvironmentProfilesStore()
+    store.$patch({ profiles: [BUNDLED_PROFILE] as never })
+    const status = makeStatus({ health_state: 'image_not_pulled', available: false })
+    const wrapper = mount(RunnersProfilesTab, { props: { status, reloadStatus } })
+    await nextTick()
+    await flushPromises()
+
+    const badge = wrapper.find(`[data-testid="runner-profile-health-p-bundled"]`)
+    expect(badge.text()).toBe('image not pulled')
+    expect(badge.classes()).toContain('text-warning-text')
+  })
+
   it('surfaces template drift per row with an Apply action', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
