@@ -8,7 +8,7 @@ runbook links, escalation notes, ticket pointers). This module is the SINGLE
 source of that format so the two alert channels can never drift apart: the
 helpers here render the text part, the HTML part, and the shared line list.
 It also owns the ONE deployment-environment send gate
-(``alerting_enabled_for_environment`` — the ``ALERT_EMAIL_ENVIRONMENTS``
+(``alerting_enabled_for_environment`` — the ``ALERT_ENVIRONMENTS``
 allowlist), for the same drift-prevention reason.
 
 Deliberately a leaf: it imports only ``modulo.settings`` (plus stdlib
@@ -83,7 +83,7 @@ def alert_context_html(settings: Settings) -> str:
 def alerting_enabled_for_environment(settings: Settings) -> bool:
     """May THIS deployment environment send operator alerts at all?
 
-    The ONE definition of the ``ALERT_EMAIL_ENVIRONMENTS`` gate, shared by
+    The ONE definition of the ``ALERT_ENVIRONMENTS`` gate, shared by
     both alert channels (``core.health_alerts`` readiness emails and
     ``core.watchdog.worker_liveness``) so their answers can never drift:
 
@@ -96,7 +96,7 @@ def alerting_enabled_for_environment(settings: Settings) -> bool:
       case-folded on both sides, so ``"production"``, ``" production "``
       and ``"Production"`` are the same entry. A staging deployment
       (``MODULO_ENV=staging``, CI-only E2E with no live workload) setting
-      ``ALERT_EMAIL_ENVIRONMENTS=production`` therefore stops paging the
+      ``ALERT_ENVIRONMENTS=production`` therefore stops paging the
       operator while production keeps alerting.
 
     A value that parses to an empty list (``""``, ``"  "``, ``", ,"``) is
@@ -104,7 +104,7 @@ def alerting_enabled_for_environment(settings: Settings) -> bool:
     unrestricted, and silently suppressing every alert because of a
     whitespace typo would be a silent failure path.
     """
-    raw = settings.alert_email_environments
+    raw = settings.alert_environments
     if raw is None:
         return True
     allowed = {entry.strip().casefold() for entry in raw.split(",") if entry.strip()}

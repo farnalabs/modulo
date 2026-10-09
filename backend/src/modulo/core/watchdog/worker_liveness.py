@@ -40,7 +40,7 @@ Design:
   (``alert_email_to`` + SMTP settings). Each channel is isolated: one
   channel's failure never blocks the others. Default-off — nothing is sent
   until at least one channel is configured. Additionally, when
-  ``ALERT_EMAIL_ENVIRONMENTS`` is set and does not include this
+  ``ALERT_ENVIRONMENTS`` is set and does not include this
   deployment's ``MODULO_ENV``, NO channel fires (the shared
   ``core.alert_context.alerting_enabled_for_environment`` gate, identical
   to the readiness alert's) — staging is CI-only with no live workload, so
@@ -509,7 +509,7 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
       ("all clear") email, and later healthy ticks stay silent (no state).
     """
     if not alerting_enabled_for_environment(settings):
-        # ALERT_EMAIL_ENVIRONMENTS excludes this deployment's environment
+        # ALERT_ENVIRONMENTS excludes this deployment's environment
         # (e.g. staging: a CI-only E2E environment with no live workload, so
         # a dead-worker page there is pure noise). Shared one-definition
         # gate with the readiness alert (core.alert_context), so the two
@@ -518,8 +518,7 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
         # exactly like the no-channel quiet path below (no claim, so no
         # later recovery email from a channel-less environment either).
         _log.warning(
-            "watchdog.alert_suppressed_environment conditions=%s "
-            "(ALERT_EMAIL_ENVIRONMENTS does not include environment=%r)",
+            "watchdog.alert_suppressed_environment conditions=%s (ALERT_ENVIRONMENTS does not include environment=%r)",
             "; ".join(conditions),
             settings.environment,
         )

@@ -73,7 +73,8 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 - [x] Stale-run recovery sweep outcome – ADVISORY, never gates readiness: a missing or
       >15min-stale sweep reports `degraded` to alert operators while the app stays
       healthy (`_check_stale_run_recovery`, health.py)
-- [x] Dispatcher reconcile staleness – two tiers: `degraded` after a single missed 60s tick
+- [x] Dispatcher reconcile staleness – two tiers: `degraded` after 180s (3x the 60s
+      system-cron cadence, so a single slow or missed tick alone never pages)
       is advisory (never flips readiness), `unavailable` past 5 minutes – the system
       worker's cron is silently dead and the fleet can no longer terminalize
       stalled/never-dispatched runs – 503s readiness

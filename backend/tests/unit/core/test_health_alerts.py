@@ -903,7 +903,7 @@ def test_alerting_configured_requires_both_halves() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ALERT_EMAIL_ENVIRONMENTS: the shared environment allowlist gate
+# ALERT_ENVIRONMENTS: the shared environment allowlist gate
 # (core.alert_context.alerting_enabled_for_environment — ONE definition for
 # both alert channels). Unset/blank = alert in every environment; set = only
 # when settings.environment is listed.
@@ -914,30 +914,28 @@ def test_environment_allowlist_unset_allows_every_environment() -> None:
     """Unset (the compose/self-hosted default) or blank must alert EVERYWHERE
     — a deployment that never heard of the allowlist keeps working."""
     assert ha.alerting_enabled_for_environment(_make_settings()) is True
-    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_EMAIL_ENVIRONMENTS="")) is True
-    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_EMAIL_ENVIRONMENTS="   ")) is True
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="")) is True
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="   ")) is True
     # Punctuation that parses to no entries is blank, not "allow nothing".
-    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_EMAIL_ENVIRONMENTS=" , , ")) is True
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS=" , , ")) is True
 
 
 def test_environment_allowlist_matches_case_insensitively_and_trims() -> None:
     """Entries are comma-split, trimmed and case-folded on BOTH sides."""
-    allowed = _make_settings(ALERT_EMAIL_ENVIRONMENTS=" Production , staging ", MODULO_ENV="staging")
+    allowed = _make_settings(ALERT_ENVIRONMENTS=" Production , staging ", MODULO_ENV="staging")
     assert ha.alerting_enabled_for_environment(allowed) is True
     assert (
         ha.alerting_enabled_for_environment(
-            _make_settings(ALERT_EMAIL_ENVIRONMENTS="production,staging", MODULO_ENV="Production")
+            _make_settings(ALERT_ENVIRONMENTS="production,staging", MODULO_ENV="Production")
         )
         is True
     )
-    excluded = _make_settings(ALERT_EMAIL_ENVIRONMENTS="production", MODULO_ENV="staging")
+    excluded = _make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="staging")
     assert ha.alerting_enabled_for_environment(excluded) is False
     # An environment that is not in a non-empty allowlist never alerts, even
     # the self-hosted default one.
     assert (
-        ha.alerting_enabled_for_environment(
-            _make_settings(ALERT_EMAIL_ENVIRONMENTS="production", MODULO_ENV="development")
-        )
+        ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="development"))
         is False
     )
 
@@ -945,11 +943,11 @@ def test_environment_allowlist_matches_case_insensitively_and_trims() -> None:
 async def test_excluded_environment_never_sends_but_state_machine_advances(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """``ALERT_EMAIL_ENVIRONMENTS=production`` + ``MODULO_ENV=staging``: health
+    """``ALERT_ENVIRONMENTS=production`` + ``MODULO_ENV=staging``: health
     is still evaluated, the hysteresis/dedup state still advances (so the
     operator loses no history if the allowlist changes), but NOTHING is sent —
     exactly the disabled-channel quiet path, with its log-once notice."""
-    settings = _make_settings(MODULO_ENV="staging", ALERT_EMAIL_ENVIRONMENTS="production")
+    settings = _make_settings(MODULO_ENV="staging", ALERT_ENVIRONMENTS="production")
     observer = _FakeObserver()
     sender = _FakeSender()
     store = _FakeRedis()
@@ -980,14 +978,14 @@ async def test_excluded_environment_never_sends_but_state_machine_advances(
         record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()
     ]
     assert len(disabled_logs) == 1
-    assert "ALERT_EMAIL_ENVIRONMENTS" in disabled_logs[0]
+    assert "ALERT_ENVIRONMENTS" in disabled_logs[0]
 
 
 async def test_included_environment_still_sends() -> None:
-    """``ALERT_EMAIL_ENVIRONMENTS=production`` + ``MODULO_ENV=production``:
+    """``ALERT_ENVIRONMENTS=production`` + ``MODULO_ENV=production``:
     the allowlist does not suppress the environment it names — exactly one
     alert email on the confirmed edge."""
-    settings = _make_settings(MODULO_ENV="production", ALERT_EMAIL_ENVIRONMENTS="production")
+    settings = _make_settings(MODULO_ENV="production", ALERT_ENVIRONMENTS="production")
     observer = _FakeObserver()
     sender = _FakeSender()
     store = _FakeRedis()

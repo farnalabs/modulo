@@ -62,7 +62,7 @@ inventing a mechanism):
   evaluates health and still advances its state machine, but never calls the
   sender, never raises, and logs that alerting is disabled (and what to set)
   at most once per ``DISABLED_LOG_INTERVAL_SECONDS`` at INFO.
-* **Quiet in environments the operator excluded (``ALERT_EMAIL_ENVIRONMENTS``).**
+* **Quiet in environments the operator excluded (``ALERT_ENVIRONMENTS``).**
   Both the readiness cron and the worker-liveness watchdog email the same
   operator, and staging (a CI-only E2E environment with no live workload)
   was paging them with blips they cannot act on. The allowlist is opt-in —
@@ -216,7 +216,7 @@ def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> Non
 
     Two reasons, one rate limiter (they are the same log-hygiene concern):
     the channel is unconfigured, or this environment is excluded by
-    ``ALERT_EMAIL_ENVIRONMENTS``. The message says which, so the operator
+    ``ALERT_ENVIRONMENTS``. The message says which, so the operator
     knows what to change.
     """
     global _last_disabled_log_at
@@ -226,7 +226,7 @@ def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> Non
     if environment_excluded:
         _log.info(
             "health_alerts.disabled: readiness alerting is off for this environment — set "
-            "ALERT_EMAIL_ENVIRONMENTS to include it to email the operator (health is still "
+            "ALERT_ENVIRONMENTS to include it to email the operator (health is still "
             "evaluated; no email is sent)"
         )
         return

@@ -298,6 +298,88 @@ class TestWorkerLivenessWatchdog:
             assert wl._ALERT_STATE_KEY in fake._data
             fake._data.pop(wl._ALERT_STATE_KEY, None)
 
+    # -----------------------------------------------------------------------
+    # ALERT_ENVIRONMENTS: the shared environment allowlist gate
+    # (core.alert_context.alerting_enabled_for_environment - ONE definition for
+    # both alert channels). Unset/blank = alert in every environment; set = only
+    # when settings.environment is listed. The gate sits in _maybe_alert, ahead
+    # of the claim AND the fan-out, so an excluded environment sends on NO
+    # channel (webhook, Teams and email alike) and claims no incident state.
+    # -----------------------------------------------------------------------
+
+    async def test_excluded_environment_never_fans_out_on_any_channel(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """``ALERT_ENVIRONMENTS=production`` + ``MODULO_ENV=staging``: an
+        unhealthy fleet must send on NO channel (generic webhook, Teams and
+        email all configured) and must log the suppression - while the
+        watchdog keeps evaluating the condition."""
+        fake = _FakeWatchdogRedis()
+        settings = _make_settings(
+            MODULO_ENV="staging",
+            ALERT_ENVIRONMENTS="production",
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+            ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t",
+            ALERT_EMAIL_TO="ops@example.com",
+            smtp_host="smtp.example.com",
+        )
+
+        generic = AsyncMock()
+        teams = AsyncMock()
+        email = AsyncMock()
+        with (
+            patch.object(wl, "_post_generic_webhook", generic),
+            patch.object(wl, "_post_teams_webhook", teams),
+            patch.object(wl, "_send_email_alert", email),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            state = await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
+
+        # NOTHING was sent on any channel...
+        generic.assert_not_awaited()
+        teams.assert_not_awaited()
+        email.assert_not_awaited()
+        # ...no incident was claimed (so no later recovery edge either)...
+        assert wl._ALERT_STATE_KEY not in fake._data
+        # ...but the watchdog still evaluated the condition and said why it is quiet.
+        assert state.all_dead_since is not None
+        assert "watchdog.alert_suppressed_environment" in caplog.text
+        assert "ALERT_ENVIRONMENTS" in caplog.text
+
+    async def test_included_or_unset_environment_still_fans_out(self) -> None:
+        """The gate is opt-in: with the allowlist unset (the self-hosted
+        default, alert everywhere) or naming this environment, the configured
+        fan-out still fires on every channel."""
+        fake = _FakeWatchdogRedis()
+        for overrides in (
+            {"MODULO_ENV": "staging"},  # allowlist unset
+            {"MODULO_ENV": "staging", "ALERT_ENVIRONMENTS": "production,staging"},  # env included
+        ):
+            settings = _make_settings(
+                **overrides,
+                ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+                ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t",
+                ALERT_EMAIL_TO="ops@example.com",
+                smtp_host="smtp.example.com",
+            )
+
+            generic = AsyncMock()
+            teams = AsyncMock()
+            email = AsyncMock()
+            with (
+                patch.object(wl, "_post_generic_webhook", generic),
+                patch.object(wl, "_post_teams_webhook", teams),
+                patch.object(wl, "_send_email_alert", email),
+            ):
+                await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=time.time() - 200))
+
+            generic.assert_awaited_once()
+            teams.assert_awaited_once()
+            email.assert_awaited_once()
+            assert wl._ALERT_STATE_KEY in fake._data
+            fake._data.pop(wl._ALERT_STATE_KEY, None)
+
     async def test_recovery_sends_all_clear_then_fresh_alert_can_fire(self) -> None:
         fake = _FakeWatchdogRedis()
         settings = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
