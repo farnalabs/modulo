@@ -746,6 +746,109 @@ class TestUpdateTriggerSuccess(_AuthContext):
 
 
 # ---------------------------------------------------------------------------
+# update_trigger — connector team gate (FAR-1595)
+# ---------------------------------------------------------------------------
+
+_TEAM_A = uuid.UUID("7f000000-0000-0000-0000-00000000000a")
+_TEAM_B = uuid.UUID("7f000000-0000-0000-0000-00000000000b")
+
+
+def _cross_team_mismatch(connector_id: uuid.UUID) -> object:
+    from modulo.core.team_visibility import ConnectorTeamMismatch
+
+    return ConnectorTeamMismatch(
+        connector_id=connector_id,
+        connector_name="other-teams-connector",
+        connector_owner_team_id=_TEAM_B,
+        pipeline_owner_team_id=_TEAM_A,
+        connector_visibility="team",
+    )
+
+
+class TestUpdateTriggerConnectorTeamGate(_AuthContext):
+    """FAR-1595: the general MCP update path team-validates a NEW connector id.
+
+    REST's PUT does this through ``_validate_connector_instance_team_scope``;
+    the MCP tool merged the id into ``config_json`` with no lookup, so it was a
+    bypass around the save-time gate.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_cross_team_connector_is_refused(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+        trigger = _make_mock_trigger(trigger_type="polling", config_json={})
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+        connector_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.triggers.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)]),
+        ) as find_mismatches:
+            result = await update_trigger(
+                trigger_id=str(trigger.id),
+                config_json={"connector_instance_id": str(connector_id)},
+            )
+
+        assert result["error"] == CONNECTOR_TEAM_MISMATCH
+        assert "connector_team_mismatch" in result["detail"]
+        find_mismatches.assert_awaited_once()
+        # The refusal lands BEFORE the ORM object is touched: `_session`'s
+        # early return COMMITS, so a mutated config would be persisted while
+        # the tool reported an error. The config started empty and must still
+        # hold no connector reference.
+        assert not trigger.config_json
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_unchanged_connector_reference_is_not_rejudged(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """An unrelated edit to a trigger that already carries the id still saves.
+
+        The gate is a NEW-binding check (``previous_connector_instance_id``),
+        matching REST — otherwise every edit to such a trigger would be blocked
+        by a connector it was already allowed to hold.
+        """
+        connector_id = uuid.uuid4()
+        trigger = _make_mock_trigger(
+            trigger_type="polling",
+            config_json={"connector_instance_id": str(connector_id)},
+        )
+        mock_sesh = AsyncMock()
+        mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
+        mock_session.return_value = _make_session_context(mock_sesh)
+
+        with patch(
+            "modulo.api.routes.triggers.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)]),
+        ) as find_mismatches:
+            result = await update_trigger(
+                trigger_id=str(trigger.id),
+                config_json={"connector_instance_id": str(connector_id)},
+            )
+
+        assert result.get("error") is None
+        find_mismatches.assert_not_awaited()
+        assert trigger.config_json["connector_instance_id"] == str(connector_id)
+
+
+# ---------------------------------------------------------------------------
 # update_trigger — streak_status surfacing (FAR-251)
 # ---------------------------------------------------------------------------
 

@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -789,6 +790,73 @@ def test_test_polling_condition_happy_path_delegates_to_engine(client: tuple[Tes
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "matched"
     engine.evaluate_condition.assert_awaited_once()
+
+
+def test_test_polling_condition_cross_team_connector_is_denied(client: tuple[TestClient, AsyncMock]) -> None:
+    """The TEST route's evaluation carries the trigger's pipeline into the gate (FAR-1595).
+
+    ``evaluate_condition`` receives the real Trigger row but used to build the
+    connector WITHOUT its ``pipeline_id``, so ``enforce_polling_team_scope``
+    had no team context and a team-A trigger could test-read a team-B
+    connector. The Pipeline read is the gate's own: it does not happen unless
+    the pipeline context is forwarded, and without it the cross-team refusal
+    below never fires (the read proceeds instead).
+    """
+    from modulo.db.models.connector_instance import ConnectorInstance
+    from modulo.db.models.pipeline import Pipeline
+    from modulo.db.models.trigger import Trigger
+
+    http, session = client
+    connector_id = uuid.uuid4()
+    instance = MagicMock()
+    instance.id = connector_id
+    instance.connector_type_id = "rest"
+    instance.config_json = {}
+    instance.allowed_operations = None
+    instance.visibility = "team"
+    instance.owner_team_id = _TEAM_B
+
+    instance_result = MagicMock()
+    instance_result.scalar_one_or_none.return_value = instance
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one_or_none.return_value = SimpleNamespace(owner_team_id=_TEAM_A)
+    trigger_result = _trigger_result([_make_trigger(trigger_type="polling")])
+
+    def _execute(stmt: Any, *_args: Any, **_kwargs: Any) -> Any:
+        """Answer each read by the ROW IT ASKS FOR — order-independent.
+
+        The route's own reads (Trigger, then ConnectorInstance, then the
+        gate's Pipeline) are interleaved with whatever the permission/team
+        dependencies read on the mocked session, so a positional
+        ``side_effect`` list would be fragile.
+        """
+        entities = [d.get("entity") for d in getattr(stmt, "column_descriptions", [])]
+        if Trigger in entities:
+            return trigger_result
+        if ConnectorInstance in entities:
+            return instance_result
+        if Pipeline in entities:
+            return pipeline_result
+        return _trigger_result([])
+
+    session.execute = AsyncMock(side_effect=_execute)
+    resp = _with_patches(
+        list(_happy_patches()),
+        lambda: http.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling/test",
+            json={"connector_instance_id": str(connector_id), "poll_query": "q"},
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "is not usable by pipeline" in body["error"]
+    # The gate's OWN Pipeline read — ``scalar_one_or_none`` is what
+    # ``enforce_polling_team_scope`` resolves the owner team with, and it is
+    # never reached unless the pipeline context is forwarded into
+    # ``_build_polling_connector_from_instance``.
+    pipeline_result.scalar_one_or_none.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

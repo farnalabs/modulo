@@ -1203,8 +1203,10 @@ async def _build_polling_connector(
         # can judge a TEAM-PRIVATE connector against the trigger's pipeline
         # team. The fire job reads the connector row TEAM-BLIND (execution
         # context), so without this the allowlist gate was the only check.
-        # ``getattr`` keeps the legacy no-pipeline test doubles working; a real
-        # Trigger always carries ``pipeline_id``.
+        # ``getattr`` is defensive only: a real Trigger always carries
+        # ``pipeline_id`` (NOT NULL), and with no context the team-scope gate
+        # now DENIES a team-private instance (FAR-1595) rather than reading it
+        # unchecked — so this default never silently reopens the gate.
         connector, redis_client = await _build_polling_connector_from_instance(
             session,
             connector_instance,

@@ -334,20 +334,22 @@ def test_unresolvable_pipeline_fails_closed() -> None:
         _build_team_gated(_team_instance(TEAM_B), session)
 
 
-def test_no_supplied_pipeline_context_skips_the_team_gate() -> None:
-    """A caller without team context cannot be judged — and must not be blocked.
+def test_no_supplied_pipeline_context_fails_closed() -> None:
+    """A caller without team context is DENIED, not silently allowed through.
 
-    The gate is defence-in-depth on top of the save-time validation
-    (``api/routes/triggers.py``) and the request session's team RLS; the SAQ
-    fire path ALWAYS supplies ``pipeline_id`` (proven below).
+    Skipping was the previous behaviour, and it is exactly how FAR-1595
+    happened: ``evaluate_condition`` held a real Trigger row but did not
+    forward its ``pipeline_id``, the gate took its no-context early-return,
+    and a team-A trigger could test-read a team-B connector. The sibling
+    branch (an id that does not resolve) already denied, so this one denies
+    too — a forgotten argument must surface as a refusal, never as a pass.
     """
-    connector, _redis_client = _build_team_gated(
-        _team_instance(TEAM_B),
-        MagicMock(),
-        pipeline_id=None,
-    )
-
-    assert connector is _SENTINEL
+    with pytest.raises(ConnectorPermissionError, match="no pipeline context"):
+        _build_team_gated(
+            _team_instance(TEAM_B),
+            MagicMock(),
+            pipeline_id=None,
+        )
 
 
 def test_cron_fire_path_supplies_the_pipeline_team_context() -> None:
@@ -382,3 +384,44 @@ def test_cron_fire_path_supplies_the_pipeline_team_context() -> None:
     logged = log_event.await_args.kwargs
     assert logged["result"] == "poll_error"
     assert "Team-private connector" in logged["error_detail"]
+
+
+def test_evaluate_condition_supplies_the_pipeline_team_context() -> None:
+    """The one-off TEST path forwards the owning trigger's pipeline (the wiring).
+
+    ``TriggerEngine.evaluate_condition`` holds the real ``Trigger`` row but
+    built the connector WITHOUT its ``pipeline_id``, so the team gate had no
+    context to judge against — the defect FAR-1595 names on the
+    ``POST /triggers/{id}/polling/test`` route. Without the forwarded context
+    the gate's Pipeline read never happens (1 execute, not 2) and the
+    cross-team denial in the message below never fires: the read proceeds to
+    credential decryption instead.
+    """
+    from modulo.core.trigger_engine import TriggerEngine
+
+    session = AsyncMock()
+    instance_result = MagicMock()
+    instance_result.scalar_one_or_none.return_value = _team_instance(TEAM_B)
+    pipeline_result = _PipelineResult(SimpleNamespace(owner_team_id=TEAM_A))
+    session.execute = AsyncMock(side_effect=[instance_result, pipeline_result])
+
+    with (
+        patch("modulo.settings.get_settings", return_value=MagicMock(fernet_key="b" * 44)),
+        patch("modulo.core.secrets_backend.create_secrets_backend") as create_backend,
+        patch("modulo.core.trigger_engine.polling._build_polling_connector") as build,
+    ):
+        result = asyncio.run(
+            TriggerEngine.evaluate_condition(
+                session,
+                _trigger=SimpleNamespace(pipeline_id=PIPELINE_ID),
+                org_id=ORG,
+                connector_instance_id=uuid.uuid4(),
+                poll_query="SELECT 1",
+            )
+        )
+
+    assert result["status"] == "error"
+    assert "is not usable by pipeline" in result["error"]
+    assert session.execute.await_count == 2
+    create_backend.assert_not_called()
+    build.assert_not_called()

@@ -72,7 +72,11 @@ from modulo.api.middleware.sensitive_mask import (
 from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
-from modulo.api.routes.triggers import _streak_status_for, _validate_trigger_config_keys
+from modulo.api.routes.triggers import (
+    _streak_status_for,
+    _validate_connector_instance_team_scope,
+    _validate_trigger_config_keys,
+)
 from modulo.auth.api_key import (
     ApiKeyGrantsUnavailableError,
     ApiKeyInvalidError,
@@ -6803,9 +6807,25 @@ async def _create_trigger_impl(
         # _pipeline_team_gate) so an RLS-hidden team-private pipeline is
         # DENIED, never allowed (the caller-facing owner read returned None,
         # which passed every old boundary/membership check).
-        _, gate_denial = await _pipeline_team_gate(s, pid)
+        owner_team_id, gate_denial = await _pipeline_team_gate(s, pid)
         if gate_denial:
             return gate_denial
+        # FAR-1595: a connector reference named at create time is
+        # team-validated against the owning pipeline before the trigger can
+        # ever poll it (the fire job reads the row team-blind). This is the
+        # SAME shared gate REST's create route calls — without it the MCP
+        # create tool was a bypass around it.
+        try:
+            await _validate_connector_instance_team_scope(
+                s,
+                org_id=org_id,
+                pipeline_owner_team_id=owner_team_id,
+                config=config_json,
+            )
+        except FastAPIHTTPException as exc:
+            from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+            return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
         next_fire_at, ongoing_err = await _validate_ongoing_trigger_create(
             s, pid, trigger_type, max_concurrent_runs, daily_spend_limit, config_json
         )
@@ -6963,24 +6983,30 @@ def _validate_trigger_update_inputs(
 
 async def _load_trigger_for_update(
     s: AsyncSession, org_id: uuid.UUID, tid: uuid.UUID
-) -> tuple[Any | None, dict[str, Any] | None]:
-    """Load the trigger row for update plus its pipeline's team-gate denial.
+) -> tuple[Any | None, uuid.UUID | None, dict[str, Any] | None]:
+    """Load the trigger row for update plus its pipeline's team-gate owner and denial.
 
-    Returns ``(trigger, denial)``: `(None, None)` when the trigger row itself
-    is absent (caller renders ``_MSG_TRIGGER_NOT_FOUND``), `(trigger, None)`
-    when the gate allows, and `(None, envelope)`/`(trigger, envelope)` when
-    the gate denies — FAR-1513 fix: the gate evaluates the pipeline through
-    the team-blind read, so an RLS-hidden team-private pipeline denies
-    instead of falling through the key mismatch that consumed the old
-    ``_TEAM_SCOPE_ERROR`` sentinel.
+    Returns ``(trigger, owner_team_id, denial)``: ``(None, None, None)`` when
+    the trigger row itself is absent (caller renders ``_MSG_TRIGGER_NOT_FOUND``),
+    ``(trigger, owner, None)`` when the gate allows, and ``(None, owner,
+    denial)``/``(trigger, owner, denial)`` when the gate denies — FAR-1513
+    fix: the gate evaluates the pipeline through the team-blind read, so an
+    RLS-hidden team-private pipeline denies instead of falling through the key
+    mismatch that consumed the old ``_TEAM_SCOPE_ERROR`` sentinel.
+
+    ``owner_team_id`` is the gate's RESOLVED effective owner (None for an
+    org-level pipeline), returned so callers can run team-scoped validation
+    (FAR-1595's connector gate) against the same value the gate judged — a
+    second caller-facing read would return None under a team-scoped key and
+    deny an otherwise legitimate write.
     """
     trigger = await _load_trigger_row(s, org_id, tid)
     if trigger is None:
-        return None, None
-    _, denial = await _pipeline_team_gate(s, trigger.pipeline_id)
+        return None, None, None
+    owner_team_id, denial = await _pipeline_team_gate(s, trigger.pipeline_id)
     if denial is not None:
-        return None, denial
-    return trigger, None
+        return None, owner_team_id, denial
+    return trigger, owner_team_id, None
 
 
 async def _validate_ongoing_config_change(
@@ -7159,7 +7185,7 @@ async def _update_trigger_txn(
         # a denial envelope is returned verbatim (never re-mapped through the
         # team-scope sentinel, which would misname a membership/not-found
         # denial as a key-boundary message).
-        trigger, gate_denial = await _load_trigger_for_update(s, org_id, tid)
+        trigger, owner_team_id, gate_denial = await _load_trigger_for_update(s, org_id, tid)
         if gate_denial is not None:
             return gate_denial
         if trigger is None:
@@ -7196,6 +7222,24 @@ async def _update_trigger_txn(
                 _validate_trigger_config_keys(merged_config, context="merged config_json")
             except FastAPIHTTPException as exc:
                 return {"error": "validation", "detail": exc.detail}
+            # FAR-1595: a NEW connector reference written through the general
+            # update path is team-validated too — same shared gate REST's PUT
+            # calls, so MCP is not a bypass around it. Judged on the MERGED
+            # config and against the PREVIOUS value (an unchanged reference is
+            # not re-judged), all BEFORE the ORM object is mutated: a clean
+            # early return from ``_session`` COMMITS.
+            try:
+                await _validate_connector_instance_team_scope(
+                    s,
+                    org_id=org_id,
+                    pipeline_owner_team_id=owner_team_id,
+                    config=merged_config,
+                    previous_connector_instance_id=(trigger.config_json or {}).get("connector_instance_id"),
+                )
+            except FastAPIHTTPException as exc:
+                from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+                return {"error": CONNECTOR_TEAM_MISMATCH, "detail": str(exc.detail)}
         await _apply_trigger_field_updates(
             s,
             trigger,

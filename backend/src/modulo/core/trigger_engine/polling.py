@@ -158,7 +158,9 @@ async def enforce_polling_team_scope(
     a team-A trigger naming a team-B connector id polled it — reading
     team-private credentials with only the allowlist gate applied. This is the
     defence-in-depth half; the save-time half lives in
-    ``api/routes/triggers.py``.
+    ``api/routes/triggers.py`` (REST) and ``api/mcp_server.py`` (the MCP
+    trigger tools), both through the shared
+    ``_validate_connector_instance_team_scope`` gate.
 
     Scope rule: a TEAM-PRIVATE connector is only usable by a pipeline owned by
     the SAME team — the shared
@@ -177,11 +179,15 @@ async def enforce_polling_team_scope(
     secrets to this path.
 
     *pipeline_id* is the owning trigger's pipeline. When the caller supplies
-    none there is no team context to judge against and this returns without a
-    check — the gate is defence-in-depth on top of the save-time validation and
-    the request session's team RLS, not the sole control. A pipeline id that
-    does not resolve in *org_id* is a DENIAL (fail closed): a fire we cannot
-    team-scope must not read.
+    NONE there is no team context to judge against — DENIED, on exactly the
+    same rule as an id that does not resolve in *org_id*: a read whose team
+    scope we cannot verify must not proceed. Every production caller has it
+    (the SAQ fire job passes the trigger's ``pipeline_id``, which is NOT NULL,
+    and ``TriggerEngine.evaluate_condition`` passes its own trigger's), so a
+    missing context is a wiring bug rather than an expected state — reporting
+    it as a denial is what stops the next forgotten argument from silently
+    reopening this gate. The gate is defence-in-depth on top of the save-time
+    validation and the request session's team RLS, never the sole control.
 
     Raises :class:`ConnectorPermissionError` when the read must not proceed.
     """
@@ -191,7 +197,10 @@ async def enforce_polling_team_scope(
         # short-circuit also means no pipeline read is issued at all.
         return
     if pipeline_id is None:
-        return
+        raise ConnectorPermissionError(
+            f"Team-private connector {getattr(connector_instance, 'id', '?')} was read with no "
+            "pipeline context; the team scope of the connector read cannot be verified",
+        )
 
     from modulo.core.team_visibility import connector_team_mismatch
     from modulo.db.models.pipeline import Pipeline
@@ -234,10 +243,10 @@ async def _build_polling_connector_from_instance(
     gate for the same path (FAR-1595). BOTH run BEFORE any credential is
     decrypted, so a denied instance never exposes its secrets.
 
-    *pipeline_id* is the owning trigger's pipeline — pass it whenever the
-    caller has it (the cron fire job always does), so the team-scope gate can
-    judge the connector against the pipeline's team; see
-    :func:`enforce_polling_team_scope` for what happens without it.
+    *pipeline_id* is the owning trigger's pipeline — ALWAYS pass it when the
+    caller has one (both production callers do). Without it a TEAM-PRIVATE
+    instance is denied outright rather than read unchecked; see
+    :func:`enforce_polling_team_scope` for the rule and its rationale.
 
     Shared by the cron fire path (``cron_helpers``) and the sync one-off
     ``TriggerEngine.evaluate_condition`` so the three-step wiring
