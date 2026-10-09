@@ -4383,7 +4383,8 @@ export default {
       "failed": "Script failed",
       "invalid_output": "Invalid script output",
       "side_effect_unknown": "Script side effects unknown",
-      "session_lost": "Session lost"
+      "session_lost": "Session lost",
+      "budget_killed": "Script killed by resource limits"
     },
     "harness": {
       "unknown": "Unknown error",
@@ -4392,6 +4393,7 @@ export default {
       "sdk_task_cancelled": "Agent task cancelled",
       "executor_failed": "Executor failed",
       "executor_heartbeat_lost": "Executor heartbeat lost",
+      "heartbeat_stale": "Worker heartbeat stale",
       "dispatch_failed": "Dispatch failed",
       "worker_failed": "Worker failed",
       "node_cancelled": "Node cancelled",
@@ -4402,19 +4404,33 @@ export default {
     "sandbox": {
       "no_output_json": "No structured output",
       "spawn": "Sandbox failed to start",
-      "network": "Sandbox network error"
+      "network": "Sandbox network error",
+      "rate_limited": "Sandbox rate limited",
+      "queue_timeout": "Sandbox queue timed out",
+      "agent_failed": "Runner execution failed",
+      "binding_resolution": "Runner binding failed",
+      "tier_refused": "Provider tier refused",
+      "dispatch_unbound": "Profile not dispatch-capable",
+      "input_credential_failed": "Workspace credential failed",
+      "input_checkout_failed": "Workspace checkout failed",
+      "input_host_mismatch": "Workspace input host mismatch",
+      "input_resolution_failed": "Workspace input ref unresolved",
+      "workspace_inputs_disabled": "Workspace inputs disabled"
     },
+    "dispatch": { "wait_timeout": "Dispatch wait timed out" },
     "node": {
       "timeout": "Node timed out",
+      "deadline_exceeded": "Node missed its deadline",
       "runaway": "Runaway node",
       "cancelled": "Node cancelled"
     },
-    "run": { "superseded": "Run superseded" },
+    "run": { "superseded": "Run superseded", "no_progress": "Run made no progress" },
     "connector": {
       "invalid_key": "Invalid connector key",
       "permission": "Connector permission denied",
       "rate_limit": "Connector rate limited",
-      "network": "Connector network error"
+      "network": "Connector network error",
+      "side_effect_unknown": "Connector side effects unknown"
     },
     "capacity": {
       "org": "Org at capacity",
@@ -4429,10 +4445,23 @@ export default {
       "connection": "Provider connection error"
     },
     "eval": { "blocked": "Eval blocked", "failed": "Eval failed" },
-    "config": { "error": "Configuration error", "invalid": "Invalid configuration" },
+    "config": {
+      "error": "Configuration error",
+      "invalid": "Invalid configuration",
+      "missing_model_backend": "Agent has no model backend"
+    },
+    "model": {
+      "provider_timeout": "Model timed out",
+      "connection": "Model connection error",
+      "rate_limited": "Model rate limited"
+    },
+    "model_disabled": "Model disabled",
+    "scope": { "violation": "Capability out of scope" },
     "hitl": {
       "review_expired": "HITL review expired",
-      "review_missing": "HITL review missing"
+      "review_missing": "HITL review missing",
+      "rejected": "Rejected at review",
+      "superseded": "Review superseded"
     }
   },
   "errorCodeDescriptions": {
