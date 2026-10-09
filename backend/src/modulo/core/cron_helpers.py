@@ -446,6 +446,9 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # FAR-1525 per-org time bound counters (same additive .get() contract).
     "org_timeouts": 0,
     "orgs_deferred": 0,
+    # FAR-1601 row-lock bound: orgs skipped because their bounded mutation
+    # wait hit SQLSTATE 55P03 (same additive .get() contract).
+    "org_lock_timeouts": 0,
 }
 
 
@@ -491,6 +494,7 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     # the in-process mirror (a missing copy line would silently zero them).
     _dispatcher_reconcile_stats["org_timeouts"] = stats.get("org_timeouts", 0)
     _dispatcher_reconcile_stats["orgs_deferred"] = stats.get("orgs_deferred", 0)
+    _dispatcher_reconcile_stats["org_lock_timeouts"] = stats.get("org_lock_timeouts", 0)
 
 
 # Shared Redis key for dispatcher_reconcile outcome stats (cross-process).
@@ -6560,6 +6564,10 @@ async def _dispatcher_reconcile_body(
                 summary.clear()
                 summary.update(summary_before)
                 del terminalized_run_ids[terminalized_len_before:]
+                # Observability parity with the per-org time bound above: make
+                # a contended tick visible in the health summary, not only in
+                # the WARNING log.
+                summary["org_lock_timeouts"] = summary.get("org_lock_timeouts", 0) + 1
                 _log.warning(
                     "dispatcher_reconcile.org_lock_timeout org=%s (SQLSTATE 55P03 from "
                     "the bounded mutation_row_lock_timeout_ms wait) — org transaction "
@@ -6659,6 +6667,9 @@ def _dispatcher_summary() -> dict[str, Any]:
         # reserved tail of the budget remained (drains on later ticks).
         "org_timeouts": 0,
         "orgs_deferred": 0,
+        # FAR-1601 row-lock bound: orgs skipped by the 55P03 lock-timeout
+        # handler (same additive .get() contract as the counters above).
+        "org_lock_timeouts": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720) — a new terminalizer registers once below without a

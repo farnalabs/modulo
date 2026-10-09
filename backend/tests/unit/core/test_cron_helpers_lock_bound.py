@@ -429,6 +429,8 @@ class TestOrgLockTimeoutSkip:
         assert summary_out["status"] == "ok"
         assert summary_out["last_error"] is None
         assert summary_out["org_timeouts"] == 0
+        # The skip is visible in the health summary, not only the WARNING log.
+        assert summary_out["org_lock_timeouts"] == 1
         # Never silent: WARNING with the SQLSTATE, the org, and the recovery.
         records = [record for record in caplog.records if "org_lock_timeout" in record.getMessage()]
         assert records, f"no org_lock_timeout WARNING emitted; log={caplog.text}"
