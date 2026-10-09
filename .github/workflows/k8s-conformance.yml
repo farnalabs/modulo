@@ -45,6 +45,23 @@ name: "K8s conformance (kind + managed)"
 #      cron stops producing runs), so a dropped cron or a permanently red
 #      suite is visible instead of silent.
 #
+#      FAR-1620: "green" here means the conformance SUITE ran and passed,
+#      not merely that the workflow run concluded successfully. The kind
+#      job's suite steps are path-gated (`steps.detect.outputs.changed`), so
+#      a docs-only push to main or a chart-only PR starts this workflow,
+#      SKIPS the suite step, and still completes with conclusion=success -
+#      refreshing last-green while the suite is actually dark. The staleness
+#      job therefore inspects each candidate run's JOB STEPS via the Actions
+#      API and counts a run as green only when a step named "Run the
+#      runtime-provider conformance suite" has conclusion=success. A
+#      path-skipped success never refreshes the staleness clock; a jobs-API
+#      read failure is never counted as fresh either (it warns loudly, and
+#      fails the cycle when nothing could be verified). It pages the run
+#      history back past the widest grace window (measured cadence ~23
+#      runs/day would otherwise shrink the 28-day grace to a ~4-day view),
+#      with a bounded per-cycle verification budget so a long-dark scan
+#      cannot blow the step timeout.
+#
 # Claim discipline (docs/deployment/k8s-conformance-parity.md): a substrate
 # is claimed conformant ONLY while its most recent conformance run is green.
 # A red run withdraws the claim immediately. The parity table records what
@@ -360,7 +377,10 @@ jobs:
         # Publishing step: stamp this green run's date into the run summary.
         # The staleness job reads the same run history and does the
         # authoritative cross-run computation (including excluding its own
-        # cron runs).
+        # cron runs) - and, since FAR-1620, inspects each run's job steps so
+        # a path-skipped success (suite step conclusion=skipped) never
+        # refreshes last-green. This stamp is gated on `changed`, so a
+        # chart-only green does not write it either.
         run: |
           STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
@@ -534,6 +554,13 @@ jobs:
           # the scan below WARNS loudly when that happens).
           STALENESS_RUN_NAME: "K8s conformance - cron 17 5 * * *"
           MANAGED_RUN_NAME: "K8s conformance - cron 0 4 * * 1"
+          # FAR-1620: the exact step name of the conformance suite step -
+          # must match BOTH suite steps in this workflow (`kind` and
+          # `managed`). A run counts green only when a step with this name
+          # has conclusion=success in the run's job list; a path-skipped run
+          # (docs-only push / chart-only PR) has it as conclusion=skipped
+          # and must never refresh last-green.
+          SUITE_STEP_NAME: "Run the runtime-provider conformance suite"
           # Grace windows (days), overridable via repo variables:
           #   ANY_GRACE  - the scheduled leg refreshes weekly once the secrets
           #                are provisioned, so 28d = four missed cycles; before
@@ -546,24 +573,78 @@ jobs:
           MANAGED_DARK_GRACE: ${{ vars.K8S_CONFORMANCE_MANAGED_DARK_GRACE_DAYS || 14 }}
         run: |
           set -euo pipefail
-          # Fail open WITH a loud warning on API failure (a token/scope problem
-          # must not read as "no runs found" - the Actions 404-vs-empty lesson).
+          NOW_TS="$(date -u +%s)"
+          # Scan depth: the grace-window comparisons below are only meaningful
+          # if the fetched run history reaches back past the widest grace
+          # window. Measured 2026-10-09: ~23 runs/day for this workflow, so a
+          # single 100-run page spans only ~4 days - far short of the 28-day
+          # ANY grace. After FAR-1620 (path-skipped successes no longer count
+          # as green) greens are sparse enough that page depth, not the grace
+          # variable, would otherwise define the effective window and cry
+          # STALE on any quiet stretch. So page back until the oldest run
+          # collected is older than the widest window (or history is
+          # exhausted), capped at MAX_PAGES pages.
+          MAX_GRACE_DAYS=$(( ANY_GRACE > MANAGED_DARK_GRACE ? ANY_GRACE : MANAGED_DARK_GRACE ))
+          CUTOFF_TS=$(( NOW_TS - (MAX_GRACE_DAYS + 1) * 86400 ))
+          MAX_PAGES=10
           # (.conclusion // "pending" keeps every TSV field non-empty: an empty
           # field would collapse under IFS-whitespace and shift the columns.)
-          rc=0
-          RUNS_TSV="$(gh api "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=100" \
-            --jq '.workflow_runs[] | [.name, .event, (.conclusion // "pending"), .created_at] | @tsv' 2>&1)" || rc=$?
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::could not read this workflow's run history (rc=${rc}) - cannot determine staleness this cycle. Transient failures warn, not fail; if this repeats, investigate the Actions API read (token scope yields 404, which looks like an empty result)."
-            {
-              echo "## Kubernetes conformance - staleness"
-              echo ""
-              echo "UNKNOWN this cycle: run-history read failed (rc=${rc})."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          # .id rides along (FAR-1620) so each candidate green run's JOB STEPS
+          # can be read - a run-level success alone is NOT proof the suite ran.
+          JQ_RUNS='.workflow_runs[] | [.id, .name, .event, (.conclusion // "pending"), .created_at] | @tsv'
+          RUNS_TSV=""
+          PAGE=0
+          COVERED=false
+          while [ "${PAGE}" -lt "${MAX_PAGES}" ]; do
+            PAGE=$((PAGE + 1))
+            rc=0
+            PAGE_TSV="$(gh api "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=100&page=${PAGE}" \
+              --jq "${JQ_RUNS}" 2>&1)" || rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              if [ "${PAGE}" -eq 1 ]; then
+                # Fail open WITH a loud warning on API failure (a token/scope
+                # problem must not read as "no runs found" - the Actions
+                # 404-vs-empty lesson): transient failures warn, not fail.
+                echo "::warning::could not read this workflow's run history (rc=${rc}) - cannot determine staleness this cycle. Transient failures warn, not fail; if this repeats, investigate the Actions API read (token scope yields 404, which looks like an empty result)."
+                {
+                  echo "## Kubernetes conformance - staleness"
+                  echo ""
+                  echo "UNKNOWN this cycle: run-history read failed (rc=${rc})."
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "::warning::run-history read failed on page ${PAGE} (rc=${rc}) - continuing with the runs already collected; if no green is found below, the scan may simply not reach back far enough."
+              break
+            fi
+            if [ -z "${PAGE_TSV}" ]; then
+              # Empty page = history exhausted; everything has been collected.
+              COVERED=true
+              break
+            fi
+            RUNS_TSV="${RUNS_TSV}${PAGE_TSV}"$'\n'
+            PAGE_LINES="$(printf '%s\n' "${PAGE_TSV}" | wc -l | tr -d '[:space:]')"
+            # Timestamps are fixed-width UTC ISO-8601 (Z suffix), so a
+            # lexicographic min is a chronological min.
+            OLDEST="$(printf '%s\n' "${PAGE_TSV}" | cut -f5 | sort | head -n1)"
+            OLDEST_TS="$(date -u -d "${OLDEST}" +%s)"
+            if [ "${OLDEST_TS}" -le "${CUTOFF_TS}" ]; then
+              COVERED=true
+              break
+            fi
+            if [ "${PAGE_LINES}" -lt 100 ]; then
+              # Short page = last page; the whole run history is collected.
+              COVERED=true
+              break
+            fi
+          done
+          if [ "${COVERED}" != "true" ]; then
+            if [ "${PAGE}" -ge "${MAX_PAGES}" ]; then
+              echo "::warning::run-history scan hit the ${MAX_PAGES}-page cap before reaching back past the ${MAX_GRACE_DAYS}-day grace boundary - the ages below are computed from an incomplete window (an old enough last-green may be unseen)."
+            else
+              echo "::warning::run-history scan is INCOMPLETE (stopped at page ${PAGE} after a read failure - see warning above) - the ages below are computed from too short a window."
+            fi
           fi
 
-          NOW_TS="$(date -u +%s)"
           ANY_GREEN_TS=0
           ANY_GREEN_DATE=""
           MANAGED_TS=0
@@ -575,7 +656,21 @@ jobs:
           # run-name template rename would otherwise classify every scheduled
           # leg as "other" and silently stop tracking the managed leg.
           SCHEDULE_NAME_DRIFT=""
-          while IFS=$'\t' read -r NAME EVENT CONCLUSION CREATED; do
+          # FAR-1620: count of per-run jobs-API reads that failed this cycle.
+          # A run whose job list could not be read is NEVER counted green (an
+          # API failure must never refresh last-green); when the failures
+          # mean nothing could be verified at all, the cycle fails loud
+          # below instead of reporting a false "never green".
+          JOBS_READ_ERRORS=0
+          # Verification budget: bounds the per-run jobs reads (each is one
+          # API call). In the normal case the newest green is found within a
+          # handful of candidates and the timestamp gate below stops further
+          # reads, so this budget is only approached while the suite has been
+          # dark for a long stretch - exactly then a loud warning is wanted.
+          JOBS_VERIFIED=0
+          MAX_JOBS_VERIFIED=250
+          JOBS_VERIFY_CAPPED=false
+          while IFS=$'\t' read -r RUN_ID NAME EVENT CONCLUSION CREATED; do
             [ -z "${CREATED}" ] && continue
             # Self-reference guard: the staleness job's own runs never count
             # (a green staleness run would otherwise refresh the last-green
@@ -587,19 +682,15 @@ jobs:
               continue
             fi
             TS="$(date -u -d "${CREATED}" +%s)"
-            if [ "${CONCLUSION}" = "success" ] && [ "${TS}" -gt "${ANY_GREEN_TS}" ]; then
-              ANY_GREEN_TS="${TS}"
-              ANY_GREEN_DATE="${CREATED}"
-            fi
             if [ "${NAME}" = "${MANAGED_RUN_NAME}" ]; then
+              # Run-level (not suite-verified) on purpose: this row measures
+              # whether the weekly cron still PRODUCES runs at all - the
+              # cron-drop tripwire - so a red or step-skipped managed run
+              # still refreshes it.
               if [ "${TS}" -gt "${MANAGED_TS}" ]; then
                 MANAGED_TS="${TS}"
                 MANAGED_DATE="${CREATED}"
                 MANAGED_CONCLUSION="${CONCLUSION}"
-              fi
-              if [ "${CONCLUSION}" = "success" ] && [ "${TS}" -gt "${MANAGED_GREEN_TS}" ]; then
-                MANAGED_GREEN_TS="${TS}"
-                MANAGED_GREEN_DATE="${CREATED}"
               fi
             elif [ "${EVENT}" = "schedule" ] && [ -z "${SCHEDULE_NAME_DRIFT}" ]; then
               # A scheduled run must be one of the two known legs; anything
@@ -607,6 +698,53 @@ jobs:
               # above (or a third schedule was added). Record it so the check
               # fails loud below instead of silently under-reporting.
               SCHEDULE_NAME_DRIFT="${NAME}"
+            fi
+            # Suite-verified green (FAR-1620): a successful RUN is not proof
+            # the suite ran - the suite step is path-gated on the kind job
+            # (`steps.detect.outputs.changed`), so a docs-only push or a
+            # chart-only PR concludes success with the suite step SKIPPED.
+            # Read this run's job list and count it green only when a step
+            # named SUITE_STEP_NAME has conclusion=success (i.e. the
+            # conformance suite actually executed and passed).
+            if [ "${CONCLUSION}" = "success" ]; then
+              # Read the job list only when the answer could change a green
+              # statistic: a run older than the current last-green cannot
+              # improve it (and neither can an older managed run). The
+              # timestamp gate is order-independent - if a strictly newer
+              # run appears later in the iteration it still passes - so this
+              # purely bounds API calls: normally the newest green is found
+              # within a handful of candidates and the rest cost nothing.
+              NEED_JOBS_READ=false
+              if [ "${TS}" -gt "${ANY_GREEN_TS}" ]; then
+                NEED_JOBS_READ=true
+              fi
+              if [ "${NAME}" = "${MANAGED_RUN_NAME}" ] && [ "${TS}" -gt "${MANAGED_GREEN_TS}" ]; then
+                NEED_JOBS_READ=true
+              fi
+              if [ "${NEED_JOBS_READ}" = "true" ] && [ "${JOBS_VERIFIED}" -ge "${MAX_JOBS_VERIFIED}" ]; then
+                JOBS_VERIFY_CAPPED=true
+              elif [ "${NEED_JOBS_READ}" = "true" ]; then
+                JOBS_VERIFIED=$((JOBS_VERIFIED + 1))
+                jrc=0
+                SUITE_STEPS="$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+                  --jq "[.jobs[] | .steps[]? | select(.name == \"${SUITE_STEP_NAME}\" and .conclusion == \"success\")] | length" 2>&1)" || jrc=$?
+                if [ "${jrc}" -ne 0 ]; then
+                  JOBS_READ_ERRORS=$((JOBS_READ_ERRORS + 1))
+                  echo "::warning::could not read the job list for run ${RUN_ID} ('${NAME}', rc=${jrc}) - NOT counting it as green (an API failure must never read as fresh)."
+                elif [[ "${SUITE_STEPS}" =~ ^[0-9]+$ ]] && [ "${SUITE_STEPS}" -gt 0 ]; then
+                  # The suite step exists in this run AND concluded success.
+                  if [ "${TS}" -gt "${ANY_GREEN_TS}" ]; then
+                    ANY_GREEN_TS="${TS}"
+                    ANY_GREEN_DATE="${CREATED}"
+                  fi
+                  if [ "${NAME}" = "${MANAGED_RUN_NAME}" ] && [ "${TS}" -gt "${MANAGED_GREEN_TS}" ]; then
+                    MANAGED_GREEN_TS="${TS}"
+                    MANAGED_GREEN_DATE="${CREATED}"
+                  fi
+                else
+                  echo "::notice::run ${RUN_ID} ('${NAME}') concluded success but its suite step did not run+pass (suite-step count='${SUITE_STEPS}') - excluded from last-green (FAR-1620)."
+                fi
+              fi
             fi
           done <<< "${RUNS_TSV}"
 
@@ -628,16 +766,34 @@ jobs:
             echo ""
             echo "| signal | date | age |"
             echo "| --- | --- | --- |"
-            echo "| Last green run (any leg, staleness-cron runs excluded) | ${ANY_GREEN_DATE:-none yet} | ${ANY_AGE_CELL} |"
+            echo "| Last green run (any leg, staleness-cron runs excluded; suite step must have run+passed) | ${ANY_GREEN_DATE:-none yet} | ${ANY_AGE_CELL} |"
             echo "| Last scheduled (managed) run | ${MANAGED_DATE:-none yet} (${MANAGED_CONCLUSION:-n/a}) | ${MANAGED_AGE_CELL} |"
-            echo "| Last green managed run | ${MANAGED_GREEN_DATE:-none yet} | |"
+            echo "| Last green managed run (suite-verified) | ${MANAGED_GREEN_DATE:-none yet} | |"
             echo "| Grace windows | ${ANY_GRACE}d (any green) / ${MANAGED_DARK_GRACE}d (managed cron dark) | |"
+            if [ "${JOBS_READ_ERRORS}" -gt 0 ]; then
+              echo "| Jobs-API reads that failed this cycle (runs not counted green) | ${JOBS_READ_ERRORS} | |"
+            fi
             echo ""
             echo "Claim discipline: a substrate is claimed conformant ONLY while its most recent conformance run is green (docs/deployment/k8s-conformance-parity.md)."
           } >> "$GITHUB_STEP_SUMMARY"
 
+          if [ "${JOBS_READ_ERRORS}" -gt 0 ] && [ -z "${ANY_GREEN_DATE}" ]; then
+            # Fail LOUD when nothing could be verified: reporting
+            # "never green" (or worse, staying silent) on the back of a
+            # token/scope failure would be exactly the 404-looks-like-empty
+            # incident again. An API failure is never treated as fresh.
+            echo "::error::could not VERIFY any green run this cycle: ${JOBS_READ_ERRORS} jobs-API read(s) failed (see warnings above). Refusing to claim or deny freshness from a failed API read - investigate the Actions API read (github.token must carry actions: read; a token/scope problem yields 404). Re-run with workflow_dispatch job=staleness once fixed."
+            exit 1
+          fi
+          if [ "${JOBS_READ_ERRORS}" -gt 0 ]; then
+            echo "::warning::${JOBS_READ_ERRORS} jobs-API read(s) failed this cycle; those runs were NOT counted green. Last-green above was verified from the remaining runs, but the scan is incomplete - re-run with workflow_dispatch job=staleness once the Actions API read is healthy."
+          fi
+          if [ "${JOBS_VERIFY_CAPPED}" = "true" ]; then
+            echo "::warning::verification budget exhausted (${MAX_JOBS_VERIFIED} job-list reads this cycle) before every candidate green run could be inspected - candidate runs beyond the budget were NOT counted green. Re-run with workflow_dispatch job=staleness (or raise MAX_JOBS_VERIFIED) if last-green looks understated."
+          fi
+
           if [ -z "${ANY_GREEN_DATE}" ]; then
-            echo "::error::Kubernetes conformance has NEVER run green (FAR-1053). Establish the first green: land a PR touching the conformance surface, or run workflow_dispatch with job=kind. Until then the Kubernetes tier is not claimed conformant."
+            echo "::error::no suite-verified green run exists in the scanned run history (FAR-1053/FAR-1620): either the conformance suite has NEVER run green, or it has been dark for longer than the scanned window (every recent run either failed or path-skipped the suite). Establish the first green: land a PR touching the conformance surface, or run workflow_dispatch with job=kind. Until then the Kubernetes tier is not claimed conformant."
             exit 1
           fi
 
