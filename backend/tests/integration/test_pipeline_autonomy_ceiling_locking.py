@@ -243,9 +243,11 @@ async def test_patch_rejects_ceiling_made_inverted_by_a_concurrent_commit(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_race(session: AsyncSession, pid: uuid.UUID) -> Pipeline:
+    async def _unlocked_read_then_race(
+        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+    ) -> Pipeline:
         nonlocal raced
-        row = await original(session, pid)
+        row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
             raced = True
             await _set_default_committed(db_engine, pid, _FULL)
@@ -432,9 +434,11 @@ async def test_patch_to_the_pre_change_owner_is_blocked_for_a_non_member(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID) -> Pipeline:
+    async def _unlocked_read_then_rescope(
+        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+    ) -> Pipeline:
         nonlocal raced
-        row = await original(session, pid)
+        row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
             raced = True
             await _set_scope_committed(db_engine, pid, visibility="team", owner_team_id=locked_team)
@@ -485,9 +489,11 @@ async def test_patch_reports_rebind_compared_against_the_post_lock_owner(
     original = pipelines_route._get_pipeline_or_404
     raced = False
 
-    async def _unlocked_read_then_rescope(session: AsyncSession, pid: uuid.UUID) -> Pipeline:
+    async def _unlocked_read_then_rescope(
+        session: AsyncSession, pid: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+    ) -> Pipeline:
         nonlocal raced
-        row = await original(session, pid)
+        row = await original(session, pid, organisation_id=organisation_id)
         if not raced:
             raced = True
             await _set_scope_committed(db_engine, pid, visibility="team", owner_team_id=locked_team)

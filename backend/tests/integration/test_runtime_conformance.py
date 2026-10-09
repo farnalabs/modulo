@@ -307,7 +307,15 @@ async def test_conformance_stalling_node_fails(
     with patch.object(
         pe,
         "get_settings",
-        return_value=MagicMock(saq_setup_grace_seconds=1, run_heartbeat_seconds=30),
+        return_value=MagicMock(
+            saq_setup_grace_seconds=1,
+            run_heartbeat_seconds=30,
+            # FAR-1601: heartbeat_once issues the transaction-scoped lock_timeout
+            # bound; the value is interpolated into the set_config statement, so
+            # an unset MagicMock attribute would inject "<MagicMock ...>ms" and
+            # Postgres rejects it. Use the real default (Settings default 5000).
+            mutation_row_lock_timeout_ms=5000,
+        ),
     ):
         outcome = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
             db_engine,

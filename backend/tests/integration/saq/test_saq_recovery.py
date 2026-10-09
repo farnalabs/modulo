@@ -134,6 +134,15 @@ class TestNoSaqEvictionRedispatch:
             def begin(self) -> _FakeSession:
                 return self
 
+            # FAR-1601: dispatcher_reconcile issues the transaction-scoped
+            # lock_timeout bound (db.crud.row_lock.set_mutation_row_lock_timeout)
+            # before its first row lock. That helper resolves the dialect through
+            # session.get_bind(); a non-postgresql bind skips the Postgres-only
+            # statement (a documented no-op), so model the same SQLite shape the
+            # unit-suite session doubles use.
+            def get_bind(self) -> SimpleNamespace:
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
             async def execute(self, stmt: object, params: dict[str, Any] | None = None) -> _Result:
                 s = str(stmt)
                 if "FROM organisations" in s:
@@ -232,6 +241,11 @@ class TestClaimTokenFence:
                 return _Conn(self)
 
         class _Conn:
+            # FAR-1601: heartbeat_once issues the transaction-scoped lock_timeout
+            # bound before its first write, reading conn.dialect.name. A
+            # non-postgresql dialect is the documented no-op gate.
+            dialect = SimpleNamespace(name="sqlite")
+
             def __init__(self, rec: _Recorder) -> None:
                 self.rec = rec
 
@@ -290,6 +304,11 @@ class TestClaimTokenFence:
         statements: list[str] = []
 
         class _Conn:
+            # FAR-1601: heartbeat_once issues the transaction-scoped lock_timeout
+            # bound before its first write, reading conn.dialect.name. A
+            # non-postgresql dialect is the documented no-op gate.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
