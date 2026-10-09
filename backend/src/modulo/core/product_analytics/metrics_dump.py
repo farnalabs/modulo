@@ -47,6 +47,21 @@ _DUMP_EXECUTION_WINDOW_MINUTES = 10  # each instance gets 10 min to complete
 _OFFSET_KEY = "product_analytics_dump_offset_minutes"
 
 
+def _parse_iso_date(value: str) -> date:
+    """Parse an ISO date *or* datetime string to a ``date``.
+
+    ``settings_json`` stores ``level_changed_at`` as a full ISO datetime
+    (``consent.apply_consent_action`` / ``set_level`` write ``now.isoformat()``),
+    whereas the dump watermark stores a date-only string.  ``date.fromisoformat``
+    rejects any string carrying a time component, so a datetime string is parsed
+    with ``datetime.fromisoformat`` and narrowed to its date.
+    """
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return datetime.fromisoformat(value).date()
+
+
 async def _get_or_create_system_config(factory: Any, key: str, create: Any) -> str:
     """Get-or-create a string-valued ``system_config`` entry.
 
@@ -185,7 +200,7 @@ async def _resolve_start_date(
 
     if last_dumped is not None:
         if isinstance(last_dumped, str):
-            last_dumped = date.fromisoformat(last_dumped)
+            last_dumped = _parse_iso_date(last_dumped)
         return last_dumped + timedelta(days=1), last_dumped
 
     earliest_consent = min(
@@ -193,7 +208,7 @@ async def _resolve_start_date(
         default=dump_date,
     )
     if isinstance(earliest_consent, str):
-        earliest_consent = date.fromisoformat(earliest_consent)
+        earliest_consent = _parse_iso_date(earliest_consent)
     backfill_start = max(earliest_consent, dump_date - timedelta(days=_BACKFILL_MAX_DAYS))
     return backfill_start, None
 
@@ -266,7 +281,7 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
         if pa.get("level") == "all":
             level_changed_at = pa.get("level_changed_at")
             if isinstance(level_changed_at, str):
-                level_changed_at = date.fromisoformat(level_changed_at)
+                level_changed_at = _parse_iso_date(level_changed_at)
             orgs.append({"id": row.id, "level_changed_at": level_changed_at})
     return orgs
 

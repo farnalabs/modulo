@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
 from modulo.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
     _DUMP_EXECUTION_WINDOW_MINUTES,
@@ -24,6 +25,7 @@ from modulo.core.product_analytics.metrics_dump import (
     _get_consenting_orgs,
     _get_or_create_instance_id,
     _get_or_create_system_config,
+    _parse_iso_date,
     _resolve_start_date,
     _should_dump_now,
     metrics_dump,
@@ -156,6 +158,32 @@ class TestGetConsentingOrgs:
         assert result[0]["level_changed_at"] == date(2026, 7, 1)
 
     @pytest.mark.asyncio
+    async def test_parses_full_iso_datetime_level_changed_at(self) -> None:
+        """A production-written ``level_changed_at`` is a full ISO datetime.
+
+        ``consent.apply_consent_action`` / ``set_level`` store
+        ``now.isoformat()`` (e.g. ``2026-08-15T10:30:00+00:00``); the dump must
+        narrow it to a date. ``date.fromisoformat`` alone rejects any string with
+        a time component, which previously crashed the whole daily dump.
+        """
+        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 15, 10, 30, tzinfo=UTC))[
+            "level_changed_at"
+        ]
+        rows = [
+            MagicMock(
+                id="dddd-4444",
+                settings_json={"product_analytics": {"level": "all", "level_changed_at": stored}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+
+        result = await _get_consenting_orgs(mock_session)
+        assert result[0]["level_changed_at"] == date(2026, 8, 15)
+
+    @pytest.mark.asyncio
     async def test_handles_none_level_changed_at(self) -> None:
         rows = [
             MagicMock(
@@ -187,6 +215,20 @@ class TestGetConsentingOrgs:
 
         result = await _get_consenting_orgs(mock_session)
         assert result == []
+
+
+# --- ISO date/datetime parsing ---
+
+
+class TestParseIsoDate:
+    def test_parses_date_only(self) -> None:
+        assert _parse_iso_date("2026-08-15") == date(2026, 8, 15)
+
+    def test_parses_full_datetime_with_offset(self) -> None:
+        assert _parse_iso_date("2026-08-15T10:30:00.123456+00:00") == date(2026, 8, 15)
+
+    def test_parses_naive_datetime(self) -> None:
+        assert _parse_iso_date("2026-08-15T10:30:00") == date(2026, 8, 15)
 
 
 # --- Helper to build a mock session factory ---

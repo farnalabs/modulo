@@ -41,8 +41,12 @@ an eligible tier.
       `test_metrics_ingest.py`, `tests/bdd/features/product_analytics/metrics_ingest.feature`)
 - [x] A stable instance identity is generated and persisted per install
       (`core/product_analytics/instance_identity.py`, `test_instance_identity.py`)
-- [x] The system-admin surface exposes the collected metrics on `/admin/product-analytics`
-      (`api/routes/product_analytics.py`, `test_routes.py`)
+- [x] The system-admin surface at `/admin/product-analytics` reads the transparency
+      endpoint (`GET /api/v1/product-analytics/transparency` -
+      `api/routes/product_analytics_transparency.py`,
+      `tests/unit/api/routes/test_product_analytics_transparency.py`; frontend
+      `frontend/src/views/AdminProductAnalyticsView.vue`,
+      `frontend/src/stores/productAnalyticsStore.ts`)
 - [x] Reporting is gated by license/plan eligibility and the instance-level kill
       (`core/product_analytics/license_enforcement.py`, `test_license_enforcement.py`)
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
@@ -60,8 +64,32 @@ an eligible tier.
 
 - Metrics telemetry is vendor-bound; a fully self-hosted, in-product analytics
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
+- The transparency endpoint (`api/routes/product_analytics_transparency.py`) reads
+  four `system_config` keys - `product_analytics_last_dump_at`,
+  `product_analytics_dump_count`, `product_analytics_consent_level`,
+  `product_analytics_enforcement_enabled` - that **no production path writes** (only
+  tests seed them via a patched `get_config`; a repo-wide search finds no writer).
+  The shipped `/admin/product-analytics` page therefore always renders its defaults:
+  last dump `-`, dump count `0`, consent level `off`, enforcement `inactive`, and
+  `egress_allowed` / `warning` permanently `False` / `None` even while the dump is
+  actively delivering for consenting orgs. Completing it needs the metrics dump to
+  record successful-dump facts and the consent path to mirror the instance consent
+  level (an instance-vs-org consent semantics decision), plus aligning
+  `instance_enabled` with the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback that
+  `is_instance_analytics_enabled` applies. Feature completion, not a QA fix -
+  tracked for a follow-up ticket.
 
 ## QA History
+- 2026-10-09: **Improve Architecture product-map walk** - fixed CRITICAL: the daily
+  metrics dump (`core/product_analytics/metrics_dump.py`) crashed with `ValueError`
+  for every consenting org. `consent.apply_consent_action` / `set_level` persist
+  `level_changed_at` as a full ISO datetime (`now.isoformat()`), but
+  `_get_consenting_orgs` parsed it with `date.fromisoformat`, which rejects any
+  string carrying a time component - so the cron raised before building a payload and
+  never delivered. Added `_parse_iso_date` (date-or-datetime) and routed all three
+  parse sites through it. Regression tests now seed the production-written format
+  (the previous dump tests seeded a date-only string the writer never produces, which
+  is why CI stayed green). Also documented the MAJOR transparency-writer gap above.
 - 2026-10-03: **Improve Architecture product-map walk** — closed the CISO
   data-residency persona gap (`personas/marcus-ciso.feature`, pinned
   `@awaiting-implementation` since 2026-08): the scenario now executes against
