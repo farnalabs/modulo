@@ -345,3 +345,31 @@ def test_clone_pipeline_name_race_409_detail_names_conflict(client: TestClient) 
     body = resp.json()
     msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "already exists" in msg
+
+
+def test_clone_pipeline_unrelated_integrity_error_is_not_reported_as_name_conflict(
+    client: TestClient,
+) -> None:
+    """An IntegrityError that is NOT the (org, name) unique violation must not be
+    mapped to the clone's name-conflict 409; it re-raises to ``handle_db_errors``'
+    generic integrity arm (409 "Resource conflict") unchanged."""
+    violation = IntegrityError(
+        "INSERT INTO pipelines",
+        {},
+        Exception('null value in column "organisation_id" violates not-null constraint'),
+    )
+    source = _make_pipeline()
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=violation),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"})
+
+    assert resp.status_code == 409
+    body = resp.json()
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
+    assert msg == "Resource conflict. The operation could not be completed."
+    assert "already exists" not in msg
