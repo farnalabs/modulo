@@ -1,7 +1,8 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, OrgScoped
@@ -29,7 +30,11 @@ class AuditEvent(OrgScoped):
     )
     resource_type: Mapped[str | None] = mapped_column(String(100))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
-    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # DB stores JSONB (0147_json_to_jsonb_standardize); the PG variant keeps
+    # SQLite/MariaDB parity via generic JSON (the run.py cost_breakdown precedent).
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
     request_id: Mapped[str | None] = mapped_column(String(255))
     previous_hash: Mapped[str | None] = mapped_column(Text)
 
@@ -38,6 +43,7 @@ class AuditChainHead(Base):
     """Tracks the most recent audit event hash per organisation."""
 
     __tablename__ = "audit_chain_heads"
+    __table_args__ = (CheckConstraint("event_count >= 0", name="ck_audit_chain_heads_event_count_nonneg"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
@@ -53,4 +59,4 @@ class AuditChainHead(Base):
     last_event_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("audit_events.id", ondelete="SET NULL"), index=True
     )
-    event_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    event_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
