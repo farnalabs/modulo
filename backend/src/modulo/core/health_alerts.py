@@ -36,12 +36,16 @@ inventing a mechanism):
   ``event_loop_lag`` (a transient stall diagnostic), ``break_glass`` (an
   expected config posture), and ``db_hygiene`` (a GRADED failure already
   gates the aggregate — so it already alerts — while its NOT-MEASURED probe
-  is advisory per FAR-1510 and is not a hygiene failure at all). The
-  hysteresis below is unchanged, so a single transient advisory blip still
-  never emails. On recovery the email reports ONLY the alert-time conditions
-  that actually cleared — the alert-time list can contain a benign advisory
-  that is STILL degraded when the real failure recovers, and claiming that
-  one "cleared" would be false.
+  is advisory per FAR-1510 and is not a hygiene failure at all). Of those
+  three, only the first two are the REPORTING-benign set
+  (``BENIGN_NON_TRIGGERING_CHECKS``, filtered from every alert body);
+  ``db_hygiene`` stays OUT of that set and is still reported, because a
+  graded failure there is genuine. The hysteresis below is unchanged, so a
+  single transient advisory blip still never emails. On recovery the email
+  reports ONLY the alert-time conditions that actually cleared — the
+  alert-time list holds only non-benign conditions, but a check that is
+  still non-``ok`` now (e.g. a not-measured ``db_hygiene`` probe, which does
+  not flip ``observed_state``) must not be claimed "cleared".
 * **Edge-triggered, confirmed by hysteresis.** A new state must be observed on
   ``CONFIRM_TICKS`` consecutive ticks before any notification. A single-probe
   blip never emails, and a one-tick flap produces ZERO emails (neither the
@@ -62,6 +66,27 @@ inventing a mechanism):
   evaluates health and still advances its state machine, but never calls the
   sender, never raises, and logs that alerting is disabled (and what to set)
   at most once per ``DISABLED_LOG_INTERVAL_SECONDS`` at INFO.
+* **Quiet in environments the operator excluded (``ALERT_ENVIRONMENTS``).**
+  Both the readiness cron and the worker-liveness watchdog email the same
+  operator, and staging (a CI-only E2E environment with no live workload)
+  was paging them with blips they cannot act on. The allowlist is opt-in —
+  unset means "alert everywhere" so a self-hosted default keeps working —
+  and the ONE parse lives in ``core.alert_context.alerting_enabled_for_environment``
+  so the two channels can never disagree. An excluded environment takes
+  exactly the disabled path above: health still evaluated, state machine
+  still advanced, no send, the same rate-limited log-once — with one
+  deliberate exception: a confirmed RECOVERY edge while excluded closes the
+  incident record silently (``notified``/``conditions``/``since`` cleared,
+  no email), so a distinct later incident after re-inclusion can alert again
+  instead of being swallowed by a stale "unhealthy" record. The alert edge
+  stays "skip send, do not mutate" so a later SMTP/allowlist configuration
+  still alerts on the next confirmed tick.
+* **Benign, non-triggering advisories are never listed as failing checks.**
+  ``conditions()`` skips :data:`BENIGN_NON_TRIGGERING_CHECKS`
+  (``break_glass``, ``event_loop_lag``) — neither can contribute to
+  ``observed_state``, so naming them as the reason an alert fired is
+  alarm-fatigue (staging bodies listed ``break_glass`` on every page).
+  Everything else, ``db_hygiene`` included, is still reported.
 * **Send-then-commit.** The notification state advances only after the sender
   reports success, so a failed SMTP send is retried on the next confirmed
   tick instead of being swallowed. ``unique=True`` on the SAQ cron entry means
@@ -89,6 +114,7 @@ from modulo.core.alert_context import (
     alert_context_html,
     alert_context_text,
     alert_environment_line,
+    alerting_enabled_for_environment,
     stamp_stdout,
 )
 from modulo.core.email_service import EmailSendingError, send_email
@@ -119,16 +145,19 @@ _MAX_PERSISTED_CONDITIONS = 50
 #: These are exactly the advisory sweep/probe checks from the readiness
 #: ``checks`` dict (``api.routes.health`` is the taxonomy). Deliberately
 #: EXCLUDED as benign/other-channel:
-#:   * ``event_loop_lag`` — transient stall diagnostic (visible in the body;
-#:     must not page on its own),
-#:   * ``break_glass`` — expected config posture,
+#:   * ``event_loop_lag`` — transient stall diagnostic (must not page on its
+#:     own, and never listed as a failing check — see
+#:     ``BENIGN_NON_TRIGGERING_CHECKS``),
+#:   * ``break_glass`` — expected config posture (also never listed as a
+#:     failing check — see ``BENIGN_NON_TRIGGERING_CHECKS``),
 #:   * ``db_hygiene`` — a GRADED failure already gates the aggregate (so it
 #:     already alerts); its NOT-MEASURED probe is advisory (FAR-1510) and is
 #:     not a hygiene failure.
 #:
 #: ``dispatcher_reconcile`` is the one member that is ALSO a gating check: it
 #: gates the aggregate at its ``unavailable`` tier (a silently dead reconcile
-#: cron); only its ``degraded`` tier (a single missed 60s tick) is advisory —
+#: cron); only its ``degraded`` tier (a last_run_at older than 180s — 3x the
+#: 60s cadence, so a single missed tick never reads stale) is advisory —
 #: see the aggregation in ``api.routes.health``. Both routes merge into the
 #: same binary ``observed_state``, so an incident there still yields exactly
 #: ONE alert email and ONE recovery email (never double-counted, no second
@@ -145,6 +174,27 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
         "runner_health_probe",
     }
 )
+
+#: Advisory checks that are non-``ok`` in an observation but must NEVER be
+#: listed as "Failing checks" in an alert body (alarm-fatigue hygiene).
+#:
+#: Neither contributes to ``observed_state`` — both are outside
+#: ``REAL_FAILURE_ADVISORY_CHECKS``, so neither can page on its own — so
+#: naming them among the failing checks tells the operator to act on
+#: something that did not cause (and could not cause) the email:
+#:
+#:   * ``break_glass`` — an expected config posture, already documented as
+#:     excluded from alerting; its non-``ok`` reading is the feature armed,
+#:     not a fault (every staging alert body used to list it).
+#:   * ``event_loop_lag`` — a transient stall diagnostic that must never
+#:     page; it stays visible on ``/healthz/ready`` for whoever looks there.
+#:
+#: ``db_hygiene`` is deliberately NOT in this set: a graded dead-tuple
+#: failure there gates the aggregate and is a genuine gating failure, so it
+#: must keep being reported. Filtering happens ONLY in ``conditions()``
+#: (the reported bullets) — ``non_ok_names()`` still sees these checks so
+#: the recovery split never claims a still-degraded advisory cleared.
+BENIGN_NON_TRIGGERING_CHECKS: frozenset[str] = frozenset({"break_glass", "event_loop_lag"})
 
 
 #: ``settings.alert_email_to`` split into recipients (mirrors the watchdog's
@@ -171,12 +221,25 @@ def alerting_configured(settings: Settings) -> bool:
 _last_disabled_log_at: float | None = None
 
 
-def _log_disabled_once(now: float) -> None:
-    """Log that alerting is disabled — at most once per hour, per process."""
+def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> None:
+    """Log that alerting is disabled — at most once per hour, per process.
+
+    Two reasons, one rate limiter (they are the same log-hygiene concern):
+    the channel is unconfigured, or this environment is excluded by
+    ``ALERT_ENVIRONMENTS``. The message says which, so the operator
+    knows what to change.
+    """
     global _last_disabled_log_at
     if _last_disabled_log_at is not None and now - _last_disabled_log_at < DISABLED_LOG_INTERVAL_SECONDS:
         return
     _last_disabled_log_at = now
+    if environment_excluded:
+        _log.info(
+            "health_alerts.disabled: readiness alerting is off for this environment — set "
+            "ALERT_ENVIRONMENTS to include it to email the operator (health is still "
+            "evaluated; no email is sent)"
+        )
+        return
     _log.info(
         "health_alerts.disabled: readiness alerting is off — set SMTP_HOST and ALERT_EMAIL_TO "
         "to email the operator when readiness degrades (health is still evaluated; no email is sent)"
@@ -237,11 +300,23 @@ class HealthObservation:
         return "degraded" if self.observed_state == "unhealthy" else "ok"
 
     def conditions(self) -> list[str]:
-        """Human-readable bullets for every non-``ok`` check (sorted, stable)."""
+        """Human-readable bullets for every non-``ok`` check (sorted, stable).
+
+        Skips :data:`BENIGN_NON_TRIGGERING_CHECKS` (``break_glass``,
+        ``event_loop_lag``): those never contribute to ``observed_state``, so
+        listing them as "Failing checks" would blame the alert on something
+        that cannot page — pure alarm fatigue (every staging alert used to
+        list ``break_glass``). Every other non-``ok`` check is reported,
+        ``db_hygiene`` included (a graded failure there is genuine).
+        ``non_ok_names()`` is deliberately unfiltered so the recovery split
+        never claims a still-degraded benign advisory as cleared.
+        """
         bullets: list[str] = []
         for name in sorted(self.checks):
             check = self.checks[name]
             if check.status == "ok":
+                continue
+            if name in BENIGN_NON_TRIGGERING_CHECKS:
                 continue
             bullet = f"{name}: {check.status}"
             if check.detail:
@@ -406,10 +481,18 @@ def _split_cleared_conditions(
     A condition bullet is ``"<name>: <status> (<detail>)"`` — its check NAME
     is everything before the first ``":"``. An alert-time condition has
     CLEARED exactly when its check is no longer non-``ok`` in the current
-    observation. This matters under FAR-1571: the alert-time list can contain
-    benign advisories (``event_loop_lag``, ``break_glass``, a not-measured
-    ``db_hygiene``) that are STILL degraded when the real failure recovers —
-    the recovery email must not claim those cleared.
+    observation. Two cases make the split matter:
+
+    * a check that is still non-``ok`` while the observation reads healthy —
+      e.g. a graded ``db_hygiene`` finding or its not-measured probe
+      (advisory per FAR-1510), neither of which flips ``observed_state`` —
+      must never be claimed cleared; and
+    * LEGACY persisted state: an incident record written before
+      ``conditions()`` started filtering :data:`BENIGN_NON_TRIGGERING_CHECKS`
+      can still hold a benign bullet (``event_loop_lag``, ``break_glass``),
+      which must not be claimed cleared either. Newly written records never
+      contain one (``conditions()`` filters them out), but the split reads
+      whatever is in the store.
     """
     cleared: list[str] = []
     still_failing: list[str] = []
@@ -541,8 +624,9 @@ async def _notify_recovery(
 
     ``cleared`` / ``still_failing`` are the caller's split of the alert-time
     conditions against the CURRENT observation (FAR-1571): only ``cleared``
-    is ever reported as cleared — an alert-time benign advisory that is still
-    degraded must not be claimed as resolved.
+    is ever reported as cleared — an alert-time condition whose check is
+    still non-``ok`` (a graded ``db_hygiene``, or a legacy persisted benign
+    bullet) must not be claimed as resolved.
     """
     if not configured:
         return "disabled"
@@ -612,7 +696,17 @@ async def run_health_alert_check(
     current_time = now_fn()
 
     configured = alerting_configured(settings)
-    if not configured:
+    env_excluded = not alerting_enabled_for_environment(settings)
+    if env_excluded:
+        # Excluded environment: exactly the disabled path. Health is still
+        # evaluated, the hysteresis/dedup state machine still advances, but
+        # nothing is sent — so staging (or any env the operator allowlisted
+        # out) never pages while production keeps alerting. The recovery edge
+        # below closes the incident record silently (see its branch); the
+        # ALERT edge keeps "skip send, do not mutate" semantics.
+        configured = False
+        _log_disabled_once(current_time, environment_excluded=True)
+    elif not configured:
         _log_disabled_once(current_time)
 
     owns_client = redis_client is None
@@ -644,19 +738,38 @@ async def run_health_alert_check(
                 now=current_time,
             )
         elif confirmed and observed == "healthy" and state.notified == "unhealthy":
-            # Split the alert-time conditions against the CURRENT observation:
-            # only what actually cleared is reported as cleared (a benign
-            # advisory still degraded here must not be claimed resolved).
-            cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
-            action = await _notify_recovery(
-                settings,
-                send_fn,
-                configured=configured,
-                cleared=cleared,
-                still_failing=still_failing,
-                state=state,
-                now=current_time,
-            )
+            if env_excluded:
+                # Quiet close-out while EXCLUDED: the all-clear email is
+                # suppressed by the allowlist, but the incident record must
+                # not strand. Leaving notified="unhealthy" would mean a
+                # distinct later incident after re-inclusion is never
+                # alerted (the alert edge needs notified != "unhealthy"),
+                # and a much later recovery email would name THIS old
+                # incident's conditions/duration. Clear the record without
+                # sending; pending/pending_count (hysteresis) are untouched
+                # above. NOTE: the SMTP-unconfigured path is SEPARATE and
+                # keeps its "state untouched, retry when configured"
+                # semantics — this branch is reachable only via the
+                # env-allowlist gate.
+                state.notified = None
+                state.conditions = []
+                state.since = None
+                action = "recovery_suppressed"
+            else:
+                # Split the alert-time conditions against the CURRENT
+                # observation: only what actually cleared is reported as
+                # cleared (a still-degraded check must not be claimed
+                # resolved).
+                cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
+                action = await _notify_recovery(
+                    settings,
+                    send_fn,
+                    configured=configured,
+                    cleared=cleared,
+                    still_failing=still_failing,
+                    state=state,
+                    now=current_time,
+                )
 
         await redis.set(STATE_KEY, state.to_json(), ex=STATE_TTL_SECONDS)
     except asyncio.CancelledError:

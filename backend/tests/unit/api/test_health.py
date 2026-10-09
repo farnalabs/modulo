@@ -240,8 +240,11 @@ class TestReadiness:
         assert body["checks"]["dispatcher_reconcile"]["status"] == "unavailable"
 
     def test_healthz_ready_dispatcher_degraded_stays_advisory(self, client: TestClient) -> None:
-        """FAR-199: a dispatcher_reconcile check that is degraded (a single
-        missed 60s tick) must NOT flip overall readiness — it stays advisory."""
+        """FAR-199: a dispatcher_reconcile check that is degraded (stale
+        past the 180s 3x-cadence tier — sustained slowness or several
+        missed 60s ticks) must NOT flip overall readiness — it stays
+        advisory. A SINGLE missed tick never reaches this tier (see
+        ``tests/unit/api/routes/test_health.py``)."""
         with (
             patch("modulo.api.routes.health._check_database", AsyncMock(return_value=_ok_check("database"))),
             patch("modulo.api.routes.health._check_redis", AsyncMock(return_value=_ok_check("redis"))),

@@ -115,10 +115,27 @@ class TestCheckDispatcherReconcile:
         assert "rows_deferred=0" in result.detail
 
     @pytest.mark.asyncio
+    async def test_single_slow_tick_is_not_stale(self) -> None:
+        """61s-stale — ONE tick past the 60s cron cadence — is ``ok``, not
+        degraded: the stale tier is 3x the cadence (180s), so a single slow
+        or missed tick can never page the operator (FAR-199: "a single missed
+        tick must never block bluegreen"; the 60s threshold read one slow
+        tick as stale)."""
+        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=61)).isoformat())
+        fake = _FakeStatsRedis(blob=stale.encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+
+    @pytest.mark.asyncio
     async def test_stale_run_degraded(self) -> None:
-        """One-missed-tick staleness (120s, below the 300s unavailable tier) is
-        degraded, not unavailable â€” short staleness stays advisory (FAR-199)."""
-        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(minutes=2)).isoformat())
+        """Staleness past the 180s (3x-cadence) degraded tier but below the
+        300s unavailable tier is degraded, not unavailable — sustained
+        staleness stays advisory (FAR-199)."""
+        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=181)).isoformat())
         fake = _FakeStatsRedis(blob=stale.encode())
         with (
             patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
@@ -130,6 +147,21 @@ class TestCheckDispatcherReconcile:
         assert "stale" in result.detail
         assert result.detail is not None
         assert "last_run_at=" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_just_past_unavailable_tier_is_unavailable(self) -> None:
+        """301s-stale — one second past the 300s unavailable tier — gates
+        readiness: at 5x the cadence the reconcile cron is silently dead."""
+        stale = _fresh_payload(last_run_at=(datetime.now(UTC) - timedelta(seconds=301)).isoformat())
+        fake = _FakeStatsRedis(blob=stale.encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "unavailable"
+        assert result.detail is not None
+        assert "stale" in result.detail
 
     @pytest.mark.asyncio
     async def test_long_stale_unavailable(self) -> None:
