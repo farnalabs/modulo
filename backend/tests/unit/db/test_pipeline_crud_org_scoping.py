@@ -136,6 +136,13 @@ async def test_get_pipeline_graph_scopes_edges_to_own_org(session: AsyncSession)
     assert len(graph[1]) == 1
 
 
+async def test_get_pipeline_graph_without_org_returns_edges(session: AsyncSession) -> None:
+    graph = await get_pipeline_graph(session, _PIPE_B)
+
+    assert graph is not None
+    assert len(graph[1]) == 1
+
+
 async def test_replace_pipeline_graph_refuses_other_org(session: AsyncSession) -> None:
     result = await replace_pipeline_graph(
         session,
