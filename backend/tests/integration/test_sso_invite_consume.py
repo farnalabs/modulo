@@ -127,7 +127,10 @@ async def _create_invitation(
 ) -> uuid.UUID:
     """Create a pending (live) invitation."""
     inv_id = uuid.uuid4()
-    token_hash = f"integration-test-{inv_id.hex[:16]}"
+    # invitations.token_hash is a SHA-256 hex digest (64 chars) and migration
+    # 0291 enforces length(token_hash) = 64 on Postgres, so the seed must use a
+    # full-width hash — a short placeholder violates ck_invitations_token_hash_len.
+    token_hash = inv_id.hex * 2
     async with engine.begin() as conn:
         await conn.execute(
             text(
