@@ -14,6 +14,14 @@ class AuditEvent(OrgScoped):
     # (organisation_id, event_type, account_id, created_at); the composite
     # index pins that shape instead of relying on the org-narrowed subset of
     # the single-column indexes.
+    #
+    # 0292: every list/export path filters by resource_type
+    # (core/audit_logger._apply_filters) and point lookups by
+    # (resource_type, resource_id) serve the run-workspace probe
+    # (api/routes/runs.py) and the MCP audit resource lookups. The new
+    # composite leads on the tenant column so it serves both shapes; it is
+    # declared here for parity with the migration so create_all'd schemas
+    # (SQLite unit tests) carry the same index.
     __table_args__ = (
         Index(
             "ix_audit_events_org_type_actor_time",
@@ -21,6 +29,12 @@ class AuditEvent(OrgScoped):
             "event_type",
             "account_id",
             "created_at",
+        ),
+        Index(
+            "ix_audit_events_org_resource",
+            "organisation_id",
+            "resource_type",
+            "resource_id",
         ),
     )
 
