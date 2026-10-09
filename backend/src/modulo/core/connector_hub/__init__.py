@@ -509,9 +509,14 @@ class ConnectorHub:
                     # ``None``/``[]`` mean UNRESTRICTED (the unset value every
                     # REST/MCP/UI-created connector stores), a non-empty list is
                     # the allowlist. ConnectorACL owns that interpretation.
+                    # FAR-1616: the instance's OWN type is threaded in so a
+                    # mis-typed legacy allowlist entry (``github.write`` on a
+                    # filesystem connector) is REJECTED (fail closed) instead
+                    # of granting bare ``write`` on the wrong surface.
                     acl = ConnectorACL(
                         visibility=ci.visibility,
                         allowed_operations=ci.allowed_operations,
+                        connector_type_id=ci.connector_type_id,
                     )
                     traced = _TracedConnector(
                         connector,

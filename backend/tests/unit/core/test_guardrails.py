@@ -18,6 +18,7 @@ from modulo.core.guardrails import (
     apply_redaction_masks,
     derive_conformance_state,
     evaluate_guardrails,
+    non_conformant_blocking_guardrails,
     resolve_static_path,
     run_guardrail_pass,
     run_interception_pass,
@@ -561,3 +562,39 @@ def test_conformance_block_action_fail_closed_absent_and_unknown():
     unknown = derive_conformance_state(["cap"], {"cap": None})
     assert absent.state in ("absent", "unknown")
     assert unknown.state in ("absent", "unknown")
+
+
+# ---------------------------------------------------------------------------
+# Run-creation seam: NON-CONNECTOR registered surfaces are a BARE vocabulary
+# (FAR-1615)
+# ---------------------------------------------------------------------------
+
+
+def test_non_conformant_profile_qualified_capability_cannot_satisfy_qualified_claim():
+    """FAR-1615: a profile declaring the literal string ``github.read`` must
+    NOT satisfy a type-qualified ``github.read`` claim at run creation.
+
+    ``non_conformant_blocking_guardrails`` consumes the run-creation seam's
+    registered map (active EnvironmentProfile ``capabilities_json`` — a
+    NON-CONNECTOR surface), so its keys are reduced to the bare vocabulary:
+    ``github.read`` registers ``read``, and the qualified claim stays unknown
+    (fail closed -> non-conformant). Before FAR-1615 the verbatim key
+    satisfied the claim with no github-typed connector bound.
+    """
+    guardrail = _guardrail(name="g_legacy", required_capabilities=["github.read"])
+    non_conformant = non_conformant_blocking_guardrails([guardrail], {"github.read": True})
+    assert [g.name for g, _derivation in non_conformant] == ["g_legacy"]
+    assert non_conformant[0][1].state == "unknown"
+
+
+def test_non_conformant_bare_claim_matches_a_profile_qualified_declaration():
+    """The inverse: the same profile declaration satisfies a BARE ``read``
+    claim — the bare capability it genuinely declares."""
+    guardrail = _guardrail(name="g_bare", required_capabilities=["read"])
+    assert not non_conformant_blocking_guardrails([guardrail], {"github.read": True})
+
+
+def test_non_conformant_bare_claim_matches_a_bare_profile_declaration():
+    """A bare profile capability satisfies a bare claim (unchanged)."""
+    guardrail = _guardrail(name="g_bare", required_capabilities=["read"])
+    assert not non_conformant_blocking_guardrails([guardrail], {"read": True})

@@ -51,6 +51,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from modulo.connectors.base import canonical_capability
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
@@ -1274,6 +1275,31 @@ async def run_interception_pass_async(
 # ---------------------------------------------------------------------------
 
 
+def _bare_registered_capability_map(registered: dict[str, bool | None]) -> dict[str, bool | None]:
+    """Reduce a NON-CONNECTOR surface's registered keys to bare capabilities (FAR-1615).
+
+    The run-creation conformance seam builds ``registered`` from active
+    EnvironmentProfile ``capabilities_json`` — a NON-CONNECTOR surface. A
+    profile declaring the literal legacy string ``github.read`` must register
+    ``read`` (bare) and can never satisfy a TYPE-QUALIFIED claim, which
+    requires a connector-typed surface the run-creation seam never loads.
+    Collisions fold with the conformance matcher's state merge (present wins,
+    else absent, else unknown); non-capability keys (``sandbox.egress``,
+    ``docker``, ...) pass through untouched.
+    """
+    merged: dict[str, bool | None] = {}
+    for key, state in registered.items():
+        bare = canonical_capability(str(key)) or str(key)
+        existing = merged.get(bare)
+        if existing is True or state is True:
+            merged[bare] = True
+        elif existing is False or state is False:
+            merged[bare] = False
+        else:
+            merged[bare] = None
+    return merged
+
+
 def non_conformant_blocking_guardrails(
     definitions: Sequence[EvalDefinition],
     registered: dict[str, bool | None],
@@ -1284,7 +1310,15 @@ def non_conformant_blocking_guardrails(
     (confirmed absent) / None (unreadable). Fail-closed: a block-action
     guardrail with ``required_capabilities`` whose derivation is ``absent`` OR
     ``unknown`` is non-conformant. observe/warn guardrails never participate.
+
+    FAR-1615: *registered* comes from NON-CONNECTOR surfaces (profile
+    ``capabilities_json``), so its keys are reduced to the BARE vocabulary
+    before matching — a profile declaring the literal string ``github.read``
+    registers ``read`` and can NEVER satisfy a type-qualified claim; such a
+    claim stays ``unknown`` here (fail closed), consistent with the mid-run
+    re-check in ``core.guardrails.conformance``.
     """
+    canonical_registered = _bare_registered_capability_map(registered)
     out: list[tuple[EvalDefinition, ConformanceDerivation]] = []
     for eval_def in definitions:
         if _resolve_action(eval_def) != GuardrailAction.BLOCK:
@@ -1292,7 +1326,7 @@ def non_conformant_blocking_guardrails(
         required = eval_def.config.get("required_capabilities") or []
         if not required:
             continue
-        derivation = derive_conformance_state([str(c) for c in required], registered)
+        derivation = derive_conformance_state([str(c) for c in required], canonical_registered)
         if derivation.state in ("absent", "unknown"):
             out.append((eval_def, derivation))
     return out

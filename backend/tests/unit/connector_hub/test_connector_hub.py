@@ -939,6 +939,60 @@ async def test_acl_allows_read(tmp_path):
     assert isinstance(records, list)
 
 
+async def test_hub_rejects_mis_typed_legacy_allowlist_entry(tmp_path):
+    """FAR-1616: the hub threads the instance's OWN type into the ACL, so a
+    stored ["github.write"] on a FILESYSTEM connector grants nothing.
+
+    Before FAR-1616 the ACL canonicalised the entry by dropping the qualifier
+    unconditionally, so the mis-typed entry granted bare ``write`` on the
+    wrong surface. The ACL is built from the row, so this proves the
+    construction-site wiring — not just the ACL class in isolation.
+    """
+    from modulo.connectors.base import ConnectorPermissionError
+
+    ci_id = uuid.uuid4()
+    ci = _FakeCI(
+        id=ci_id,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        credentials_ciphertext=_encrypt({}),
+        visibility="org",
+        allowed_operations=["github.write"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+
+    acl = hub.acl(ci_id)
+    assert acl.connector_type_id == "filesystem"
+    assert acl.allowed_operations is not None
+    assert not acl.allowed_operations
+    with pytest.raises(ConnectorPermissionError):
+        hub.get(ci_id, operation="write")
+
+
+async def test_hub_same_type_legacy_allowlist_entry_still_grants(tmp_path):
+    """FAR-1594/FAR-1616: a SAME-type legacy entry keeps granting through the
+    hub — ["filesystem.write"] on a filesystem connector allows the write."""
+    ci_id = uuid.uuid4()
+    ci = _FakeCI(
+        id=ci_id,
+        connector_type_id="filesystem",
+        config_json={"base_path": str(tmp_path)},
+        credentials_ciphertext=_encrypt({}),
+        visibility="org",
+        allowed_operations=["filesystem.write"],
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value="{}"):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+
+    assert hub.acl(ci_id).allowed_operations == frozenset({"write"})
+    assert hub.get(ci_id, operation="write") is not None
+
+
 async def test_initialise_shell_no_runtime_provider_creates_connector():
     """Shell connector initialised without RuntimeProvider succeeds at init
     but raises ValueError on query/write."""
