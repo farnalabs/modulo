@@ -273,7 +273,9 @@ async def _create_invitation(
                 "email": email,
                 "name": f"Invited {email}",
                 "role": org_role,
-                "hash": f"oidc-http-{inv_id.hex[:16]}",
+                # Full-width SHA-256-hex-shaped hash: migration 0291 enforces
+                # length(token_hash) = 64 on Postgres.
+                "hash": inv_id.hex * 2,
                 "by": str(invited_by),
                 "exp": datetime.now(UTC) + timedelta(hours=24),
             },

@@ -121,8 +121,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0287_team_rls_lifecycle_evals chains off 0286_pipeline_run_state, and
 # 0288_runs_execution_origin chains off 0287_team_rls_lifecycle_evals, and
 # 0289_pipelines_environment_profile chains off 0288_runs_execution_origin, and
-# 0290_scheduled_reports_due_scan chains off 0289_pipelines_environment_profile as the chain head.
-_CHAIN_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
+# 0290_scheduled_reports_due_scan chains off 0289_pipelines_environment_profile, and
+# 0291_invitations_lookup_constraints chains off 0290_scheduled_reports_due_scan as the chain head.
+_CHAIN_HEAD_MIGRATION = "0291_invitations_lookup_constraints"
 
 
 def _source(name: str) -> str:
