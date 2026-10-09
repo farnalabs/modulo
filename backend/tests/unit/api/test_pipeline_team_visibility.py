@@ -420,7 +420,6 @@ def _mismatch(*, connector_id: uuid.UUID, pipeline_owner_team_id: uuid.UUID | No
         connector_name="shared-ci",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=pipeline_owner_team_id,
-        connector_visibility="team",
         node_id="node-1",
     )
 

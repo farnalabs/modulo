@@ -32,7 +32,11 @@ from modulo.api.team_scope import TeamGateDenial
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
-from modulo.core.team_visibility import ConnectorBindingMissingError, ConnectorTeamMismatch
+from modulo.core.team_visibility import (
+    ConnectorBindingMissingError,
+    ConnectorTeamMismatch,
+    connector_team_mismatch,
+)
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -454,13 +458,15 @@ def _with_patches(ctxs: list, call: Any) -> Any:
             c.__exit__(None, None, None)
 
 
-def _cross_team_mismatch(connector_id: uuid.UUID, *, visibility: str = "team") -> ConnectorTeamMismatch:
+def _cross_team_mismatch(connector_id: uuid.UUID) -> ConnectorTeamMismatch:
+    """A team-PRIVATE connector held outside ``_TEAM_A`` — the only shape
+    ``find_connector_team_mismatches`` can report (FAR-1618: an org-visibility
+    row never mismatches, so no visibility argument exists any more)."""
     return ConnectorTeamMismatch(
         connector_id=connector_id,
         connector_name="other-teams-connector",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility=visibility,
     )
 
 
@@ -572,19 +578,32 @@ def test_update_polling_config_org_connector_on_team_pipeline_is_accepted(
 ) -> None:
     """Scoping pin: only the TEAM-PRIVATE direction is refused at save.
 
-    An org-wide connector is usable by any team's pipeline (a poll carries no
-    caller visibility scope); the reverse direction — a team pipeline pinning
-    an org-only connector — is a RUN-time rule enforced at graph save.
+    An org-wide connector is usable by any team's pipeline. Since FAR-1618 the
+    shared predicate can never report one, so the finder the route drives
+    yields no mismatch and the reference is accepted — and THAT is the
+    invariant asserted here: ``connector_team_mismatch`` is False for an
+    org-visibility connector against every pipeline owner, which is exactly
+    why the route has nothing to refuse. (The earlier version of this test
+    fabricated an org-visibility mismatch record the real finder can no longer
+    produce and asserted the route ignored it — testing a value the product
+    never yields.)
     """
+    # Real product code: the org-visibility direction never mismatches, for an
+    # org pipeline, for the owning team, or for a different team.
+    assert connector_team_mismatch("org", None, None) is False
+    assert connector_team_mismatch("org", None, _TEAM_A) is False
+    assert connector_team_mismatch("org", _TEAM_B, _TEAM_A) is False
+
     http, _session = client
     trigger = _make_trigger(trigger_type="polling", config_json={})
     engine = MagicMock()
     engine.schedule_polling_trigger = AsyncMock()
     ctxs = list(_happy_patches())
+    # What the REAL finder returns for an org-visibility reference: nothing.
     ctxs.append(
         patch(
             f"{_PREFIX}find_connector_team_mismatches",
-            new=AsyncMock(return_value=[_cross_team_mismatch(uuid.uuid4(), visibility="org")]),
+            new=AsyncMock(return_value=[]),
         ),
     )
     ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
@@ -599,6 +618,7 @@ def test_update_polling_config_org_connector_on_team_pipeline_is_accepted(
     )
 
     assert resp.status_code == 200, resp.text
+    assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
 
 
 def test_update_polling_config_unchanged_connector_is_not_revalidated(

@@ -97,20 +97,19 @@ class ConnectorTeamMismatch:
     """A connector binding that the team-scope rule refuses.
 
     Only the team-PRIVATE direction ever produces one (FAR-1618): an
-    org-visibility connector never mismatches, so ``connector_visibility`` is
-    carried for diagnostics/audit rather than to pick a message branch.
+    org-visibility connector never mismatches, so the row needs nothing but
+    the identities required to name the refusal.
     """
 
     connector_id: uuid.UUID
     connector_name: str
     connector_owner_team_id: uuid.UUID | None
     pipeline_owner_team_id: uuid.UUID | None
-    connector_visibility: str | None
     node_id: str | None = None
 
 
 def connector_team_mismatch(
-    connector_visibility: str | None,
+    visibility: str | None,
     connector_owner_team_id: uuid.UUID | None,
     pipeline_owner_team_id: uuid.UUID | None,
 ) -> bool:
@@ -126,7 +125,7 @@ def connector_team_mismatch(
     pipeline. This is the same rule
     :func:`model_backend_team_mismatch` applies to model backends.
     """
-    if (connector_visibility or "org") != "team":
+    if (visibility or "org") != "team":
         # Org-visibility connector: shared across the organisation, so no
         # pipeline can create a cross-team binding with it.
         return False
@@ -461,6 +460,5 @@ def _build_connector_mismatch(
         connector_name=instance.name,
         connector_owner_team_id=instance.owner_team_id,
         pipeline_owner_team_id=pipeline_owner_team_id,
-        connector_visibility=instance.visibility,
         node_id=node_id,
     )

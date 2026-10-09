@@ -156,7 +156,6 @@ def test_detail_contains_named_error() -> None:
         connector_name="eng-db",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
-        connector_visibility="team",
         node_id=_NODE_ID,
     )
     detail = connector_team_mismatch_detail([mismatch])
@@ -172,7 +171,6 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-a",
         connector_owner_team_id=_TEAM_A,
         pipeline_owner_team_id=_TEAM_B,
-        connector_visibility="team",
         node_id=_NODE_ID,
     )
     m2 = ConnectorTeamMismatch(
@@ -180,7 +178,6 @@ def test_detail_joins_multiple_mismatches() -> None:
         connector_name="db-b",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="team",
         node_id="node-2",
     )
     detail = connector_team_mismatch_detail([m1, m2])
@@ -196,24 +193,24 @@ def test_detail_joins_multiple_mismatches() -> None:
 def test_detail_builder_has_no_org_only_branch() -> None:
     """FAR-1618: the org-only message branch was removed with the rule it served.
 
-    An org-visibility connector never mismatches, so the gate can no longer
-    build a ``ConnectorTeamMismatch`` for one — and the detail builder no
-    longer renders the removed "is org-only / flip the connector to `team`"
-    text. This pins the removal from both ends: re-introducing the rule
-    fails the predicate tests above, re-introducing just the dead message
-    branch fails here.
+    An org-visibility connector never mismatches, and (since the field's
+    removal) a ``ConnectorTeamMismatch`` cannot even carry a visibility any
+    more — so the only message the builder can render is the team-private one.
+    This pins both halves: the vestigial field cannot come back silently, and
+    the removed "is org-only / flip the connector to `team`" text stays gone.
     """
     mismatch = ConnectorTeamMismatch(
         connector_id=uuid.uuid4(),
         connector_name="shared-ci",
         connector_owner_team_id=None,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="org",
         node_id=_NODE_ID,
     )
+    assert not hasattr(mismatch, "connector_visibility")
     detail = connector_team_mismatch_detail([mismatch])
     assert detail.startswith(CONNECTOR_TEAM_MISMATCH)
     assert "shared-ci" in detail
+    assert "is team-private" in detail
     assert "is org-only" not in detail
     assert "flip the connector to `team`" not in detail
     assert "duplicate it" not in detail

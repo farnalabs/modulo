@@ -4031,11 +4031,11 @@ async def bind_connector_to_node(
             )
 
             if connector_team_mismatch(connector.visibility, connector.owner_team_id, pipeline.owner_team_id):
-                # FAR-1515: route through the shared detail builder so this
-                # surface names the same fix as the REST save path - a
-                # team-private connector reaching outside its team, or an
-                # org-only connector pinned by a team pipeline whose every run
-                # would be rejected at the connector gate.
+                # FAR-1515 / FAR-1618: route through the shared detail builder
+                # so this surface names the same fix as the REST save path —
+                # a team-private connector reaching outside its owner team.
+                # (An org-visibility connector is shared across the
+                # organisation and never reaches this branch.)
                 return {
                     "error": CONNECTOR_TEAM_MISMATCH,
                     "detail": connector_team_mismatch_detail(
@@ -4045,7 +4045,6 @@ async def bind_connector_to_node(
                                 connector_name=connector.name,
                                 connector_owner_team_id=connector.owner_team_id,
                                 pipeline_owner_team_id=pipeline.owner_team_id,
-                                connector_visibility=connector.visibility,
                                 node_id=node_id,
                             )
                         ]

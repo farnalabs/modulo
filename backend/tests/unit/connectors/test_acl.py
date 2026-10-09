@@ -47,17 +47,21 @@ def test_acl_empty_allowlist_is_unrestricted():
 @pytest.mark.parametrize("visibility", ["org", "team"])
 def test_acl_empty_allowlist_is_unrestricted_for_every_visibility(visibility):
     # An unrestricted operation scope is unrestricted regardless of the
-    # connector's visibility — visibility is no longer an ACL-time axis at
-    # all (FAR-1618), so it can never narrow the operation scope.
+    # connector's visibility. Made revert-sensitive by the signature
+    # assertion: visibility USED to narrow check() for a team-scoped caller
+    # (the FAR-516 run-gate), so re-threading that axis fails here even though
+    # the behavioural assertions below would still pass without it.
     acl = ConnectorACL(visibility=visibility, allowed_operations=[])
+    assert "request_visibility" not in inspect.signature(acl.check).parameters
     assert acl.check("read") is None
     assert acl.check("write") is None
 
 
 def test_acl_team_connector_allows_org_request():
-    # FAR-1618: teams are a visibility grouping, not a credential trust
-    # boundary. Neither direction of the caller's scope is an ACL axis any
-    # more — only the allowlist is enforced here.
+    # Control: an unset allowlist is unrestricted (FAR-1564), so a team
+    # connector serves a plain read. That a caller's scope cannot even be
+    # expressed to check() is pinned by
+    # test_acl_org_connector_is_shared_and_carries_no_request_scope_axis.
     acl = ConnectorACL(visibility="team")
     assert acl.check("read") is None
 
