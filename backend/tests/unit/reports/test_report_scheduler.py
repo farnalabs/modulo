@@ -31,15 +31,14 @@ from modulo.core.reports.scheduler import (
     register_report_type,
 )
 from tests.unit.reports.helpers import (
+    SLACK_URL,
+    SLACK_URL_2,
     MockSession,
     MockSessionFactory,
     make_http_client,
     make_http_response,
     make_report_mock,
 )
-
-_SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
-_SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
 
 # ---------------------------------------------------------------------------
 # Registry tests
@@ -326,8 +325,8 @@ class TestFireScheduledReport:
 
 class TestDeliverSlackWebhook:
     async def test_delivers_to_multiple_urls(self) -> None:
-        url1 = _SLACK_URL
-        url2 = _SLACK_URL_2
+        url1 = SLACK_URL
+        url2 = SLACK_URL_2
 
         with respx.mock:
             respx.post(url1).mock(return_value=Response(200, text="ok"))
@@ -342,7 +341,7 @@ class TestDeliverSlackWebhook:
         assert all(r["status"] == "delivered" for r in results)
 
     async def test_reports_failure(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
@@ -374,7 +373,7 @@ class TestDeliverWebhook:
 
 class TestDeliverViaConfig:
     async def test_slack_webhook_type(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         config = {"type": "slack_webhook", "webhook_urls": [url]}
 
         with respx.mock:

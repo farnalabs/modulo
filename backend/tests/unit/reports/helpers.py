@@ -14,7 +14,17 @@ from collections.abc import Iterator
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
+from sqlalchemy.sql.elements import BinaryExpression
+
 from modulo.db.models.scheduled_report import ScheduledReport
+
+# Shared Slack webhook URLs for the reports tests — a single definition so the
+# quality and scheduler suites cannot drift apart.
+SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
+SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
+
+# Sentinel distinguishing "no value expected" from an expected ``None``.
+_UNSET = object()
 
 
 class _MockBegin:
@@ -83,20 +93,17 @@ def make_report_mock(
 
 def make_cost_report_mock(*, schedule_type: str) -> MagicMock:
     """Build the cost-report ScheduledReport double shared by the cost tests."""
-    report = MagicMock(spec=ScheduledReport)
-    report.id = uuid.uuid4()
-    report.organisation_id = uuid.uuid4()
-    report.active = True
-    report.report_type = "cost"
-    report.cron_expression = "0 0 * * *"
-    report.config_json = {
-        "period": "daily",
-        "group_by": "team",
-        "format": "csv",
-        "schedule_type": schedule_type,
-    }
-    report.recipient_config = {"type": "email", "emails": ["admin@example.com"]}
-    return report
+    return make_report_mock(
+        report_type="cost",
+        cron_expression="0 0 * * *",
+        config_json={
+            "period": "daily",
+            "group_by": "team",
+            "format": "csv",
+            "schedule_type": schedule_type,
+        },
+        recipient_config={"type": "email", "emails": ["admin@example.com"]},
+    )
 
 
 def make_http_client(side_effect: list[object] | None = None) -> MagicMock:
@@ -108,14 +115,19 @@ def make_http_client(side_effect: list[object] | None = None) -> MagicMock:
 
 def make_http_response(
     *,
-    is_success: bool = True,
+    is_success: bool | None = None,
     status_code: int = 200,
     text: str = "ok",
     headers: dict[str, str] | None = None,
 ) -> MagicMock:
-    """Build a minimal ``httpx.Response``-shaped double."""
+    """Build a minimal ``httpx.Response``-shaped double.
+
+    ``is_success`` defaults to being derived from ``status_code`` so a
+    non-2xx response is consistent with its status unless a caller explicitly
+    overrides it.
+    """
     resp = MagicMock()
-    resp.is_success = is_success
+    resp.is_success = status_code < 400 if is_success is None else is_success
     resp.status_code = status_code
     resp.text = text
     resp.headers = {} if headers is None else headers
@@ -126,11 +138,27 @@ def binary_expressions(clause: Any) -> Iterator[Any]:
     """Yield every ``BinaryExpression`` nested inside a SQL clause.
 
     Lets tests assert on SQL predicate structure (operator + column) without
-    matching on rendered SQL text.
+    matching on rendered SQL text. A single-predicate ``.where()`` collapses to
+    the ``BinaryExpression`` itself, so that case is yielded directly rather
+    than being lost when iterating children.
     """
-    from sqlalchemy.sql.elements import BinaryExpression
-
+    if clause is None:
+        return
+    if isinstance(clause, BinaryExpression):
+        yield clause
     for child in clause.get_children():
-        if isinstance(child, BinaryExpression):
-            yield child
         yield from binary_expressions(child)
+
+
+def has_predicate(clause: Any, operator: Any, column_name: str, value: Any = _UNSET) -> bool:
+    """True when *clause* contains a BinaryExpression with the given operator and
+    left column name (and, when *value* is provided, that right-side value)."""
+    for pred in binary_expressions(clause):
+        if pred.operator is not operator:
+            continue
+        if getattr(pred.left, "name", None) != column_name:
+            continue
+        if value is not _UNSET and getattr(pred.right, "value", _UNSET) != value:
+            continue
+        return True
+    return False

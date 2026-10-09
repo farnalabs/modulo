@@ -26,10 +26,12 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
-from tests.unit.reports.helpers import binary_expressions, make_http_response
-
-_SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
-_SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
+from tests.unit.reports.helpers import (
+    SLACK_URL,
+    SLACK_URL_2,
+    has_predicate,
+    make_http_response,
+)
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -473,7 +475,7 @@ class TestWebhookSigning:
 
 class TestDeliverQualityReport:
     async def test_returns_success_for_2xx(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -495,7 +497,7 @@ class TestDeliverQualityReport:
         """The scheduler always hands ``deliver_quality_report`` the formatter's
         JSON *string*, so that production branch must be exercised, not just the
         raw-dict convenience path."""
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
         preformatted = format_slack_message(_REPORT_DELIVERY)
 
@@ -514,10 +516,10 @@ class TestDeliverQualityReport:
 
     async def test_rejects_malformed_json_string(self) -> None:
         with pytest.raises(json.JSONDecodeError):
-            await deliver_quality_report("not json", {"webhook_urls": [_SLACK_URL]})
+            await deliver_quality_report("not json", {"webhook_urls": [SLACK_URL]})
 
     async def test_returns_failure_for_non_2xx_after_exhaustion(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -538,7 +540,7 @@ class TestDeliverQualityReport:
         assert results[0]["status_code"] == 500
 
     async def test_error_text_truncated_to_200_chars(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -558,8 +560,8 @@ class TestDeliverQualityReport:
         assert len(results[0]["error"]) == 200
 
     async def test_single_url_failure_does_not_block_others(self) -> None:
-        url1 = _SLACK_URL
-        url2 = _SLACK_URL_2
+        url1 = SLACK_URL
+        url2 = SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with (
@@ -583,8 +585,8 @@ class TestDeliverQualityReport:
         assert results[1]["status"] == "delivered"
 
     async def test_request_error_caught_per_url(self) -> None:
-        url1 = _SLACK_URL
-        url2 = _SLACK_URL_2
+        url1 = SLACK_URL
+        url2 = SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with (
@@ -612,7 +614,7 @@ class TestDeliverQualityReport:
     async def test_signed_delivery_sends_signature_header_and_bytes(self) -> None:
         from modulo.core.reports.scheduler import _serialize_json_body, _sign_payload
 
-        url = _SLACK_URL
+        url = SLACK_URL
         secret = "super-secret"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
 
@@ -641,7 +643,7 @@ class TestDeliverQualityReport:
         assert kwargs["headers"]["X-Modulo-Signature"] == expected_sig
 
     async def test_unsigned_delivery_sends_json_without_signature(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -662,7 +664,7 @@ class TestDeliverQualityReport:
         assert "X-Modulo-Signature" not in kwargs["headers"]
 
     async def test_signature_is_verifiable_from_raw_body(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         secret = "verify-me"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
 
@@ -685,7 +687,7 @@ class TestDeliverQualityReport:
         assert received_signature == f"sha256={recomputed}"
 
     async def test_empty_signing_secret_treated_as_unsigned(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "signing_secret": ""}
 
         with (
@@ -706,7 +708,7 @@ class TestDeliverQualityReport:
     # --- Configurable delivery timeout ---
 
     async def test_custom_timeout_used(self) -> None:
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 5.0}
 
         with (
@@ -724,7 +726,7 @@ class TestDeliverQualityReport:
     async def test_default_timeout_used_when_absent(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -742,7 +744,7 @@ class TestDeliverQualityReport:
     async def test_invalid_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": "abc"}
 
         with (
@@ -760,7 +762,7 @@ class TestDeliverQualityReport:
     async def test_zero_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = _SLACK_URL
+        url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 0}
 
         with (
@@ -960,11 +962,16 @@ class TestGenerateQualityReport:
 
 
 class TestQualityReportSqlPredicates:
-    async def test_weekly_rollup_scopes_team_and_excludes_guardrails(self) -> None:
-        """Pin the two load-bearing predicates the report's numbers depend on:
-        the weekly roll-up must exclude team-scoped rows (``team_id IS NULL``),
-        and the eval summary must exclude guardrail results (``eval_id NOT IN
-        ...``). Dropping either would silently change every reported figure."""
+    async def test_each_statement_carries_its_scoping_predicates(self) -> None:
+        """Pin each statement's load-bearing predicates individually.
+
+        Both weekly roll-ups must exclude team-scoped rows (``team_id IS
+        NULL``); both eval summaries and the daily eval rates must exclude
+        guardrail results (``eval_id NOT IN (...)``); and every statement must
+        be tenant-scoped to the report's org. Asserting per recorded statement
+        (not pooled across all six) means a filter dropped from one query
+        cannot be masked by another query that still carries it. Dropping any
+        of these would silently change every reported figure."""
         org_id = uuid.uuid4()
         statements: list[object] = []
 
@@ -997,11 +1004,21 @@ class TestQualityReportSqlPredicates:
 
         await generate_quality_report(session, org_id)
 
-        predicates = [pred for stmt in statements for pred in binary_expressions(stmt.whereclause)]
-        assert any(
-            pred.operator is operators.is_ and getattr(pred.left, "name", None) == "team_id" for pred in predicates
-        )
-        assert any(
-            pred.operator is operators.not_in_op and getattr(pred.left, "name", None) == "eval_id"
-            for pred in predicates
-        )
+        # Verified execution order in generate_quality_report:
+        #   0/1 current/previous weekly roll-up (_query_weekly_agg)
+        #   2/3 current/previous eval summary (_query_eval_summary)
+        #   4   daily run counts
+        #   5   daily eval rates (_query_daily_eval_rates)
+        assert len(statements) == 6
+
+        # Both weekly roll-ups exclude team-scoped rows.
+        assert has_predicate(statements[0].whereclause, operators.is_, "team_id")
+        assert has_predicate(statements[1].whereclause, operators.is_, "team_id")
+
+        # Both eval summaries and the daily eval rates exclude guardrail results.
+        for statement in (statements[2], statements[3], statements[5]):
+            assert has_predicate(statement.whereclause, operators.not_in_op, "eval_id")
+
+        # Every statement is tenant-scoped to the requested organisation.
+        for statement in statements:
+            assert has_predicate(statement.whereclause, operators.eq, "organisation_id", org_id)
