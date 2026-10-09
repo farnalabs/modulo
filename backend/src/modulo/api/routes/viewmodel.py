@@ -309,7 +309,9 @@ async def viewmodel_current(
             memberships = await list_team_memberships_for_account(session, current_user.account_id)
 
             if current_user.organisation_id is not None:
-                pipelines_page = await list_pipelines(session, page=1, page_size=20)
+                pipelines_page = await list_pipelines(
+                    session, page=1, page_size=20, organisation_id=current_user.organisation_id
+                )
                 runs_page = await list_runs(session, page=1, page_size=10)
 
                 user_team_ids = [m.team_id for m in memberships]

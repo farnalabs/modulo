@@ -423,8 +423,11 @@ async def list_pipelines(
     include_deleted: bool = False,
     folder_id: uuid.UUID | None = None,
     team_id: uuid.UUID | None = None,
+    organisation_id: uuid.UUID | None = None,
 ) -> PageResult[Pipeline]:
     base = select(Pipeline)
+    if organisation_id is not None:
+        base = base.where(Pipeline.organisation_id == organisation_id)
     base = include_soft_deleted(base) if include_deleted else base.where(Pipeline.deleted_at.is_(None))
     if not include_archived:
         base = base.where(Pipeline.archived_at.is_(None))
@@ -457,6 +460,8 @@ async def list_pipelines(
     offset = (page - 1) * page_size
     try:
         count_where: list[ColumnElement[bool]] = []
+        if organisation_id is not None:
+            count_where.append(Pipeline.organisation_id == organisation_id)
         if not include_deleted:
             count_where.append(Pipeline.deleted_at.is_(None))
         if not include_archived:
@@ -499,7 +504,7 @@ async def update_pipeline(
     ``pipeline.circuit_breaker_threshold_changed`` audit event on EVERY path
     (the actor is ``account_id`` when supplied). ``None`` disables the breaker.
     """
-    pipeline = await get_pipeline(session, pipeline_id)
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
     if pipeline is None:
         return None
     if updates.get("max_concurrent_runs") is not None:
@@ -618,6 +623,8 @@ async def soft_delete_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
     deleted_by: uuid.UUID | None = None,
+    *,
+    organisation_id: uuid.UUID | None = None,
 ) -> Pipeline | None:
     """Mark a pipeline as deleted (soft delete). Returns None if not found or already deleted.
 
@@ -625,17 +632,17 @@ async def soft_delete_pipeline(
     audit (mirrors the eval models' soft-delete wiring). It is optional so the
     MCP/hard-delete paths that call this without a principal keep working.
     """
-    result = await session.execute(
-        update(Pipeline)
-        .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
-        .values(deleted_at=func.now(), deleted_by=deleted_by)
-        .returning(Pipeline)
-    )
+    stmt = update(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
+    if organisation_id is not None:
+        stmt = stmt.where(Pipeline.organisation_id == organisation_id)
+    result = await session.execute(stmt.values(deleted_at=func.now(), deleted_by=deleted_by).returning(Pipeline))
     await session.flush()
     return result.scalar_one_or_none()
 
 
-async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pipeline | None:
+async def restore_pipeline(
+    session: AsyncSession, pipeline_id: uuid.UUID, *, organisation_id: uuid.UUID | None = None
+) -> Pipeline | None:
     """Restore a soft-deleted pipeline. Returns None if not found.
 
     Clears both ``deleted_at`` and ``deleted_by`` so a restored row never
@@ -643,12 +650,10 @@ async def restore_pipeline(session: AsyncSession, pipeline_id: uuid.UUID) -> Pip
     the audit state to exactly what soft_delete wrote, mirrored by the eval
     models' restore wiring).
     """
-    result = await session.execute(
-        update(Pipeline)
-        .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_not(None))
-        .values(deleted_at=None, deleted_by=None)
-        .returning(Pipeline)
-    )
+    stmt = update(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_not(None))
+    if organisation_id is not None:
+        stmt = stmt.where(Pipeline.organisation_id == organisation_id)
+    result = await session.execute(stmt.values(deleted_at=None, deleted_by=None).returning(Pipeline))
     await session.flush()
     return result.scalar_one_or_none()
 
@@ -743,20 +748,21 @@ async def resume_pipeline(
 async def get_pipeline_graph(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
+    *,
+    organisation_id: uuid.UUID | None = None,
 ) -> tuple[list[dict[str, Any]], list[PipelineEdge]] | None:
-    """Return the editable live graph for an RLS-visible pipeline."""
-    pipeline = await get_pipeline(session, pipeline_id)
+    """Return the editable live graph for an RLS-visible pipeline.
+
+    ``organisation_id`` (defence-in-depth) scopes both the pipeline read and the
+    edge read (edges are filtered on their own ``organisation_id``).
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=organisation_id)
     if pipeline is None:
         return None
-    edges = list(
-        (
-            await session.execute(
-                select(PipelineEdge)
-                .where(PipelineEdge.pipeline_id == pipeline_id)
-                .order_by(PipelineEdge.created_at, PipelineEdge.id)
-            )
-        ).scalars()
-    )
+    edge_stmt = select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id)
+    if organisation_id is not None:
+        edge_stmt = edge_stmt.where(PipelineEdge.organisation_id == organisation_id)
+    edges = list((await session.execute(edge_stmt.order_by(PipelineEdge.created_at, PipelineEdge.id))).scalars())
     return list(pipeline.graph_nodes_json), edges
 
 
@@ -1211,7 +1217,11 @@ async def _read_clone_source_snapshot(
                 )
             src_result = await read_session.execute(
                 select(Pipeline)
-                .where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None))
+                .where(
+                    Pipeline.id == pipeline_id,
+                    Pipeline.organisation_id == org_id,
+                    Pipeline.deleted_at.is_(None),
+                )
                 .with_for_update(read=True)
             )
             source = src_result.scalar_one_or_none()
@@ -1225,7 +1235,7 @@ async def _read_clone_source_snapshot(
                 for e in (
                     await read_session.execute(
                         select(PipelineEdge)
-                        .where(PipelineEdge.pipeline_id == pipeline_id)
+                        .where(PipelineEdge.pipeline_id == pipeline_id, PipelineEdge.organisation_id == org_id)
                         .order_by(PipelineEdge.created_at, PipelineEdge.id)
                     )
                 ).scalars()
@@ -1433,7 +1443,9 @@ async def replace_pipeline_graph(
     fires for gate weakenings.
     """
     result = await session.execute(
-        select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.deleted_at.is_(None)).with_for_update()
+        select(Pipeline)
+        .where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_id, Pipeline.deleted_at.is_(None))
+        .with_for_update()
     )
     pipeline = result.scalar_one_or_none()
     if pipeline is None:

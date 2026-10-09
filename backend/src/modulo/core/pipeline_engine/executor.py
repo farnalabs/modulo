@@ -5944,7 +5944,7 @@ class PipelineExecutor:
                 # degrades to None rather than poisoning the transaction.
                 try:
                     async with session.begin_nested():
-                        pipeline = await get_pipeline(session, pipeline_id)
+                        pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
                         pipeline_name = pipeline.name if pipeline is not None else None
                 except asyncio.CancelledError:
                     raise

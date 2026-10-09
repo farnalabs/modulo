@@ -352,7 +352,7 @@ async def _load_watchdog_retry_context(
         run = await get_run(session, run_id)
         if run is None:
             return None
-        pipeline = await get_pipeline(session, run.pipeline_id)
+        pipeline = await get_pipeline(session, run.pipeline_id, organisation_id=org_id)
         if pipeline is None:
             return None
         snapshot_result = await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.id == run.snapshot_id))
