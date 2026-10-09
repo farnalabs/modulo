@@ -91,6 +91,7 @@ def _ensure() -> None:
 
 
 def record_facts_write_failed() -> None:
+    """Count one facts write that failed and was swallowed (fail-open)."""
     if _facts_write_failed_total is None:
         _ensure()
     if _facts_write_failed_total is not None:
@@ -98,6 +99,7 @@ def record_facts_write_failed() -> None:
 
 
 def set_backfill_last_run_ts(epoch: float) -> None:
+    """Publish the epoch seconds of the last successful backfill batch run."""
     if _backfill_last_run_ts is None:
         _ensure()
     if _backfill_last_run_ts is not None:
@@ -105,6 +107,7 @@ def set_backfill_last_run_ts(epoch: float) -> None:
 
 
 def set_backfill_rows(rows: int) -> None:
+    """Publish the number of facts rows written by the last backfill invocation."""
     if _backfill_rows is None:
         _ensure()
     if _backfill_rows is not None:
@@ -112,6 +115,7 @@ def set_backfill_rows(rows: int) -> None:
 
 
 def record_reconcile_alert(org_id: str, drift_type: str) -> None:
+    """Count one reconcile alert for ``org_id`` of the given ``drift_type``."""
     if _reconcile_alert_total is None:
         _ensure()
     if _reconcile_alert_total is not None:
@@ -119,6 +123,7 @@ def record_reconcile_alert(org_id: str, drift_type: str) -> None:
 
 
 def set_retention_lag(days: float) -> None:
+    """Publish the days between the oldest kept fact and today."""
     if _retention_lag is None:
         _ensure()
     if _retention_lag is not None:
@@ -126,6 +131,7 @@ def set_retention_lag(days: float) -> None:
 
 
 def record_facts_skip_non_pg() -> None:
+    """Count one analytics maintenance invocation skipped on a non-Postgres backend."""
     if _facts_skip_non_pg_total is None:
         _ensure()
     if _facts_skip_non_pg_total is not None:
