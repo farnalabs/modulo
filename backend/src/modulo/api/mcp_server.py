@@ -98,6 +98,7 @@ from modulo.auth.oauth import (
     check_oauth_token_family_valid,
     clamp_oauth_role,
     decode_oauth_access_token,
+    get_oauth_client_team_id,
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
@@ -1129,6 +1130,7 @@ async def _validate_oauth_live(token: str) -> bool:
         except JWTError:
             return False
         return await _validate_principal_live(token, principal)
+    client_team_id: uuid.UUID | None = None
     async with _session(claims.organisation_id) as s:
         if not await check_oauth_token_family_valid(
             s,
@@ -1137,6 +1139,11 @@ async def _validate_oauth_live(token: str) -> bool:
             org_id=claims.organisation_id,
         ):
             return False
+        # FAR-1476: resolve the client's team boundary in the SAME round-trip
+        # the family check already makes (the client row is not otherwise loaded
+        # on this leg). A team-bound client re-applies its boundary on every
+        # SSE event; an org-wide client resolves None (no boundary).
+        client_team_id = await get_oauth_client_team_id(s, claims.client_id)
     # ADR 047: re-resolve the account's LIVE role (TTL-bounded per
     # connection) and re-apply the scope→live clamp so a demoted
     # operator loses scope mid-stream too.
@@ -1148,7 +1155,7 @@ async def _validate_oauth_live(token: str) -> bool:
     if live_role is None:
         return False
     _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
-    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
     return True
 
 
@@ -1713,6 +1720,7 @@ async def _finalize_oauth_principal(
     # failure is attributed instead of dropped (the success-path bind below
     # re-binds the same org together with the account).
     _bind_org_context(request, claims.organisation_id, claims.account_id)
+    client_team_id: uuid.UUID | None = None
     try:
         async with _session(claims.organisation_id) as s:
             live_role = await resolve_role_from_membership(
@@ -1720,6 +1728,11 @@ async def _finalize_oauth_principal(
                 str(claims.account_id),
                 str(claims.organisation_id),
             )
+            # FAR-1476: resolve the client's team boundary in the SAME round-trip
+            # the live-role read already makes (the client row is not otherwise
+            # loaded on this leg). A team-bound client scopes every token it was
+            # issued to that team; an org-wide client resolves None (no boundary).
+            client_team_id = await get_oauth_client_team_id(s, claims.client_id)
     except (SQLAlchemyError, TimeoutError) as exc:
         raise_session_contract_error(exc, "mcp_server._finalize_oauth_principal")
         _log.exception(_MSG_MCP_AUTH_DB_UNAVAILABLE)
@@ -1747,7 +1760,7 @@ async def _finalize_oauth_principal(
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
     _ctx_key_grants.set(None)
-    _ctx_team_id.set(None)  # user tokens carry no team boundary
+    _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
     request.scope["auth_principal"] = {
         "type": "user",
         "org_id": str(claims.organisation_id),

@@ -19,10 +19,12 @@ client's resolved org instead.
 
 import asyncio
 import logging
+import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +35,7 @@ from modulo.api.constants import (
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import deny_break_glass_mint, get_db_session, require_feature
+from modulo.api.team_scope import team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
@@ -48,6 +51,7 @@ from modulo.auth.oauth import (
 )
 from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
+from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
@@ -60,6 +64,9 @@ class CreateOAuthClientRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     redirect_uris: list[str] = Field(min_length=1, description="Allowed redirect URIs")
     scopes: list[str] = Field(min_length=1, description="Allowed scopes")
+    # FAR-1476: optional team boundary. NULL = an org-wide client (admin/operator
+    # only); a runner-registered client MUST bind one of its member teams.
+    team_id: uuid.UUID | None = None
 
 
 class CreateOAuthClientResponse(BaseModel):
@@ -80,6 +87,52 @@ class OAuthClientItem(BaseModel):
 
 class DeleteOAuthClientResponse(BaseModel):
     deleted: bool
+
+
+async def _validate_oauth_team_binding(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    team_id: uuid.UUID | None,
+) -> None:
+    """Validate the optional ``team_id`` on OAuth client registration (FAR-1476).
+
+    Membership rule (explicit, tested):
+    - ``admin``/``operator`` may bind any team in their org, or none (org-wide).
+    - ``runner`` may bind ONLY a team they are a member of, and MUST bind one —
+      a runner-registered client is never org-wide (no NULL boundary).
+
+    The team must exist (not soft-deleted) in the caller's organisation, else
+    404 — a foreign-org or non-existent team is never silently persisted (the
+    same-org tenant trigger would also reject it at the DB layer). Runs inside
+    the RLS-scoped transaction, so the org filter is enforced by the RLS policy
+    as well as the explicit ``organisation_id`` predicate.
+    """
+    if team_id is None:
+        if principal.org_role == "runner":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Runner-registered OAuth clients must be bound to a team the runner is a member of",
+            )
+        return
+    result = await session.execute(
+        select(Team.id).where(
+            Team.id == team_id,
+            Team.organisation_id == principal.organisation_id,
+            Team.deleted_at.is_(None),
+        )
+    )
+    if result.first() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team {team_id} not found in this organisation.",
+        )
+    if principal.org_role == "runner":
+        is_member = await team_membership_exists(session, account_id=principal.account_id, team_id=team_id)
+        if not is_member:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Runner can only bind an OAuth client to a team they are a member of",
+            )
 
 
 # Minting an OAuth client secret is a credential grant: an unaudited mint would
@@ -103,10 +156,14 @@ async def register_oauth_client(
     principal: TenantPrincipal = Depends(get_current_tenant_user),
     settings: Settings = Depends(get_settings),
 ) -> CreateOAuthClientResponse:
-    if principal.org_role not in ("admin", "operator"):
+    # FAR-1476 (D1): runners may register a team-bound OAuth client. The
+    # per-role team-binding rule (runner must bind a member team; admin/operator
+    # may bind any org team or none) is enforced by
+    # ``_validate_oauth_team_binding`` below, inside the RLS transaction.
+    if principal.org_role not in ("admin", "operator", "runner"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admin or operator users can register OAuth clients",
+            detail="Only admin, operator or runner users can register OAuth clients",
         )
 
     if not public_url_is_configured(settings):
@@ -140,6 +197,7 @@ async def register_oauth_client(
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
+            await _validate_oauth_team_binding(session, principal, req.team_id)
             client, raw_secret = await create_oauth_client(
                 session,
                 org_id=principal.organisation_id,
@@ -147,6 +205,7 @@ async def register_oauth_client(
                 scopes=scopes_str,
                 redirect_uris=redirect_uris_str,
                 created_by=principal.account_id,
+                team_id=req.team_id,
             )
     except ProgrammingError:
         _log.exception("mcp_oauth.register_oauth_client")
