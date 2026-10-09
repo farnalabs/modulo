@@ -30,11 +30,15 @@ Schema legs:
    on both Postgres and SQLite (unit-test ``create_all``).
 
 Indexes are created with ``IF NOT EXISTS`` (the guarded style used by
-0177) so a re-run never fails. CHECKs are Postgres-only:
+0177) so a re-run never fails. Both legs are Postgres-only: the
+``public.``-qualified index SQL has no SQLite equivalent, and
 ``op.create_check_constraint`` emits a bare ``ALTER TABLE ... ADD
-CONSTRAINT`` which SQLite cannot execute, and SQLite unit-test schemas
-get the same rules from the ``Invitation`` model's ``__table_args__``
-via ``create_all`` (the 0246 precedent).
+CONSTRAINT`` which SQLite cannot execute. SQLite unit-test schemas get
+the same two partial indexes and the same two CHECK rules from the
+``Invitation`` model's ``__table_args__`` (``sqlite_where`` predicates +
+``CheckConstraint``s) via ``create_all`` (the 0246 precedent), so the
+SQLite-ported claim holds at the model/``create_all`` layer, not by
+running this migration's DDL there.
 
 Downgrade: drops both indexes and both constraints.
 
