@@ -17,6 +17,7 @@ from modulo.api.constants import (
     MSG_FEATURE_NOT_AVAILABLE,
     MSG_NOT_FOUND,
     MSG_RESOURCE_ALREADY_EXISTS,
+    MSG_UNEXPECTED_ERROR_PLEASE_TRY,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session, require_permission, require_permission_any_credential
@@ -54,7 +55,6 @@ _CODE_AGENT_LIST = "agent.list"
 _CODE_MODEL_BACKEND_BINDING_MANAGE = "model_backend.binding.manage"
 _MSG_DATABASE_OPERATION_FAILED = "Database operation failed"
 _MSG_DATABASE_OPERATION_FAILED_PLEASE = "Database operation failed. Please try again."
-_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE = "An unexpected error occurred. Please try again."
 _MSG_AGENT_NOT_FOUND = "Agent not found"
 _MSG_BINDING_NOT_FOUND = "Binding not found"
 _CODE_AGENT_UPDATE = "agent.update"
@@ -401,7 +401,7 @@ async def list_agents_endpoint(
         _log.exception("Unexpected error listing agents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     return AgentListResponse(
         items=[AgentResponse.model_validate(a) for a in result.items],
@@ -488,7 +488,7 @@ async def create_agent_endpoint(
         _log.exception("Unexpected error creating agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     return AgentResponse.model_validate(agent)
 
@@ -523,7 +523,7 @@ async def get_agent_endpoint(
         _log.exception("Unexpected error getting agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -565,7 +565,7 @@ async def update_agent_endpoint(
         _log.exception("Unexpected error updating agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -642,7 +642,7 @@ async def update_agent_endpoint(
         _log.exception("Unexpected error updating agent (write path)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     return response
 
@@ -854,7 +854,7 @@ async def apply_optimized_prompt(
         _log.exception("Unexpected error applying optimized prompt")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -891,7 +891,7 @@ async def list_prompt_versions(
         _log.exception("Unexpected error listing prompt versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -943,7 +943,7 @@ async def get_prompt_version_endpoint(
         _log.exception("Unexpected error getting prompt version")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
@@ -1007,7 +1007,7 @@ async def rollback_prompt(
         _log.exception("Unexpected error rolling back prompt")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None:
         raise HTTPException(
@@ -1051,7 +1051,7 @@ async def diff_prompt_versions(
         _log.exception("Unexpected error diffing prompt versions")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if agent is None or agent.organisation_id != principal.organisation_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -1129,7 +1129,7 @@ async def delete_agent_endpoint(
         _log.exception("Unexpected error deleting agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_AGENT_NOT_FOUND)
@@ -1197,7 +1197,7 @@ async def list_bindings_endpoint(
         _log.exception("Unexpected error listing agent bindings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     return AgentBindingListResponse(items=[AgentBindingResponse.model_validate(b) for b in bindings])
 
@@ -1289,7 +1289,7 @@ async def replace_bindings_endpoint(
         _log.exception("Unexpected error replacing agent bindings")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
     return AgentBindingListResponse(items=[AgentBindingResponse.model_validate(b) for b in created])
 
@@ -1351,5 +1351,5 @@ async def delete_binding_endpoint(
         _log.exception("Unexpected error deleting agent binding")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=_MSG_UNEXPECTED_ERROR_OCCURRED_PLEASE,
+            detail=MSG_UNEXPECTED_ERROR_PLEASE_TRY,
         ) from None
