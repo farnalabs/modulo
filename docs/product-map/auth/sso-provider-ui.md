@@ -48,7 +48,9 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 - [x] Admin can add a SAML 2.0 provider (metadata URL, metadata XML, entity ID)
 - [x] Provider form shows conditional fields based on selected type (OIDC vs SAML)
 - [x] Common fields per provider: name, auto-provision toggle, default role
-      (operator/runner), group-to-team mappings
+      (operator/runner); group-to-team mappings are managed through the admin API
+      (`PUT`/`GET /api/v1/admin/sso/providers/{provider_id}/group-mappings`), not
+      the provider form
 - [x] Admin can edit, enable/disable, and delete an SSO provider (confirmation dialog)
 - [x] Admin can test an SSO provider connection – OIDC resolves the discovery URL,
       SAML parses the metadata XML
@@ -64,8 +66,9 @@ incident-response playbook as the prevention control for IdP-initiated SSO valid
 - [x] Configured SSO providers surface on the login page as buttons – `LoginView.vue`
       calls `GET /api/v1/auth/sso/providers` on mount and renders an OIDC button per
       advertised provider (linking to `/api/v1/auth/oidc/{provider}/login`) plus a SAML
-      button when SAML is enabled; when the feature is unavailable (402) or no provider
-      is advertised, the page stays on password login (fails closed)
+      button when SAML is enabled; when the feature is unavailable (the pre-auth
+      discovery endpoint answers 200 with an empty provider list, never a 401/402)
+      or no provider is advertised, the page stays on password login (fails closed)
 - [x] Deleting a provider warns that already-signed-in users are NOT signed out – their
       sessions remain valid until they expire and only new sign-ins through the provider
       are blocked (`settings-sso-delete-session-warning` in the delete-confirmation dialog)

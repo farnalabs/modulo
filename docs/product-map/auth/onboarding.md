@@ -16,12 +16,15 @@ status: covered
 
 # Onboarding
 
-First-run onboarding wizard (`/onboarding`) driven by an action-based checklist with
-DB persistence (`OnboardingProgress`). Six org-scoped actions – log in, add an AI
-model, create first agent, create first schema, create first pipeline, run first
-pipeline – are auto-completed from real org state, or manually completed/skipped, and
-the whole wizard can be dismissed. Rapid-start helpers seed a "Truth Classifier"
-example (schema, schema version, agent, pipeline) and create a starter pipeline.
+First-run onboarding: the `/onboarding` setup wizard plus an independent
+action-based checklist with DB persistence (`OnboardingProgress`), the latter
+rendered on the dashboard by the onboarding banner
+(`frontend/src/composables/useOnboarding.ts` / `OnboardingBanner.vue`). Six
+org-scoped checklist actions – log in, add an AI model, create first agent, create
+first schema, create first pipeline, run first pipeline – are auto-completed from
+real org state, or manually completed/skipped, and the checklist can be dismissed.
+Rapid-start helpers seed a "Truth Classifier" example (schema, schema version,
+agent, pipeline) and create a starter pipeline.
 
 ## Behaviours
 
@@ -84,8 +87,8 @@ example (schema, schema version, agent, pipeline) and create a starter pipeline.
   drives the real routes through the shared `client` fixture with only the DB layer
   patched: first-run status + action ordering, auto-completion from real org state,
   manual complete (incl. idempotency), skip, unknown-action 422, dismissal, the
-  seed-examples success/refusal paths, and starter-pipeline creation. Ten scenarios
-  now execute against `GET /status`, `POST /actions/{id}/complete|skip`, `POST
+  seed-examples success/refusal paths, and starter-pipeline creation. Eleven
+  scenarios execute against `GET /status`, `POST /actions/{id}/complete|skip`, `POST
   /dismiss`, `POST /seed-examples` and `POST /starter-pipeline`.
 
 - 2026-09-13: **product-map review pass**: closed the "seed
