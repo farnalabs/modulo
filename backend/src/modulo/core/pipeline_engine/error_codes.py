@@ -79,6 +79,13 @@ _CODE_SANDBOX_INPUT_CHECKOUT_FAILED = "sandbox.input_checkout_failed"
 _CODE_SANDBOX_INPUT_HOST_MISMATCH = "sandbox.input_host_mismatch"
 _CODE_SANDBOX_INPUT_RESOLUTION_FAILED = "sandbox.input_resolution_failed"
 _CODE_SANDBOX_WORKSPACE_INPUTS_DISABLED = "sandbox.workspace_inputs_disabled"
+# FAR-1558 follow-up: the dispatch route resolved to a provider that was NEVER
+# dispatch-relevant (or its dispatch config is missing) — a deterministic
+# config fault raised only at dispatch by ``runner_dispatch`` as a typed
+# ``SandboxDispatchUnboundError``. The executor's generic catch publishes the
+# raw class name, so without this code the run resolved through
+# ``harness.unknown`` ("Unknown error") with the cause only in the detail.
+_CODE_SANDBOX_DISPATCH_UNBOUND = "sandbox.dispatch_unbound"
 _CODE_CAPACITY_ORG = "capacity.org"
 # FAR-410: a connector write was cancelled mid-send (per-attempt timeout), so
 # the upstream side-effect state is unknowable. This is a DISTINCT terminal
@@ -451,6 +458,25 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         alert_severity="warning",
         guidance="Managed workspace inputs are disabled for this organisation or pipeline.",
     ),
+    # FAR-1558 follow-up: the bundled-runner dispatch route rejected the
+    # pipeline-bound environment profile — a provider that was NEVER
+    # dispatch-relevant (local / inert local_docker), a missing dispatch
+    # binding (MODULO_DOCKER_HOST / kubernetes opt-in / image_ref), or a
+    # locked-policy mismatch. Raised ONLY at dispatch as the typed
+    # ``SandboxDispatchUnboundError``; the executor's generic catch publishes
+    # ``type(exc).__name__``, so the LEGACY_ALIASES entry below is what keeps
+    # the run out of the ``harness.unknown`` "Unknown error" slice. Config
+    # fault like its sibling ``sandbox.tier_refused``: the operator re-binds
+    # the profile, so it is terminal and never retried.
+    _CODE_SANDBOX_DISPATCH_UNBOUND: ErrorCodeSpec(
+        error_class="config",
+        retryable=False,
+        alert_severity="warning",
+        guidance=(
+            "Environment profile is not dispatch-relevant (inert provider or missing "
+            "dispatch binding); re-bind the pipeline to a dispatch-capable profile."
+        ),
+    ),
     # --- node guard codes ------------------------------------------------
     _CODE_NODE_TIMEOUT: ErrorCodeSpec(
         error_class="node",
@@ -808,6 +834,14 @@ LEGACY_ALIASES: dict[str, str] = {
     # publish.
     "SandboxTierRefusedError": _CODE_SANDBOX_TIER_REFUSED,
     "LocalProviderBindingsRefusedError": _CODE_SANDBOX_TIER_REFUSED,
+    # FAR-1558 follow-up: the dispatch route's typed refusal (raised ONLY at
+    # dispatch by ``bundled_runner.runner_dispatch`` when a pipeline-bound
+    # profile is not dispatch-relevant). The executor's generic catch publishes
+    # ``type(exc).__name__`` as the raw ``runs.error_code``; without this alias
+    # the run presented as ``harness.unknown`` / "Unknown error" with the named
+    # cause confined to ``error_detail``. Canonicalizes to its own registered
+    # code so analytics buckets it apart from genuinely unclassified failures.
+    "SandboxDispatchUnboundError": _CODE_SANDBOX_DISPATCH_UNBOUND,
     "executor_setup_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_failed": _CODE_HARNESS_EXECUTOR_FAILED,
     "executor_heartbeat_lost": "harness.executor_heartbeat_lost",
