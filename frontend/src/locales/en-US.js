@@ -3576,9 +3576,25 @@ export default {
     },
     "CompositeEditorView": {
       "save_as_composite": "Save as Composite",
+      "save_as_composite_action": "Save as composite",
       "name": "Name",
+      "name_placeholder": "My Composite",
       "description": "Description",
-      "node_dispatch_badge": "DISPATCH"
+      "description_placeholder": "Optional description",
+      "back_to_library": "Back to Library",
+      "ports": "Ports",
+      "hide_ports": "Hide Ports",
+      "publish": "Publish",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving...",
+      "close_dialog": "Close dialog",
+      "loading_canvas": "Loading composite editor",
+      "node_dispatch_badge": "DISPATCH",
+      "node_manual_badge": "MANUAL",
+      "node_agent_badge": "AGENT",
+      "node_composite_badge": "COMPOSITE",
+      "node_default_label": "Node {id}"
     },
     "SettingsGuardrailsView": {
       "title": "Guardrails",
