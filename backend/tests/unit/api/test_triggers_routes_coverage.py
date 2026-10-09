@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncGenerator, Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,15 +25,24 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import get_db_session, get_plan_context
 from modulo.api.main import app
-from modulo.api.routes.triggers import _require_team_gate_in_txn
+
+# Aliased: the route handler's own name starts with ``test_``, so importing it
+# unaliased would make pytest try to COLLECT it as a test function.
+from modulo.api.routes.triggers import PollingTestRequest, _require_team_gate_in_txn
+from modulo.api.routes.triggers import test_polling_condition as polling_test_route
 from modulo.api.team_scope import TeamGateDenial
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
 from modulo.core.team_visibility import ConnectorBindingMissingError, ConnectorTeamMismatch
+from modulo.db.models.base import Base
+from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.pipeline import Pipeline
+from modulo.db.models.trigger import Trigger
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -889,6 +899,109 @@ def test_test_polling_condition_cross_team_connector_is_denied(client: tuple[Tes
     # never reached unless the pipeline context is forwarded into
     # ``_build_polling_connector_from_instance``.
     pipeline_result.scalar_one_or_none.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# POST /triggers/{id}/polling/test — real autobegin=False session (FAR-1609)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSecretsBackend:
+    """Credential-less secrets backend: the filesystem connector ignores creds."""
+
+    async def get_secret(self, _key: str) -> str:
+        return "{}"
+
+
+async def test_test_polling_condition_real_autobegin_false_session_returns_poll_result(
+    tmp_path: Path,
+) -> None:
+    """FAR-1609: the route 500s on EVERY real request without this fix.
+
+    The DI session factory is ``autobegin=False`` (api/dependencies.py), so
+    the evaluation's first read — the ``ConnectorInstance`` select inside
+    ``TriggerEngine.evaluate_condition`` — must run inside an active
+    transaction. The route used to evaluate AFTER its
+    ``async with session.begin():`` block had committed, so that read raised
+    ``InvalidRequestError: Autobegin is disabled on this Session`` and
+    ``handle_db_errors`` answered ``500`` (log key
+    ``triggers.test_polling_condition.session_contract_error``) on every real
+    request. The mocked-session tests above cannot see this — an AsyncMock
+    has no autobegin contract — and the integration conftest's session
+    factory omits ``autobegin=False``, which is why CI stayed green. This
+    test drives the REAL route handler through a REAL ``autobegin=False``
+    session over seeded rows and asserts the poll result comes back.
+    """
+    base = tmp_path / "fs"
+    base.mkdir()
+    (base / "one.txt").write_text("x", encoding="utf-8")
+
+    engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    tables = [Trigger.__table__, Pipeline.__table__, ConnectorInstance.__table__]
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+    # Mirrors the production DI factory (api/dependencies.py): no autobegin,
+    # no expire-on-commit.
+    factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
+
+    connector_id = uuid.uuid4()
+    principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    try:
+        async with factory() as session:
+            async with session.begin():
+                session.add(
+                    Pipeline(
+                        id=_PIPELINE_ID,
+                        organisation_id=_ORG_ID,
+                        name="poll-test-pipeline",
+                        account_id=_USER_ID,
+                    )
+                )
+                session.add(
+                    Trigger(
+                        id=_TRIGGER_ID,
+                        organisation_id=_ORG_ID,
+                        pipeline_id=_PIPELINE_ID,
+                        trigger_type="polling",
+                        account_id=_USER_ID,
+                        config_json={},
+                    )
+                )
+                session.add(
+                    ConnectorInstance(
+                        id=connector_id,
+                        organisation_id=_ORG_ID,
+                        name="fs",
+                        connector_type_id="filesystem",
+                        account_id=_USER_ID,
+                        credentials_ciphertext=b"x",
+                        config_json={"base_path": str(base)},
+                    )
+                )
+
+            with (
+                patch(
+                    "modulo.settings.get_settings",
+                    return_value=MagicMock(fernet_key="b" * 44, redis_url="", modulo_db="sqlite"),
+                ),
+                patch(
+                    "modulo.core.secrets_backend.create_secrets_backend",
+                    return_value=_FakeSecretsBackend(),
+                ),
+            ):
+                result = await polling_test_route(
+                    _TRIGGER_ID,
+                    PollingTestRequest(connector_instance_id=str(connector_id), poll_query="directory"),
+                    session,
+                    principal,
+                    principal,
+                )
+    finally:
+        await engine.dispose()
+
+    assert result["status"] == "condition_met"
+    assert result["records"]
 
 
 # ---------------------------------------------------------------------------
