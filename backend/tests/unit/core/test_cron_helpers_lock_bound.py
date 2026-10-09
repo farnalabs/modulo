@@ -440,6 +440,63 @@ class TestOrgLockTimeoutSkip:
         assert "next 60s tick" in message
         assert records[0].exc_info is not None
 
+    async def test_lock_timeout_counter_reaches_every_health_stats_surface(self) -> None:
+        """FAR-1613: the 55P03 skip's ``org_lock_timeouts`` travels the WHOLE
+        health-stats chain, not only the tick summary that the first test
+        asserts — a counter nobody persists is as invisible as a WARNING.
+
+        Pinned surfaces, each of which a dropped link silently zeroes:
+        ``_dispatcher_summary`` seeds it at 0, the summary handed to
+        ``set_dispatcher_reconcile_stats`` (the in-process ``/healthz/ready``
+        mirror) carries the increment, that setter mirrors it into the module
+        stats dict, and the summary handed to ``write_dispatcher_reconcile_stats``
+        — the Redis blob the WEB process reads — carries it too. The heartbeat
+        stays ``ok`` throughout: a contended org is a counter, never a tick
+        failure."""
+        timeout_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        assert summary["org_lock_timeouts"] == 0
+
+        async def fake_reconcile_org(
+            *, org_id: uuid.UUID, terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]], **_kwargs: Any
+        ) -> int:
+            if org_id == timeout_org:
+                raise _lock_timeout_error("UPDATE runs SET ...")
+            summary["scanned"] += 1
+            return 0
+
+        set_stats = MagicMock(wraps=ch.set_dispatcher_reconcile_stats)
+        write_stats = AsyncMock()
+        prior_mirror = ch._dispatcher_reconcile_stats.get("org_lock_timeouts")
+        try:
+            with (
+                patch.object(ch, "set_dispatcher_reconcile_stats", set_stats),
+                patch.object(ch, "write_dispatcher_reconcile_stats", write_stats),
+            ):
+                summary_out, _sweeps = await _drive_body(
+                    [timeout_org, good_org],
+                    fake_reconcile_org,
+                    summary=summary,
+                    terminalized_run_ids=[],
+                    record_facts=AsyncMock(),
+                )
+            # The tick's own outcome: a counter, on a tick that is NOT a failure.
+            assert summary_out["org_lock_timeouts"] == 1
+            assert summary_out["status"] == "ok"
+            assert summary_out["org_timeouts"] == 0
+            # The summary handed to set_dispatcher_reconcile_stats carries it.
+            handed_to_setter = dict(set_stats.call_args.args[0])
+            assert handed_to_setter["org_lock_timeouts"] == 1
+            assert handed_to_setter["status"] == "ok"
+            # ... and the setter mirrored it into the /healthz/ready module dict.
+            assert ch._dispatcher_reconcile_stats["org_lock_timeouts"] == 1
+            # ... and the persisted payload (what the WEB process reads) carries it.
+            persisted_payload = dict(write_stats.call_args.args[1])
+            assert persisted_payload["org_lock_timeouts"] == 1
+            assert persisted_payload["status"] == "ok"
+        finally:
+            ch._dispatcher_reconcile_stats["org_lock_timeouts"] = prior_mirror
+
     async def test_non_lock_timeout_error_still_fails_the_tick(self, caplog: pytest.LogCaptureFixture) -> None:
         """The handler is targeted at 55P03 ONLY: any other failure keeps the
         tick's own failure contract — propagated to the outer failure

@@ -6260,6 +6260,16 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         are unwound, the org is SKIPPED with a ``WARNING`` + full chain, and
         the loop CONTINUES — its rows are re-selected by the same predicates
         on the next 60s tick. Never a silent no-op, never a lost recovery.
+        The skip is also OBSERVABLE (FAR-1613): it increments the
+        ``org_lock_timeouts`` counter seeded in ``_dispatcher_summary``,
+        carried by ``set_dispatcher_reconcile_stats`` (the in-process health
+        mirror) and written into the ``/healthz/ready`` stats blob by
+        ``write_dispatcher_reconcile_stats`` — mirroring how the per-org time
+        bound's ``org_timeouts`` is threaded — while the heartbeat itself
+        stays ``status='ok'``, because a contended org is a COUNTER, never a
+        tick failure. A permanently contended org therefore reads as a rising
+        ``org_lock_timeouts`` on an ``ok`` tick rather than as silence in the
+        WARNING log alone.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
