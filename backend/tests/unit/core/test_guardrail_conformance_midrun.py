@@ -25,6 +25,7 @@ from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
     _capabilities_for_connector,
+    _register_connector_surface,
     build_live_manifest,
     canonical_capability,
     check_node_start,
@@ -291,6 +292,24 @@ async def test_build_live_manifest_empty_allowlist_yields_type_capabilities(monk
     assert registered.get("write") is True
     assert registered.get("git_push") is True
     assert registered.get("create_pr") is True
+
+
+def test_register_connector_surface_skips_alias_for_non_bare_capability():
+    """A legacy-qualified capability earns NO ``<type>.<cap>`` alias.
+
+    ``capabilities`` reaching this helper is always already canonical in
+    production (``_capabilities_for_connector`` reduces every accepted spelling),
+    so the guard is defensive: only a BARE capability gets the type-qualified
+    alias a typed claim matches, while a spelling that does not round-trip to
+    itself is left unaliased rather than mis-stamped as ``github.github.write``.
+    """
+    registered: dict[str, bool | None] = {}
+    row = MagicMock()
+    row.connector_type_id = "github"
+    _register_connector_surface(registered, row, {"read", "github.write"})
+    assert registered["read"] is True
+    assert registered["github.read"] is True
+    assert "github.github.write" not in registered
 
 
 def test_capabilities_for_connector_none_allowlist_yields_type_capabilities():

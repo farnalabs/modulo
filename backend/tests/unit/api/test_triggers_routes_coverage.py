@@ -625,6 +625,38 @@ def test_update_polling_config_unchanged_connector_is_not_revalidated(
     find.assert_not_awaited()
 
 
+def test_update_polling_config_non_uuid_connector_is_not_gated(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A non-UUID ``connector_instance_id`` can never name a real connector row.
+
+    The stored value cannot resolve to a ``ConnectorInstance`` (the fire job's
+    own parse fails loudly), so the save-time team-scope gate returns before any
+    read rather than refusing a value that cannot leak another team's
+    credentials.
+    """
+    http, _session = client
+    trigger = _make_trigger(trigger_type="polling", config_json={})
+    engine = MagicMock()
+    engine.schedule_polling_trigger = AsyncMock()
+    find = AsyncMock(return_value=[])
+    ctxs = list(_happy_patches())
+    ctxs.append(patch(f"{_PREFIX}find_connector_team_mismatches", new=find))
+    ctxs.append(patch(f"{_PREFIX}_load_trigger_for_update", new=AsyncMock(return_value=trigger)))
+    ctxs.append(patch(f"{_PREFIX}TriggerEngine", return_value=engine))
+
+    resp = _with_patches(
+        ctxs,
+        lambda: http.patch(
+            f"/api/v1/triggers/{_TRIGGER_ID}/polling",
+            json={"connector_instance_id": "not-a-connector-uuid"},
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+    find.assert_not_awaited()
+
+
 def test_update_polling_config_unresolvable_connector_returns_409(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
