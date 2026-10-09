@@ -10,6 +10,12 @@ code:
   - backend/src/modulo/db/migrations/versions/0289_pipelines_environment_profile.py
   - backend/src/modulo/core/runtime_provider
   - backend/src/modulo/core/team_visibility.py
+  - backend/src/modulo/core/bundled_runner/runner_dispatch.py
+  - backend/src/modulo/core/pipeline_engine/node_runner.py
+  - backend/src/modulo/api/mcp_server.py
+  - backend/src/modulo/cli/apply/models.py
+  - backend/src/modulo/cli/apply/plan.py
+  - backend/src/modulo/cli/apply/pipeline_apply.py
   - backend/src/modulo/api/routes/admin.py
   - frontend/src/views/runners
   - frontend/src/views/environment-profiles
@@ -19,6 +25,11 @@ unit-tests:
   - backend/tests/integration/crud/test_environment_profiles.py
   - backend/tests/unit/api/test_environment_profiles_routes.py
   - backend/tests/unit/api/test_pipeline_environment_profile_binding.py
+  - backend/tests/unit/api/test_snapshot_environment_profile_coercion.py
+  - backend/tests/unit/api/test_mcp_update_pipeline.py
+  - backend/tests/unit/cli/test_apply_environment_profile.py
+  - backend/tests/unit/core/bundled_runner/test_dispatch_route.py
+  - backend/tests/integration/test_dispatch_team_scope_backstop.py
   - backend/tests/integration/test_environment_profile_scope_rls_guard.py
   - backend/tests/unit/graph_validator/test_environment_capabilities.py
 bdd:
@@ -135,6 +146,48 @@ into the Runners page as redirects.)
       `unit-tests: test_pipeline_environment_profile_binding.py,
       test_environment_profiles_routes.py,
       test_environment_profile_scope_rls_guard.py`)
+- [x] The FAR-1558 team rule has a dispatch-time backstop as its last line of
+      defence (FAR-1598): when the snapshot-bound environment profile is loaded
+      for dispatch, `runner_dispatch` re-validates it with the SAME shared
+      predicate (`core.team_visibility.environment_profile_team_mismatch`)
+      against the pipeline's EFFECTIVE owner team, read team-blind through
+      `set_rls_execution_context` + `include_soft_deleted` so a team-private
+      pipeline or profile is never hidden from the internal execution context - a
+      team-private profile not owned by that team raises the typed
+      `SandboxDispatchUnboundError` carrying the named
+      `environment_profile_team_mismatch` code BEFORE any provider or hub is
+      selected, so a binding forged or drifted outside the three REST writers (a
+      direct DB write, a race) can never silently fall back to another provider
+      or the default route; org-visible profiles and NULL bindings resolve
+      exactly as before, and an unresolvable owner team is fail-closed (treated
+      as "no owner team", so a team-private profile mismatches every pipeline).
+      Locked by `backend/tests/integration/test_dispatch_team_scope_backstop.py`,
+      which exercises the PRODUCTION consumption chain (executor ctx seeding ->
+      node_runner `_resolve_sandbox_dispatch_route_for_run` -> shared predicate)
+      under real Postgres RLS: it asserts the premise first (an org-only session
+      cannot see the team-private profile), then the typed refusal with no
+      provider selected, then the same-team mirror resolving the e2b route - the
+      test fails if the dispatch enforcement is removed
+      (`backend/src/modulo/core/bundled_runner/runner_dispatch.py`,
+      `backend/src/modulo/core/pipeline_engine/node_runner.py`;
+      `unit-tests: test_dispatch_team_scope_backstop.py,
+      test_dispatch_route.py`)
+- [x] The binding is exposed on the read and non-REST surfaces (FAR-1599):
+      `SnapshotResponse` carries `environment_profile_id` (additive and nullable
+      - legacy and partial stand-in snapshots serialise as null) so a snapshot's
+      frozen binding is readable through the API; the MCP `update_pipeline` tool
+      accepts the field so MCP / org-API-key callers can set it; and
+      `cli/apply` takes an `environment_profile_id` key on pipelines, managed
+      ONLY when declared (an omitted key is neither hashed nor written so a
+      UI/API-set binding survives untouched, a declared id is hashed in
+      UUID-string id-space so `--diff` reports drift, and an explicit null clears
+      back to the default route), with a created pipeline's binding riding the
+      follow-up PATCH because `PipelineCreate` cannot carry the field
+      (`backend/src/modulo/api/mcp_server.py`,
+      `backend/src/modulo/cli/apply/{models,plan,pipeline_apply}.py`;
+      `unit-tests: test_apply_environment_profile.py,
+      test_mcp_update_pipeline.py,
+      test_snapshot_environment_profile_coercion.py`)
 
 ## Known Gaps
 
@@ -146,6 +199,21 @@ into the Runners page as redirects.)
   actual agent graph inside the workspace before release.
 
 ## QA History
+- 2026-10-09: **Improve Architecture product-map walk** – reconciled the two
+  product-map layers for the environment-profile binding follow-ups. The
+  FAR-1614 post-merge polish sweep (PR #1455) added the FAR-1598 (dispatch-time
+  team-scope backstop) and FAR-1599 (read / non-REST surface exposure:
+  `SnapshotResponse.environment_profile_id`, the MCP `update_pipeline` tool, and
+  the `modulo apply` `environment_profile_id` key) behaviours to the manifest
+  `feat-environments` registry, but this human-readable tracker still stopped at
+  FAR-1558, so a reader of the feature graph got the opposite coverage answer
+  from the machine layer Assistant indexes. Added the two checked behaviour
+  lines mirroring the manifest, plus the `runner_dispatch.py` / `node_runner.py`
+  / `mcp_server.py` / `cli/apply` code citations and the
+  `test_dispatch_team_scope_backstop.py` / `test_dispatch_route.py` /
+  `test_apply_environment_profile.py` / `test_mcp_update_pipeline.py` /
+  `test_snapshot_environment_profile_coercion.py` test citations.
+  `_ORPHANED_BDD_FEATURES` stays empty.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1558 sub-surface (per-pipeline environment-profile binding, slices 1 and 2
   merged in PRs #1396 and #1406): the binding shipped in the manifest
