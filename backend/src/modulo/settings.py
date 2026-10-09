@@ -924,6 +924,26 @@ class Settings(BaseSettings):
     # "development")`` convention for the alert path; the pre-existing call
     # sites are deliberately not migrated in this change.
     environment: str = Field("development", alias="MODULO_ENV")
+    # Comma-separated allowlist of environments (case-insensitive, trimmed)
+    # that may SEND operator alerts — it gates the TWO in-app operator-alert
+    # channels that consult it: the readiness-degradation cron
+    # (core.health_alerts) and the worker-liveness watchdog
+    # (core.watchdog.worker_liveness). Each of those channels fans out over
+    # email, generic webhook and Teams alike (hence the channel-neutral name:
+    # an EMAIL-named setting that also suppresses webhook/Teams fan-out would
+    # be a footgun for a self-hosted operator). It does NOT gate the
+    # out-of-process Gatus sentinel or the error-tracking pipeline — those
+    # are separate systems (see docs/configuration-reference.md). None/blank
+    # (default) = alerts in EVERY environment, so a self-hosted compose
+    # deployment defaulting to MODULO_ENV=development still alerts out of
+    # the box. When set, one of these two channels sends only when
+    # ``environment`` is in the list — the staging deployment
+    # (MODULO_ENV=staging, a CI-only E2E environment with no live workload)
+    # sets it to "production" so its readiness blips stop paging the
+    # operator while production keeps alerting. The ONE parse lives in
+    # ``core.alert_context.alerting_enabled_for_environment`` so both
+    # channels share it and cannot drift.
+    alert_environments: str | None = Field(default=None, alias="ALERT_ENVIRONMENTS", repr=False)
     # Operator-supplied free text appended verbatim to every alert email body
     # (FAR-1495) — runbook links, escalation notes, ticket pointers. One item
     # per line; blank lines are dropped and the rendering is bounded by

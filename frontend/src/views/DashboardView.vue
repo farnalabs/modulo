@@ -90,7 +90,7 @@
             </span>
           </div>
           <p class="text-xs text-muted-foreground mt-1">{{ spendTrackedDays }} {{ $t('views.DashboardView.days_tracked') }}</p>
-          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="hsl(var(--warning))" :show-y-axis="true" />
+          <Sparkline class="mt-2 h-12 w-full" :data="spendSparklineData" :labels="summaryTrendLabels" unit="$" color="hsl(var(--warning-text))" :show-y-axis="true" />
         </router-link>
       </div>
       <!-- Team breakdown (Team only) -->
@@ -161,11 +161,11 @@
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.token_spend') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="hsl(var(--warning))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendSpendData" :labels="trendLabels" unit="$" color="hsl(var(--warning-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.avg_approval_time') }}</p>
-            <Sparkline class="h-16 w-full" :data="trendHitlWaitMs" :labels="trendLabels" missing-data="carry-forward" unit="ms" color="hsl(var(--warning))" :show-y-axis="true" :show-x-ticks="true" />
+            <Sparkline class="h-16 w-full" :data="trendHitlWaitMs" :labels="trendLabels" missing-data="carry-forward" unit="ms" color="hsl(var(--warning-text))" :show-y-axis="true" :show-x-ticks="true" />
           </div>
           <div>
             <p class="text-xs font-medium text-muted-foreground mb-1">{{ $t('views.DashboardView.rejection_rate') }}</p>

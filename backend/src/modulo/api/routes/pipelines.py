@@ -4451,7 +4451,18 @@ class SnapshotResponse(BaseModel):
         # Read defensively (same treatment as PipelineResponse's binding
         # validator): a partial stand-in that lacks the column serialises as
         # "unbound" (None), never a validation failure.
-        return value if isinstance(value, uuid.UUID | str) else None
+        if isinstance(value, uuid.UUID | str):
+            return value
+        if value is not None:
+            # Observability only — the returned value is unchanged. A non-None
+            # value of any other type would otherwise vanish into "unbound"
+            # with no trace (the None case is the documented unbound /
+            # missing-column read, not a coercion, so it stays quiet).
+            logger.debug(
+                "Snapshot read: unexpected environment_profile_id type %s; coercing to None",
+                type(value).__name__,
+            )
+        return None
 
 
 class SnapshotDetailResponse(SnapshotResponse):

@@ -29,8 +29,10 @@ spec:
       # provider must turn this on to give it a namespaced credential. With
       # the provider off nothing here calls the Kubernetes API, and an
       # unmounted token keeps the blast radius of a compromised pod small
-      # (kubernetes:S6865).
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      # (kubernetes:S6865). The `| default false` guard makes a nil
+      # override (e.g. --set serviceAccount.automountServiceAccountToken=null)
+      # render `false` rather than an empty, apply-time-error value.
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken | default false }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

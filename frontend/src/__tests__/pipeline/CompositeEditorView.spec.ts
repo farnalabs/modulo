@@ -261,6 +261,40 @@ describe('CompositeEditorView', () => {
     wrapper.unmount()
   })
 
+  it('renders the page-level ErrorAlert and its retry reloads the editor when the fetcher itself throws', async () => {
+    // The fetcher catch-guards each GET, so the pageError branch only surfaces
+    // when the call itself throws synchronously (before the `.catch` attaches).
+    // That exercises the v-else-if="pageError" arm plus the ErrorAlert retry
+    // wiring; retry clears the override and refetches into the canvas.
+    getMock.mockImplementation(() => {
+      throw new Error('client exploded')
+    })
+    const wrapper = mountView()
+    await flush()
+
+    expect(wrapper.text()).toContain('client exploded')
+    expect(wrapper.find('.vue-flow-stub').exists()).toBe(false)
+
+    const retryBtn = wrapper.findAll('button').find((b) => b.text().includes('Retry'))!
+    expect(retryBtn).toBeTruthy()
+
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/composite-templates/{template_id}') {
+        return Promise.resolve({ data: templatePayload(), error: undefined })
+      }
+      if (url === '/api/v1/composite-templates/{template_id}/editor') {
+        return Promise.resolve({ data: editorPayload(), error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    await retryBtn.trigger('click')
+    await flush()
+
+    expect(wrapper.find('.vue-flow-stub').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('client exploded')
+    wrapper.unmount()
+  })
+
   it('canManage: operator/admin JWTs grant manage rights; other roles do not', async () => {
     const wrapper = mountView()
     await flush()
@@ -329,6 +363,30 @@ describe('CompositeEditorView', () => {
     await nextTick()
     expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(false)
     expect(postMock).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('save-as dialog renders a POST failure inline (role=alert) and stays open', async () => {
+    // The saveAsError row only mounts when the dialog is open AND a save has
+    // failed; handleSaveAs keeps the dialog open on error so the user can fix
+    // the name.
+    const wrapper = mountView()
+    await flush()
+
+    const saveAsBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Save as composite')!
+    await saveAsBtn.trigger('click')
+    await nextTick()
+    await wrapper.find('#compositeeditorview-field-2').setValue('Duplicate')
+
+    postMock.mockRejectedValue(new Error('name already taken'))
+    await wrapper.find('[data-testid="composite-save-as-submit"]').trigger('click')
+    await flush()
+
+    const alert = wrapper.find('[role="alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('name already taken')
+    expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(true)
+    expect(routerPush).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

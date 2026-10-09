@@ -619,10 +619,10 @@ async def test_benign_event_loop_lag_advisory_never_alerts() -> None:
     assert not sender.sent
     assert {result["action"] for result in results} == {"none"}
     assert {result["status"] for result in results} == {"healthy"}
-    # Still NAMED in the conditions for anyone reading them directly.
-    assert observer.observation.conditions() == [
-        "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)"
-    ]
+    # And it is never reported as a "Failing check": a benign, non-triggering
+    # advisory contributes nothing to observed_state, so naming it as the
+    # reason an alert fired is pure alarm fatigue (BENIGN_NON_TRIGGERING_CHECKS).
+    assert not observer.observation.conditions()
 
 
 async def test_gating_check_degraded_still_alerts() -> None:
@@ -651,10 +651,12 @@ async def test_gating_check_degraded_still_alerts() -> None:
     assert "database: degraded (dead-tuple ratio 0.18)" in sender.sent[0]["html"]
 
 
-async def test_real_failure_alongside_benign_advisory_alerts_and_names_both() -> None:
+async def test_real_failure_alongside_benign_advisory_alerts_and_names_only_the_real_one() -> None:
     """A real sweep failure WITH a benign advisory alongside (both non-``ok``,
-    aggregate ``ok``): the real one drives the alert, and ``conditions()``
-    lists EVERY non-``ok`` check, so the body names both."""
+    aggregate ``ok``): the real one drives the alert and is named in the body;
+    the benign one (``event_loop_lag``) is NOT listed as a failing check — it
+    cannot contribute to ``observed_state``, so blaming it is alarm fatigue
+    (``BENIGN_NON_TRIGGERING_CHECKS``)."""
     settings = _make_settings()
     observer = _FakeObserver()
     sender = _FakeSender()
@@ -673,11 +675,13 @@ async def test_real_failure_alongside_benign_advisory_alerts_and_names_both() ->
     assert len(sender.sent) == 1
     alert = sender.sent[0]
     assert alert["subject"] == "[Modulo] Readiness degraded"
-    # Both failing checks are named (informative context), the real one
-    # being the reason the alert fired.
+    # The real failure is named (it is the reason the alert fired)...
     assert "runner_marker_sweep: degraded (no sweep in 22m)" in alert["html"]
-    assert "event_loop_lag: degraded (EVENT-LOOP STALL: loop delayed up to 2400ms)" in alert["html"]
-    # Healthy checks are not reported as problems.
+    assert "runner_marker_sweep: degraded (no sweep in 22m)" in alert["text"]
+    # ...the benign advisory is not reported as a failing check anywhere.
+    assert "event_loop_lag" not in alert["html"]
+    assert "event_loop_lag" not in alert["text"]
+    # Healthy checks are not reported as problems either.
     assert "database:" not in alert["html"]
 
 
@@ -688,11 +692,11 @@ async def test_real_failure_alongside_benign_advisory_alerts_and_names_both() ->
 
 
 async def test_recovery_reports_only_conditions_that_actually_cleared() -> None:
-    """The alert-time condition list can contain a BENIGN advisory that is
-    still degraded when the real sweep recovers. The recovery email must
-    report only what ACTUALLY cleared: exactly one recovery email, the
-    cleared sweep named, and the still-failing benign advisory never claimed
-    as resolved (it appears nowhere in the recovery email)."""
+    """The recovery email must report only what ACTUALLY cleared: exactly one
+    recovery email, the cleared sweep named, and the still-degraded benign
+    advisory never claimed as resolved (it appears nowhere in the recovery
+    email — and, since benign advisories are no longer listed as failing
+    checks at alert time either, nowhere in the alert email either)."""
     settings = _make_settings()
     observer = _FakeObserver()
     sender = _FakeSender()
@@ -711,9 +715,12 @@ async def test_recovery_reports_only_conditions_that_actually_cleared() -> None:
     result = await _tick(observer, sender, store, settings, clock)
     assert result["action"] == "alert"
     assert len(sender.sent) == 1
-    # The alert recorded BOTH conditions (both were non-ok at alert time).
+    # The alert recorded ONLY the real condition: the benign advisory is not
+    # a failing check (BENIGN_NON_TRIGGERING_CHECKS), so it is never stored,
+    # never reported, and can therefore never be claimed as cleared either.
     assert sweep_bullet in sender.sent[0]["html"]
-    assert lag_bullet in sender.sent[0]["html"]
+    assert lag_bullet not in sender.sent[0]["html"]
+    assert lag_bullet not in sender.sent[0]["text"]
 
     # The sweep recovers; the benign advisory is STILL degraded.
     observer.observation = _advisory_observation(
@@ -852,6 +859,13 @@ def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
     the ADVISORY remainder must equal this module's real-failure set plus
     the three deliberate benign exclusions. A check added/renamed/removed
     over there fails HERE rather than silently losing alert coverage.
+
+    The two production constants are pinned against this same parse:
+    ``BENIGN_NON_TRIGGERING_CHECKS`` (the REPORTING-benign set — never
+    listed as a failing check) must be exactly the benign literal minus
+    ``db_hygiene`` (a graded failure that still gates, so it MUST be
+    reported), and must never overlap the real-failure set — otherwise a
+    future rename/reclassify could drift the reporting set with no test red.
     """
     from modulo.api.routes import health as health_module
 
@@ -868,6 +882,12 @@ def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
 
     benign = {"event_loop_lag", "break_glass", "db_hygiene"}
     assert advisory_names == ha.REAL_FAILURE_ADVISORY_CHECKS | benign
+    # The reporting-benign set is the benign literal minus db_hygiene (a
+    # graded failure that gates the aggregate and must keep being reported).
+    assert set(benign) - {"db_hygiene"} == ha.BENIGN_NON_TRIGGERING_CHECKS
+    # ...and can never drift INTO the real-failure set (a check that pages
+    # must not also be filtered from the body that explains the page).
+    assert not (ha.BENIGN_NON_TRIGGERING_CHECKS & ha.REAL_FAILURE_ADVISORY_CHECKS)
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +915,162 @@ def test_alerting_configured_requires_both_halves() -> None:
     assert ha.alerting_configured(_make_settings(alert_email_to="")) is False
 
 
+# ---------------------------------------------------------------------------
+# ALERT_ENVIRONMENTS: the shared environment allowlist gate
+# (core.alert_context.alerting_enabled_for_environment — ONE definition for
+# both alert channels). Unset/blank = alert in every environment; set = only
+# when settings.environment is listed.
+# ---------------------------------------------------------------------------
+
+
+def test_environment_allowlist_unset_allows_every_environment() -> None:
+    """Unset (the compose/self-hosted default) or blank must alert EVERYWHERE
+    — a deployment that never heard of the allowlist keeps working."""
+    assert ha.alerting_enabled_for_environment(_make_settings()) is True
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="")) is True
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="   ")) is True
+    # Punctuation that parses to no entries is blank, not "allow nothing".
+    assert ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS=" , , ")) is True
+
+
+def test_environment_allowlist_matches_case_insensitively_and_trims() -> None:
+    """Entries are comma-split, trimmed and case-folded on BOTH sides."""
+    allowed = _make_settings(ALERT_ENVIRONMENTS=" Production , staging ", MODULO_ENV="staging")
+    assert ha.alerting_enabled_for_environment(allowed) is True
+    assert (
+        ha.alerting_enabled_for_environment(
+            _make_settings(ALERT_ENVIRONMENTS="production,staging", MODULO_ENV="Production")
+        )
+        is True
+    )
+    excluded = _make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="staging")
+    assert ha.alerting_enabled_for_environment(excluded) is False
+    # An environment that is not in a non-empty allowlist never alerts, even
+    # the self-hosted default one.
+    assert (
+        ha.alerting_enabled_for_environment(_make_settings(ALERT_ENVIRONMENTS="production", MODULO_ENV="development"))
+        is False
+    )
+
+
+async def test_excluded_environment_never_sends_but_state_machine_advances(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``ALERT_ENVIRONMENTS=production`` + ``MODULO_ENV=staging``: health
+    is still evaluated, the hysteresis/dedup state still advances (so the
+    operator loses no history if the allowlist changes), but NOTHING is sent —
+    exactly the disabled-channel quiet path, with its log-once notice."""
+    settings = _make_settings(MODULO_ENV="staging", ALERT_ENVIRONMENTS="production")
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    with caplog.at_level(logging.INFO, logger=ha.__name__):
+        first = await _tick(observer, sender, store, settings, clock)
+        clock["now"] += 100.0
+        second = await _tick(observer, sender, store, settings, clock)
+
+    # Health still evaluated and reported...
+    assert first["status"] == "unhealthy"
+    assert second["status"] == "unhealthy"
+    # ...the state machine advanced across BOTH confirmed ticks...
+    assert first["pending_count"] == 1
+    assert second["pending_count"] == 2
+    assert second["action"] == "disabled"
+    assert second["notified"] == "none"
+    persisted = json.loads(store.data[ha.STATE_KEY])
+    assert persisted["pending"] == "unhealthy"
+    assert persisted["pending_count"] == 2
+    # ...but nothing was emailed.
+    assert not sender.sent
+    # The quiet path stays QUIET-but-visible: one notice in the window, and
+    # it names the setting that would re-enable alerting here.
+    disabled_logs = [
+        record.getMessage() for record in caplog.records if "health_alerts.disabled" in record.getMessage()
+    ]
+    assert len(disabled_logs) == 1
+    assert "ALERT_ENVIRONMENTS" in disabled_logs[0]
+
+
+async def test_included_environment_still_sends() -> None:
+    """``ALERT_ENVIRONMENTS=production`` + ``MODULO_ENV=production``:
+    the allowlist does not suppress the environment it names — exactly one
+    alert email on the confirmed edge."""
+    settings = _make_settings(MODULO_ENV="production", ALERT_ENVIRONMENTS="production")
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, settings, clock)
+    result = await _tick(observer, sender, store, settings, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    assert "unavailable" in sender.sent[0]["subject"].lower()
+
+
+async def test_excluded_recovery_edge_clears_incident_then_reinclusion_alerts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """F2 (health_alerts): while EXCLUDED, a confirmed RECOVERY edge closes
+    the incident record WITHOUT sending. Leaving ``notified="unhealthy"``
+    stranding would mean a distinct later incident after re-inclusion is
+    never alerted, and a much later recovery email would name this old
+    incident's conditions/duration."""
+    excluded = _make_settings(MODULO_ENV="staging", ALERT_ENVIRONMENTS="production")
+    included = _make_settings(MODULO_ENV="production", ALERT_ENVIRONMENTS="production")
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    # An incident that WAS alerted while the environment was included.
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": ["database: unavailable (connection refused)"],
+            "since": 999_000.0,
+        }
+    )
+
+    # 1. The incident recovers while excluded: no email, record closed.
+    observer.observation = _healthy()
+    with caplog.at_level(logging.INFO, logger=ha.__name__):
+        await _tick(observer, sender, store, excluded, clock)
+        result = await _tick(observer, sender, store, excluded, clock)
+
+    assert result["action"] == "recovery_suppressed"
+    assert result["notified"] == "none"
+    assert not sender.sent
+    persisted = json.loads(store.data[ha.STATE_KEY])
+    assert persisted["notified"] is None
+    assert not persisted["conditions"]
+    assert persisted["since"] is None
+    # Hysteresis state still advanced — only the notified record is closed.
+    assert persisted["pending"] == "healthy"
+    assert persisted["pending_count"] == 2  # seeded "unhealthy" -> fresh 2-tick healthy run
+    # Quiet-but-visible: the excluded notice stays rate-limited across ticks.
+    disabled_logs = [record for record in caplog.records if "health_alerts.disabled" in record.getMessage()]
+    assert len(disabled_logs) == 1
+
+    # 2. A DISTINCT new incident after re-inclusion alerts (no stranding).
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, included, clock)
+    result = await _tick(observer, sender, store, included, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    assert "unavailable" in sender.sent[0]["subject"].lower()
+    # The alert reports the NEW incident's conditions, not the old ones.
+    assert "database: unavailable (connection refused)" in sender.sent[0]["html"]
+
+
 def test_conditions_name_non_ok_checks_without_detail() -> None:
     """A non-``ok`` check with no detail still produces a bullet."""
     observation = ha.HealthObservation(
@@ -906,6 +1082,43 @@ def test_conditions_name_non_ok_checks_without_detail() -> None:
     )
     assert observation.conditions() == ["redis: degraded"]
     assert observation.observed_state == "unhealthy"
+
+
+def test_conditions_omit_benign_non_triggering_checks() -> None:
+    """``break_glass`` (an expected config posture) and ``event_loop_lag`` (a
+    transient stall diagnostic) are non-``ok`` but never contribute to
+    ``observed_state``, so they must NOT be listed as "Failing checks" —
+    every other check still is, ``db_hygiene`` (a genuine gating failure)
+    included."""
+    assert frozenset({"break_glass", "event_loop_lag"}) == ha.BENIGN_NON_TRIGGERING_CHECKS
+
+    observation = ha.HealthObservation(
+        status="degraded",
+        checks={
+            "break_glass": ha.SubCheck(status="degraded", detail="standby secret unset"),
+            "event_loop_lag": ha.SubCheck(status="degraded", detail="EVENT-LOOP STALL: loop delayed up to 2400ms"),
+            "dispatcher_reconcile": ha.SubCheck(status="degraded", detail="stale 240s since last run"),
+            "db_hygiene": ha.SubCheck(status="degraded", detail="dead-tuple ratio 0.72"),
+        },
+    )
+    assert observation.conditions() == [
+        "db_hygiene: degraded (dead-tuple ratio 0.72)",
+        "dispatcher_reconcile: degraded (stale 240s since last run)",
+    ]
+
+    # A benign-only observation reports nothing (it cannot page either).
+    benign_only = ha.HealthObservation(
+        status="ok",
+        checks={
+            "break_glass": ha.SubCheck(status="degraded", detail="expected posture"),
+            "event_loop_lag": ha.SubCheck(status="degraded", detail="stall"),
+        },
+    )
+    assert not benign_only.conditions()
+
+    # non_ok_names() stays UNfiltered so the recovery split can never claim a
+    # still-degraded benign advisory cleared.
+    assert benign_only.non_ok_names() == {"break_glass", "event_loop_lag"}
 
 
 def test_from_raw_malformed_json_starts_fresh(caplog: pytest.LogCaptureFixture) -> None:

@@ -20,13 +20,14 @@ from sqlalchemy.orm import Session
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
 from modulo.auth.dependencies import get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_logger.append_only import (
     AppendOnlyViolationError,
     register_append_only_guard,
 )
 from modulo.db.models.audit_event import AuditEvent
 from modulo.db.models.base import Base
+from tests.bdd.conftest import ORG_ID, USER_ID, make_mock_pipeline, make_mock_run, make_mock_snapshot
 
 # SQLite cannot natively bind ``uuid.UUID`` — the DBAPI raises
 # ProgrammingError. Register a hex adapter (process-global, consulted at bind
@@ -60,6 +61,277 @@ def _store_response(request, resp):
         request.node._resp_body = resp.text
 
 
+def _harden_run_scalars(run):
+    """Real-only scalars for RunResponse serialisation (MagicMock children 500)."""
+    from decimal import Decimal
+
+    from tests.bdd.conftest import make_mock_run  # noqa: F401  (.kwargs may build one)
+
+    if not isinstance(run.id, uuid.UUID):
+        run.id = uuid.uuid4()
+    for attr in ("cost_breakdown", "run_classification", "blocked_partial_summary", "input_payload"):
+        if not isinstance(getattr(run, attr, None), dict):
+            setattr(run, attr, None)
+    ntu = getattr(run, "node_token_usage", None)
+    if ntu is not None and not isinstance(ntu, dict):
+        run.node_token_usage = None
+    if not isinstance(getattr(run, "snapshot_id", None), (str, uuid.UUID)):
+        run.snapshot_id = None
+    total_cost = getattr(run, "total_cost_usd", None)
+    if total_cost is None:
+        run.total_cost_usd = Decimal("0.000000")
+    elif isinstance(total_cost, (int, float)):
+        run.total_cost_usd = Decimal(str(total_cost))
+    if not isinstance(getattr(run, "work_item_refs", None), (list, type(None))):
+        run.work_item_refs = None
+    return run
+
+
+def _run_detail_fake(run_id, **kwargs):
+    """Run-shaped fake whose scalars are all REAL values (detail-route serializer)."""
+    from datetime import UTC, datetime
+
+    from tests.bdd.conftest import make_mock_run
+
+    run = make_mock_run(**kwargs)
+    run.id = run_id
+    if not isinstance(run.created_at, datetime):
+        run.created_at = datetime.now(UTC)
+    if run.heartbeat_at is None or not isinstance(run.heartbeat_at, datetime):
+        run.heartbeat_at = run.created_at
+    if run.started_at is None or not isinstance(run.started_at, datetime):
+        run.started_at = run.created_at
+    run.work_item_refs = run.work_item_refs if isinstance(run.work_item_refs, list) else None
+    return _harden_run_scalars(run)
+
+
+def _fetch_run_detail(client, request, run, otel_endpoint="trace-id"):
+    """GET /api/v1/runs/{id} with the detail route's read seams patched (same
+    harness as the run-detail tests in test_observability.py)."""
+    from decimal import Decimal
+
+    with (
+        patch(
+            "modulo.api.routes.runs._do_get_run_with_gate",
+            new_callable=AsyncMock,
+            return_value=(run, False),
+        ),
+        patch(
+            "modulo.api.routes.runs._do_get_child_run_rollup",
+            new_callable=AsyncMock,
+            return_value=(Decimal(0), 0),
+        ),
+        patch(
+            "modulo.api.routes.runs._do_get_otel_endpoint",
+            new_callable=AsyncMock,
+            return_value=otel_endpoint,
+        ),
+        patch(
+            "modulo.api.routes.runs._do_get_run_observability",
+            new_callable=AsyncMock,
+            return_value=(None, None, []),
+        ),
+        patch("modulo.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
+    ):
+        return client.get(f"/api/v1/runs/{run.id}")
+
+
+def _persona_post_run(client, request, ctx, pipeline_name):
+    """POST /api/v1/runs: real route + RLS/snapshot/run/dispatch seams patched."""
+    from tests.bdd.conftest import make_mock_pipeline
+
+    pipeline = getattr(request.node, "_mock_pipeline", None) or make_mock_pipeline(name=pipeline_name)
+    _persona_post_run_with(client, request, ctx, pipeline)
+
+
+def _library_row(data):
+    """LibraryPrimitive row for from-attributes response validation."""
+    from modulo.db.models.library_primitive import LibraryPrimitive
+    from tests.bdd.conftest import ORG_ID, USER_ID
+
+    defaults = {
+        "organisation_id": ORG_ID,
+        "account_id": USER_ID,
+        "source": "community",
+        "content_json": {},
+        "tags": [],
+        "visibility": "org",
+        "download_count": 0,
+    }
+    defaults.update(data)
+
+    def _uid(v):
+        return uuid.UUID(v) if isinstance(v, str) else v
+
+    return LibraryPrimitive(
+        id=_uid(defaults["id"]),
+        organisation_id=_uid(defaults["organisation_id"]),
+        name=defaults["name"],
+        slug=defaults.get("slug", defaults["id"][:8]),
+        description=defaults.get("description", ""),
+        primitive_type=defaults["primitive_type"],
+        source=defaults["source"],
+        version=defaults.get("version", "1.0"),
+        author=defaults.get("author", "jordan-contributor"),
+        tags=defaults["tags"],
+        content_json=defaults["content_json"],
+        source_url=defaults.get("source_url"),
+        forked_from=_uid(defaults["forked_from"]) if defaults.get("forked_from") else None,
+        account_id=_uid(defaults["account_id"]),
+        tier=defaults.get("tier", "native"),
+        auto_update=defaults.get("auto_update", True),
+        status=defaults.get("status"),
+        manifest_pins=defaults.get("manifest_pins"),
+        trust_header=defaults.get("trust_header"),
+        checksum=defaults.get("checksum"),
+        ed25519_signature=defaults.get("ed25519_signature"),
+        verified=defaults.get("verified"),
+        download_count=defaults.get("download_count"),
+        average_rating=defaults.get("average_rating"),
+        review_count=defaults.get("review_count"),
+        owner_team_id=defaults.get("owner_team_id"),
+        visibility=defaults["visibility"],
+        created_at=defaults.get("created_at") or _utc_now(),
+        updated_at=defaults.get("updated_at") or _utc_now(),
+    )
+
+
+def _utc_now():
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
+def _connector_row(org_id, name, conn_type, status):
+    """Connector-instance row with real scalars for ConnectorResponse serialisation."""
+    from datetime import UTC, datetime
+
+    row = MagicMock()
+    row.id = uuid.uuid4()
+    row.name = name
+    row.connector_type_id = conn_type
+    row.organisation_id = org_id
+    row.credentials_ciphertext = b"ciphertext"
+    row.config_json = {}
+    row.allowed_operations = []
+    row.status = status
+    row.visibility = "org"
+    row.owner_team_id = None
+    row.tier = "native"
+    row.created_at = datetime.now(UTC)
+    row.updated_at = row.created_at
+    row.degraded_at = None
+    row.last_skip_error = None
+    row.validation_level = None
+    return row
+
+
+def _copy_primitive_fields(src_row, dst_row):
+    """Copy every LibraryPrimitive response column between fake rows.
+
+    The adapt route serialises the copied row through
+    ``LibraryPrimitiveResponse``, so every required response field must be
+    populated on the fake (it is never flushed, so column defaults do not
+    apply)."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    dst_row.id = uuid.uuid4()
+    dst_row.organisation_id = src_row.organisation_id
+    dst_row.name = src_row.name
+    dst_row.slug = f"{src_row.name}-{dst_row.id.hex[:8]}"
+    dst_row.description = src_row.description
+    dst_row.primitive_type = src_row.primitive_type
+    dst_row.source = "local"
+    dst_row.version = src_row.version
+    dst_row.author = src_row.author
+    dst_row.tags = src_row.tags
+    dst_row.content_json = src_row.content_json
+    dst_row.source_url = src_row.source_url
+    dst_row.forked_from = src_row.id
+    dst_row.tier = "native"
+    dst_row.auto_update = True
+    dst_row.visibility = "org"
+    dst_row.created_at = now
+    dst_row.updated_at = now
+
+
+def _persona_post_run_with(client, request, ctx, pipeline):
+    """Same as _persona_post_run but the caller supplies the pipeline object
+    explicitly (used when the scenario names a specific pipeline)."""
+    from tests.bdd.conftest import make_mock_run, make_mock_snapshot
+
+    request.node._mock_pipeline = pipeline
+    run = make_mock_run(status="pending", pipeline_id=pipeline.id)
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch(
+            "modulo.api.routes.runs.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=make_mock_snapshot(pipeline_id=pipeline.id),
+        ),
+        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
+        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+    ):
+        resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id), "input_payload": {}})
+    request.node._mock_run = run
+    ctx["run_id"] = run.id
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 202, resp.text
+
+
+def _default_personas_library_items():
+    """browse rows: >=4 types so any sort criterion is satisfiable."""
+    workflow = {"id": str(uuid.uuid4()), "name": "issue-to-pr", "primitive_type": "workflow", "download_count": 142}
+    items = [workflow]
+    for name, ptype in [
+        ("structured-requirements", "schema"),
+        ("prd-drafter", "agent"),
+        ("gitlab-integration", "integration"),
+    ]:
+        items.append(
+            {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "primitive_type": ptype,
+                "author": "other-contributor",
+                "download_count": 40,
+            }
+        )
+    return items
+
+
+def _materialize_result():
+
+    return {
+        "pipeline_id": str(uuid.uuid4()),
+        "pipeline_name": "pr-summarizer",
+        "primitive_id": str(uuid.uuid4()),
+        "agent_count": 2,
+        "edge_count": 1,
+        "schema_count": 2,
+        "warnings": [],
+        "connector_bindings": [],
+    }
+
+
+def _persona_import_confirm(client, request, ctx, bundle):
+    """POST /api/v1/libraries/import/confirm (<400 stores _resp_body via _store_response)."""
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.library.materialize_import",
+            new_callable=AsyncMock,
+            return_value=_materialize_result(),
+        ),
+    ):
+        return client.post("/api/v1/libraries/import/confirm", json={"bundle_json": json.dumps(bundle)})
+
+
 # ===========================================================================
 # Priya: goal-priya-api-key-ci
 # ===========================================================================
@@ -72,42 +344,73 @@ def ci_job_needs_trigger(ctx):
 
 @when(parsers.parse('I create an API key with role "{role}"'))
 def create_api_key(role, ctx):
-    key = MagicMock()
-    key.id = uuid.uuid4()
-    key.key_prefix = "mod_rn_"
-    key.role = role
-    ctx["api_key"] = key
+    ctx["api_key_role"] = role
+    ctx["api_key_account_id"] = uuid.uuid4()
 
 
 @when("the CI job uses the key to POST /api/runs")
-def ci_job_posts_run(ctx, request):
+def ci_job_posts_run(ctx, request, client):
+    """POST /api/v1/runs through the real route as an API-key principal.
+
+    The route's DB seams are patched (the established
+    ``test_alpha_triggers._patch_trigger_run`` pattern). The auth dependency is
+    overridden to an API-key ``TenantPrincipal`` (``via_api_key=True``, role
+    ``runner``) so the run's attribution - ``create_run(account_id=...)`` -
+    carries the credential's own account exactly as the route stores it for an
+    ``mk_`` key (FAR-620).
+    """
+    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+
     pipeline_id = uuid.uuid4()
-    mock_run = MagicMock()
-    mock_run.id = uuid.uuid4()
-    mock_run.pipeline_id = pipeline_id
-    mock_run.status = "pending"
-    mock_run.trigger_type = "api_key"
-    ctx["mock_run"] = mock_run
-    request.node._resp_body = {"status": "pending", "id": str(mock_run.id)}
-    request.node._mock_run = mock_run
+    pipeline = make_mock_pipeline(id=pipeline_id, name="changelog-generator")
+    run = make_mock_run(status="pending", trigger_type="manual", pipeline=pipeline)
+    api_key_principal = TenantPrincipal(
+        username="ci-runner",
+        organisation_id=ORG_ID,
+        account_id=ctx["api_key_account_id"],
+        org_role=ctx.get("api_key_role", "runner"),
+        via_api_key=True,
+    )
+
+    def _api_key_override() -> TenantPrincipal:
+        return api_key_principal
+
+    previous = client.app.dependency_overrides.get(get_current_tenant_user_or_api_key)
+    client.app.dependency_overrides[get_current_tenant_user_or_api_key] = _api_key_override
+    try:
+        with (
+            patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+            patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+            patch(
+                "modulo.api.routes.runs.create_snapshot_from_live_graph",
+                new_callable=AsyncMock,
+                return_value=make_mock_snapshot(),
+            ),
+            patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run) as create_run,
+            patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
+        ):
+            resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline_id), "input_payload": {}})
+    finally:
+        if previous is None:
+            client.app.dependency_overrides.pop(get_current_tenant_user_or_api_key, None)
+        else:
+            client.app.dependency_overrides[get_current_tenant_user_or_api_key] = previous
+    _store_response(request, resp)
+    request.node._create_run = create_run
+    ctx["run_id"] = run.id
+    assert resp.status_code == 202, resp.text
 
 
 @then('the run is created with status "pending"')
 def run_created_pending(request):
-    body = request.node._resp_body
-    if isinstance(body, dict) and "status" in body:
-        assert body["status"] == "pending"
-    else:
-        mock_run = getattr(request.node, "_mock_run", None)
-        assert mock_run is not None, "No mock run available"
-        assert mock_run.status == "pending"
+    assert request.node._resp_body["status"] == "pending"
 
 
 @then("the run is attributed to the API key, not a user")
-def run_attributed_to_api_key(ctx):
-    mock_run = ctx.get("mock_run")
-    assert mock_run is not None
-    assert mock_run.trigger_type == "api_key"
+def run_attributed_to_api_key(ctx, request):
+    kwargs = request.node._create_run.await_args.kwargs
+    assert kwargs["account_id"] == ctx["api_key_account_id"]
+    assert ctx["api_key_account_id"] != USER_ID
 
 
 # ===========================================================================
@@ -1287,29 +1590,25 @@ def jordan_community_library_contains_modules(ctx):
 
 
 @when("I browse the library")
-def jordan_search_library(ctx, request):
-    items = ctx.get("browse_items")
-    if items is None:
-        workflow = ctx.get("library_workflow", {})
-        items = [
-            {
-                "id": str(uuid.uuid4()),
-                "name": workflow.get("name", "PRD to tickets"),
-                "description": workflow.get("description", ""),
-                "author": workflow.get("author", "community-contributor"),
-                "download_count": workflow.get("download_count", 142),
-                "primitive_type": workflow.get("type", "workflow"),
-                "source": "community",
-                "version": "1.0",
-            }
-        ]
-    request.node._resp_body = {"items": items, "total": len(items)}
-    ctx["response"] = request.node._resp_body
+def jordan_search_library(ctx, client, request):
+    from modulo.db.crud.base import PageResult
+
+    items = ctx.get("browse_items") or _default_personas_library_items()
+    rows = [_library_row(item) for item in items]
+    page = PageResult(items=rows, total=len(rows), page=1, page_size=50)
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.list_primitives", new_callable=AsyncMock, return_value=page),
+    ):
+        resp = client.get("/api/v1/libraries")
+    request.node._resp = resp
+    _store_response(request, resp)
 
 
 @then("I see primitives organised by type: schemas, agents, workflows, integrations")
-def jordan_see_primitives_by_type(ctx):
-    body = ctx.get("response") or {}
+def jordan_see_primitives_by_type(request):
+    body = getattr(request.node, "_resp_body", {}) or {}
     items = body.get("items", [])
     types = {p["primitive_type"] for p in items}
     for expected in ("schema", "agent", "workflow", "integration"):
@@ -1317,8 +1616,8 @@ def jordan_see_primitives_by_type(ctx):
 
 
 @then("I can filter by category and sort by downloads or rating")
-def jordan_can_filter_and_sort(ctx):
-    body = ctx.get("response") or {}
+def jordan_can_filter_and_sort(request):
+    body = getattr(request.node, "_resp_body", {}) or {}
     items = body.get("items", [])
     assert len(items) >= 4, f"Expected at least 4 primitives, got {len(items)}"
 
@@ -1342,41 +1641,45 @@ def jordan_community_library_has_workflow(ctx):
     }
 
 
-@when("I copy the workflow to my workspace")
-def jordan_copy_workflow_to_workspace(ctx, request):
+@when("I fork the community workflow into my workspace")
+def jordan_copy_workflow_to_workspace(ctx, request, client):
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
     workflow = ctx.get("library_workflow")
     assert workflow is not None, "No library workflow configured"
 
-    forked_id = uuid.uuid4()
-    resp_body = {
-        "id": str(forked_id),
-        "name": workflow["name"],
-        "source": "local",
-        "forked_from": workflow["id"],
-        "primitive_type": "workflow",
-    }
-    request.node._resp_body = resp_body
-    ctx["response"] = resp_body
-    ctx["forked_workflow_id"] = forked_id
-    ctx["forked_from_id"] = workflow["id"]
+    original = _library_row({"id": workflow["id"], "name": workflow["name"], "primitive_type": "workflow"})
+    forked = LibraryPrimitive()
+    _copy_primitive_fields(original, forked)
+    forked.forked_from = original.id
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
+    ):
+        resp = client.post(f"/api/v1/libraries/{original.id}/adapt", json={"target_team_id": None})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
+    ctx["forked_workflow_id"] = forked.id
+    ctx["forked_from_id"] = original.id
 
 
 @then("a local copy is created with forked_from set to the community source")
-def jordan_forked_copy_has_forked_from(ctx):
-    body = ctx.get("response", {})
-    if isinstance(body, dict) and "source" in body:
-        assert body["source"] == "local", f"Expected source='local', got '{body.get('source')}'"
-        assert body.get("forked_from") is not None, "Missing forked_from"
-        assert str(body["forked_from"]) == str(ctx.get("forked_from_id")), (
-            "forked_from does not match the community source"
-        )
+def jordan_forked_copy_has_forked_from(request, ctx):
+    body = getattr(request.node, "_resp_body", {}) or {}
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", f"Expected source='local', got '{body.get('source')}'"
+    assert body.get("forked_from") is not None, "Missing forked_from"
+    assert str(body["forked_from"]) == str(ctx.get("forked_from_id")), "forked_from does not match the community source"
 
 
 @then("I can edit the agent prompts for my project conventions")
-def jordan_can_edit_agent_prompts(ctx):
-    body = ctx.get("response", {})
-    if isinstance(body, dict) and "source" in body:
-        assert body["source"] == "local", "Cannot edit prompts on a community primitive"
+def jordan_can_edit_agent_prompts(request):
+    body = getattr(request.node, "_resp_body", {}) or {}
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", "Cannot edit prompts on a community primitive"
 
 
 # ===========================================================================
@@ -1554,21 +1857,15 @@ def jordan_contributor_shared_bundle(ctx):
 
 
 @when("I import the bundle")
-def jordan_import_bundle(request, ctx):
+def jordan_import_bundle(request, ctx, client):
+
     bundle = ctx.get("shared_bundle", {})
-    imported_id = uuid.uuid4()
-    resp_body = {
-        "pipeline_id": str(imported_id),
-        "pipeline_name": "pr-summarizer",
-        "primitive_id": str(uuid.uuid4()),
-        "agent_count": 2,
-        "edge_count": 1,
-        "schema_count": 2,
-        "warnings": [],
-    }
-    request.node._resp_body = resp_body
-    ctx["response"] = resp_body
-    ctx["imported_pipeline_id"] = str(imported_id)
+    resp = _persona_import_confirm(client, request, ctx, bundle)
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code < 400, resp.text
+    body = resp.json()
+    ctx["imported_pipeline_id"] = body.get("pipeline_id")
     ctx["imported_node_count"] = len(bundle.get("pipeline", {}).get("graph_nodes_json", []))
 
 
@@ -1613,10 +1910,56 @@ def jordan_new_release_published(ctx):
 
 
 @when("the webhook trigger fires")
-def jordan_webhook_trigger_fires(ctx, request):
+def jordan_webhook_trigger_fires(ctx, request, client):
+    from modulo.core import trigger_engine as trigger_engine_module
+    from tests.bdd.conftest import make_mock_run, make_mock_snapshot
+
+    payload = ctx.get("release_event", {})
+    handle_webhook = AsyncMock(
+        return_value=(make_mock_run(status="pending", trigger_type="webhook"), MagicMock(), payload)
+    )
+    request.node._trigger_name = str(uuid.uuid4())
+    request.node._webhook_secret = "secret"
+    request.node._handle_webhook = handle_webhook
+    mock_session = request.getfixturevalue("mock_session")
+    mock_session.add = MagicMock()
+    with (
+        patch(
+            "modulo.api.routes.webhooks.system_engine_is_fallback",
+            lambda: False,
+        ),
+        patch(
+            "modulo.api.routes.webhooks.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(active=True, config_json={}), ORG_ID),
+        ),
+        patch("modulo.api.routes.webhooks.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=make_mock_snapshot(),
+        ),
+        patch.object(trigger_engine_module.TriggerEngine, "handle_webhook", handle_webhook),
+        patch("modulo.api.routes.webhooks._dispatch_webhook_run", lambda *a, **k: None),
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=False),
+        patch("modulo.api.routes.webhooks.verify_timestamp", lambda *a, **k: 1700000000),
+        patch("modulo.api.routes.webhooks.verify_hmac", lambda *a, **k: True),
+    ):
+        headers = {
+            "X-Modulo-Timestamp": "1700000000",
+            "X-Modulo-Webhook-Secret": "secret",
+        }
+        resp = client.post(
+            f"/api/v1/triggers/{request.node._trigger_name}/webhook",
+            json=payload,
+            headers=headers,
+        )
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code in (200, 202), resp.text
+    assert handle_webhook.await_args is not None, "handle_webhook was not called"
     ctx["trigger_fired"] = True
     ctx["run_created"] = True
-    request.node._resp_body = {"status": "accepted", "run_id": str(uuid.uuid4())}
 
 
 @then('my "changelog-generator" pipeline starts')
@@ -1686,21 +2029,8 @@ def node_bound_to_backend(node_id: str, backend_id: str, request):
 
 
 @when("I trigger a run")
-def trigger_run(request):
-    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
-
-    mock_pipeline = getattr(request.node, "_mock_pipeline", None)
-    if mock_pipeline is None:
-        mock_pipeline = make_mock_pipeline(name="default-pipeline")
-        request.node._mock_pipeline = mock_pipeline
-
-    mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
-    request.node._mock_run = mock_run
-    request.node._resp_body = {
-        "id": str(mock_run.id),
-        "pipeline_id": str(mock_pipeline.id),
-        "status": "pending",
-    }
+def trigger_run(request, client, ctx):
+    _persona_post_run(client, request, ctx, "default-pipeline")
 
 
 @then(parsers.parse('node "{node_id}" executes against {backend_name}'))
@@ -1729,25 +2059,30 @@ def run_failed_at_node_id(name: str, node_id: str, request):
 
 
 @when("I resume the run")
-def resume_run(request):
+def resume_run(request, client, ctx):
     mock_run = getattr(request.node, "_mock_run", None)
-    if mock_run is None:
-        return
     failed_at = getattr(request.node, "_failed_at_node", None)
-    request.node._resp_body = {
-        "id": str(mock_run.id),
-        "status": "running",
-        "restart_node": failed_at,
-    }
+    assert mock_run is not None, "Run recovery requires a run"
+    assert failed_at, "Run recovery requires the failed node"
+    recovered = make_mock_run(status="pending", pipeline_id=mock_run.pipeline_id, error_detail=None)
+    recovered.id = mock_run.id
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.runs.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.runs.recover_node", new_callable=AsyncMock, return_value=recovered),
+        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock, return_value=("enqueued", "job-1")),
+    ):
+        resp = client.post(f"/api/v1/runs/{mock_run.id}/nodes/{failed_at}/recover", json={})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @then(parsers.parse('the run restarts from node "{node_id}"'))
 def run_restarts_from_node_id(node_id: str, request):
     body = getattr(request.node, "_resp_body", {})
-    if isinstance(body, dict) and "restart_node" in body:
-        assert body["restart_node"] == node_id, f"Expected restart at {node_id}, got {body['restart_node']}"
-    failed_at = getattr(request.node, "_failed_at_node", None)
-    assert failed_at == node_id, f"Expected failure at {node_id}, got {failed_at}"
+    assert body.get("node_id") == node_id, f"Expected recovery at {node_id}, got {body}"
+    assert body.get("status") == "pending", f"Expected the recovered run to restart, got {body}"
 
 
 @then("earlier node outputs are preserved")
@@ -1771,17 +2106,41 @@ def i_have_configured_pipeline(name: str, request):
 
 
 @when("I export the pipeline as a YAML bundle")
-def export_yaml_bundle(request):
-    pipeline_name = getattr(request.node, "_pipeline_name", "test-pipeline")
+def export_yaml_bundle(request, client, ctx):
+    import yaml
 
-    mock_bundle = {
+    from tests.bdd.conftest import make_mock_pipeline
+
+    pipeline_name = getattr(request.node, "_pipeline_name", "test-pipeline")
+    pipeline = getattr(request.node, "_mock_pipeline", None) or make_mock_pipeline(name=pipeline_name)
+    request.node._mock_pipeline = pipeline
+    bundle = {
         "version": "1.0",
-        "pipeline": {"name": pipeline_name, "nodes": [], "edges": []},
-        "schemas": [],
-        "agents": [],
+        "pipeline": {
+            "id": str(pipeline.id),
+            "name": pipeline_name,
+            "nodes": [{"id": "planner", "node_type": "test_router"}],
+            "edges": [],
+        },
+        "schemas": ["pr-draft-schema"],
+        "agents": ["pr-drafter"],
         "credentials_included": False,
     }
-    request.node._resp_body = mock_bundle
+    request.node._bundle = bundle
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
+        patch(
+            "modulo.api.routes.library.export_pipeline_bundle_v2",
+            new_callable=AsyncMock,
+            return_value=yaml.safe_dump(bundle),
+        ),
+    ):
+        resp = client.post(f"/api/v1/libraries/export/{pipeline.id}", params={"format": "v2"})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @then("the bundle contains no credentials")
@@ -1800,12 +2159,14 @@ def bundle_has_abstract_schemas(request):
 
 
 @when("I import the bundle on another Modulo instance")
-def import_bundle_other_instance(request):
-    request.node._resp_body = {
-        "pipeline_id": str(uuid.uuid4()),
-        "pipeline_name": "release-pipeline",
-        "status": "created",
-    }
+def import_bundle_other_instance(request, ctx, client):
+    bundle = getattr(request.node, "_bundle", None)
+    if not isinstance(bundle, dict):
+        bundle = {"pipeline": {"name": "release-pipeline", "nodes": [], "edges": []}}
+    resp = _persona_import_confirm(client, request, ctx, bundle)
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @then("a new pipeline is created with the same node topology")
@@ -1846,23 +2207,32 @@ def claim_gate(ctx):
 
 @when("I approve the gate with my decision")
 def approve_gate(client, request, ctx):
-    from unittest.mock import AsyncMock, patch
+    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
 
     if not ctx.get("gate_claimed"):
         ctx["gate_claimed"] = True
     ctx["decision"] = "approved"
     mock_mgr = MagicMock()
     mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
-    with patch("modulo.core.hitl_manager.HITLManager", return_value=mock_mgr):
-        request.node._resp = {"status": "approved", "run_id": str(ctx["run_id"])}
-        request.node._resp_status = 200
+    with (
+        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
+        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
+    ):
+        mock_exec_cls.return_value.resume = AsyncMock()
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/approve",
+            json={"claim_token": ctx.get("claim_token"), "notes": None},
+        )
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @then("the run resumes")
-def the_run_resumes(ctx):
-    ctx["run_status"] = "running"
-    assert ctx.get("decision") == "approved", "Run was not approved"
-    assert ctx["run_status"] == "running", "Run did not resume"
+def the_run_resumes(request, ctx):
+    body = getattr(request.node, "_resp_body", {})
+    assert body.get("status") == "approved", f"Run did not resume - approve response {body}"
+    assert body.get("run_id") == str(ctx["run_id"]), f"Approval wrong run: {body}"
 
 
 @then("the audit log records my approval")
@@ -1983,16 +2353,73 @@ def pipeline_node_bound_to_connector(name: str, connector_type: str, request):
 
 
 @when('I create a new connector instance of type "git-host" for GitLab')
-def alice_create_connector_instance(request):
-    request.node._resp_body = {"id": str(uuid.uuid4()), "connector_type": "git-host", "name": "GitLab"}
-    request.node._new_connector_id = uuid.uuid4()
+def alice_create_connector_instance(request, ctx, client):
+    from tests.bdd.conftest import ORG_ID
+
+    row = _connector_row(ORG_ID, "GitLab", "git-host", "active")
+    with (
+        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.connectors.create_connector_instance",
+            new_callable=AsyncMock,
+            return_value=row,
+        ),
+        patch(
+            "modulo.api.routes.connectors._encrypt",
+            return_value=b"ciphertext-for-gitlab-token",
+        ),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json={"connector_type_id": "git-host", "name": "GitLab", "credentials": "glpat-plain-token"},
+        )
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body.get("id"), "Connector create response carried no id"
+    ctx["new_connector_id"] = body["id"]
+    request.node._new_connector_id = uuid.UUID(body["id"])
 
 
 @when(parsers.parse('I update the node\'s connector binding to "{provider_name}"'))
-def alice_update_connector_binding(provider_name: str, request):
-    getattr(request.node, "_mock_pipeline", None)
-    request.node._resp_body = {"status": "ok"}
-    request.node._updated_connector = provider_name
+def alice_update_connector_binding(provider_name: str, request, ctx, client):
+    from tests.bdd.conftest import ORG_ID, make_mock_pipeline
+
+    pipeline = getattr(request.node, "_mock_pipeline", None) or make_mock_pipeline(name="git-pipeline")
+    request.node._mock_pipeline = pipeline
+    row = _connector_row(ORG_ID, "GitLab", "git-host", "active")
+    row.id = uuid.UUID(ctx["new_connector_id"])
+    node_id = str(uuid.uuid4())
+    node = {
+        "id": node_id,
+        "node_type": "router",
+        "position": {"x": 0.0, "y": 0.0},
+        "router_config": {"rules": [{"default": True, "target": node_id}]},
+        "connector_binding": {"type": provider_name.lower(), "instance_id": str(row.id)},
+    }
+    with (
+        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=pipeline),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
+        patch("modulo.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new_callable=AsyncMock,
+            return_value=([node], []),
+        ),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
+    ):
+        resp = client.patch(f"/api/v1/pipelines/{pipeline.id}/graph", json={"nodes": [node], "edges": []})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
+    request.node._updated_connector = provider_name.lower()
 
 
 @then("the pipeline saves successfully")
@@ -2077,24 +2504,40 @@ def copy_workflow_to_workspace(request, ctx):
 
 
 @when("I configure my GitHub connector")
-def configure_github_connector(request):
+def configure_github_connector(request, ctx, client):
+    from tests.bdd.conftest import ORG_ID
+
+    row = _connector_row(ORG_ID, "GitHub", "github", "active")
+    with (
+        patch("modulo.api.routes.connectors.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.connectors.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.connectors.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.connectors._verify_github_credentials", new_callable=AsyncMock, return_value=True),
+        patch(
+            "modulo.api.routes.connectors._encrypt",
+            return_value=b"ciphertext-for-github-token",
+        ),
+        patch(
+            "modulo.api.routes.connectors.create_connector_instance",
+            new_callable=AsyncMock,
+            return_value=row,
+        ),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json={"connector_type_id": "github", "name": "GitHub", "credentials": "ghp-github-pat"},
+        )
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 201, resp.text
     request.node._connector_configured = True
-    request.node._resp_body = {"status": "ok"}
 
 
 @when("I trigger a manual run")
-def trigger_manual_run(request):
-    from tests.bdd.conftest import make_mock_pipeline, make_mock_run
+def trigger_manual_run(request, ctx, client):
+    from tests.bdd.conftest import make_mock_pipeline
 
-    mock_pipeline = make_mock_pipeline(name="PRD to tickets")
-    request.node._mock_pipeline = mock_pipeline
-    mock_run = make_mock_run(status="pending", pipeline_id=mock_pipeline.id)
-    request.node._mock_run = mock_run
-    request.node._resp_body = {
-        "id": str(mock_run.id),
-        "pipeline_id": str(mock_pipeline.id),
-        "status": "pending",
-    }
+    _persona_post_run_with(client, request, ctx, make_mock_pipeline(name="PRD to tickets"))
 
 
 @then('the run starts with status "pending"')
@@ -2108,13 +2551,27 @@ def run_starts_pending(request):
 
 
 @then("the run completes successfully")
-def run_completes_successfully(request):
-    mock_run = getattr(request.node, "_mock_run", None)
-    if mock_run:
-        mock_run.status = "completed"
-    request.node._resp_body = {"status": "completed"}
-    body = getattr(request.node, "_resp_body", {})
-    assert body.get("status") == "completed"
+def run_completes_successfully(request, client):
+    from datetime import UTC, datetime
+
+    from tests.bdd.conftest import make_mock_run
+
+    prior = getattr(request.node, "_mock_run", None)
+    assert prior is not None, "No run was triggered"
+    run = make_mock_run(
+        id=prior.id,
+        status="completed",
+        pipeline_id=prior.pipeline_id,
+        started_at=prior.started_at,
+        heartbeat_at=prior.heartbeat_at,
+        created_at=prior.created_at,
+        final_state="completed",
+        completed_at=datetime.now(UTC),
+    )
+    request.node._resp = resp = _fetch_run_detail(client, request, _harden_run_scalars(run), otel_endpoint="")
+    assert resp.status_code == 200, resp.text
+    body = request.node._resp_body = resp.json()
+    assert body.get("status") == "completed", f"Run did not complete: {body}"
 
 
 @then("tickets are created in my issue tracker")
@@ -2146,28 +2603,39 @@ def pipeline_node_bound_to_backend_given(pipeline_name: str, node_id: str, backe
 
 
 @then('the run status becomes "failed"')
-def run_status_becomes_failed(request):
+def run_status_becomes_failed(request, client):
+    from tests.bdd.conftest import make_mock_run
+
     mock_run = getattr(request.node, "_mock_run", None)
     unhealthy = getattr(request.node, "_unhealthy_backends", [])
     bindings = getattr(request.node, "_node_bindings", {})
+    assert mock_run is not None, "No run was triggered"
 
-    if mock_run:
-        bound_backends = list(bindings.values())
-        failed_backends = [b for b in bound_backends if b in unhealthy]
-        if failed_backends:
-            mock_run.status = "failed"
-            mock_run.error_detail = f"Health check failed for backend '{failed_backends[0]}'"
-        else:
-            mock_run.status = "failed"
-            mock_run.error_detail = "Health check failure: backend unhealthy"
-        request.node._mock_run = mock_run
+    bound_backends = list(bindings.values())
+    failed_backends = [b for b in bound_backends if b in unhealthy]
+    if failed_backends:
+        fail_detail = f"Health check failed for backend '{failed_backends[0]}'"
+    elif unhealthy:
+        fail_detail = f"Health check failed for backend '{unhealthy[0]}'"
+    else:
+        fail_detail = "Health check failure: backend unhealthy"
+    request.node._mock_run = mock_run = _harden_run_scalars(
+        make_mock_run(
+            id=mock_run.id,
+            status="failed",
+            error_detail=fail_detail,
+            pipeline_id=mock_run.pipeline_id,
+            created_at=mock_run.created_at,
+            started_at=mock_run.started_at,
+            heartbeat_at=mock_run.heartbeat_at,
+        )
+    )
 
-    request.node._resp_body = {
-        "status": "failed",
-        "error_detail": getattr(mock_run, "error_detail", "Health check failure"),
-    }
-    body = getattr(request.node, "_resp_body", {})
+    request.node._resp = resp = _fetch_run_detail(client, request, mock_run)
+    assert resp.status_code == 200, resp.text
+    body = request.node._resp_body = resp.json()
     assert body.get("status") == "failed", f"Expected failed status, got {body.get('status')}"
+    assert "health" in body.get("error_detail", "").lower(), "error_detail lost the health detail"
 
 
 @then("the error_detail describes the backend health check failure")
@@ -2189,7 +2657,7 @@ def error_detail_describes_health_check_failure(request):
 
 
 @when(parsers.parse('I add a new "{node_name}" node between "{prev_node}" and "{next_node}"'))
-def add_new_node_between(node_name: str, prev_node: str, next_node: str, request):
+def add_new_node_between(node_name: str, prev_node: str, next_node: str, request, ctx, client):
     mock_pipeline = getattr(request.node, "_mock_pipeline", None)
     assert mock_pipeline is not None, "No pipeline defined — use Given pipeline has N nodes"
     node_count = getattr(request.node, "_node_count", 0)
@@ -2197,7 +2665,32 @@ def add_new_node_between(node_name: str, prev_node: str, next_node: str, request
     request.node._inserted_node = node_name
     request.node._insert_prev = prev_node
     request.node._insert_next = next_node
-    request.node._resp_body = {"status": "ok", "node_count": node_count + 1}
+    node_id = str(uuid.uuid4())
+    node = {
+        "id": node_id,
+        "node_type": "router",
+        "position": {"x": 0.0, "y": 0.0},
+        "router_config": {"rules": [{"default": True, "target": node_id}]},
+    }
+    with (
+        patch("modulo.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._get_pipeline_or_404", new_callable=AsyncMock, return_value=mock_pipeline),
+        patch("modulo.api.routes.pipelines._enforce_connector_team_bindings", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._resolve_graph_references", new_callable=AsyncMock, return_value=([], [])),
+        patch("modulo.api.routes.pipelines.merge_masked_graph_nodes", lambda node_data, _existing: node_data),
+        patch(
+            "modulo.api.routes.pipelines.replace_pipeline_graph",
+            new_callable=AsyncMock,
+            return_value=([node], []),
+        ),
+        patch("modulo.api.routes.pipelines._sync_agent_row_commands", new_callable=AsyncMock),
+        patch("modulo.api.routes.pipelines._validate_graph_save", new_callable=AsyncMock, return_value=[]),
+    ):
+        resp = client.patch(f"/api/v1/pipelines/{mock_pipeline.id}/graph", json={"nodes": [node], "edges": []})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @then("existing runs against the previous snapshot are unaffected")
@@ -2206,8 +2699,9 @@ def existing_runs_snapshot_unaffected(request):
 
     snapshot = make_mock_snapshot()
     assert snapshot is not None, "Snapshot should exist"
-    body = getattr(request.node, "_resp_body", {})
-    assert body.get("status") == "ok", f"Pipeline save did not return ok: {body}"
+    resp = getattr(request.node, "_resp", None)
+    assert resp is not None, "No graph-save response was captured"
+    assert resp.status_code == 200, f"Graph save did not accept the new node: {resp.status_code} {resp.text}"
     existing_run = getattr(request.node, "_mock_run", None)
     if existing_run is not None:
         assert existing_run.status != "affected"
@@ -2277,40 +2771,50 @@ def completed_run_for_pipeline(name: str, ctx, request):
 
 
 @when("I view the run detail")
-def view_run_detail(ctx, request):
+def view_run_detail(ctx, request, client):
+
     run = ctx.get("mock_run")
     assert run is not None, "No mock run found"
-    request.node._resp_body = {
-        "id": str(run.id),
-        "pipeline_id": str(run.pipeline_id),
-        "status": run.status,
-        "token_consumption": run.token_consumption,
-        "total_cost_usd": run.total_cost_usd,
-        "trace_id": run.trace_id,
-    }
+    consumption = run.token_consumption or {}
+    per_node = dict(consumption)
+    fake = _run_detail_fake(
+        run.id,
+        status=run.status,
+        pipeline_id=run.pipeline_id,
+        created_at=run.created_at,
+        started_at=run.started_at,
+        heartbeat_at=run.heartbeat_at,
+        total_cost_usd=run.total_cost_usd,
+        total_tokens=sum(c.get("input_tokens", 0) + c.get("output_tokens", 0) for c in consumption.values()),
+        node_token_usage=per_node,
+    )
+    fake.completed_at = None
+    ctx["detail_run"] = fake
+    request.node._resp = resp = _fetch_run_detail(client, request, fake)
+    assert resp.status_code == 200, resp.text
+    body = request.node._resp_body = resp.json()
+    assert body.get("status") == run.status, f"Detail route lost the status: {body}"
 
 
 @then("I see per-node token consumption")
 def see_per_node_token_consumption(request):
     body = getattr(request.node, "_resp_body", {})
-    tc = body.get("token_consumption", {})
-    assert isinstance(tc, dict), "token_consumption should be a dict"
-    assert len(tc) > 0, "token_consumption should not be empty"
+    usage = body.get("node_token_usage") or {}
+    assert len(usage) > 0, "node_token_usage should be present and keyed per node"
+    assert body.get("token_consumption", {}).get("total_tokens", 0) > 0, "total_tokens missing"
 
 
 @then("I see the total run cost")
-def see_total_run_cost(ctx):
-    run = ctx.get("mock_run")
-    assert run is not None, "No mock run found"
-    assert run.total_cost_usd is not None, "total_cost_usd missing from run detail"
-    assert float(run.total_cost_usd) >= 0
+def see_total_run_cost(request):
+    body = getattr(request.node, "_resp_body", {})
+    assert body.get("total_cost_usd") is not None, "total_cost_usd missing from run detail"
+    assert float(body["total_cost_usd"]) >= 0
 
 
 @then("I see the OTel trace ID")
-def see_otel_trace_id(ctx):
-    run = ctx.get("mock_run")
-    assert run is not None, "No mock run found"
-    assert run.trace_id, "trace_id missing from run detail"
+def see_otel_trace_id(request):
+    body = getattr(request.node, "_resp_body", {})
+    assert body.get("trace_id"), "trace_id missing from run detail"
 
 
 # ===========================================================================

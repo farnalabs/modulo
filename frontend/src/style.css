@@ -462,6 +462,13 @@
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 50%;
+  /* FAR-1607: text drawn ON a --warning fill (banner/badge backgrounds), which
+     is mid-amber (~50% lightness) in every theme - so the on-fill ink is dark
+     in every theme, unlike --warning-text (which is warning-coloured text on a
+     NEUTRAL background and is byte-identical to --warning in the dark/agent
+     themes, i.e. invisible on the fill). Mirrors the -foreground-on-fill
+     pattern of --primary-foreground / --destructive-foreground. */
+  --warning-foreground: 222 29% 9%;
   --pending: 210 40% 60%;
   --preview: 18 60% 50%;
   --border: 213 19% 18%;
@@ -506,6 +513,8 @@
   --success: 142 71% 45%;
   --warning: 38 92% 50%;
   --warning-text: 38 92% 30%;
+  /* FAR-1607: see --warning-foreground in :root - dark ink on the mid-amber fill. */
+  --warning-foreground: 220 29% 6%;
   --pending: 210 40% 60%;
   --preview: 18 60% 40%;
   --border: 215 15% 85%;
@@ -548,6 +557,8 @@
   --success: 142 80% 50%;
   --warning: 38 95% 55%;
   --warning-text: 38 95% 55%;
+  /* FAR-1607: see --warning-foreground in :root - dark ink on the mid-amber fill. */
+  --warning-foreground: 222 30% 8%;
   --preview: 18 60% 55%;
   --border: 222 20% 30%;
   --input: 222 20% 30%;

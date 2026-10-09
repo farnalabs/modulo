@@ -53,21 +53,23 @@ clients.
       (reuse_replay=True for logging). Reuse outside the window, ahead of max, or
       from a blacklisted family blacklists the family as theft
       (`backend/src/modulo/db/crud/token_family.py`)
-- [x] Cross-tab refresh serialisation: browser tabs share localStorage, so only
-      one tab refreshes at a time. The frontend uses the Web Locks API
-      (`navigator.locks.request('modulo-auth-refresh', ...)`) to serialise
-      concurrent refresh attempts across tabs. A tab that acquires the lock
-      re-reads localStorage before POSTing – if a sibling already rotated the
-      token, the tab adopts it without a redundant request. When Web Locks are
-      unavailable (older browsers, test environments), the refresh runs directly
-      with the in-tab single-flight dedup (`frontend/src/lib/api/auth.ts`)
-- [x] Reuse-interval refresh: if a stale refresh token is presented within the
-      grace window (`REFRESH_REUSE_GRACE_SECONDS` of the last rotation), the
-      server advances and mints normally (reuse_replay=True for logging). The
-      client does NOT need to retry – the stale token was accepted and new
-      tokens are returned. Reuse outside the window, ahead of max, or from a
-      blacklisted family returns 401 (theft). The family is NOT blacklisted on
-      a within-window reuse (`frontend/src/lib/api/auth.ts`)
+- [x] Cross-tab refresh serialisation: the refresh token rides the httpOnly
+      `modulo_refresh` cookie (FAR-1197 — no longer persisted in localStorage),
+      which the browser shares across tabs, so a rotation by one tab is
+      immediately visible to the others and no cross-tab adopt/retry loop is
+      needed. Refresh attempts are still serialised with the Web Locks API
+      (`navigator.locks.request('modulo-auth-refresh', ...)`) and an in-tab
+      single-flight promise, falling back to a direct refresh when Web Locks are
+      unavailable (older browsers, test environments)
+      (`frontend/src/lib/api/auth.ts`)
+- [x] Reuse-interval refresh (client view): a within-window stale refresh token
+      is accepted by the server, so the frontend does not retry or re-mint –
+      `attemptTokenRefresh` POSTs once and consumes the returned pair; outside
+      the window, ahead of max, or from a blacklisted family the server answers
+      401 and the client treats the session as dead. The family is NOT
+      blacklisted on a within-window reuse
+      (`backend/src/modulo/db/crud/token_family.py`,
+      `backend/src/modulo/api/routes/auth.py`)
 - [x] Logout blacklists the token family so all tokens from that session are
       invalidated
 - [x] `/me` returns the authenticated user's profile with `must_change_password`

@@ -1141,6 +1141,32 @@ async def test_polling_condition(
             await _require_team_gate_in_txn(session, principal, trigger.pipeline_id)
 
             _require_trigger_type(trigger, "polling", "Only polling triggers can be tested")
+
+        # FAR-1609: ``evaluate_condition`` issues its OWN DB reads through this
+        # session (the ConnectorInstance lookup, the FAR-1595 team-scope
+        # Pipeline read, the secrets read), so it must run inside an ACTIVE
+        # transaction — the DI session factory is ``autobegin=False``, and a
+        # read after the transaction above committed raised
+        # ``InvalidRequestError: Autobegin is disabled`` -> 500 on EVERY real
+        # request. It runs in a SECOND transaction rather than extending the
+        # first: the team gate above took a ``FOR UPDATE`` row lock on the
+        # pipeline, and holding that write lock across the connector's network
+        # I/O would block concurrent pipeline mutations for the duration of
+        # the query. The RLS org/user GUCs are transaction-scoped
+        # (``set_config(..., is_local=true)``), so they are re-established
+        # here for the evaluation's reads.
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            trigger_engine = TriggerEngine()
+            return await trigger_engine.evaluate_condition(
+                session,
+                _trigger=trigger,
+                org_id=principal.organisation_id,
+                connector_instance_id=uuid.UUID(req.connector_instance_id),
+                poll_query=req.poll_query,
+                condition_expression=req.condition_expression,
+            )
     except ProgrammingError:
         _log.exception("triggers.test_polling_condition")
         raise HTTPException(
@@ -1162,17 +1188,6 @@ async def test_polling_condition(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
-
-    # Evaluate outside the transaction (connector ops are I/O, not DB)
-    trigger_engine = TriggerEngine()
-    return await trigger_engine.evaluate_condition(
-        session,
-        _trigger=trigger,
-        org_id=principal.organisation_id,
-        connector_instance_id=uuid.UUID(req.connector_instance_id),
-        poll_query=req.poll_query,
-        condition_expression=req.condition_expression,
-    )
 
 
 # ---------------------------------------------------------------------------

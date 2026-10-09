@@ -38,6 +38,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.auth.log_redaction import truncate_token_family
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthConsentState, OAuthTokenFamily
 
@@ -831,7 +832,7 @@ async def rotate_oauth_token_family(
         _log.warning(
             "oauth.token_theft_detected",
             extra={
-                "family_id": str(family_id),
+                "family_id": truncate_token_family(family_id),
                 "client_id": client_id,
                 "expected_sequence": family.max_sequence,
                 "current_sequence": current_sequence,

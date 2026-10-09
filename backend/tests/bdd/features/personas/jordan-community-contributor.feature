@@ -13,7 +13,7 @@ Feature: Jordan — Community Contributor / Library Author
   @goal-jordan-fork-workflow
   Scenario: Jordan forks a community workflow for his OSS project
     Given the community library has workflow "issue-to-pr"
-    When I copy the workflow to my workspace
+    When I fork the community workflow into my workspace
     Then a local copy is created with forked_from set to the community source
     And I can edit the agent prompts for my project conventions
 

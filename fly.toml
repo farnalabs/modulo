@@ -171,6 +171,12 @@ primary_region = 'lhr'
   MODULO_DB = "postgres"
   # Deployment environment name stamped on every operator alert email (FAR-1495).
   MODULO_ENV = "production"
+  # Operator-alert environment allowlist: only these MODULO_ENVs may send
+  # operator alerts on any channel (email + webhook + Teams; readiness-degradation
+  # + worker-liveness watchdog alerts).
+  # Set to "production" on BOTH Fly apps so staging — a CI-only E2E
+  # environment with no live workload — stops paging while prod keeps alerting.
+  ALERT_ENVIRONMENTS = "production"
   # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the modulo_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.

@@ -506,12 +506,13 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
 DISPATCHER_RECONCILE_STATS_KEY = "saq:cron:stats:dispatcher_reconcile"
 # The reconcile cron runs on the 60s system-cron tick (_CRON_EVERY_MINUTE in
 # saq_worker._system_cron_jobs); /healthz/ready's FAR-199 two-tier gate reports
-# "stale" past one tick (health._RECONCILE_STALE_SECONDS = 60) and flips to the
-# readiness-gating "unavailable" tier past 5 min (health.
-# _RECONCILE_UNAVAILABLE_SECONDS = 300 = 5 ticks). TTL for the stats key (2026-09
-# Redis audit): one tick past the unavailable window, so a live worker's 60s
-# refresh never lets it lapse while a dead worker's key self-expires instead of
-# persisting a dead timestamp forever. Missing-key semantics are unchanged:
+# "stale" past 3 ticks (health._RECONCILE_STALE_SECONDS = 180 = 3 * the 60s
+# cadence) and flips to the readiness-gating "unavailable" tier past 5 min
+# (health._RECONCILE_UNAVAILABLE_SECONDS = 300 = 5 ticks). TTL for the stats
+# key (2026-09 Redis audit): one tick past the unavailable window, so a live
+# worker's 60s refresh never lets it lapse while a dead worker's key
+# self-expires instead of persisting a dead timestamp forever. Missing-key
+# semantics are unchanged:
 # /healthz/ready reports a missing key as "never run" — the SAME "unavailable"
 # tier a stale key gets — so expiry is signal-equivalent; only the diagnostic
 # detail text differs.

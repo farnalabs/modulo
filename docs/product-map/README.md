@@ -1143,6 +1143,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > (it is: `DELETE /scim/v2/Users/{id}` and `PATCH active=false` tombstone the
 > membership); the deferral now names only the genuinely-unshipped SAML single
 > logout. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-09):** reconciled the two product-map layers for
+> `feat-environments` after the FAR-1614 post-merge polish sweep (PR #1455)
+> extended the manifest registry with two environment-profile follow-ups that
+> the human-readable tracker never mirrored. `environments/environments.md` now
+> carries the **FAR-1598 dispatch-time team-scope backstop** (runner_dispatch
+> re-validates the snapshot-bound profile with the shared
+> `environment_profile_team_mismatch` predicate against the pipeline's effective
+> owner team, team-blind, BEFORE any provider is selected - a typed
+> `SandboxDispatchUnboundError` instead of a silent fallback) and the **FAR-1599
+> read / non-REST exposure** (`SnapshotResponse.environment_profile_id`, the MCP
+> `update_pipeline` tool, and the opt-in `modulo apply`
+> `environment_profile_id` key), with the matching code and test citations.
+> `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A

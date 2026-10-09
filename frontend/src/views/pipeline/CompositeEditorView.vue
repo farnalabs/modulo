@@ -1,35 +1,38 @@
 <template>
-  <BackLink to="/library" label="Back to Library" />
+  <BackLink to="/library" :label="$t('views.CompositeEditorView.back_to_library')" />
   <div class="flex h-[calc(100vh-3.5rem)]">
-    <div v-if="loading" class="flex flex-1 items-center justify-center">
-      <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+    <div v-if="loading" class="flex flex-1 flex-col gap-4 p-6" :aria-label="$t('views.CompositeEditorView.loading_canvas')" role="status">
+      <SkeletonBlock height-class="h-8 w-64" />
+      <SkeletonBlock height-class="flex-1 w-full" />
     </div>
 
-    <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
-      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+    <div v-else-if="pageError" class="flex flex-1 items-center justify-center p-6">
+      <ErrorAlert :message="pageError" :on-retry="retry" />
     </div>
 
     <template v-else>
       <!-- Toolbar -->
       <div class="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
-        <h2 class="text-sm font-semibold">{{ compositeName }}</h2>
-        <span class="mx-2 h-4 w-px bg-border" />
+        <h2 class="text-sm font-semibold">{{ compositeName || '—' }}</h2>
+        <span class="mx-2 h-4 w-px bg-border" aria-hidden="true" />
         <button type="button"
           v-if="canManage"
+          data-testid="composite-editor-save-as"
           class="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500"
           @click="showSaveAsComposite = true"
         >
-          Save as composite
+          {{ $t('views.CompositeEditorView.save_as_composite_action') }}
         </button>
-        <Button size="small" class="text-xs" @click="showPortPanel = !showPortPanel">
-          {{ showPortPanel ? 'Hide Ports' : 'Ports' }}
+        <Button size="small" class="text-xs" data-testid="composite-editor-ports-toggle" @click="showPortPanel = !showPortPanel">
+          {{ showPortPanel ? $t('views.CompositeEditorView.hide_ports') : $t('views.CompositeEditorView.ports') }}
         </Button>
         <button type="button"
           v-if="canManage"
+          data-testid="composite-editor-publish"
           class="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-500"
           @click="showPublishFlow = true"
         >
-          Publish
+          {{ $t('views.CompositeEditorView.publish') }}
         </button>
       </div>
 
@@ -51,19 +54,19 @@
           <FlowControls :show-interactive="false" />
           <template #node-manual="nodeProps">
             <div class="rounded-lg border-2 border-warning/60 bg-warning/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">MANUAL</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-warning-text">{{ $t('views.CompositeEditorView.node_manual_badge') }}</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
           <template #node-agent="nodeProps">
             <div class="rounded-lg border-2 border-primary/60 bg-primary/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">AGENT</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-primary">{{ $t('views.CompositeEditorView.node_agent_badge') }}</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
           <template #node-composite="nodeProps">
             <div class="rounded-lg border-2 border-indigo-500/60 bg-indigo-500/10 px-4 py-2 shadow-sm">
-              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-400">COMPOSITE</div>
+              <div class="font-brand-mono text-[11px] font-medium lowercase tracking-wide text-indigo-700 dark:text-indigo-300">{{ $t('views.CompositeEditorView.node_composite_badge') }}</div>
               <div class="text-sm font-semibold">{{ nodeProps.data.label }}</div>
             </div>
           </template>
@@ -90,7 +93,7 @@
     </template>
 
     <!-- Save as composite dialog -->
-    <div role="button" tabindex="0" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
+    <div role="button" tabindex="0" :aria-label="$t('views.CompositeEditorView.close_dialog')" @keydown.enter="($event.currentTarget as HTMLElement).click()" @keydown.space.prevent="($event.currentTarget as HTMLElement).click()"
       v-if="showSaveAsComposite"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       @click.self="showSaveAsComposite = false"
@@ -102,32 +105,35 @@
             <label for="compositeeditorview-field-2" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.name') }}</label>
             <input id="compositeeditorview-field-2"
               v-model="saveAsName"
+              data-testid="composite-save-as-name"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-              placeholder="My Composite"
+              :placeholder="$t('views.CompositeEditorView.name_placeholder')"
             />
           </div>
           <div>
             <label for="compositeeditorview-field-1" class="mb-1 block text-sm font-medium">{{ $t('views.CompositeEditorView.description') }}</label>
             <textarea id="compositeeditorview-field-1"
               v-model="saveAsDescription"
+              data-testid="composite-save-as-description"
               class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
               rows="3"
-              placeholder="Optional description"
+              :placeholder="$t('views.CompositeEditorView.description_placeholder')"
             />
           </div>
-          <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          <div v-if="saveAsError" role="alert" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
             {{ saveAsError }}
           </div>
           <div class="flex justify-end gap-2">
             <button type="button"
+              data-testid="composite-save-as-cancel"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
               @click="showSaveAsComposite = false"
             >
-              Cancel
+              {{ $t('views.CompositeEditorView.cancel') }}
             </button>
-            <Button :disabled="!saveAsName || saving" @click="handleSaveAs">
-              {{ saving ? 'Saving...' : 'Save' }}
-            </button>
+            <Button data-testid="composite-save-as-submit" :disabled="!saveAsName || saving" @click="handleSaveAs">
+              {{ saving ? $t('views.CompositeEditorView.saving') : $t('views.CompositeEditorView.save') }}
+            </Button>
           </div>
         </div>
       </div>
@@ -146,13 +152,16 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import BackLink from '../../components/BackLink.vue'
+import ErrorAlert from '../../components/shared/ErrorAlert.vue'
 import FlowControls from '../../components/shared/FlowControls.vue'
+import SkeletonBlock from '../../components/shared/SkeletonBlock.vue'
 import { useDataFetch } from '../../composables/useDataFetch'
 import { shortId } from '../../utils/format'
 import { CANVAS_EDGE_STROKE } from '../../constants/canvas'
@@ -166,6 +175,7 @@ import Button from 'primevue/button'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const compositeId = route.params.id as string
 
 // composite-template create/update/publish require pipeline.create/update
@@ -206,7 +216,7 @@ function convertBackendNode(n: any): any {
     id: n.id,
     type: nodeType,
     position: n.position || { x: 0, y: 0 },
-    data: { label: n.label || 'Node ' + shortId(n.id) },
+    data: { label: n.label || t('views.CompositeEditorView.node_default_label', { id: shortId(n.id) }) },
   }
 }
 
@@ -220,7 +230,7 @@ function convertBackendEdge(e: any, i: number): any {
   }
 }
 
-const { loading, error: pageError } = useDataFetch(
+const { loading, error: pageError, load: retry } = useDataFetch(
   async () => {
     const [templateResp, editorResp] = await Promise.all([
       api.GET('/api/v1/composite-templates/{template_id}', {
