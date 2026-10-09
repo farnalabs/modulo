@@ -73,16 +73,17 @@ class AssistantContextSourceService:
         return await self._query_by_user_id(org_id, user_id=user_id)
 
     async def _query_by_user_id(self, org_id: uuid.UUID, user_id: uuid.UUID | None) -> dict[str, str]:
-        if user_id is None:
-            stmt = select(AssistantContextSource).where(
-                AssistantContextSource.organisation_id == org_id,
-                AssistantContextSource.account_id.is_(None),
-            )
-        else:
-            stmt = select(AssistantContextSource).where(
-                AssistantContextSource.organisation_id == org_id,
-                AssistantContextSource.account_id == user_id,
-            )
+        # ``user_id is None`` reads the ORG-DEFAULT rows (account_id IS NULL);
+        # otherwise the rows scoped to that account.
+        account_clause = (
+            AssistantContextSource.account_id.is_(None)
+            if user_id is None
+            else AssistantContextSource.account_id == user_id
+        )
+        stmt = select(AssistantContextSource).where(
+            AssistantContextSource.organisation_id == org_id,
+            account_clause,
+        )
         result = await self._session.execute(stmt)
         rows = list(result.scalars())
         return {r.source_key: r.source_mode for r in rows}
