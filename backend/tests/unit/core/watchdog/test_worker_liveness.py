@@ -39,6 +39,15 @@ def _no_boot_grace_in_tests() -> Iterator[None]:
     wl._STARTED_AT = saved
 
 
+@pytest.fixture(autouse=True)
+def _reset_suppressed_log_limiter(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The env-suppression log rate limiter is per-process state — reset it
+    so one test's rate-limited notice can never suppress (or fake) another's."""
+    monkeypatch.setattr(wl, "_last_suppressed_log_at", None)
+    yield
+    monkeypatch.setattr(wl, "_last_suppressed_log_at", None)
+
+
 def _make_settings(**overrides: Any) -> Settings:
     base: dict[str, Any] = {
         "database_url": "postgresql+asyncpg://localhost/test",
@@ -346,6 +355,119 @@ class TestWorkerLivenessWatchdog:
         assert state.all_dead_since is not None
         assert "watchdog.alert_suppressed_environment" in caplog.text
         assert "ALERT_ENVIRONMENTS" in caplog.text
+
+    async def test_excluded_environment_healthy_tick_is_silent_and_claimless(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """F1: a HEALTHY tick in an excluded environment logs NOTHING and
+        claims nothing. The gate runs on every ~30s tick, so warning-per-tick
+        would put ~2,880 suppression lines a day in the exact environment
+        this allowlist exists to quiet."""
+        fake = _FakeWatchdogRedis()
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat()
+        settings = _make_settings(
+            MODULO_ENV="staging",
+            ALERT_ENVIRONMENTS="production",
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+        )
+
+        send = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", send),
+            caplog.at_level(logging.INFO, logger="modulo.watchdog"),
+        ):
+            state: wl._LivenessState | None = None
+            for _ in range(3):  # rapid healthy ticks — all must stay silent
+                state = await wl._evaluate_once(settings, fake, wl._LivenessState())
+
+        assert state is not None
+        send.assert_not_awaited()
+        assert state.all_dead_since is None
+        assert wl._ALERT_STATE_KEY not in fake._data
+        # No suppression warning AND no claim-clearing notice (nothing was claimed).
+        assert "watchdog.alert_suppressed_environment" not in caplog.text
+        assert "watchdog.alert_recovery_suppressed_environment" not in caplog.text
+        assert "ALERT_ENVIRONMENTS" not in caplog.text
+
+    async def test_excluded_environment_suppression_logged_once_per_window_not_per_tick(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """F1: an ACTIVE condition while excluded logs the suppression AT MOST
+        once per window across rapid ticks — never once per tick — and still
+        sends nothing and claims nothing."""
+        fake = _FakeWatchdogRedis()
+        settings = _make_settings(
+            MODULO_ENV="staging",
+            ALERT_ENVIRONMENTS="production",
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+        )
+        dead_since = time.time() - 200
+
+        send = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", send),
+            caplog.at_level(logging.WARNING, logger="modulo.watchdog"),
+        ):
+            for _ in range(5):  # rapid unhealthy ticks inside one window
+                await wl._evaluate_once(settings, fake, wl._LivenessState(all_dead_since=dead_since))
+
+        send.assert_not_awaited()
+        assert wl._ALERT_STATE_KEY not in fake._data  # the alert edge still claims nothing
+        suppressed = [
+            record for record in caplog.records if "watchdog.alert_suppressed_environment" in record.getMessage()
+        ]
+        assert len(suppressed) == 1
+        assert "ALERT_ENVIRONMENTS" in suppressed[0].getMessage()
+
+    async def test_excluded_environment_healthy_tick_clears_stranded_claim_then_reinclusion_alerts(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """F2 (worker_liveness): an incident claimed while the environment was
+        INCLUDED must not strand while EXCLUDED. A healthy excluded tick
+        clears the claim WITHOUT sending, so a genuinely NEW incident after
+        re-inclusion wins the ``SET NX`` claim and alerts — instead of losing
+        it (silently, until the state TTL) to the stale claim."""
+        fake = _FakeWatchdogRedis()
+        # An incident claim left over from an "included" window.
+        fake._data[wl._ALERT_STATE_KEY] = json.dumps(
+            {"conditions": ["no live SAQ worker on any queue for 200s"], "started_at": time.time() - 500}
+        )
+        excluded = _make_settings(
+            MODULO_ENV="staging",
+            ALERT_ENVIRONMENTS="production",
+            ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
+        )
+        fake.add_live_worker("runs")
+        fake.add_live_worker("system")
+        fake.set_cron_heartbeat()
+
+        # 1. Healthy tick while excluded: claim cleared, nothing sent.
+        send = AsyncMock()
+        with (
+            patch.object(wl, "_send_alerts", send),
+            caplog.at_level(logging.INFO, logger="modulo.watchdog"),
+        ):
+            await wl._evaluate_once(excluded, fake, wl._LivenessState())
+        send.assert_not_awaited()  # the all-clear is NOT delivered while excluded
+        assert wl._ALERT_STATE_KEY not in fake._data
+        assert "watchdog.alert_recovery_suppressed_environment" in caplog.text
+
+        # 2. Re-included (allowlist unset = alert everywhere): a NEW incident
+        #    must claim the edge and fan out — it cannot, if step 1 stranded.
+        included = _make_settings(ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook")
+        fake.clear_workers("runs")
+        fake.clear_workers("system")
+        fake.set_cron_heartbeat(age_seconds=600)
+        send2 = AsyncMock()
+        with patch.object(wl, "_send_alerts", send2):
+            await wl._evaluate_once(included, fake, wl._LivenessState(all_dead_since=time.time() - 200))
+        send2.assert_awaited_once()
+        assert wl._ALERT_STATE_KEY in fake._data
 
     async def test_included_or_unset_environment_still_fans_out(self) -> None:
         """The gate is opt-in: with the allowlist unset (the self-hosted

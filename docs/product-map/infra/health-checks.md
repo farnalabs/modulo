@@ -114,7 +114,13 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       so a failed SMTP send retries next tick. Quiet (never raises, hourly INFO
       log) when `SMTP_HOST`/`ALERT_EMAIL_TO` are unconfigured – the compose
       default – and the `unique=True` cron slot bounds fleet ticks to one
-      execution per slot (`core/health_alerts.py`, `core/saq_worker.py`,
+      execution per slot. Gated by the `ALERT_ENVIRONMENTS` env allowlist
+      (shared `core/alert_context.alerting_enabled_for_environment`): in an
+      excluded environment health is still evaluated and the state machine
+      still advances but NO email is sent (one rate-limited notice per hour),
+      except that a confirmed RECOVERY edge while excluded closes the incident
+      record silently so a distinct later incident can alert after
+      re-inclusion (`core/health_alerts.py`, `core/saq_worker.py`,
       `api/routes/health.py` `evaluate_readiness`, `test_health_alerts.py`)
 - [x] Advisory / dead-sweep failures alert in-app (FAR-1571): the readiness
       aggregate deliberately EXCLUDES the advisory checks, so keying
@@ -159,7 +165,16 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       incident, never one per tick. On fire it fans out to EVERY configured channel
       in isolation – generic webhook (Slack-compatible JSON), Microsoft Teams
       MessageCard and email – default-off until at least one channel is set, and
-      fails open on Redis read errors (cannot confirm death => never alert)
+      fails open on Redis read errors (cannot confirm death => never alert). The
+      `ALERT_ENVIRONMENTS` env allowlist (shared
+      `core/alert_context.alerting_enabled_for_environment`, same gate as the
+      readiness cron) suppresses the whole fan-out in an excluded environment:
+      no channel fires and no incident is claimed, a healthy tick is SILENT
+      (nothing logged – the gate runs every ~30s), an active condition logs the
+      suppression at most once per hour, and a healthy tick still clears any
+      incident claim left from an included window – without sending – so a
+      later re-included incident can win the `SET NX` claim instead of being
+      silently unalerted until the state TTL
       (`core/watchdog/worker_liveness.py`, `test_worker_liveness.py`)
 - [x] Shared operator-alert context (FAR-1495 / FAR-1499): every operator alert
       identifies the deployment environment (`Environment: <MODULO_ENV>`, empty ->

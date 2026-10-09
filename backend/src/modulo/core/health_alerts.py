@@ -36,12 +36,16 @@ inventing a mechanism):
   ``event_loop_lag`` (a transient stall diagnostic), ``break_glass`` (an
   expected config posture), and ``db_hygiene`` (a GRADED failure already
   gates the aggregate — so it already alerts — while its NOT-MEASURED probe
-  is advisory per FAR-1510 and is not a hygiene failure at all). The
-  hysteresis below is unchanged, so a single transient advisory blip still
-  never emails. On recovery the email reports ONLY the alert-time conditions
-  that actually cleared — the alert-time list can contain a benign advisory
-  that is STILL degraded when the real failure recovers, and claiming that
-  one "cleared" would be false.
+  is advisory per FAR-1510 and is not a hygiene failure at all). Of those
+  three, only the first two are the REPORTING-benign set
+  (``BENIGN_NON_TRIGGERING_CHECKS``, filtered from every alert body);
+  ``db_hygiene`` stays OUT of that set and is still reported, because a
+  graded failure there is genuine. The hysteresis below is unchanged, so a
+  single transient advisory blip still never emails. On recovery the email
+  reports ONLY the alert-time conditions that actually cleared — the
+  alert-time list holds only non-benign conditions, but a check that is
+  still non-``ok`` now (e.g. a not-measured ``db_hygiene`` probe, which does
+  not flip ``observed_state``) must not be claimed "cleared".
 * **Edge-triggered, confirmed by hysteresis.** A new state must be observed on
   ``CONFIRM_TICKS`` consecutive ticks before any notification. A single-probe
   blip never emails, and a one-tick flap produces ZERO emails (neither the
@@ -70,7 +74,13 @@ inventing a mechanism):
   and the ONE parse lives in ``core.alert_context.alerting_enabled_for_environment``
   so the two channels can never disagree. An excluded environment takes
   exactly the disabled path above: health still evaluated, state machine
-  still advanced, no send, the same rate-limited log-once.
+  still advanced, no send, the same rate-limited log-once — with one
+  deliberate exception: a confirmed RECOVERY edge while excluded closes the
+  incident record silently (``notified``/``conditions``/``since`` cleared,
+  no email), so a distinct later incident after re-inclusion can alert again
+  instead of being swallowed by a stale "unhealthy" record. The alert edge
+  stays "skip send, do not mutate" so a later SMTP/allowlist configuration
+  still alerts on the next confirmed tick.
 * **Benign, non-triggering advisories are never listed as failing checks.**
   ``conditions()`` skips :data:`BENIGN_NON_TRIGGERING_CHECKS`
   (``break_glass``, ``event_loop_lag``) — neither can contribute to
@@ -471,10 +481,18 @@ def _split_cleared_conditions(
     A condition bullet is ``"<name>: <status> (<detail>)"`` — its check NAME
     is everything before the first ``":"``. An alert-time condition has
     CLEARED exactly when its check is no longer non-``ok`` in the current
-    observation. This matters under FAR-1571: the alert-time list can contain
-    benign advisories (``event_loop_lag``, ``break_glass``, a not-measured
-    ``db_hygiene``) that are STILL degraded when the real failure recovers —
-    the recovery email must not claim those cleared.
+    observation. Two cases make the split matter:
+
+    * a check that is still non-``ok`` while the observation reads healthy —
+      e.g. a graded ``db_hygiene`` finding or its not-measured probe
+      (advisory per FAR-1510), neither of which flips ``observed_state`` —
+      must never be claimed cleared; and
+    * LEGACY persisted state: an incident record written before
+      ``conditions()`` started filtering :data:`BENIGN_NON_TRIGGERING_CHECKS`
+      can still hold a benign bullet (``event_loop_lag``, ``break_glass``),
+      which must not be claimed cleared either. Newly written records never
+      contain one (``conditions()`` filters them out), but the split reads
+      whatever is in the store.
     """
     cleared: list[str] = []
     still_failing: list[str] = []
@@ -606,8 +624,9 @@ async def _notify_recovery(
 
     ``cleared`` / ``still_failing`` are the caller's split of the alert-time
     conditions against the CURRENT observation (FAR-1571): only ``cleared``
-    is ever reported as cleared — an alert-time benign advisory that is still
-    degraded must not be claimed as resolved.
+    is ever reported as cleared — an alert-time condition whose check is
+    still non-``ok`` (a graded ``db_hygiene``, or a legacy persisted benign
+    bullet) must not be claimed as resolved.
     """
     if not configured:
         return "disabled"
@@ -677,11 +696,14 @@ async def run_health_alert_check(
     current_time = now_fn()
 
     configured = alerting_configured(settings)
-    if not alerting_enabled_for_environment(settings):
+    env_excluded = not alerting_enabled_for_environment(settings)
+    if env_excluded:
         # Excluded environment: exactly the disabled path. Health is still
         # evaluated, the hysteresis/dedup state machine still advances, but
         # nothing is sent — so staging (or any env the operator allowlisted
-        # out) never pages while production keeps alerting.
+        # out) never pages while production keeps alerting. The recovery edge
+        # below closes the incident record silently (see its branch); the
+        # ALERT edge keeps "skip send, do not mutate" semantics.
         configured = False
         _log_disabled_once(current_time, environment_excluded=True)
     elif not configured:
@@ -716,19 +738,38 @@ async def run_health_alert_check(
                 now=current_time,
             )
         elif confirmed and observed == "healthy" and state.notified == "unhealthy":
-            # Split the alert-time conditions against the CURRENT observation:
-            # only what actually cleared is reported as cleared (a benign
-            # advisory still degraded here must not be claimed resolved).
-            cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
-            action = await _notify_recovery(
-                settings,
-                send_fn,
-                configured=configured,
-                cleared=cleared,
-                still_failing=still_failing,
-                state=state,
-                now=current_time,
-            )
+            if env_excluded:
+                # Quiet close-out while EXCLUDED: the all-clear email is
+                # suppressed by the allowlist, but the incident record must
+                # not strand. Leaving notified="unhealthy" would mean a
+                # distinct later incident after re-inclusion is never
+                # alerted (the alert edge needs notified != "unhealthy"),
+                # and a much later recovery email would name THIS old
+                # incident's conditions/duration. Clear the record without
+                # sending; pending/pending_count (hysteresis) are untouched
+                # above. NOTE: the SMTP-unconfigured path is SEPARATE and
+                # keeps its "state untouched, retry when configured"
+                # semantics — this branch is reachable only via the
+                # env-allowlist gate.
+                state.notified = None
+                state.conditions = []
+                state.since = None
+                action = "recovery_suppressed"
+            else:
+                # Split the alert-time conditions against the CURRENT
+                # observation: only what actually cleared is reported as
+                # cleared (a still-degraded check must not be claimed
+                # resolved).
+                cleared, still_failing = _split_cleared_conditions(state.conditions, observation.non_ok_names())
+                action = await _notify_recovery(
+                    settings,
+                    send_fn,
+                    configured=configured,
+                    cleared=cleared,
+                    still_failing=still_failing,
+                    state=state,
+                    now=current_time,
+                )
 
         await redis.set(STATE_KEY, state.to_json(), ex=STATE_TTL_SECONDS)
     except asyncio.CancelledError:

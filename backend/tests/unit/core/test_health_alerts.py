@@ -859,6 +859,13 @@ def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
     the ADVISORY remainder must equal this module's real-failure set plus
     the three deliberate benign exclusions. A check added/renamed/removed
     over there fails HERE rather than silently losing alert coverage.
+
+    The two production constants are pinned against this same parse:
+    ``BENIGN_NON_TRIGGERING_CHECKS`` (the REPORTING-benign set — never
+    listed as a failing check) must be exactly the benign literal minus
+    ``db_hygiene`` (a graded failure that still gates, so it MUST be
+    reported), and must never overlap the real-failure set — otherwise a
+    future rename/reclassify could drift the reporting set with no test red.
     """
     from modulo.api.routes import health as health_module
 
@@ -875,6 +882,12 @@ def test_advisory_classification_tracks_the_readiness_taxonomy() -> None:
 
     benign = {"event_loop_lag", "break_glass", "db_hygiene"}
     assert advisory_names == ha.REAL_FAILURE_ADVISORY_CHECKS | benign
+    # The reporting-benign set is the benign literal minus db_hygiene (a
+    # graded failure that gates the aggregate and must keep being reported).
+    assert set(benign) - {"db_hygiene"} == ha.BENIGN_NON_TRIGGERING_CHECKS
+    # ...and can never drift INTO the real-failure set (a check that pages
+    # must not also be filtered from the body that explains the page).
+    assert not (ha.BENIGN_NON_TRIGGERING_CHECKS & ha.REAL_FAILURE_ADVISORY_CHECKS)
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1011,64 @@ async def test_included_environment_still_sends() -> None:
     assert result["action"] == "alert"
     assert len(sender.sent) == 1
     assert "unavailable" in sender.sent[0]["subject"].lower()
+
+
+async def test_excluded_recovery_edge_clears_incident_then_reinclusion_alerts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """F2 (health_alerts): while EXCLUDED, a confirmed RECOVERY edge closes
+    the incident record WITHOUT sending. Leaving ``notified="unhealthy"``
+    stranding would mean a distinct later incident after re-inclusion is
+    never alerted, and a much later recovery email would name this old
+    incident's conditions/duration."""
+    excluded = _make_settings(MODULO_ENV="staging", ALERT_ENVIRONMENTS="production")
+    included = _make_settings(MODULO_ENV="production", ALERT_ENVIRONMENTS="production")
+    observer = _FakeObserver()
+    sender = _FakeSender()
+    store = _FakeRedis()
+    clock = {"now": 1_000_000.0}
+
+    # An incident that WAS alerted while the environment was included.
+    store.data[ha.STATE_KEY] = json.dumps(
+        {
+            "notified": "unhealthy",
+            "pending": "unhealthy",
+            "pending_count": 5,
+            "conditions": ["database: unavailable (connection refused)"],
+            "since": 999_000.0,
+        }
+    )
+
+    # 1. The incident recovers while excluded: no email, record closed.
+    observer.observation = _healthy()
+    with caplog.at_level(logging.INFO, logger=ha.__name__):
+        await _tick(observer, sender, store, excluded, clock)
+        result = await _tick(observer, sender, store, excluded, clock)
+
+    assert result["action"] == "recovery_suppressed"
+    assert result["notified"] == "none"
+    assert not sender.sent
+    persisted = json.loads(store.data[ha.STATE_KEY])
+    assert persisted["notified"] is None
+    assert not persisted["conditions"]
+    assert persisted["since"] is None
+    # Hysteresis state still advanced — only the notified record is closed.
+    assert persisted["pending"] == "healthy"
+    assert persisted["pending_count"] == 2  # seeded "unhealthy" -> fresh 2-tick healthy run
+    # Quiet-but-visible: the excluded notice stays rate-limited across ticks.
+    disabled_logs = [record for record in caplog.records if "health_alerts.disabled" in record.getMessage()]
+    assert len(disabled_logs) == 1
+
+    # 2. A DISTINCT new incident after re-inclusion alerts (no stranding).
+    observer.observation = _unhealthy()
+    await _tick(observer, sender, store, included, clock)
+    result = await _tick(observer, sender, store, included, clock)
+
+    assert result["action"] == "alert"
+    assert len(sender.sent) == 1
+    assert "unavailable" in sender.sent[0]["subject"].lower()
+    # The alert reports the NEW incident's conditions, not the old ones.
+    assert "database: unavailable (connection refused)" in sender.sent[0]["html"]
 
 
 def test_conditions_name_non_ok_checks_without_detail() -> None:

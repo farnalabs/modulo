@@ -44,7 +44,14 @@ Design:
   deployment's ``MODULO_ENV``, NO channel fires (the shared
   ``core.alert_context.alerting_enabled_for_environment`` gate, identical
   to the readiness alert's) — staging is CI-only with no live workload, so
-  a worker-death page there pages the operator about nothing. Every text
+  a worker-death page there pages the operator about nothing. The gate is
+  QUIET on healthy ticks (no log at all — it runs every 30s, and an
+  excluded deployment must not emit thousands of suppression lines a day in
+  the very environment this change exists to quiet); an active condition
+  logs the suppression at most once per hour, and a healthy tick still
+  CLEARS any incident claim left over from an included window (without
+  sending) so a later, re-included incident can win the ``SET NX`` claim
+  instead of being silently unalerted until the state key's TTL. Every text
   rendering (email text
   part, generic webhook, Teams) comes from ``_alert_text``/``_recovery_text``
   and therefore carries the deployment environment plus the operator's
@@ -124,6 +131,33 @@ _WEBHOOK_TIMEOUT_SECONDS = 10.0
 _WATCHDOG_BOOT_GRACE_SECONDS = 120
 
 _STARTED_AT: float | None = None  # set by run_worker_liveness_watchdog at loop entry
+
+# Rate limit for the env-exclusion suppression notice (log hygiene, NOT alert
+# dedup — that lives in Redis). The gate runs on EVERY tick
+# (``settings.watchdog_tick_seconds``, default 30s), so an excluded
+# deployment would otherwise log ~2,880 warnings/day in the exact
+# environment this allowlist exists to quiet. Healthy ticks log NOTHING at
+# all; only an ACTIVE condition is logged, at most once per hour per
+# process (mirrors ``health_alerts.DISABLED_LOG_INTERVAL_SECONDS``).
+_SUPPRESSED_LOG_INTERVAL_SECONDS = 3600
+_last_suppressed_log_at: float | None = None
+
+
+def _log_suppressed_once(now: float, conditions: list[str], environment: str) -> None:
+    """Log the env-exclusion suppression — at most once per hour, per process.
+
+    Called ONLY when there is an active condition (a healthy excluded tick
+    is silent by design, so this never fires on a routine healthy tick).
+    """
+    global _last_suppressed_log_at
+    if _last_suppressed_log_at is not None and now - _last_suppressed_log_at < _SUPPRESSED_LOG_INTERVAL_SECONDS:
+        return
+    _last_suppressed_log_at = now
+    _log.warning(
+        "watchdog.alert_suppressed_environment conditions=%s (ALERT_ENVIRONMENTS does not include environment=%r)",
+        "; ".join(conditions),
+        environment,
+    )
 
 
 def _in_boot_grace(now: float) -> bool:
@@ -507,6 +541,9 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
     - ``conditions`` empty: this is the RECOVERY edge. The incident state is
       cleared atomically (GETDEL) so exactly ONE machine sends the recovery
       ("all clear") email, and later healthy ticks stay silent (no state).
+    - Either edge in an env-EXCLUDED deployment: nothing is sent, and the
+      alert edge claims nothing; the recovery edge still CLEARS an existing
+      claim (silently) so a later re-inclusion can alert again.
     """
     if not alerting_enabled_for_environment(settings):
         # ALERT_ENVIRONMENTS excludes this deployment's environment
@@ -515,13 +552,30 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
         # gate with the readiness alert (core.alert_context), so the two
         # alert channels can never disagree about who may be paged. The
         # watchdog still ticks and evaluates — only the fan-out is skipped,
-        # exactly like the no-channel quiet path below (no claim, so no
-        # later recovery email from a channel-less environment either).
-        _log.warning(
-            "watchdog.alert_suppressed_environment conditions=%s (ALERT_ENVIRONMENTS does not include environment=%r)",
-            "; ".join(conditions),
-            settings.environment,
-        )
+        # exactly like the no-channel quiet path below (no claim on the alert
+        # edge, so no later recovery email from a channel-less environment
+        # either).
+        if conditions:
+            # Active incident while excluded: no claim AND no send (unchanged)
+            # — but say so at most once per hour, never once per tick.
+            _log_suppressed_once(time.time(), conditions, settings.environment)
+            return
+        # Healthy tick while excluded: SILENT (no log — this path runs every
+        # ~30s), but still CLEAR any incident claim left over from a window
+        # when this environment was included. Skipping the clear would strand
+        # the claim: after re-inclusion a genuinely NEW incident could not
+        # win the SET NX claim and would be silently unalerted until the
+        # state key's TTL (default 7 days). The all-clear itself is NOT
+        # emailed — the send stays suppressed — so only the state transition
+        # is taken, ignoring the claimed-recovery result.
+        state = await _claim_recovery(redis)
+        if state is not None:
+            _log.info(
+                "watchdog.alert_recovery_suppressed_environment cleared_conditions=%s "
+                "(ALERT_ENVIRONMENTS does not include environment=%r; all-clear not sent)",
+                "; ".join(str(c) for c in (state.get("conditions") or [])),
+                settings.environment,
+            )
         return
     if not _channel_configured(settings):
         # Default-off: the watchdog still ticks and logs, but never sends.
