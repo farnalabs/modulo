@@ -97,7 +97,7 @@ test.describe('JsonViewer design-token theming', { tag: '@regression' }, () => {
       ['.vjs-value-string', 'success'],
       ['.vjs-key', 'muted-foreground'],
       ['.vjs-value-number', 'primary'],
-      ['.vjs-value-null', 'warning'],
+      ['.vjs-value-null', 'warning-text'],
       ['.vjs-tree-brackets', 'foreground'],
     ] as const
 
