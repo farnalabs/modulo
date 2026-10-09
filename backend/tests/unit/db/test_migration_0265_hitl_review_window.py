@@ -30,8 +30,10 @@ Lenses:
    0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state, and
    0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals, and
    0289_pipelines_environment_profile chains onto 0288_runs_execution_origin, and
-   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile as the
-   current single linear head.
+   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile, and
+    0291_invitations_lookup_constraints chains onto 0290_scheduled_reports_due_scan, and
+    0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints as the
+    current single linear head.
 * **Structure (mocked ``op``)** - upgrade adds BOTH columns existence-gated,
   adds the ``ck_pipelines_hitl_review_window`` CHECK (NOT VALID then VALIDATE on
   Postgres; batch mode on SQLite) and creates the partial sweep index;
@@ -57,7 +59,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0265_hitl_review_window"
 _MIGRATION_DOWN_REVISION = "0264_pipelines_max_autonomy_ge_default"
-_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
+_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
 _CHECK_CONSTRAINT = "ck_pipelines_hitl_review_window"
 _SWEEP_INDEX = "ix_hitl_claims_terminalize_sweep"
 _ENVELOPE = (60, 604800)

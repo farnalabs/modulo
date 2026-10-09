@@ -34,8 +34,10 @@ Lenses:
    0287_team_rls_lifecycle_evals chains onto 0286_pipeline_run_state, and
    0288_runs_execution_origin chains onto 0287_team_rls_lifecycle_evals, and
    0289_pipelines_environment_profile chains onto 0288_runs_execution_origin, and
-   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile as the
-   single linear head (0259's test documents the run-up through 0288).
+   0290_scheduled_reports_due_scan chains onto 0289_pipelines_environment_profile, and
+    0291_invitations_lookup_constraints chains onto 0290_scheduled_reports_due_scan, and
+    0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints as the
+    single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
   before any DML and held for the whole single-transaction upgrade - see the
@@ -70,7 +72,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
+_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

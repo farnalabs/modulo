@@ -28,8 +28,8 @@ Schema legs:
 
 Downgrade: drops the index, the CHECK constraint, and the column default.
 
-Revision ID: 0291_audit_events_resource_lookup
-Revises: 0290_scheduled_reports_due_scan
+Revision ID: 0292_audit_events_resource_lookup
+Revises: 0291_invitations_lookup_constraints
 Create Date: 2026-10-09
 """
 
@@ -40,8 +40,8 @@ import re
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0291_audit_events_resource_lookup"
-down_revision: str | None = "0290_scheduled_reports_due_scan"
+revision: str = "0292_audit_events_resource_lookup"
+down_revision: str | None = "0291_invitations_lookup_constraints"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

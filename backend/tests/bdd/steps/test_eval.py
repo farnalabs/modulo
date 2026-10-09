@@ -1,10 +1,31 @@
-"""Step definitions for Eval Run and related eval features."""
+"""Step definitions for eval-run, eval-suite CRUD, scorer and feedback features.
+
+eval_run.feature and eval_suite_crud.feature drive REAL product surfaces:
+
+- The eval-suite CRUD steps drive the real FastAPI routes through
+  ``session_client`` (real routing, real permission floor, real Pydantic
+  response validation); only the DB seams are stubbed.
+- The trigger step drives the real ``build_suite_run`` construction path -
+  the cron/SAQ eval-trigger dispatch creates SuiteRuns there (there is no
+  HTTP route; the old POST /api/pipelines/{name}/evals step text was a
+  fabricated endpoint).
+- The below-threshold scenario drives the real state transition
+  (``_suite_run_transition``) and real completion pipeline
+  (``record_completion`` / ``suite_pass_rate``); the engine's llm_judge
+  compute applies the suite threshold through a caller-injected judge
+  callable, exactly as the suite-run runner does.
+- The results step drives the real ``GET /api/v1/runs/{run_id}/evals``
+  route and the real pass-rate aggregator.
+
+eval_scorer.feature and feedback_system.feature keep their own steps below.
+"""
 
 import contextlib
-import json
 import uuid
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from collections import deque
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -41,44 +62,77 @@ def pipeline_has_eval_suite(pipeline_name: str, suite_name: str, ctx):
     ctx["suite_name"] = suite_name
     ctx["suite_id"] = uuid.uuid4()
 
-    # Mock the eval suite and pipeline lookup
-    mock_suite = MagicMock()
-    mock_suite.id = ctx["suite_id"]
-    mock_suite.name = suite_name
-    mock_suite.pass_threshold = 0.8
-    mock_suite.test_cases = []
-    ctx["mock_suite"] = mock_suite
 
-    mock_pipeline = MagicMock()
-    mock_pipeline.id = ctx["pipeline_id"]
-    mock_pipeline.name = pipeline_name
-    ctx["mock_pipeline"] = mock_pipeline
+@when("the eval suite trigger fires")
+def trigger_eval_run(ctx):
+    """Drive the real eval-trigger construction path.
+
+    The cron/SAQ eval-trigger dispatch calls ``build_suite_run`` to construct
+    and persist a pending SuiteRun (there is no HTTP route). The five
+    org-scoped loads (suite, dataset, model backend, suite definitions, active
+    cases) are shaped; the constructed SuiteRun is captured from ``session.add``.
+    """
+    import asyncio
+
+    from modulo.core.eval_engine.execute_suite_run import build_suite_run
+    from tests.bdd.conftest import make_mock_session
+
+    def _definition() -> MagicMock:
+        definition = MagicMock()
+        definition.id = uuid.uuid4()
+        definition.eval_type = "regex"
+        definition.config_json = {"pattern": "ok"}
+        return definition
+
+    definitions = [_definition(), _definition()]
+    cases = [MagicMock(), MagicMock(), MagicMock()]
+
+    def shaper(session: MagicMock) -> None:
+        suite = MagicMock()
+        suite.id = ctx["suite_id"]
+        dataset = MagicMock()
+        dataset.version = 2
+        backend = MagicMock()
+        session.execute = AsyncMock(
+            side_effect=[
+                MagicMock(scalar_one_or_none=MagicMock(return_value=suite)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=dataset)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=backend)),
+                MagicMock(scalars=MagicMock(return_value=definitions)),
+                MagicMock(scalars=MagicMock(return_value=cases)),
+            ]
+        )
+        session.add = MagicMock(side_effect=lambda run: ctx.__setitem__("suite_run", run))
+        session.flush = AsyncMock()
+
+    session = make_mock_session()
+    shaper(session)
+    ctx["dataset_version"] = 2
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(
+            build_suite_run(
+                session,
+                org_id=ORG_ID,
+                suite_id=ctx["suite_id"],
+                dataset_id=uuid.uuid4(),
+                model_backend_id=uuid.uuid4(),
+                pipeline_id=ctx["pipeline_id"],
+            )
+        )
+    finally:
+        loop.close()
 
 
-@when(parsers.parse("I POST /api/pipelines/{pipeline_name}/evals"))
-def trigger_eval_run(request, pipeline_name: str, ctx):
-    """POST to trigger an eval run — simulated API response."""
-    # Simulate 202 Accepted: eval run created asynchronously
-    eval_run_id = ctx.get("eval_run_id", uuid.uuid4())
-    ctx["eval_run_id"] = eval_run_id
-    request.node._resp = {
-        "status": "pending",
-        "eval_run_id": str(eval_run_id),
-    }
-    request.node._resp_status = 202
-
-
-@then("the response status is 202")
-def response_status_202(request):
-    status = getattr(request.node, "_resp_status", 200)
-    assert status == 202, f"Expected 202, got {status}"
-
-
-@then(parsers.parse('an eval run is created with status "{status}"'))
-def eval_run_created_with_status(status: str, request, ctx):
-    assert request.node._resp["status"] == status, (
-        f"Expected eval run status {status!r}, got {request.node._resp['status']!r}"
-    )
+@then(parsers.parse('the eval run starts with status "{status}"'))
+def eval_run_starts_with_status(status: str, ctx):
+    run = ctx["suite_run"]
+    assert run.state == status, f"Expected eval run state {status!r}, got {run.state!r}"
+    assert str(run.suite_id) == str(ctx["suite_id"]), "Run not scoped to the trigger's suite"
+    assert run.dataset_version == ctx["dataset_version"], "Dataset version snapshot not pinned at construction"
+    assert run.total_cases == 0, "A pending run starts with zero case counts (updated during execution)"
+    assert run.extra["pipeline_id"] == str(ctx["pipeline_id"]), "Run not attributable to the trigger's pipeline"
 
 
 # ============================================================================
@@ -148,42 +202,137 @@ def eval_run_has_aggregate_score(ctx):
 
 
 # ============================================================================
-# Eval Run — Below threshold fails
+# Eval Run - Below threshold does not pass
 # ============================================================================
 
 
 @given(parsers.parse("an eval suite with pass_threshold {threshold}"))
 def eval_suite_with_threshold(threshold: float, ctx):
     ctx["pass_threshold"] = float(threshold)
-    ctx["eval_run_id"] = uuid.uuid4()
 
 
-@given(parsers.parse("an eval run that scored {score}"))
-def eval_run_with_score(score: float, ctx):
+@given(parsers.parse("an eval run whose case scored {score}"))
+def eval_run_case_scored(score: float, ctx):
+    """Score the case through the real llm_judge compute path.
+
+    The judge callable is the caller-injected decision boundary; this is
+    exactly what the suite-run runner does when executing an llm_judge
+    evaluation against a pinned model: the judge applies the suite's
+    pass threshold to its rubric score.
+    """
+    from modulo.core.eval_engine import EvalDefinition, EvalEngine
+
+    eval_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=ORG_ID,
+        name="quality-check",
+        eval_type="llm_judge",
+        config={},
+        pass_threshold=ctx["pass_threshold"],
+        failure_behaviour="warn",
+    )
+
+    def judge(output: dict, defn) -> dict:
+        rubric_score = float(output["score"])
+        return {
+            "passed": rubric_score >= defn.pass_threshold,
+            "score": rubric_score,
+            "detail": "rubric verdict",
+        }
+
+    # ``evaluate_result`` is a plain sync method on EvalEngine - there is no
+    # coroutine to await, so no event loop is involved.
+    result = EvalEngine().evaluate_result(
+        {"score": float(score)},
+        eval_def,
+        llm_judge_callable=judge,
+    )
+    ctx["case_result"] = result
     ctx["score"] = float(score)
-    ctx["aggregate_score"] = float(score)
 
 
 @when("the eval run completes")
-def eval_run_completes(request, ctx):
-    threshold = ctx.get("pass_threshold", 0.8)
-    score = ctx.get("aggregate_score", 0.0)
-    status = "passed" if score >= threshold else "failed"
-    ctx["run_status"] = status
+def eval_run_completes(ctx):
+    """Drive the real completion path.
 
-    # Simulate the completed eval run response
-    request.node._resp = {
-        "status": status,
-        "score": score,
-        "threshold": threshold,
-    }
-    request.node._resp_status = 200
+    ``_suite_run_transition`` moves RUNNING -> COMPLETED under an
+    optimistic-lock UPDATE; ``record_completion`` then resolves the baseline
+    (none exists here), computes the comparison (skipped with a warning) and
+    sets ``completed_at``.
+    """
+    import asyncio
+
+    from modulo.core.eval_engine.execute_suite_run import _suite_run_transition as suite_run_transition
+    from modulo.core.eval_engine.suite_run import record_completion
+    from modulo.db.models.eval_suite_run import SuiteRun, SuiteRunState
+    from tests.bdd.conftest import make_mock_session
+
+    run = SuiteRun(
+        id=uuid.uuid4(),
+        organisation_id=ORG_ID,
+        suite_id=ctx.get("suite_id", uuid.uuid4()),
+        dataset_id=uuid.uuid4(),
+        dataset_version=1,
+        definition_checksum="abc123",
+        model_backend_id=uuid.uuid4(),
+        scenario_signature="default",
+        baseline_tuple={},
+        state=SuiteRunState.RUNNING.value,
+        version=1,
+        total_cases=1,
+        passed_cases=0,
+        failed_cases=1,
+        excluded_case_count=0,
+        claimed_cost=Decimal(0),
+    )
+    session = make_mock_session()
+    # _suite_run_transition: optimistic-lock UPDATE returns the new version.
+    session.execute = AsyncMock(
+        side_effect=[
+            MagicMock(scalar_one_or_none=MagicMock(return_value=2)),
+        ]
+    )
+    # record_completion: refresh the run, then resolve the baseline via
+    # ``session.scalars`` (no completed same-tuple run exists here), flush.
+    session.refresh = AsyncMock()
+    session.scalars = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    session.flush = AsyncMock()
+
+    async def _complete() -> None:
+        await suite_run_transition(session, run, SuiteRunState.COMPLETED)
+        await record_completion(session, run, {})
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_complete())
+    finally:
+        loop.close()
+    ctx["suite_run"] = run
 
 
 @then(parsers.parse('the eval run status is "{expected_status}"'))
-def eval_run_status_is(expected_status: str, request, ctx):
-    actual = ctx.get("run_status") or request.node._resp.get("status")
+def eval_run_status_is(expected_status: str, ctx):
+    run = ctx["suite_run"]
+    actual = run.state
     assert actual == expected_status, f"Expected eval run status {expected_status!r}, got {actual!r}"
+    assert run.completed_at is not None, "Completed run missing completed_at"
+    assert run.version == 2, "Optimistic-lock version not bumped by the transition"
+
+
+@then("no case passed the eval")
+def no_case_passed(ctx):
+    from modulo.core.eval_engine.suite_run import suite_pass_rate
+
+    result = ctx["case_result"]
+    assert not result.passed, f"Case scored {ctx['score']} below threshold must not pass"
+    assert result.score == pytest.approx(ctx["score"]), "Judge score not carried into the result"
+    stats = suite_pass_rate([result], ctx["suite_run"].excluded_case_count)
+    assert stats["passed"] == 0, f"Expected 0 passed cases, got {stats['passed']}"
+    assert stats["total"] == 1, f"Expected 1 total case, got {stats['total']}"
+    assert stats["pass_rate"] == 0.0, f"Expected pass_rate 0.0, got {stats['pass_rate']}"
+    comparison = ctx["suite_run"].comparison_json
+    assert comparison is not None, "record_completion did not attach a comparison"
+    assert isinstance(comparison, dict), f"comparison_json not a dict: {type(comparison)}"
 
 
 # ============================================================================
@@ -193,41 +342,85 @@ def eval_run_status_is(expected_status: str, request, ctx):
 
 @given("a completed eval run with scores")
 def completed_eval_run_with_scores(ctx):
-    ctx["eval_run_id"] = uuid.uuid4()
-    ctx["scores"] = [
-        {"case_id": str(uuid.uuid4()), "score": 0.95},
-        {"case_id": str(uuid.uuid4()), "score": 0.72},
-        {"case_id": str(uuid.uuid4()), "score": 0.88},
-    ]
-    ctx["aggregate_score"] = sum(s["score"] for s in ctx["scores"]) / len(ctx["scores"])
-    ctx["run_status"] = "completed"
+    from modulo.db.models.eval_result import EvalResult
+
+    eval_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    ctx["run_id"] = run_id
+    ctx["scores"] = [(True, 0.95), (False, 0.72), (True, 0.88)]
+    evaluated_at = datetime(2025, 1, 1, tzinfo=UTC)
+    rows = []
+    for index, (passed, score) in enumerate(ctx["scores"]):
+        row = EvalResult(
+            id=uuid.uuid4(),
+            organisation_id=ORG_ID,
+            run_id=run_id,
+            suite_run_id=None,
+            node_id=uuid.uuid4(),
+            eval_id=eval_id,
+            passed=passed,
+            score=score,
+            detail="rubric verdict",
+            observed=False,
+            evaluated_at=evaluated_at + timedelta(minutes=index),
+        )
+        rows.append(row)
+    ctx["rows"] = rows
+    ctx["run_row"] = MagicMock(id=run_id)
 
 
 @when("I navigate to the eval results page")
 def navigate_to_eval_results(request, ctx):
-    """Simulate the navigation — the frontend Playwright test handles actual
-    browser navigation; here we store expected page data for validation."""
-    ctx["results_page_data"] = {
-        "eval_run_id": str(ctx["eval_run_id"]),
-        "scores": ctx["scores"],
-        "aggregate": ctx["aggregate_score"],
-        "status": ctx["run_status"],
-    }
-    request.node._resp = ctx["results_page_data"]
+    """Drive the real ``GET /api/v1/runs/{run_id}/evals`` route.
+
+    The three business queries (run lookup, count, rows) are shaped; the route
+    body contract - the 404 on a foreign-org run, the per-item wire shape, the
+    pagination envelope - runs unpatched.
+    """
+    from tests.bdd.conftest import session_client
+
+    def shaper(session: MagicMock) -> None:
+        _eval_shaped_execute(
+            session,
+            [
+                MagicMock(scalar_one_or_none=MagicMock(return_value=ctx["run_row"])),
+                MagicMock(scalar=MagicMock(return_value=len(ctx["rows"]))),
+                MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=ctx["rows"])))),
+            ],
+        )
+
+    with (
+        session_client(role=_eval_role(request), shaper=shaper) as client,
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.get(f"/api/v1/runs/{ctx['run_id']}/evals")
+    request.node._resp = resp
 
 
 @then("I see per-case scores and the aggregate")
 def see_per_case_scores_and_aggregate(request, ctx):
-    data = ctx.get("results_page_data") or request.node._resp
-    assert data is not None
-    assert "scores" in data, "Missing per-case scores"
-    assert data["scores"], "Scores list is empty"
-    assert "aggregate" in data, "Missing aggregate score"
-    assert isinstance(data["aggregate"], (int, float))
-    # All per-case scores should be present
-    for s in data["scores"]:
-        assert "case_id" in s, "Case missing id"
-        assert "score" in s, "Case missing score"
+    from modulo.core.eval_engine.suite_run import suite_pass_rate
+
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200 for run eval results, got {resp.status_code}"
+    body = resp.json()
+    assert body["total"] == len(ctx["rows"]), f"Expected total {len(ctx['rows'])}, got {body['total']}"
+    assert len(body["items"]) == len(ctx["rows"]), "Item count does not match the shaped row count"
+    for item in body["items"]:
+        assert item["run_id"] == str(ctx["run_id"]), "Result not scoped to the requested run"
+        assert item["passed"] in (True, False), f"Non-boolean passed value: {item['passed']!r}"
+        assert isinstance(item["score"], (int, float)), f"Score not numeric: {item['score']!r}"
+        assert item["evaluated_at"] is not None, "Missing evaluated_at timestamp"
+    # Aggregate: the score list the backend exposed is what the pass-rate
+    # aggregator consumes - drive it against the real rows the wire carried.
+    expected_passes = sum(1 for passed, _ in ctx["scores"] if passed)
+    stats = suite_pass_rate(ctx["rows"], 0)
+    assert stats["total"] == len(ctx["rows"]), f"Expected total {len(ctx['rows'])}, got {stats['total']}"
+    assert stats["passed"] == expected_passes, f"Expected {expected_passes} passed cases, got {stats['passed']}"
+    assert stats["pass_rate"] == round(expected_passes / len(ctx["rows"]), 4), (
+        f"Expected pass rate {round(expected_passes / len(ctx['rows']), 4)}, got {stats['pass_rate']}"
+    )
 
 
 # ============================================================================
@@ -382,19 +575,66 @@ def step_valid_data_passes_json_schema(ctx):
 
 
 # ============================================================================
-# eval/eval_suite_crud.feature  —  5 scenarios
+# eval/eval_suite_crud.feature  -  5 scenarios
 # ============================================================================
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/eval/eval_suite_crud.feature")
 
 
-def _eval_resp(status_code, **kwargs):
-    return SimpleNamespace(
-        status_code=status_code,
-        ok=200 <= status_code < 300,
-        json=lambda: kwargs,
-        text=json.dumps(kwargs),
+def _eval_row(
+    *,
+    eval_id: uuid.UUID,
+    name: str,
+    eval_type: str,
+    pipeline_id: uuid.UUID,
+):
+    from modulo.db.models.eval import Eval
+
+    row = Eval(
+        organisation_id=ORG_ID,
+        pipeline_id=pipeline_id,
+        node_id=None,
+        name=name,
+        eval_type=eval_type,
+        config_json={},
+        pass_threshold=None,
+        suite_id=None,
+        account_id=USER_ID,
+        version=1,
     )
+    row.id = eval_id
+    return row
+
+
+def _eval_shaped_execute(session: MagicMock, shapes: list[MagicMock]) -> None:
+    """Shape-aware ``session.execute`` for the guarded eval routes.
+
+    ``require_permission``'s kill-switch read selects
+    ``organisations.authz_enforce`` before every route body (ADR 047) and
+    must not consume a business-query shape: an absent row means
+    enforcement defaults ON, which this module's admin principals satisfy.
+    Unexpected extra executes resolve as an empty row lookup so a wrong
+    shape count fails on the route's own 404/500 assertion, not on mock
+    internals.
+    """
+    pending: deque[MagicMock] = deque(shapes)
+
+    async def _dispatch_execute(*args: object, **_kwargs: object) -> MagicMock:
+        stmt_text = str(args[0]) if args else ""
+        if "authz_enforce" in stmt_text:
+            return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        if pending:
+            return pending.popleft()
+        return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+
+    session.execute = AsyncMock(side_effect=_dispatch_execute)
+
+
+def _eval_role(request) -> str:
+    """Role wired by conftest's authenticated-as Given (default: admin)."""
+    from tests.bdd.conftest import _shared_state
+
+    return _shared_state(request).get("org_role", "admin")
 
 
 @given(parsers.parse('an eval definition "{name}" exists'))
@@ -403,87 +643,175 @@ def step_eval_def_exists(name, request, ctx):
     ctx["eval_def_id"] = uuid.uuid4()
     ctx["eval_def_type"] = "regex"
     ctx["eval_def_pipeline_id"] = uuid.uuid4()
+    ctx["eval_def_row"] = _eval_row(
+        eval_id=ctx["eval_def_id"],
+        name=name,
+        eval_type=ctx["eval_def_type"],
+        pipeline_id=ctx["eval_def_pipeline_id"],
+    )
 
 
 @when(
     parsers.parse('I POST /api/evals with name "{name}" and type "{eval_type}"'),
 )
 def step_create_eval_def(name, eval_type, request, ctx):
-    """Create eval definition — checks auth context for 403."""
-    # The conftest auth steps flag viewer scenarios on the node; branching on
-    # that real auth state (instead of the scenario title) keeps new scenarios
-    # from accidentally inheriting a spurious 403.
-    if getattr(request.node, "_viewer_auth", False):
-        request.node._resp = _eval_resp(403, detail="Only admins can create eval definitions")
-        return
+    """Drive the real ``POST /api/v1/evals`` route.
 
-    from unittest.mock import AsyncMock, MagicMock
+    Admin gating, guardrail validation and the pipeline existence check run
+    unpatched; only ``create_or_update_eval`` (a module-level seam that reads
+    and writes through the session) is stubbed, returning the row the route
+    maps into the legacy response shape.
+    """
+    from modulo.db.models.eval import Eval
+    from tests.bdd.conftest import session_client
 
-    from modulo.db.models.eval_definition import EvalDefinition
+    created = Eval(
+        organisation_id=ORG_ID,
+        pipeline_id=uuid.uuid4(),
+        node_id=None,
+        name=name,
+        eval_type=eval_type,
+        config_json={},
+        pass_threshold=None,
+        suite_id=None,
+        account_id=USER_ID,
+        version=1,
+    )
+    created.id = uuid.uuid4()
 
-    mock_session = AsyncMock()
-    mock_session.flush = AsyncMock()
-    mock_session.add = MagicMock()
-
-    import asyncio
-
-    eval_def_id = uuid.uuid4()
-    pipeline_id = uuid.uuid4()
-
-    loop = asyncio.new_event_loop()
-    try:
-        ed = EvalDefinition(
-            organisation_id=ORG_ID,
-            pipeline_id=pipeline_id,
-            name=name,
-            eval_type=eval_type,
-            config_json={},
-            failure_behaviour="warn",
-            account_id=USER_ID,
+    def shaper(session: MagicMock) -> None:
+        # Exactly one business query: the pipeline existence lookup.
+        _eval_shaped_execute(
+            session,
+            [MagicMock(scalar_one_or_none=MagicMock(return_value=MagicMock()))],
         )
-        ed.id = eval_def_id
-        mock_session.add(ed)
-        loop.run_until_complete(mock_session.flush())
 
-        ctx["eval_def_id"] = eval_def_id
-        ctx["eval_def_name"] = name
-        ctx["eval_def_type"] = eval_type
-        request.node._resp = _eval_resp(201, id=str(eval_def_id), name=name, eval_type=eval_type)
-    except Exception as exc:
-        request.node._resp = _eval_resp(500, error=str(exc))
-    finally:
-        loop.close()
+    with (
+        session_client(role=_eval_role(request), shaper=shaper) as client,
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as create_eval_mock,
+    ):
+        create_eval_mock.return_value = created
+        request.node._resp = client.post(
+            "/api/v1/evals",
+            json={"pipeline_id": str(uuid.uuid4()), "name": name, "eval_type": eval_type},
+        )
+    ctx["eval_def_row"] = created
 
 
 @when(parsers.parse('I PUT /api/evals/{eval_id} with a new name "{name}"'))
-def step_update_eval_def(name, request, ctx):
-    if getattr(request.node, "_viewer_auth", False):
-        request.node._resp = _eval_resp(403, detail="Only admins can update eval definitions")
-        return
-    eval_id = ctx.get("eval_def_id", uuid.uuid4())
-    request.node._resp = _eval_resp(200, id=str(eval_id), name=name, eval_type=ctx.get("eval_def_type", "regex"))
+def step_update_eval_def(name, eval_id, request, ctx):
+    """Drive the real ``PUT /api/v1/evals/{eval_id}`` route.
+
+    The three business queries (row lookup, current gate, gate reload) are
+    shaped; ``create_or_update_eval`` is stubbed at the seam and returns an
+    updated row, so the route's own contract - 404 handling, guardrail
+    validation against the merged type/config, response mapping - runs
+    unpatched.
+    """
+    from tests.bdd.conftest import session_client
+
+    try:
+        eval_uuid = uuid.UUID(eval_id)
+    except ValueError:
+        # The feature files carry the literal placeholder text; the id under
+        # test is the one the Given recorded.
+        eval_uuid = ctx.get("eval_def_id", uuid.uuid4())
+    row = ctx.get("eval_def_row") or _eval_row(
+        eval_id=eval_uuid,
+        name=ctx.get("eval_def_name", "quality-check"),
+        eval_type=ctx.get("eval_def_type", "regex"),
+        pipeline_id=uuid.uuid4(),
+    )
+    updated = _eval_row(
+        eval_id=eval_uuid,
+        name=name,
+        eval_type=row.eval_type,
+        pipeline_id=row.pipeline_id,
+    )
+
+    def shaper(session: MagicMock) -> None:
+        _eval_shaped_execute(
+            session,
+            [
+                MagicMock(scalar_one_or_none=MagicMock(return_value=row)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+            ],
+        )
+
+    with (
+        session_client(role=_eval_role(request), shaper=shaper) as client,
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.create_or_update_eval", new_callable=AsyncMock) as update_eval_mock,
+    ):
+        update_eval_mock.return_value = updated
+        request.node._resp = client.put(f"/api/v1/evals/{eval_uuid}", json={"name": name})
+    ctx["eval_def_name"] = name
 
 
 @when(parsers.parse("I DELETE /api/evals/{eval_id}"))
-def step_delete_eval_def(request, ctx):
-    if getattr(request.node, "_viewer_auth", False):
-        request.node._resp = _eval_resp(403, detail="Only admins can delete eval definitions")
-        return
-    request.node._resp = _eval_resp(204)
+def step_delete_eval_def(eval_id, request, ctx):
+    """Drive the real ``DELETE /api/v1/evals/{eval_id}`` route.
+
+    The definition under test is regex-typed, so the route takes the
+    hard-delete path: one business query (row lookup) plus the ORM
+    ``session.delete`` call - the soft-delete/audit branch stays product code.
+    """
+    from tests.bdd.conftest import session_client
+
+    try:
+        eval_uuid = uuid.UUID(eval_id)
+    except ValueError:
+        eval_uuid = ctx.get("eval_def_id", uuid.uuid4())
+    row = ctx.get("eval_def_row") or _eval_row(
+        eval_id=eval_uuid,
+        name=ctx.get("eval_def_name", "quality-check"),
+        eval_type="regex",
+        pipeline_id=uuid.uuid4(),
+    )
+
+    def shaper(session: MagicMock) -> None:
+        _eval_shaped_execute(session, [MagicMock(scalar_one_or_none=MagicMock(return_value=row))])
+        session.delete = AsyncMock()
+
+    with (
+        session_client(role=_eval_role(request), shaper=shaper) as client,
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        request.node._resp = client.delete(f"/api/v1/evals/{eval_uuid}")
 
 
 @when("I GET /api/evals")
 def step_list_evals(request, ctx):
-    items = []
-    if ctx.get("eval_def_name"):
-        items.append(
-            {
-                "id": str(ctx["eval_def_id"]),
-                "name": ctx["eval_def_name"],
-                "eval_type": ctx.get("eval_def_type", "regex"),
-            }
-        )
-    request.node._resp = _eval_resp(200, items=items, total=len(items), page=1, page_size=20)
+    """Drive the real ``GET /api/v1/evals`` route.
+
+    Two business queries when the page has rows (count, rows, gated
+    PolicyGate page load - three total) and two when the list is empty.
+    """
+    from tests.bdd.conftest import session_client
+
+    rows = [ctx["eval_def_row"]] if ctx.get("eval_def_row") else []
+    side_effects = [
+        MagicMock(scalar=MagicMock(return_value=len(rows))),
+        MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rows)))),
+    ]
+    if rows:
+        # Batch PolicyGate page load - only issued when the page has rows.
+        side_effects.append(MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))))
+
+    def shaper(session: MagicMock) -> None:
+        _eval_shaped_execute(session, side_effects)
+
+    with (
+        session_client(role=_eval_role(request), shaper=shaper) as client,
+        patch("modulo.api.routes.evals.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.evals.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        request.node._resp = client.get("/api/v1/evals")
 
 
 @then(parsers.parse('the response contains eval definition "{name}"'))
@@ -492,6 +820,7 @@ def step_response_contains_eval_def(name, request, ctx):
     items = body.get("items", [])
     names = [item.get("name") for item in items]
     assert name in names, f"Expected eval def {name!r} in response, got: {names}"
+    assert body["total"] >= 1, "List route did not count the existing definition"
 
 
 # ============================================================================

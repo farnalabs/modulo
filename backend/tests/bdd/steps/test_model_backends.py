@@ -344,103 +344,239 @@ def non_existent_backend_id(ctx):
     ctx["backend_not_found"] = True
 
 
+# ---------------------------------------------------------------------------
+# Model Backend CRUD — real routes driven through a stubbed DB session
+# ---------------------------------------------------------------------------
+
+_CRUD_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_CRUD_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+_SHAPED_EMPTY_EXEC_RESULT = MagicMock(
+    scalar_one_or_none=MagicMock(return_value=None),
+    scalar_one=MagicMock(return_value=0),
+    scalars=MagicMock(return_value=[]),
+    scalar=MagicMock(return_value=None),
+)
+
+
+def _shaped_exec(kind: str, value: object) -> MagicMock:
+    """A shaped ``session.execute`` return value for one result accessor."""
+    shaped = MagicMock()
+    getattr(shaped, kind).return_value = value
+    return shaped
+
+
+def _crud_field(backend: object, attr: str, default: str) -> str:
+    """Read a string field off the given-context backend, else the default."""
+    value = getattr(backend, attr, default)
+    return value if isinstance(value, str) else default
+
+
+def _model_backend_row(
+    ctx: dict[str, object],
+    *,
+    name: str | None = None,
+    provider: str | None = None,
+    fallback_backend_ids: list[str] | None = None,
+) -> ModelBackend:
+    """Build a real ModelBackend row from the CRUD step context."""
+    from datetime import UTC, datetime
+
+    backend = ctx.get("backend")
+    existing_id = ctx.get("backend_id")
+    row = ModelBackend(
+        id=uuid.UUID(str(existing_id)) if existing_id is not None else uuid.uuid4(),
+        organisation_id=_CRUD_ORG_ID,
+        name=name if name is not None else _crud_field(backend, "name", "test-backend"),
+        display_name=_crud_field(backend, "display_name", "Test Backend"),
+        provider=provider if provider is not None else _crud_field(backend, "provider", "openai"),
+        model_id=_crud_field(backend, "model_id", "gpt-4o"),
+        credentials_ciphertext=b"gAAAAAB",
+        default_params={},
+        visibility="org",
+        tier="native",
+        account_id=_CRUD_USER_ID,
+        fallback_backend_ids=fallback_backend_ids,
+    )
+    now = datetime.now(UTC)
+    row.created_at = now
+    row.updated_at = now
+    return row
+
+
+def _drive_model_backend_crud(
+    ctx: dict[str, object],
+    request: pytest.FixtureRequest,
+    *,
+    method: str,
+    path: str,
+    body: dict[str, object] | None = None,
+    exec_specs: list[tuple[str, object]] | None = None,
+) -> None:
+    """Drive a real /api/v1/model-backends CRUD route with a stubbed DB session.
+
+    The real app, route bodies, auth dependencies and DB CRUD functions run
+    unpatched; the credentials store and audit append are stubbed, the RLS
+    context helpers are no-ops against a mocked session, and the provider
+    health check is mocked so no network call is made. SELECT results are
+    supplied in order via ``exec_specs`` (kind, value) pairs, where kind is one
+    of ``scalar_one_or_none``, ``scalar_one`` or ``scalars``; any unexpected
+    extra SELECT resolves as empty. The HTTP response is stored on the request
+    node as ``_resp``, with the JSON body on ``_resp_body``.
+    """
+    from collections import deque
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+    from modulo.api.main import app
+    from modulo.auth.dependencies import (
+        get_current_tenant_user,
+        get_current_tenant_user_or_api_key,
+        get_current_user,
+    )
+    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+    from modulo.settings import Settings, get_settings
+    from tests.unit.api.mock_session import configure_mock_session
+
+    added: list[ModelBackend] = []
+
+    def _fake_get(entity_cls: object, identity: object) -> object:
+        if entity_cls is ModelBackend and added:
+            return added[-1]
+        return MagicMock()
+
+    mock_session = AsyncMock()
+    configure_mock_session(mock_session)
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_session.begin = MagicMock(return_value=begin_cm)
+    mock_session.get = AsyncMock(side_effect=_fake_get)
+
+    shaped_results = deque(_shaped_exec(kind, value) for kind, value in (exec_specs or []))
+
+    async def _dispatch_execute(*args: object, **kwargs: object) -> MagicMock:
+        stmt_text = str(args[0]) if args else ""
+        if "authz_enforce" in stmt_text:
+            # The `require_permission` kill-switch read (ADR 047) runs before
+            # every route body: an absent row means enforcement defaults ON,
+            # which the admin-role principals in these scenarios satisfy.
+            # It must not consume a route-shaped result.
+            return _SHAPED_EMPTY_EXEC_RESULT
+        if shaped_results:
+            return shaped_results.popleft()
+        return _SHAPED_EMPTY_EXEC_RESULT
+
+    mock_session.execute = AsyncMock(side_effect=_dispatch_execute)
+
+    def _flush_added_rows() -> None:
+        # A mocked session never runs INSERT defaults, so assign the values the
+        # database would delegate (row id, timestamps) once flush() completes.
+        now = datetime.now(UTC)
+        for row in added:
+            if row.id is None:
+                row.id = uuid.uuid4()
+            if row.created_at is None:
+                row.created_at = now
+            if row.updated_at is None:
+                row.updated_at = now
+
+    mock_session.add = MagicMock(side_effect=added.append)
+    mock_session.flush = AsyncMock(side_effect=_flush_added_rows)
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key=Fernet.generate_key().decode(),
+        modulo_admin_password="testpass",
+    )
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
+    )
+    # The model-backend CRUD routes require_permission_any_credential
+    # (resolves get_current_tenant_user_or_api_key), so the admin principal
+    # must satisfy that dependency too.
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
+        username="admin", organisation_id=_CRUD_ORG_ID, account_id=_CRUD_USER_ID, org_role="admin"
+    )
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+
+    try:
+        client = TestClient(app)
+        with (
+            patch("modulo.api.routes.model_backends.set_rls_org"),
+            patch("modulo.api.routes.model_backends.set_rls_user_context"),
+            patch(
+                "modulo.api.routes.model_backends._run_health_check_on_save",
+                new=AsyncMock(return_value=("ok", None)),
+            ),
+            patch("modulo.api.routes.model_backends.create_secrets_backend", return_value=AsyncMock()),
+            patch("modulo.api.routes.model_backends.append_audit_event_isolated", new=AsyncMock()),
+        ):
+            if method == "GET":
+                ctx["response"] = client.get(path)
+            elif method == "POST":
+                ctx["response"] = client.post(path, json=body)
+            elif method == "PATCH":
+                ctx["response"] = client.patch(path, json=body)
+            else:
+                ctx["response"] = client.delete(path)
+    finally:
+        for override_key in (
+            get_settings,
+            get_db_session,
+            _get_engine,
+            get_current_user,
+            get_current_tenant_user,
+            get_current_tenant_user_or_api_key,
+            get_plan_context,
+        ):
+            app.dependency_overrides.pop(override_key, None)
+
+    resp = ctx["response"]
+    request.node._resp = resp
+    request.node._resp_body = resp.json() if resp.status_code != 204 else None
+
+
 @when("I POST /api/v1/model-backends")
 def post_create_model_backend(request, ctx):
     payload = ctx.get("payload", {})
-    name = payload.get("name", "")
-    provider = payload.get("provider", "")
-
-    # Simulate fallback ID reference validation — unknown IDs are rejected 422
-    fallback_ids = payload.get("fallback_backend_ids")
-    if fallback_ids:
-        request.node._resp_status = 422
-        request.node._resp_body = {
-            "detail": [
-                {
-                    "type": "value_error",
-                    "loc": ["body", "fallback_backend_ids"],
-                    "msg": "Unknown model backend id(s) referenced as fallbacks",
-                }
-            ]
-        }
-        return
-
-    # Simulate duplicate name check
-    existing = ctx.get("backend")
-    if existing and existing.name == name:
-        request.node._resp_status = 409
-        request.node._resp_body = {"detail": "A model backend with this name already exists"}
-        return
-
-    # Simulate provider validation
-    valid_providers = {
-        "ai21",
-        "anthropic",
-        "azure_openai",
-        "bedrock",
-        "cohere",
-        "deepseek",
-        "fireworks",
-        "gemini",
-        "grok",
-        "groq",
-        "jan",
-        "llamacpp",
-        "lm_studio",
-        "localai",
-        "mistral",
-        "ollama",
-        "openai",
-        "openrouter",
-        "perplexity",
-        "qwen",
-        "replicate",
-        "tgi",
-        "togetherai",
-        "vertexai",
-        "vllm",
-        "watsonx",
-    }
-    if provider not in valid_providers and provider != "invalid_provider":
-        request.node._resp_status = 201
-        created = _make_mock_model_backend(
-            name=name,
-            provider=provider,
-            credentials_ciphertext=b"gAAAAABencrypted",
-        )
-        ctx["created_backend"] = created
-        request.node._resp_status = 201
-        request.node._resp_body = created
-    elif provider == "invalid_provider":
-        request.node._resp_status = 422
-        request.node._resp_body = {
-            "detail": [{"type": "enum", "loc": ["body", "provider"], "msg": "Input should be a valid provider"}]
-        }
-    elif not payload.get("name"):
-        request.node._resp_status = 422
-        request.node._resp_body = {"detail": [{"type": "missing", "loc": ["body", "name"], "msg": "Field required"}]}
+    exec_specs: list[tuple[str, object]] = []
+    if payload.get("fallback_backend_ids"):
+        # The candidate fallback ids resolve to nothing among the org's rows.
+        exec_specs.append(("scalars", []))
+    elif ctx.get("backend") is not None and ctx["backend"].name == payload.get("name"):
+        # Duplicate-name precheck: the org already holds a backend with this name.
+        exec_specs.append(("scalar_one_or_none", _model_backend_row(ctx)))
     else:
-        request.node._resp_status = 201
-        created = _make_mock_model_backend(
-            name=name,
-            provider=provider,
-            credentials_ciphertext=b"gAAAAABencrypted",
-        )
-        ctx["created_backend"] = created
-        request.node._resp_status = 201
-        request.node._resp_body = created
+        exec_specs.append(("scalar_one_or_none", None))
+    _drive_model_backend_crud(
+        ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs
+    )
 
 
 @when("I GET /api/v1/model-backends")
 def get_list_model_backends(request, ctx):
-    backends = ctx.get("backends", [])
-    request.node._resp_status = 200
-    request.node._resp_body = {
-        "items": backends,
-        "total": len(backends),
-        "page": 1,
-        "page_size": 20,
-    }
+    rows = [_model_backend_row({"backend": mb}, name=mb.name, provider=mb.provider) for mb in ctx.get("backends", [])]
+    ctx["crud_rows"] = rows
+    exec_specs = [("scalar_one", len(rows)), ("scalars", rows)]
+    _drive_model_backend_crud(ctx, request, method="GET", path="/api/v1/model-backends", exec_specs=exec_specs)
 
 
 @given(parsers.parse("a model backend payload with missing name"))
@@ -474,131 +610,169 @@ def another_backend_references_fallback(ctx):
 @when(parsers.parse("I GET /api/v1/model-backends/{backend_id}"))
 def get_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id  # feature file uses {backend_id} as REST placeholder
-    backend_id = ctx.get("backend_id")
-    not_found = ctx.get("backend_not_found", False)
-    if not_found:
-        request.node._resp_status = 404
-        request.node._resp_body = {"detail": "Model backend not found"}
-    else:
-        backend = ctx.get("backend")
-        request.node._resp_status = 200
-        request.node._resp_body = backend
+    found = not ctx.get("backend_not_found", False)
+    row = _model_backend_row(ctx) if found else None
+    ctx["crud_row"] = row
+    real_id = ctx.get("backend_id")
+    _drive_model_backend_crud(
+        ctx,
+        request,
+        method="GET",
+        path=f"/api/v1/model-backends/{real_id}",
+        exec_specs=[("scalar_one_or_none", row)],
+    )
 
 
 @when(parsers.parse("I PATCH /api/v1/model-backends/{backend_id} with a new name and model"))
 def patch_model_backend_name_model(request, backend_id: str, ctx):
     _ = backend_id
-    backend = ctx.get("backend")
-    if not backend:
-        request.node._resp_status = 404
-        request.node._resp_body = {"detail": "Model backend not found"}
-    else:
-        backend.name = "updated-backend"
-        backend.model_id = "gpt-4o-mini"
-        request.node._resp_status = 200
-        request.node._resp_body = backend
+    row = _model_backend_row(ctx)
+    ctx["crud_row"] = row
+    real_id = ctx.get("backend_id")
+    _drive_model_backend_crud(
+        ctx,
+        request,
+        method="PATCH",
+        path=f"/api/v1/model-backends/{real_id}",
+        body={"name": "updated-backend", "model_id": "gpt-4o-mini"},
+        # The route reads the row in its transaction, and the CRUD repo
+        # update_model_backend re-reads the same row before applying updates.
+        exec_specs=[("scalar_one_or_none", row), ("scalar_one_or_none", row)],
+    )
 
 
 @when(parsers.parse("I PATCH /api/v1/model-backends/{backend_id} with a new API key"))
 def patch_model_backend_api_key(request, backend_id: str, ctx):
     _ = backend_id
-    backend = ctx.get("backend")
-    if not backend:
-        request.node._resp_status = 404
-        request.node._resp_body = {"detail": "Model backend not found"}
-    else:
-        backend.credentials_ciphertext = b"gAAAAABnewencrypted"
-        request.node._resp_status = 200
-        request.node._resp_body = backend
+    row = _model_backend_row(ctx)
+    ctx["crud_row"] = row
+    real_id = ctx.get("backend_id")
+    _drive_model_backend_crud(
+        ctx,
+        request,
+        method="PATCH",
+        path=f"/api/v1/model-backends/{real_id}",
+        body={"api_key": "sk-rotated-key-67890"},
+        exec_specs=[("scalar_one_or_none", row), ("scalar_one_or_none", row)],
+    )
 
 
 @when(parsers.parse("I DELETE /api/v1/model-backends/{backend_id}"))
 def delete_model_backend_by_id(request, backend_id: str, ctx):
     _ = backend_id
-    not_found = ctx.get("backend_not_found", False)
-    if ctx.get("backend_referenced_as_fallback"):
-        request.node._resp_status = 409
-        request.node._resp_body = {
-            "detail": f"Cannot delete model backend: it is referenced as a fallback by backend(s): "
-            f"{ctx.get('referencing_backend_name', 'Primary Backend')}"
-        }
-    elif not_found:
-        request.node._resp_status = 404
+    found = not ctx.get("backend_not_found", False)
+    row = _model_backend_row(ctx) if found else None
+    ctx["crud_row"] = row
+    real_id = ctx.get("backend_id")
+    exec_specs: list[tuple[str, object]] = []
+    if row is not None and ctx.get("backend_referenced_as_fallback"):
+        # The pre-delete fallback scan finds another org backend referencing
+        # the target as a fallback chain entry.
+        referencing = _model_backend_row(
+            {},
+            name=str(ctx.get("referencing_backend_name", "Primary Backend")),
+            fallback_backend_ids=[str(row.id)],
+        )
+        exec_specs.append(("scalars", [referencing]))
     else:
-        request.node._resp_status = 204
+        exec_specs.append(("scalars", []))  # fallback referencing scan
+        exec_specs.append(("scalars", []))  # snapshot pin scan
+        if row is not None:
+            exec_specs.append(("scalar_one_or_none", row))  # row fetch
+            exec_specs.append(("scalar_one", 0))  # runner binding inventory count
+    _drive_model_backend_crud(
+        ctx,
+        request,
+        method="DELETE",
+        path=f"/api/v1/model-backends/{real_id}",
+        exec_specs=exec_specs,
+    )
 
 
 @when(parsers.parse('I POST /api/v1/model-backends with the same name "{name}"'))
 def post_create_model_backend_duplicate(name: str, request, ctx):
-    ctx["payload"] = {"name": name, "provider": "openai", "model_id": "gpt-4o", "api_key": "sk-test"}
-    # Set up duplicate by reusing the same name
-    request.node._resp_status = 409
-    request.node._resp_body = {"detail": "A model backend with this name already exists"}
+    payload = {
+        "name": name,
+        "display_name": f"Test {name} Backend",
+        "provider": "openai",
+        "model_id": "gpt-4o",
+        "api_key": "sk-test",
+    }
+    ctx["payload"] = payload
+    # Duplicate-name precheck: the stored backend matches the posted name.
+    exec_specs = [("scalar_one_or_none", _model_backend_row(ctx))]
+    _drive_model_backend_crud(
+        ctx, request, method="POST", path="/api/v1/model-backends", body=payload, exec_specs=exec_specs
+    )
 
 
 @then("the response contains the created model backend")
-def response_contains_created_backend(request):
+def response_contains_created_backend(request, ctx):
     body = request.node._resp_body
     assert body is not None
-    assert hasattr(body, "id") or "id" in (body if isinstance(body, dict) else {})
+    payload = ctx.get("payload", {})
+    # The fresh id is delegated by the database on insert; the real response
+    # mapping round-trips the submitted payload fields.
+    assert str(uuid.UUID(body["id"])) == body["id"]
+    assert body["name"] == payload.get("name")
+    assert body["provider"] == payload.get("provider")
+    assert body["model_id"] == payload.get("model_id")
 
 
 @then("the response has_credentials is true")
 def response_has_credentials_true(request):
     body = request.node._resp_body
-    if hasattr(body, "credentials_ciphertext"):
-        assert body.credentials_ciphertext, "Expected has_credentials to be true"
-    elif isinstance(body, dict):
-        assert body.get("has_credentials", False) is True
-    else:
-        pytest.fail("Cannot determine has_credentials from response body")
+    assert body is not None
+    assert body.get("has_credentials") is True, body
 
 
 @then("the API key is not exposed in the response")
 def api_key_not_exposed(request):
     body = request.node._resp_body
-    if isinstance(body, dict):
-        assert "api_key" not in body, "API key exposed in response!"
-    elif hasattr(body, "credentials_ciphertext"):
-        assert not hasattr(body, "api_key"), "API key exposed in response!"
-    # If it's a mock, ensure there's no api_key attribute
-    assert not hasattr(body, "api_key"), "API key exposed in response!"
+    assert body is not None
+    assert "api_key" not in body, "Response leaks the API key!"
+    assert "credentials_ciphertext" not in body, "Response leaks the credential ciphertext!"
 
 
 @then("the response contains a list of model backends")
-def response_contains_backend_list(request):
+def response_contains_backend_list(request, ctx):
     body = request.node._resp_body
-    if isinstance(body, dict):
-        assert "items" in body
-        assert isinstance(body["items"], list)
-    elif isinstance(body, list):
-        assert body
+    assert body is not None
+    items = body["items"]
+    assert isinstance(items, list)
+    assert body["total"] == len(items)
+    expected_names = [row.name for row in ctx["crud_rows"]]
+    assert [item["name"] for item in items] == expected_names
 
 
 @then("the response matches the backend details")
-def response_matches_backend_details(request):
+def response_matches_backend_details(request, ctx):
     body = request.node._resp_body
-    backend = body
-    assert backend is not None
-    if hasattr(backend, "name"):
-        assert backend.name is not None
-    elif isinstance(backend, dict):
-        assert backend.get("name") is not None
+    row = ctx["crud_row"]
+    assert body is not None
+    assert body["id"] == str(row.id)
+    assert body["name"] == row.name
+    assert body["provider"] == row.provider
+    assert body["display_name"] == row.display_name
 
 
 @then("the response reflects the updated values")
-def response_reflects_updates(request):
+def response_reflects_updates(request, ctx):
     body = request.node._resp_body
-    if hasattr(body, "name"):
-        assert body.name == "updated-backend"
-    elif isinstance(body, dict):
-        assert body.get("name") == "updated-backend"
+    row = ctx["crud_row"]
+    assert body is not None
+    assert body["name"] == "updated-backend"
+    assert body["model_id"] == "gpt-4o-mini"
+    assert body["id"] == str(row.id)
 
 
 @then(parsers.parse("the model backend response status is {expected_status:d}"))
 def model_response_status_check(expected_status: int, request):
-    actual = request.node._resp_status
-    assert actual == expected_status, f"Expected status {expected_status}, got {actual}"
+    resp = request.node._resp
+    actual = resp.status_code
+    assert actual == expected_status, (
+        f"Expected status {expected_status}, got {actual} (body: {request.node._resp_body})"
+    )
 
 
 # ============================================================================

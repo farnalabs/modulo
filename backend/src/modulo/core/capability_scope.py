@@ -114,6 +114,12 @@ def agent_granted_connector_types(connector_type_refs: Any) -> set[str]:
 
 
 def _looks_like_instance_id(value: str) -> bool:
+    """Return True when *value* parses as a UUID (a connector instance-id).
+
+    Used to split ``allowed_connectors`` entries into instance-ids (opaque at
+    compile time, enforced by the runtime fetch scope) and connector TYPES
+    (checkable against the Agent's grants).
+    """
     try:
         uuid.UUID(str(value))
         return True
