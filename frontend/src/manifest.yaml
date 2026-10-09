@@ -3237,6 +3237,28 @@ elements:
       - testid: page-header-right
         type: element
         dynamic_testid: false
+    /composites/:id/editor:
+      - testid: composite-editor-save-as
+        type: button
+        dynamic_testid: false
+      - testid: composite-editor-ports-toggle
+        type: button
+        dynamic_testid: false
+      - testid: composite-editor-publish
+        type: button
+        dynamic_testid: false
+      - testid: composite-save-as-name
+        type: input
+        dynamic_testid: false
+      - testid: composite-save-as-description
+        type: textarea
+        dynamic_testid: false
+      - testid: composite-save-as-cancel
+        type: button
+        dynamic_testid: false
+      - testid: composite-save-as-submit
+        type: button
+        dynamic_testid: false
     /pipelines/:id/editor:
       - testid: pipeline-editor-save
         type: button
