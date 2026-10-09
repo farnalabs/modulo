@@ -230,6 +230,15 @@ class TestParseIsoDate:
     def test_parses_naive_datetime(self) -> None:
         assert _parse_iso_date("2026-08-15T10:30:00") == date(2026, 8, 15)
 
+    def test_malformed_value_raises_no_silent_fallback(self) -> None:
+        """A corrupt stored value fails hard — never coerced to a default."""
+        with pytest.raises(ValueError, match="Invalid isoformat string"):
+            _parse_iso_date("not-a-date")
+
+    def test_empty_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="Invalid isoformat string"):
+            _parse_iso_date("")
+
 
 # --- Helper to build a mock session factory ---
 
@@ -717,35 +726,59 @@ class TestVendorClient:
 
 
 class TestCheckInstanceSwitch:
+    """``_check_instance_switch`` delegates to ``consent.is_instance_analytics_enabled``.
+
+    These tests exercise the REAL shared helper (only its ``get_config`` DB seam
+    is patched) so they pin the semantics the dump gate inherits: bool/string-aware
+    coercion — the stored string ``"false"`` must NOT read as enabled — and the
+    ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env fallback.
+    """
+
     @pytest.mark.asyncio
-    async def test_enabled_returns_true(self) -> None:
+    async def test_bool_true_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "modulo.core.product_analytics.consent.get_config",
             new_callable=AsyncMock,
-            return_value="true",
+            return_value=MagicMock(value=True),
         ):
             assert await _check_instance_switch(factory) is True
 
     @pytest.mark.asyncio
-    async def test_disabled_returns_false(self) -> None:
+    async def test_stored_false_string_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression: a stored string ``"false"`` is OFF, never truthy (fail-open)."""
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "modulo.core.product_analytics.consent.get_config",
+            new_callable=AsyncMock,
+            return_value=MagicMock(value="false"),
+        ):
+            assert await _check_instance_switch(factory) is False
+
+    @pytest.mark.asyncio
+    async def test_absent_key_env_unset_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+        factory = _FakeSessionFactory()
+        with patch(
+            "modulo.core.product_analytics.consent.get_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
             assert await _check_instance_switch(factory) is False
 
     @pytest.mark.asyncio
-    async def test_empty_string_returns_false(self) -> None:
+    async def test_absent_key_env_fallback_enables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The env fallback the consent surface honours must gate the dump too."""
+        monkeypatch.setenv("MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
         factory = _FakeSessionFactory()
         with patch(
-            "modulo.core.product_analytics.metrics_dump.read_system_config",
+            "modulo.core.product_analytics.consent.get_config",
             new_callable=AsyncMock,
-            return_value="",
+            return_value=None,
         ):
-            assert await _check_instance_switch(factory) is False
+            assert await _check_instance_switch(factory) is True
 
 
 # --- _should_dump_now with now=None ---
@@ -813,17 +846,37 @@ class TestResolveStartDate:
         assert last is None
 
     @pytest.mark.asyncio
-    async def test_no_watermark_string_consent_date(self) -> None:
+    async def test_no_watermark_string_consent_normalised_at_boundary(self) -> None:
+        """String consent dates are normalised by ``_get_consenting_orgs``.
+
+        ``_resolve_start_date`` consumes the already-normalised ``date`` (the
+        read boundary owns the writer-format contract); it does not re-parse raw
+        ``settings_json`` strings.
+        """
+        stored = apply_consent_action(default_consent_state(), "accept", now=datetime(2026, 8, 1, 9, 0, tzinfo=UTC))[
+            "level_changed_at"
+        ]
+        row = MagicMock(
+            id="org-1",
+            settings_json={"product_analytics": {"level": "all", "level_changed_at": stored}},
+        )
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter([row]))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        orgs = await _get_consenting_orgs(mock_session)
+        assert orgs[0]["level_changed_at"] == date(2026, 8, 1)
+
         factory = _FakeSessionFactory()
-        orgs = [{"id": "org-1", "level_changed_at": "2026-08-01"}]
         dump_date = date(2026, 8, 10)
         with patch(
             "modulo.core.product_analytics.metrics_dump.read_system_config",
             new_callable=AsyncMock,
             return_value=None,
         ):
-            start, _last = await _resolve_start_date(factory, orgs, dump_date)
+            start, last = await _resolve_start_date(factory, orgs, dump_date)
         assert start == date(2026, 8, 1)
+        assert last is None
 
     @pytest.mark.asyncio
     async def test_no_watermark_backfill_cap(self) -> None:

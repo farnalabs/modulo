@@ -47,8 +47,18 @@ an eligible tier.
       `tests/unit/api/routes/test_product_analytics_transparency.py`; frontend
       `frontend/src/views/AdminProductAnalyticsView.vue`,
       `frontend/src/stores/productAnalyticsStore.ts`)
-- [x] Reporting is gated by license/plan eligibility and the instance-level kill
-      (`core/product_analytics/license_enforcement.py`, `test_license_enforcement.py`)
+- [x] Reporting is gated by the instance-level master switch, which the dump
+      gate shares with the consent surface
+      (`core/product_analytics/metrics_dump.py` `_check_instance_switch` delegates to
+      `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
+      the transparency endpoint's raw read still lags — see Known Gaps)
+- [ ] License/plan eligibility gating is not wired in production: every function
+      in `core/product_analytics/license_enforcement.py`
+      (`check_product_analytics_requirement`, `is_enforcement_active`,
+      `should_degrade_to_community`) plus `consent.partner_license_requires_analytics`
+      / `is_partner_carve_out_active` has no production call site (unit tests only),
+      so neither a route nor the dump applies the partner `product_analytics_required`
+      carve-out. Feature completion, not a QA fix — tracked for a follow-up ticket.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
 - [x] The transparency endpoint derives the instance's data-residency posture:
@@ -65,18 +75,29 @@ an eligible tier.
 - Metrics telemetry is vendor-bound; a fully self-hosted, in-product analytics
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
 - The transparency endpoint (`api/routes/product_analytics_transparency.py`) reads
-  four `system_config` keys - `product_analytics_last_dump_at`,
+  five `system_config` keys - `product_analytics_last_dump_at`,
   `product_analytics_dump_count`, `product_analytics_consent_level`,
-  `product_analytics_enforcement_enabled` - that **no production path writes** (only
-  tests seed them via a patched `get_config`; a repo-wide search finds no writer).
+  `product_analytics_enabled`, `product_analytics_enforcement_enabled`. The four
+  collected-metric keys (`product_analytics_last_dump_at`, `..._dump_count`,
+  `..._consent_level`, `..._enforcement_enabled`) have **no feature-code writer**
+  (only tests seed them; the metrics dump and consent routes never persist them.
+  The generic `PUT /api/v1/system-admin/config/{key}` can upsert any `system_config`
+  key, so this is "no writer in normal operation", not "unwritable").
   The shipped `/admin/product-analytics` page therefore always renders its defaults:
-  last dump `-`, dump count `0`, consent level `off`, enforcement `inactive`, and
-  `egress_allowed` / `warning` permanently `False` / `None` even while the dump is
-  actively delivering for consenting orgs. Completing it needs the metrics dump to
+  last dump `-`, dump count `0`, consent level `off`, and enforcement `inactive`, with
+  the `warning` banner permanently `None` and the endpoint's (unrendered)
+  `egress_allowed` permanently `False` even while the dump is actively delivering for
+  consenting orgs. Completing it needs the metrics dump to
   record successful-dump facts and the consent path to mirror the instance consent
-  level (an instance-vs-org consent semantics decision), plus aligning
-  `instance_enabled` with the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback that
-  `is_instance_analytics_enabled` applies. Feature completion, not a QA fix -
+  level (an instance-vs-org consent semantics decision), and the transparency
+  endpoint's `instance_enabled` read should be aligned with
+  `is_instance_analytics_enabled` — both its bool/string coercion (a stored string
+  `"false"` currently reads truthy there) and its `MODULO_PRODUCT_ANALYTICS_ENABLED`
+  fallback; the dump gate now delegates to that helper. The page's
+  `enforcement_enabled` field reads a different key
+  (`product_analytics_enforcement_enabled`) from the real enforcement control
+  (`product_analytics_license_enforcement_kill_switch`), so the badge stays
+  `inactive` even after the documented steps. Feature completion, not a QA fix -
   tracked for a follow-up ticket.
 
 ## QA History
@@ -86,10 +107,19 @@ an eligible tier.
   `level_changed_at` as a full ISO datetime (`now.isoformat()`), but
   `_get_consenting_orgs` parsed it with `date.fromisoformat`, which rejects any
   string carrying a time component - so the cron raised before building a payload and
-  never delivered. Added `_parse_iso_date` (date-or-datetime) and routed all three
-  parse sites through it. Regression tests now seed the production-written format
+  never delivered. Added `_parse_iso_date` (date-or-datetime) and routed the live
+  parse sites (the watermark read and `_get_consenting_orgs`) through it. Regression
+  tests now seed the production-written format
   (the previous dump tests seeded a date-only string the writer never produces, which
   is why CI stayed green). Also documented the MAJOR transparency-writer gap above.
+  Pre-PR QA gate (same day): removed the now-dead re-parse in `_resolve_start_date`
+  (normalisation is owned by `_get_consenting_orgs`), pinned `_parse_iso_date`'s
+  fail-hard contract with negative tests, and aligned `_check_instance_switch` with
+  `consent.is_instance_analytics_enabled` — a stored string `"false"` previously read
+  as truthy and ran the dump while the consent surface reported the switch OFF
+  (fail-open), and the `MODULO_PRODUCT_ANALYTICS_ENABLED` fallback the surface honours
+  was ignored. Corrected the Known-Gaps key count (five, not four) and the
+  license/plan-gating behaviour claim (module has no production call site).
 - 2026-10-03: **Improve Architecture product-map walk** — closed the CISO
   data-residency persona gap (`personas/marcus-ciso.feature`, pinned
   `@awaiting-implementation` since 2026-08): the scenario now executes against

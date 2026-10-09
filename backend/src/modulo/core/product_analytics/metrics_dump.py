@@ -25,6 +25,7 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
+from modulo.core.product_analytics.consent import is_instance_analytics_enabled
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
@@ -207,8 +208,6 @@ async def _resolve_start_date(
         (o["level_changed_at"] for o in orgs if o["level_changed_at"] is not None),
         default=dump_date,
     )
-    if isinstance(earliest_consent, str):
-        earliest_consent = _parse_iso_date(earliest_consent)
     backfill_start = max(earliest_consent, dump_date - timedelta(days=_BACKFILL_MAX_DAYS))
     return backfill_start, None
 
@@ -263,9 +262,20 @@ async def _dump_date_range(
 
 
 async def _check_instance_switch(factory: Any) -> bool:
+    """Return True when the instance-level analytics master switch is ON.
+
+    Delegates to :func:`consent.is_instance_analytics_enabled` so the dump gate
+    applies the SAME semantics as the consent surface: a bool/string-aware
+    coercion (``"false"`` / ``"0"`` / ``"no"`` are OFF) and the
+    ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env-var fallback. A bare ``bool()``
+    on the raw stored value previously treated the stored string ``"false"`` as
+    truthy and ran the dump while the consent surface reported the switch OFF
+    (fail-open), and ignored the env fallback the surface honours. The
+    transparency endpoint still reads the raw key; its alignment to this helper
+    is tracked in the product map's Known Gaps.
+    """
     async with factory() as session, session.begin():
-        enabled = await read_system_config(session, "product_analytics_enabled")
-    return bool(enabled)
+        return await is_instance_analytics_enabled(session)
 
 
 async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
