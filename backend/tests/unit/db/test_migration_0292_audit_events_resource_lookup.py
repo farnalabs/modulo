@@ -12,17 +12,18 @@ Structural + model-parity contract (no Postgres / Testcontainers needed):
   ``(organisation_id, resource_type, resource_id)``; the downgrade drops it.
   The composite must lead on the tenant column so the RLS org filter is the
   index prefix.
-* **Postgres-only guard legs** - the ``event_count`` server default and the
-  ``NOT VALID`` -> ``VALIDATE`` CHECK constraint are Postgres-only; on any
-  other dialect the upgrade creates the index and returns (the 0246
-  precedent). The CHECK is added ``NOT VALID`` and validated as a separate
-  statement, with a pre-flight violation count that aborts the migration with
-  a descriptive error when a legacy row violates ``event_count >= 0``.
-* **Identifier guard** - ``_validate_identifier`` rejects anything that is not
-  a bare SQL identifier before it reaches an interpolated statement.
+* **Postgres-only default leg** - the ``event_count`` server default is
+  Postgres-only; on any other dialect the upgrade creates the index and
+  returns (the 0246 precedent).
+* **No duplicate CHECK** - the ``event_count >= 0`` guard is migration-owned
+  by ``0165_add_check_constraints`` (``ck_audit_event_event_count``); 0292
+  must emit no ``CHECK`` DDL, because a second predicate would double-enforce
+  on the hot ``audit_chain_heads`` upsert path and the pre-flight scan would
+  be dead code on a chain-migrated DB.
 * **Model parity** - ``AuditEvent.__table_args__`` declares the same index
   (name, ordered columns), so ``create_all``'d SQLite schemas and migrated
-  Postgres schemas agree.
+  Postgres schemas agree; the counter CHECK stays out of the ORM for the same
+  migration-owned reason.
 """
 
 from __future__ import annotations
@@ -30,12 +31,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from alembic.script import ScriptDirectory
+from sqlalchemy import CheckConstraint
 
-from modulo.db.models.audit_event import AuditEvent
+from modulo.db.models.audit_event import AuditChainHead, AuditEvent
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
 _MIGRATION_NAME = "0292_audit_events_resource_lookup"
@@ -46,14 +47,9 @@ _HEAD_MIGRATION = "0292_audit_events_resource_lookup"
 _INDEX = "ix_audit_events_org_resource"
 _TABLE = "audit_events"
 _COLUMNS = ["organisation_id", "resource_type", "resource_id"]
-_CONSTRAINT = "ck_audit_chain_heads_event_count_nonneg"
 
 _SET_DEFAULT = "ALTER TABLE audit_chain_heads ALTER COLUMN event_count SET DEFAULT 0"
 _DROP_DEFAULT = "ALTER TABLE audit_chain_heads ALTER COLUMN event_count DROP DEFAULT"
-_VIOLATION_SELECT = "SELECT count(*) FROM audit_chain_heads WHERE NOT (event_count >= 0)"
-_ADD_CONSTRAINT = f"ALTER TABLE audit_chain_heads ADD CONSTRAINT {_CONSTRAINT} CHECK (event_count >= 0) NOT VALID"
-_VALIDATE_CONSTRAINT = f"ALTER TABLE audit_chain_heads VALIDATE CONSTRAINT {_CONSTRAINT}"
-_DROP_CONSTRAINT = f"ALTER TABLE audit_chain_heads DROP CONSTRAINT IF EXISTS {_CONSTRAINT}"
 
 
 def _load_migration() -> ModuleType:
@@ -66,23 +62,20 @@ def _load_migration() -> ModuleType:
     return module
 
 
-def _run(dialect: str, entry_point: str, violation: int = 0) -> tuple[list, list, list, list]:
+def _run(dialect: str, entry_point: str) -> tuple[list, list, list, list]:
     """Run ``upgrade``/``downgrade`` against a mocked ``op``.
 
     Returns ``(created, dropped, executed, bound)`` where ``created`` is the
     recorded ``op.create_index`` calls as ``(name, table, columns)``,
     ``dropped`` is the ``op.drop_index`` calls as ``(name, table_name)``,
     ``executed`` is the ``op.execute`` statements and ``bound`` is the
-    ``op.get_bind().execute`` statements - each in call order. ``violation``
-    is what the pre-flight ``SELECT count(*)`` returns.
+    ``op.get_bind().execute`` statements - each in call order.
     """
     module = _load_migration()
     created: list[tuple[str, str, list[str]]] = []
     dropped: list[tuple[str, str | None]] = []
     executed: list[str] = []
     bound: list[str] = []
-    result = MagicMock()
-    result.scalar_one.return_value = violation
 
     def _record_create(name: str, table: str, columns: list[str], *_a: object, **_kw: object) -> None:
         created.append((name, table, list(columns)))
@@ -93,9 +86,8 @@ def _run(dialect: str, entry_point: str, violation: int = 0) -> tuple[list, list
     def _record_op(stmt: object, *_a: object, **_kw: object) -> None:
         executed.append(str(getattr(stmt, "text", stmt)))
 
-    def _record_bind(stmt: object, *_a: object, **_kw: object) -> MagicMock:
+    def _record_bind(stmt: object, *_a: object, **_kw: object) -> None:
         bound.append(str(getattr(stmt, "text", stmt)))
-        return result
 
     with patch.object(module, "op") as op:
         op.get_bind.return_value.dialect.name = dialect
@@ -143,38 +135,20 @@ class TestIndexShape:
         assert dropped == [(_INDEX, _TABLE)], dropped
 
 
-class TestPostgresGuardLegs:
-    def test_upgrade_sets_default_then_add_not_valid_then_validates(self) -> None:
+class TestPostgresDefaultLeg:
+    def test_upgrade_sets_the_event_count_default(self) -> None:
         _created, _dropped, executed, bound = _run("postgresql", "upgrade")
-        assert bound == [_SET_DEFAULT, _VIOLATION_SELECT], bound
-        assert executed == [_ADD_CONSTRAINT, _VALIDATE_CONSTRAINT], executed
+        assert executed == [], executed
+        assert bound == [_SET_DEFAULT], bound
 
-    def test_add_constraint_is_not_valid_and_validated_separately(self) -> None:
-        _created, _dropped, executed, _bound = _run("postgresql", "upgrade")
-        add_ddl, validate_ddl = executed
-        assert add_ddl.endswith("NOT VALID"), add_ddl
-        assert "VALIDATE CONSTRAINT" in validate_ddl, validate_ddl
-        assert "NOT VALID" not in validate_ddl, validate_ddl
-
-    def test_preflight_violation_count_aborts_before_ddl(self) -> None:
-        module = _load_migration()
-        result = MagicMock()
-        result.scalar_one.return_value = 3
-        with patch.object(module, "op") as op:
-            op.get_bind.return_value.dialect.name = "postgresql"
-            op.get_bind.return_value.execute.return_value = result
-            with pytest.raises(RuntimeError, match="violate `event_count >= 0`"):
-                module.upgrade()
-            op.execute.assert_not_called()
-
-    def test_non_postgres_skips_the_default_and_constraint_legs(self) -> None:
+    def test_non_postgres_upgrade_skips_the_default_leg(self) -> None:
         _created, _dropped, executed, bound = _run("sqlite", "upgrade")
         assert executed == [], executed
         assert bound == [], bound
 
-    def test_postgres_downgrade_drops_constraint_then_default(self) -> None:
+    def test_postgres_downgrade_drops_the_default(self) -> None:
         _created, _dropped, executed, bound = _run("postgresql", "downgrade")
-        assert executed == [_DROP_CONSTRAINT], executed
+        assert executed == [], executed
         assert bound == [_DROP_DEFAULT], bound
 
     def test_non_postgres_downgrade_only_drops_the_index(self) -> None:
@@ -184,13 +158,17 @@ class TestPostgresGuardLegs:
         assert dropped == [(_INDEX, _TABLE)], dropped
 
 
-class TestIdentifierGuard:
-    def test_valid_identifier_is_returned(self) -> None:
-        assert _load_migration()._validate_identifier("audit_chain_heads") == "audit_chain_heads"
+class TestNoDuplicateCheck:
+    def test_upgrade_emits_no_check_constraint_ddl(self) -> None:
+        # The event_count >= 0 guard is owned by 0165; 0292 must not re-add it.
+        _created, _dropped, executed, bound = _run("postgresql", "upgrade")
+        assert executed == [], executed
+        assert not any("CHECK" in stmt for stmt in bound), bound
 
-    def test_identifier_with_hyphen_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="invalid SQL identifier"):
-            _load_migration()._validate_identifier("bad-name")
+    def test_downgrade_emits_no_check_constraint_ddl(self) -> None:
+        _created, _dropped, executed, bound = _run("postgresql", "downgrade")
+        assert executed == [], executed
+        assert not any("CONSTRAINT" in stmt for stmt in bound), bound
 
 
 class TestModelParity:
@@ -202,3 +180,14 @@ class TestModelParity:
     def test_model_declares_both_audit_event_composites(self) -> None:
         declared = {idx.name for idx in AuditEvent.__table__.indexes if idx.name is not None}
         assert {"ix_audit_events_org_type_actor_time", _INDEX} <= declared
+
+    def test_model_does_not_declare_the_counter_check(self) -> None:
+        # Migration-owned by 0165 (_MIGRATION_OWNED_CHECKS in
+        # tests/integration/test_initial_migration.py): the ORM must not
+        # declare the duplicate.
+        checks = {
+            constraint.name
+            for constraint in AuditChainHead.__table__.constraints
+            if isinstance(constraint, CheckConstraint)
+        }
+        assert not checks, checks

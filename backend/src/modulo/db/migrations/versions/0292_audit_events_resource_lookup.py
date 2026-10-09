@@ -1,4 +1,4 @@
-"""Add resource-lookup index for audit_events + chain-head counter guard.
+"""Add resource-lookup index for audit_events + chain-head column default.
 
 Schema legs:
 
@@ -11,7 +11,11 @@ Schema legs:
    covers ``(organisation_id, event_type, account_id, created_at)`` and
    cannot serve a leading-``resource_type`` shape, so without this index
    those queries fall back to a full org scan past the unrelated
-   single-column indexes.
+   single-column indexes. It is a narrower, org-led twin of
+   ``0155_add_hot_query_indexes``' ``ix_audit_events_resource`` on
+   ``(resource_type, resource_id)``; the org-led shape is required so the
+   RLS org filter is the index prefix, at the cost of one more index to
+   maintain on the write-heavy ``audit_events`` table.
 
 2. ``audit_chain_heads.event_count`` server default ``0`` (Postgres
    only; SQLite/ORM-created test schemas get it from the model's
@@ -19,14 +23,17 @@ Schema legs:
    is ``NOT NULL`` with only a Python-side ``default=0``, so a raw-SQL
    INSERT omitting ``event_count`` fails with a NOT NULL violation.
 
-3. ``ck_audit_chain_heads_event_count_nonneg`` — ``CHECK (event_count
-   >= 0)`` on ``audit_chain_heads``. The counter only ever increments
-   (hash-chain head); a negative value indicates corruption or a buggy
-   writer. Added ``NOT VALID`` + ``VALIDATE CONSTRAINT`` (the 0186
-   precedent) with a pre-flight violation count so a single legacy dirty
-   row surfaces a descriptive error instead of dying mid-flight.
+The non-negative counter guard on ``audit_chain_heads.event_count`` is
+already owned by migration ``0165_add_check_constraints`` (constraint
+``ck_audit_event_event_count``, added ``NOT VALID`` then ``VALIDATE``-d and
+never dropped since; documented as migration-owned in
+``tests/integration/test_initial_migration.py``). This migration therefore
+does NOT re-add it: a second ``CHECK (event_count >= 0)`` would enforce the
+identical predicate twice on every write to the hot ``audit_chain_heads``
+table (the chain head is upserted on every audit event) and the pre-flight
+violation scan would be dead code on any chain-migrated DB.
 
-Downgrade: drops the index, the CHECK constraint, and the column default.
+Downgrade: drops the index and the column default.
 
 Revision ID: 0292_audit_events_resource_lookup
 Revises: 0291_invitations_lookup_constraints
@@ -34,8 +41,6 @@ Create Date: 2026-10-09
 """
 
 from __future__ import annotations
-
-import re
 
 import sqlalchemy as sa
 from alembic import op
@@ -46,31 +51,6 @@ branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
 _INDEX = "ix_audit_events_org_resource"
-_CONSTRAINT = "ck_audit_chain_heads_event_count_nonneg"
-
-_IDENTIFIER_RE = re.compile(r"[a-z_][a-z0-9_]*")
-
-
-def _validate_identifier(name: str) -> str:
-    """Guard an interpolated SQL identifier before it reaches the statement."""
-    if _IDENTIFIER_RE.fullmatch(name) is None:
-        raise ValueError(f"invalid SQL identifier: {name!r}")
-    return name
-
-
-def _add_constraint_sql() -> str:
-    return (
-        "ALTER TABLE audit_chain_heads ADD CONSTRAINT "
-        f"{_validate_identifier(_CONSTRAINT)} CHECK (event_count >= 0) NOT VALID"
-    )
-
-
-def _validate_constraint_sql() -> str:
-    return f"ALTER TABLE audit_chain_heads VALIDATE CONSTRAINT {_validate_identifier(_CONSTRAINT)}"
-
-
-def _drop_constraint_sql() -> str:
-    return f"ALTER TABLE audit_chain_heads DROP CONSTRAINT IF EXISTS {_validate_identifier(_CONSTRAINT)}"
 
 
 def _is_postgres() -> bool:
@@ -86,23 +66,9 @@ def upgrade() -> None:
     if not _is_postgres():
         return
     op.get_bind().execute(sa.text("ALTER TABLE audit_chain_heads ALTER COLUMN event_count SET DEFAULT 0"))
-    violation_count = (
-        op.get_bind()
-        .execute(sa.text("SELECT count(*) FROM audit_chain_heads WHERE NOT (event_count >= 0)"))  # nosec B608
-        .scalar_one()
-    )
-    if violation_count:
-        raise RuntimeError(
-            f"Cannot add CHECK constraint {_CONSTRAINT}: {violation_count} existing row(s) "
-            "in audit_chain_heads violate `event_count >= 0`. Quarantine or fix these "
-            "rows before deploying this migration."
-        )
-    op.execute(_add_constraint_sql())
-    op.execute(_validate_constraint_sql())
 
 
 def downgrade() -> None:
     if _is_postgres():
-        op.execute(_drop_constraint_sql())
         op.get_bind().execute(sa.text("ALTER TABLE audit_chain_heads ALTER COLUMN event_count DROP DEFAULT"))
     op.drop_index(_INDEX, table_name="audit_events")

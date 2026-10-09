@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, Text, Uuid, text
+from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,7 +57,12 @@ class AuditChainHead(Base):
     """Tracks the most recent audit event hash per organisation."""
 
     __tablename__ = "audit_chain_heads"
-    __table_args__ = (CheckConstraint("event_count >= 0", name="ck_audit_chain_heads_event_count_nonneg"),)
+    # The ``event_count >= 0`` guard is migration-owned (0165's
+    # ``ck_audit_event_event_count``, see
+    # ``tests/integration/test_initial_migration.py::_MIGRATION_OWNED_CHECKS``),
+    # so it stays out of the ORM rather than being declared twice. The server
+    # default (``event_count`` is NOT NULL) is kept here for create_all'd
+    # SQLite/MariaDB schemas; 0292 sets the Postgres-side default.
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
