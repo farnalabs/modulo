@@ -15,6 +15,7 @@ matrix), the logout surface (blacklist error matrix, claim-shape skips), the
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
@@ -936,3 +937,47 @@ def test_resolve_demo_membership_and_login_context_edges() -> None:
     assert resolved_role == "operator"
 
     asyncio.run(asyncio.sleep(0))
+
+
+def test_logout_family_not_found_log_truncates_family_id(
+    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The family-not-found log line never carries the full family UUID (#849)."""
+    http, _session = client
+    family = str(uuid.uuid4())
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims(token_family=family)),
+        patch(f"{_PREFIX}blacklist_family", new=AsyncMock(return_value=False)),
+        patch(f"{_PREFIX}clear_session_approvals_for_account"),
+    ):
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
+
+    assert resp.status_code == 200, resp.text
+    matching = [r for r in caplog.records if r.getMessage() == "logout.family_not_found"]
+    assert len(matching) == 1
+    assert matching[0].__dict__["family_id"] == family[:8]
+    assert family not in str(matching[0].__dict__)
+
+
+def test_logout_invalid_family_log_truncates_token_family(
+    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The invalid-family log line carries only a truncated token_family (#849)."""
+    http, _session = client
+    bad_family = "not-a-uuid-but-long-enough-to-truncate"
+    with (
+        caplog.at_level(logging.WARNING),
+        patch(f"{_PREFIX}decode_refresh_token_claims", return_value=_claims(token_family=bad_family)),
+        patch(f"{_PREFIX}blacklist_family", new_callable=AsyncMock),
+        patch(f"{_PREFIX}clear_session_approvals_for_account"),
+    ):
+        _arm_cookies(http, _refresh_token())
+        resp = _post_logout(http)
+
+    assert resp.status_code == 200, resp.text
+    matching = [r for r in caplog.records if r.getMessage() == "logout.invalid_token_family"]
+    assert len(matching) == 1
+    assert matching[0].__dict__["token_family"] == bad_family[:8]
+    assert bad_family not in str(matching[0].__dict__)
