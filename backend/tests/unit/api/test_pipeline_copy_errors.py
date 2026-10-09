@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
@@ -300,7 +301,7 @@ def _clone_response() -> PipelineResponse:
     )
 
 
-def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[int]:
+def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[Response]:
     source = _make_pipeline()
     with (
         patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
@@ -311,12 +312,12 @@ def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[int
         patch("modulo.api.routes.pipelines.append_audit_event"),
         patch("modulo.api.routes.pipelines._pipeline_response", side_effect=lambda _p: _clone_response()),
     ):
-        responses = [client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"}) for _ in outcomes]
-    return [r.status_code for r in responses]
+        return [client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"}) for _ in outcomes]
 
 
 def test_clone_pipeline_concurrent_same_name_yields_one_success_one_409(client: TestClient) -> None:
-    """Both requests pass the availability check; the unique constraint rejects the loser."""
+    """Both requests pass the availability check; the unique constraint rejects the
+    loser with the *named* conflict 409, not ``handle_db_errors``' generic 409."""
     violation = IntegrityError(
         "INSERT INTO pipelines", {}, Exception('duplicate key value violates unique constraint "uq_pipelines_org_name"')
     )
@@ -324,9 +325,14 @@ def test_clone_pipeline_concurrent_same_name_yields_one_success_one_409(client: 
     winner.id = uuid.uuid4()
     winner.name = "Dup"
 
-    statuses = _clone_with_outcomes(client, [winner, violation])
+    responses = _clone_with_outcomes(client, [winner, violation])
 
-    assert sorted(statuses) == [201, 409]
+    by_status = {r.status_code: r for r in responses}
+    assert sorted(by_status) == [201, 409]
+    conflict = by_status[409]
+    msg = conflict.json().get("detail", "")
+    assert "already exists" in msg
+    assert "Resource conflict" not in msg
 
 
 def test_clone_pipeline_name_race_409_detail_names_conflict(client: TestClient) -> None:
