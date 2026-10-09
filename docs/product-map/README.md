@@ -1157,6 +1157,19 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `update_pipeline` tool, and the opt-in `modulo apply`
 > `environment_profile_id` key), with the matching code and test citations.
 > `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-09):** tracked the two untracked shipped
+> sub-surfaces merged in PR #1451 (FAR-1594 / FAR-1595). `feat-connectors` now
+> carries the **FAR-1582 / FAR-1594 one-canonical-capability-vocabulary** rule
+> (`qualified_capability` / `canonical_capability` / `canonical_capability_set`
+> living in the stdlib-only `connectors/base.py` leaf so `ConnectorACL`
+> enforcement and the guardrail conformance reader certify the same stored
+> value) in both the manifest registry and `configure/connectors.md`, and
+> `feat-triggers` now carries the **FAR-1595 polling-connector team-scope gate**
+> (save-time 409 `connector_team_mismatch` over REST + MCP trigger writes and the
+> read-time `enforce_polling_team_scope` defence-in-depth on the polling fire
+> path) in both the manifest registry and `triggers/trigger-engine.md`, with the
+> matching code and test citations. `_ORPHANED_BDD_FEATURES` stays empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
