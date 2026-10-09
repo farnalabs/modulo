@@ -3,7 +3,7 @@
 import contextlib
 import os
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator, Iterator
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -345,6 +345,130 @@ def _make_mock_pipeline_full(name: str = "Test Pipeline", **kwargs: Any) -> Magi
     return p
 
 
+# ---------------------------------------------------------------------------
+# Real-route BDD harness (shared by the step modules that drive the app with a
+# stubbed session instead of the shared ``client`` fixture).
+# ---------------------------------------------------------------------------
+
+
+class AllFeaturesPlanContext:
+    """Plan context standing in for the shared ``client`` fixture's override."""
+
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+    def list_enabled_features(self) -> list:
+        return []
+
+    def tier(self) -> str:
+        return "team"
+
+    def has_license_key(self) -> bool:
+        return True
+
+
+async def all_features_plan_context() -> AllFeaturesPlanContext:
+    return AllFeaturesPlanContext()
+
+
+_MISSING = object()
+
+
+@contextlib.contextmanager
+def session_client(
+    role: str = "admin",
+    shaper: Callable[[MagicMock], None] | None = None,
+    org_id: uuid.UUID = ORG_ID,
+) -> Iterator[TestClient]:
+    """A TestClient driving the REAL routes with a stubbed session.
+
+    ``require_permission`` / ``require_team_membership_or_admin`` and the route
+    bodies run unpatched; only the DB seams are stubbed. Overrides installed
+    here are snapshotted and restored so the shared ``client`` fixture keeps
+    working after the step.
+    """
+    from modulo.api.dependencies import (
+        _get_engine,
+        get_anonymous_plan_context,
+        get_db_session,
+        get_plan_context,
+    )
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.jwt import TenantPrincipal
+    from modulo.settings import get_settings
+
+    mock_session = make_mock_session()
+    if shaper is not None:
+        shaper(mock_session)
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    principal_kwargs = {
+        "username": role,
+        "organisation_id": org_id,
+        "account_id": uuid.uuid4(),
+        "org_role": role,
+    }
+    overrides = {
+        get_settings: make_settings,
+        get_db_session: override_session,
+        _get_engine: lambda: MagicMock(),
+        get_current_user: lambda: AuthenticatedPrincipal(**principal_kwargs),
+        get_current_tenant_user: lambda: TenantPrincipal(**principal_kwargs),
+        get_plan_context: all_features_plan_context,
+        get_anonymous_plan_context: all_features_plan_context,
+    }
+    saved = {key: app.dependency_overrides.get(key, _MISSING) for key in overrides}
+    app.dependency_overrides.update(overrides)
+    try:
+        yield TestClient(app, raise_server_exceptions=False)
+    finally:
+        for key, value in saved.items():
+            if value is _MISSING:
+                app.dependency_overrides.pop(key, None)
+            else:
+                app.dependency_overrides[key] = value
+
+
+def make_pipeline_row(pdata: dict | None) -> MagicMock:
+    """A Pipeline ORM double matching PipelineResponse validation for a ctx entry."""
+    if pdata is None:
+        return None
+    row = _make_mock_pipeline_full(
+        name=pdata["name"],
+        visibility=pdata.get("visibility", "org"),
+    )
+    row.id = uuid.UUID(pdata["id"]) if pdata.get("id") else row.id
+    row.owner_team_id = uuid.UUID(pdata["owner_team_id"]) if pdata.get("owner_team_id") else None
+    row.graph_nodes_json = []
+    return row
+
+
+def make_connector_row(pdata: dict | None, name: str, org_id: uuid.UUID = ORG_ID) -> MagicMock:
+    """A ConnectorInstance ORM double matching ConnectorResponse validation."""
+    row = MagicMock()
+    row.id = uuid.UUID(pdata["id"]) if pdata and pdata.get("id") else uuid.uuid4()
+    row.organisation_id = org_id
+    row.name = name
+    row.connector_type_id = "rest"
+    row.credentials_ciphertext = b"gAAAAAB"
+    row.config_json = {}
+    row.allowed_operations = []
+    row.status = "active"
+    row.visibility = (pdata or {}).get("visibility", "org")
+    row.owner_team_id = uuid.UUID(pdata["owner_team_id"]) if pdata and pdata.get("owner_team_id") else None
+    row.tier = "native"
+    now = datetime.now(UTC)
+    row.created_at = now
+    row.updated_at = now
+    row.last_skip_error = None
+    row.validation_level = "standard"
+    row.degraded_at = None
+    return row
+
+
 @given(parsers.parse('I am authenticated as an admin in org "{org}"'))
 def _bdd_auth_admin_in_org(org: str, request, client) -> None:
     """No-op — the ``client`` fixture already provides an admin principal."""
@@ -542,32 +666,16 @@ def _make_test_client(mock_session: AsyncMock, **principal_kwargs: Any) -> Gener
     from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import get_settings
 
-    class _AllFeatures:
-        def feature_enabled(self, name: str) -> bool:
-            return True
-
-        def list_enabled_features(self) -> list:
-            return []
-
-        def tier(self) -> str:
-            return "team"
-
-        def has_license_key(self) -> bool:
-            return True
-
     async def override_session() -> AsyncGenerator[AsyncMock, None]:
         yield mock_session
-
-    async def _override_plan_context() -> _AllFeatures:
-        return _AllFeatures()
 
     app.dependency_overrides[get_settings] = make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[get_system_db_session] = _system_session_override
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[_get_session_factory] = lambda: MagicMock()
-    app.dependency_overrides[get_plan_context] = _override_plan_context
-    app.dependency_overrides[get_anonymous_plan_context] = _override_plan_context
+    app.dependency_overrides[get_plan_context] = all_features_plan_context
+    app.dependency_overrides[get_anonymous_plan_context] = all_features_plan_context
     if principal_kwargs:
         app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(**principal_kwargs)
 

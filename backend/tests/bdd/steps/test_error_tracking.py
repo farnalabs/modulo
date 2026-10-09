@@ -2,11 +2,14 @@
 
 import contextlib
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
+
+from tests.bdd.conftest import session_client
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../../bdd/features/error_tracking/error_ingestion.feature")
@@ -391,11 +394,15 @@ def check_filtered_status(expected, ctx):
 
 
 @when("I request a non-existent error group")
-def get_nonexistent_group(request, ctx):
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 404
-    request.node._resp.json = lambda: {"detail": "Error group not found"}
-    ctx["_last_resp"] = request.node._resp
+def get_nonexistent_group(ctx, request):
+    with (
+        patch("modulo.api.routes.errors.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.errors.get_error_group", new_callable=AsyncMock, return_value=None),
+        session_client() as client,
+    ):
+        resp = client.get(f"/api/v1/errors/{uuid.uuid4()}")
+    request.node._resp = resp
+    ctx["_last_resp"] = resp
 
 
 @when(parsers.parse("I GET /api/v1/errors/{group_id}"))
@@ -603,28 +610,48 @@ def lifetime_count_two(ctx):
     ctx["alert_count"] = len(alerts)
 
 
+def _shaper_rule_session(count: int) -> Callable[[MagicMock], None]:
+    """Shaper: per-org rule-count query returns *count*; rule INSERT stamps real fields."""
+
+    def shaper(session: MagicMock) -> None:
+        session.execute = AsyncMock(return_value=MagicMock(scalar_one=MagicMock(return_value=count)))
+
+        def _add(rule: MagicMock) -> None:
+            rule.id = uuid.uuid4()
+            rule.created_at = datetime.now(UTC)
+            rule.updated_at = datetime.now(UTC)
+
+        session.add = MagicMock(side_effect=_add)
+        session.flush = AsyncMock()
+
+    return shaper
+
+
+def _pose_notification_rule(count: int, request, ctx) -> None:
+    with (
+        session_client(shaper=_shaper_rule_session(count)) as client,
+        patch("modulo.api.routes.error_notification_rules.set_rls_org", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            "/api/v1/errors/notification-rules",
+            json={
+                "name": "critical error alert",
+                "enabled": True,
+                "condition_level": "critical",
+                "condition_min_count": 1,
+                "condition_window_seconds": 300,
+                "action_type": "in_app",
+                "cooldown_seconds": 300,
+            },
+        )
+    request.node._resp = resp
+    ctx["_last_resp"] = resp
+    ctx["created_rule_id"] = resp.json().get("id") if resp.status_code == 201 else None
+
+
 @when(parsers.parse("I POST /api/v1/errors/notification-rules with valid config"))
 def create_notification_rule(request, ctx):
-    rule_id = str(uuid.uuid4())
-    now = datetime.now(UTC).isoformat()
-    body = {
-        "id": rule_id,
-        "name": "critical error alert",
-        "enabled": True,
-        "condition_level": "critical",
-        "condition_min_count": 1,
-        "condition_window_seconds": 300,
-        "action_type": "in_app",
-        "webhook_url": None,
-        "cooldown_seconds": 300,
-        "created_at": now,
-        "updated_at": now,
-    }
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 201
-    request.node._resp.json = lambda: body
-    ctx["_last_resp"] = request.node._resp
-    ctx["created_rule_id"] = rule_id
+    _pose_notification_rule(0, request, ctx)
 
 
 @then("the rule is created")
@@ -644,7 +671,6 @@ def org_has_10_rules(ctx):
 
 @given("I create an 11th rule")
 def create_11th_rule(request, ctx):
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 422
-    request.node._resp.json = lambda: {"detail": "Maximum 10 notification rules per organisation reached"}
-    ctx["_last_resp"] = request.node._resp
+    # Real POST route; the per-org count query is shaped to report 10 existing
+    # rules, so the route's own limit check fires (FAR-1600).
+    _pose_notification_rule(10, request, ctx)
