@@ -164,10 +164,16 @@ async def _pipeline_owner_team_for_dispatch(
       model has ``pipeline_id`` and ``environment_profile_id`` only), so the
       frozen snapshot cannot answer the question;
     * ``runs.owner_team_id`` is stamped FROM this same pipeline row at run
-      create (``db.crud.run._resolve_owner_team_id``), and the REST layer
-      blocks a team transfer while a non-terminal run exists
-      (``PipelineHasActiveRunsError``) — so for an in-flight run the live
-      pipeline row and the run's frozen team agree;
+      create (``db.crud.run._resolve_owner_team_id``), and the audited REST
+      route path blocks a team transfer while a non-terminal run exists
+      (``PipelineHasActiveRunsError``) — so on THAT path, for an in-flight
+      run, the live pipeline row and the run's frozen team agree. The block
+      is path-scoped, not universal: ``db.crud.update_pipeline`` only applies
+      it when audit context is supplied, so callers that pass none (internal
+      tooling, MCP) transfer without the check and the two CAN diverge. This
+      read therefore re-validates against the live row at dispatch instead of
+      assuming agreement; where they have drifted the shared predicate
+      refuses — fail-closed over-refusal, never a silent allow;
     * the three FAR-1558 writers all validate against
       ``pipelines.owner_team_id`` — this read re-validates a possibly
       DRIFTED binding against exactly the quantity they enforce, live at

@@ -96,6 +96,12 @@ describe('EnvironmentProfileForm — create mode', () => {
     expect(wrapper.text()).toContain('Name is required')
     expect(postMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="envprofile-form-name"]').classes()).toContain('border-destructive')
+    // FAR-1614: the provider-required error announces itself (role="alert"),
+    // mirroring the tier hint's role="status" — an error a screen reader
+    // never hears is not surfaced at all.
+    const providerError = wrapper.find('#envprofile-form-provider-error')
+    expect(providerError.exists()).toBe(true)
+    expect(providerError.attributes('role')).toBe('alert')
   })
 
   it('create: valid submit POSTs the exact snake_case payload and navigates back to the list', async () => {
