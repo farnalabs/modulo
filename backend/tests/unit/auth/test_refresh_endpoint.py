@@ -10,6 +10,7 @@ accounts, and blacklists the presented family inside the same transaction
 (FAR-463).
 """
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager
@@ -358,3 +359,43 @@ def test_refresh_rotation_mints_configured_lifetime(client: TestClient, app: Fas
     payload = decode_refresh_token_claims(rotated, _VALID_32)
     lifetime_seconds = float(payload["exp"]) - float(payload["iat"])
     assert abs(lifetime_seconds - 6 * 3600) <= 1
+
+
+def _log_dump(caplog: pytest.LogCaptureFixture, event: str) -> tuple[str, str]:
+    """Return (family_id extra, full rendered record dict) for the named log event."""
+    matching = [r for r in caplog.records if r.getMessage() == event]
+    assert len(matching) == 1, [r.getMessage() for r in caplog.records]
+    return str(matching[0].__dict__["family_id"]), str(matching[0].__dict__)
+
+
+def test_refresh_reuse_replay_log_truncates_token_family(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    """The reuse-replay log line carries only the truncated family id (#849)."""
+    advance = AsyncMock(return_value=(3, False, True))
+    with (
+        caplog.at_level(logging.INFO),
+        _patch_account(_make_account(True)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+    ):
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        resp = _post_refresh(client)
+    assert resp.status_code == 200, resp.text
+    family_extra, dump = _log_dump(caplog, "auth.refresh_reuse_replay")
+    assert family_extra == _FAMILY_ID[:8]
+    assert _FAMILY_ID not in dump
+
+
+def test_refresh_theft_log_truncates_token_family(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    """The theft-blacklist log line carries only the truncated family id (#849)."""
+    advance = AsyncMock(return_value=(3, True, False))
+    with (
+        caplog.at_level(logging.INFO),
+        _patch_account(_make_account(True)),
+        patch("modulo.api.routes.auth.resolve_role_from_membership", new=AsyncMock(return_value="admin")),
+        patch("modulo.api.routes.auth.advance_sequence", new=advance),
+    ):
+        _set_refresh_cookie(client, _make_refresh_token(str(_ORG_ID)))
+        _post_refresh(client)
+    family_extra, dump = _log_dump(caplog, "auth.refresh_theft_blacklist")
+    assert family_extra == _FAMILY_ID[:8]
+    assert _FAMILY_ID not in dump

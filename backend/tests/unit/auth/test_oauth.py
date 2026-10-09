@@ -1,5 +1,6 @@
 """Unit tests for OAuth 2.0 authorization code flow (modulo.auth.oauth)."""
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -617,6 +618,30 @@ class TestTokenFamily:
                 org_id=_ORG_ID,
             )
         assert family.is_blacklisted is True
+
+    async def test_rotate_theft_log_truncates_family_id(self, caplog: pytest.LogCaptureFixture) -> None:
+        family = MagicMock()
+        family.family_id = uuid.uuid4()
+        family.client_id = "cid"
+        family.organisation_id = _ORG_ID
+        family.is_blacklisted = False
+        family.max_sequence = 1
+        full_id = str(family.family_id)
+
+        session = _make_session(family)
+
+        with caplog.at_level(logging.WARNING), pytest.raises(InvalidGrantError, match="Token family rotated"):
+            await rotate_oauth_token_family(
+                session,
+                family_id=full_id,
+                current_sequence=0,
+                client_id="cid",
+                org_id=_ORG_ID,
+            )
+        matching = [r for r in caplog.records if r.getMessage() == "oauth.token_theft_detected"]
+        assert len(matching) == 1
+        assert matching[0].__dict__["family_id"] == full_id[:8]
+        assert full_id not in str(matching[0].__dict__)
 
     async def test_rotate_blacklisted_family_raises(self) -> None:
         family = MagicMock()
