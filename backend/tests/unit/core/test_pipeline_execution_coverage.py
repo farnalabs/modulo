@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,6 +45,11 @@ class TestMaybeAlertRetryStorm:
         row_result.first.return_value = (5,)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -69,6 +75,11 @@ class TestMaybeAlertRetryStorm:
         row_result.first.return_value = None
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -91,6 +102,11 @@ class TestMaybeAlertRetryStorm:
         """CancelledError must not be swallowed."""
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -119,6 +135,11 @@ class TestClaimRunAsyncException:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -266,6 +287,11 @@ class TestReadCurrentClaimToken:
         row_result.first.return_value = ("tok-abc",)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -287,6 +313,11 @@ class TestReadCurrentClaimToken:
         row_result.first.return_value = (None,)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -496,6 +527,11 @@ class TestReadRunStatus:
         row_result.first.return_value = ("running",)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -517,6 +553,11 @@ class TestReadRunStatus:
         row_result.first.return_value = None
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -546,6 +587,11 @@ class TestKillSandboxBestEffort:
         row_result.first.return_value = (None,)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -567,6 +613,11 @@ class TestKillSandboxBestEffort:
         """CancelledError must not be swallowed."""
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -589,6 +640,11 @@ class TestKillSandboxBestEffort:
         row_result.first.return_value = ("sb-123",)
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -717,6 +773,11 @@ class TestStaleRunRecoverySweepEdgeCases:
         """When there are no orgs, the sweep returns zero counts immediately."""
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -753,6 +814,11 @@ class TestStaleRunRecoverySweepEdgeCases:
         """CancelledError from the org enumeration must propagate."""
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -826,6 +892,11 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -854,6 +925,11 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -880,6 +956,11 @@ class TestClaimResumeRunAsync:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1055,6 +1136,11 @@ class TestClaimRunAsyncCancelled:
         monkeypatch.setattr(pe, "get_settings", lambda: MagicMock(run_claim_stale_seconds=450, saq_run_claim_cap=20))
 
         class _Conn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's no-op branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 

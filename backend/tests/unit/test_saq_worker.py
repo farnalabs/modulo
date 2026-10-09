@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -743,6 +744,10 @@ class TestExecuteResumeWrappers:
         for the failed run — a setup-failed run must be visible in analytics."""
 
         class _FakeConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``).
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 

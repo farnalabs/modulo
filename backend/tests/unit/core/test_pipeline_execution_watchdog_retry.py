@@ -26,6 +26,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -1005,6 +1006,10 @@ def _sweep_engine(statements: list[str], params: list[dict[str, object]]):
             return self._rows
 
     class _AsyncConn:
+        # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+        # reads ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``).
+        dialect = SimpleNamespace(name="sqlite")
+
         async def __aenter__(self) -> Self:
             return self
 

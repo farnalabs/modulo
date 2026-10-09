@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from typing import Any, Self
 
 import pytest
@@ -43,6 +44,12 @@ class _FakeResult:
 class _FakeConn:
     def __init__(self, engine: _FakeEngine) -> None:
         self._engine = engine
+
+    # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound reads
+    # ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``); a
+    # non-postgres double takes the bound's no-op branch, so the recorded
+    # statement count stays at two (RLS set_config + increment).
+    dialect = SimpleNamespace(name="sqlite")
 
     async def __aenter__(self) -> Self:
         return self

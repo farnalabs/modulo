@@ -1162,6 +1162,10 @@ class _FakeAsyncConn:
     def __init__(self, row: object | None = None) -> None:
         self._row = row
 
+    # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound reads
+    # ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``).
+    dialect = SimpleNamespace(name="sqlite")
+
     async def __aenter__(self) -> Self:
         return self
 
@@ -1292,6 +1296,10 @@ class TestStaleRunSweepJourneyAdvance:
                 return self._rows
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``).
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 

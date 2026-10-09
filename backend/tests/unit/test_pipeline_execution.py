@@ -119,6 +119,11 @@ class _AsyncConnRow:
         self._row = row
         self.statements: list[str] = []
 
+    # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound reads
+    # ``conn.dialect`` (a real AsyncConnection has NO ``get_bind``); a
+    # non-postgres double takes the bound's documented no-op branch.
+    dialect = SimpleNamespace(name="sqlite")
+
     async def __aenter__(self) -> Self:
         return self
 
@@ -202,6 +207,12 @@ class TestClaimRunAsync:
         calls: list[dict[str, object]] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -241,6 +252,12 @@ class TestClaimRunAsync:
 
     async def test_async_claim_false_when_no_row(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -531,6 +548,12 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -564,6 +587,12 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -591,6 +620,12 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -631,6 +666,12 @@ class TestHeartbeat:
         executed: list[tuple[str, dict[str, Any]]] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -761,6 +802,12 @@ class TestHeartbeat:
         executed: list[str] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -820,6 +867,12 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -867,6 +920,12 @@ class TestStaleRunRecoverySweep:
                 return [org_row] if self._is_org else []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -920,6 +979,12 @@ class TestStaleRunRecoverySweep:
         _rows: list[Any] = []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -980,6 +1045,12 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1025,6 +1096,12 @@ class TestStaleRunRecoverySweep:
         org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1064,6 +1141,12 @@ class TestStaleRunRecoverySweep:
         org_row = (uuid.UUID("00000000-0000-0000-0000-0000000000aa"),)
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1114,6 +1197,12 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1175,6 +1264,12 @@ class TestStaleRunRecoverySweep:
                 return self._rows
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1227,6 +1322,12 @@ class TestStaleRunRecoverySweep:
                 return [org_row] if self._is_org else []
 
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
@@ -1261,6 +1362,12 @@ class TestStaleRunRecoverySweep:
 
     async def test_returns_error_dict_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class _AsyncConn:
+            # FAR-1601: faithful ``AsyncConnection`` shape — the row-lock bound
+            # reads ``conn.dialect`` (a real AsyncConnection has NO
+            # ``get_bind``); a non-postgres double takes the bound's documented
+            # no-op branch, a postgresql-reporting double the LIVE branch.
+            dialect = SimpleNamespace(name="sqlite")
+
             async def __aenter__(self) -> Self:
                 return self
 
