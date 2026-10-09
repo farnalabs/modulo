@@ -64,3 +64,45 @@ def _e2b_provider_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("E2B_API_KEY", "bridge-test-key")
     install_bridge(monkeypatch)
+
+
+class _ProvisionedSystemSettings:
+    """Settings stub presenting a provisioned system database URL.
+
+    ``modulo.api.dependencies`` resolves its settings via the module-level
+    ``get_settings`` name, so tests can present a provisioned reading without
+    touching the lru-cached real :class:`Settings`.
+    """
+
+    modulo_system_database_url = "postgresql+asyncpg://localhost/modulo-system-unit-test"
+    # FAR-1524: get_or_create_system_engine passes this to create_async_engine
+    # as pool_recycle; the stub must expose it just like the real Settings.
+    db_pool_recycle_seconds = 1500
+
+
+@pytest.fixture(autouse=True)
+def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Present a PROVISIONED system engine to the unit-test suite.
+
+    Unit tests mock the system SESSION but run in an environment without
+    ``MODULO_SYSTEM_DATABASE_URL``. The (now robust) fallback predicate
+    initialises the engine factory itself, so an un-provisioned reading would
+    503 every trigger delivery here. With a provisioned URL the flag reads
+    False exactly as in production; the created engine is lazy and never
+    connects (every system session is overridden per test).
+
+    This fixture is registered in the UNIT conftest rather than
+    ``tests/unit/api/conftest.py`` (it lived there, FAR-523): pytest keys an
+    autouse fixture to the collector node that loaded its conftest, and the
+    directory-level Package node for ``tests/unit/api/`` is NOT guaranteed
+    to exist for an argv section that detours out of the directory. A
+    pre-and-post ``tests/unit/test_analytics_builder.py`` argv order made
+    test_slack_trigger_endpoint lose this fixture and read a degraded
+    (fallback) system engine (FAR-1597). The unit-level conftest always
+    loads — conftest.py of every directory containing an initial argv item
+    is loaded before any test runs — so the provisioning is stable under
+    any collection order.
+    """
+    from modulo.api import dependencies as _deps
+
+    monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())

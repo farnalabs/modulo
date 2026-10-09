@@ -1,14 +1,17 @@
 """Tests for the MODULO_TEST_STYLE_SCOPE opt-in scanning behaviour.
 
 Verifies that ``_iter_test_modules()`` honours the env var and that
-``_resolve_scope_paths()`` correctly resolves, caches, and filters paths; and
-that the self-asserting-BDD baseline staleness ratchet only judges baseline
-entries whose module the active scope actually scanned.
+``_resolve_scope_paths()`` correctly resolves, caches, and filters paths; that
+the baseline staleness ratchets (the self-asserting-BDD baseline and the
+duplicate-test-body baseline) only judge baseline entries whose module the
+active scope actually scanned; and that both ratchets FIRE — raise naming the
+stale entry — when given a planted stale baseline entry under no scope.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,10 +26,15 @@ if str(_ARCH_DIR) not in sys.path:
 from test_test_suite_quality import (  # noqa: E402
     EXCLUDED_PACKAGES,
     TESTS,
+    _duplicate_test_body_baseline_candidates,
     _iter_test_modules,
+    _read_duplicate_test_body_baseline,
     _read_self_asserting_bdd_baseline,
     _resolve_scope_paths,
     _self_asserting_bdd_baseline_candidates,
+)
+from test_test_suite_quality import (  # noqa: E402
+    test_duplicate_test_body_baseline_has_no_stale_entries as _dup_stale_baseline_check,
 )
 from test_test_suite_quality import (  # noqa: E402
     test_self_asserting_bdd_baseline_has_no_stale_entries as _stale_baseline_check,
@@ -39,6 +47,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import run_test_suite_quality as _script  # noqa: E402
+
+# The checker functions live in (and read their baselines via globals of) the
+# scanner module itself, so the firing tests below monkeypatch the READER there
+# — patching the name imported into this file would not affect the check.
+import test_test_suite_quality as _scanner  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -245,6 +258,23 @@ class TestBaselineStalenessUnderScope:
         assert not _candidates()
         _stale_baseline_check()  # the real assertion; fails if out-of-scope entries count as stale
 
+    def test_scoped_run_fires_on_scanned_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The filter must not blind the ratchet for modules INSIDE the scope:
+        a baseline entry whose module is in scope but whose step no longer
+        self-asserts (simulated by a planted reader fixture) is still judged
+        stale — the candidate set alone proves nothing, so the check itself
+        must raise."""
+        module = TESTS / "unit" / "api" / "test_csrf.py"
+        planted = "unit/api/test_csrf.py:test_not_self_asserting"
+        assert planted not in _read_baseline(), "regression fixture: the planted entry must not exist already"
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        _resolve_scope_paths.cache_clear()
+        monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {planted})
+        # The real assertion: the check itself must raise, naming the planted entry.
+        with pytest.raises(AssertionError, match=re.escape("unit/api/test_csrf.py:")) as exc_info:
+            _stale_baseline_check()
+        assert planted in str(exc_info.value)
+
     def test_unscoped_run_still_judges_every_baseline_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Without a scope the candidate set must be the WHOLE baseline — the
         filter may never blind the tree-wide ratchet."""
@@ -254,9 +284,111 @@ class TestBaselineStalenessUnderScope:
         assert _read_baseline()
 
 
+class TestDuplicateBaselineStalenessUnderScope:
+    """Same ratchet discipline for the duplicate-test-body baseline.
+
+    Regression: the scoped ``--changed-files`` wrapper iterates only the changed
+    test files, but the stale check compared the TREE-WIDE duplicate baseline
+    against duplicates found in the scoped iteration — every out-of-scope
+    baseline pair (the whole 36-entry list) read as "no longer a duplicate" and
+    the scoped gate failed deterministically on unrelated modules.
+    """
+
+    def test_scoped_run_ignores_baseline_entries_it_never_scanned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Scope = one file holding no baseline duplicate pairs: the candidate
+        set must be empty and the real stale check must pass rather than
+        reporting all out-of-scope entries."""
+        target = TESTS / "architecture" / "test_test_suite_quality_scope.py"
+        assert _read_dup_baseline(), "regression fixture: the duplicate baseline must be non-empty"
+        assert not any(key.startswith("architecture/") for key in _read_dup_baseline()), (
+            "regression fixture: the baseline lists no architecture/ modules, so this scope excludes them all"
+        )
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(target))
+        _resolve_scope_paths.cache_clear()
+        assert not _dup_candidates()
+        _dup_stale_baseline_check()  # the real assertion; fails if out-of-scope entries count as stale
+
+    def test_scoped_run_passes_for_in_scope_current_pairs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Scope = a module whose baseline pairs are still duplicates: the
+        stale check must pass (its entries are found by the scanned tree)."""
+        module = TESTS / "unit" / "api" / "test_csrf.py"
+        assert any(key.startswith("unit/api/test_csrf.py:") for key in _read_dup_baseline()), (
+            "regression fixture: the duplicate baseline must list test_csrf.py entries"
+        )
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        _resolve_scope_paths.cache_clear()
+        _dup_stale_baseline_check()
+
+    def test_scoped_run_fires_on_in_scope_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The filter must not blind the ratchet for modules INSIDE the scope:
+        a baseline entry whose module is in scope but whose duplicate pair does
+        not exist in the tree (simulated by a planted reader fixture) is still
+        judged stale — the scoped gate shrinking the baseline is not how this
+        works; the planted entry proves the check itself fires."""
+        module = TESTS / "unit" / "api" / "test_csrf.py"
+        planted = "unit/api/test_csrf.py:TestNotADuplicatePair:test_not_a_duplicate_a=test_not_a_duplicate_b"
+        assert planted not in _read_dup_baseline(), "regression fixture: the planted entry must not exist already"
+        monkeypatch.setenv("MODULO_TEST_STYLE_SCOPE", str(module))
+        _resolve_scope_paths.cache_clear()
+        monkeypatch.setattr(_scanner, "_read_duplicate_test_body_baseline", lambda: {planted})
+        # The real assertion: the check itself must raise, naming the planted entry.
+        with pytest.raises(AssertionError, match=re.escape("unit/api/test_csrf.py:")) as exc_info:
+            _dup_stale_baseline_check()
+        assert planted in str(exc_info.value)
+
+    def test_unscoped_run_still_judges_every_duplicate_baseline_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Without a scope the candidate set must be the WHOLE baseline — the
+        filter may never blind the tree-wide ratchet."""
+        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        _resolve_scope_paths.cache_clear()
+        assert _dup_candidates() == _read_dup_baseline()
+        assert _read_dup_baseline()
+
+
 def _read_baseline() -> set[str]:
     return _read_self_asserting_bdd_baseline()
 
 
 def _candidates() -> set[str]:
     return _self_asserting_bdd_baseline_candidates()
+
+
+def _read_dup_baseline() -> set[str]:
+    return _read_duplicate_test_body_baseline()
+
+
+def _dup_candidates() -> set[str]:
+    return _duplicate_test_body_baseline_candidates()
+
+
+class TestRatchetsFireOnStaleEntries:
+    """Unscoped firing coverage for both stale-baseline ratchets (FAR-1596).
+
+    The regression scope-tests above prove the ratchets DO run in the
+    scoped/unscoped gate configurations, but none of them could fail for a
+    reader that lets a stale entry survive: every candidate-only or pass-only
+    assertion is blind to the ``stale = candidates - keys`` arithmetic being
+    silently made empty. These tests hand the ratchet a planted (nonexistent)
+    baseline entry under NO scope and assert the check actually raises —
+    naming the planted entry — so deleting or neutering the stale-set
+    arithmetic fails loudly instead of passing vacuously.
+    """
+
+    _PLANTED_BDD = "unit/api/test_csrf.py:test_not_self_asserting"
+    _PLANTED_DUP = "unit/api/test_csrf.py:TestNotADuplicatePair:test_not_a_duplicate_a=test_not_a_duplicate_b"
+
+    def test_self_asserting_bdd_ratchet_fires_on_planted_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        _resolve_scope_paths.cache_clear()
+        monkeypatch.setattr(_scanner, "_read_self_asserting_bdd_baseline", lambda: {self._PLANTED_BDD})
+        with pytest.raises(AssertionError, match="no longer violate the lens") as exc_info:
+            _stale_baseline_check()
+        assert self._PLANTED_BDD in str(exc_info.value)
+
+    def test_duplicate_body_ratchet_fires_on_planted_stale_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MODULO_TEST_STYLE_SCOPE", raising=False)
+        _resolve_scope_paths.cache_clear()
+        monkeypatch.setattr(_scanner, "_read_duplicate_test_body_baseline", lambda: {self._PLANTED_DUP})
+        with pytest.raises(AssertionError, match="no longer duplicates") as exc_info:
+            _dup_stale_baseline_check()
+        assert self._PLANTED_DUP in str(exc_info.value)
