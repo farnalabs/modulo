@@ -62,6 +62,21 @@ inventing a mechanism):
   evaluates health and still advances its state machine, but never calls the
   sender, never raises, and logs that alerting is disabled (and what to set)
   at most once per ``DISABLED_LOG_INTERVAL_SECONDS`` at INFO.
+* **Quiet in environments the operator excluded (``ALERT_EMAIL_ENVIRONMENTS``).**
+  Both the readiness cron and the worker-liveness watchdog email the same
+  operator, and staging (a CI-only E2E environment with no live workload)
+  was paging them with blips they cannot act on. The allowlist is opt-in —
+  unset means "alert everywhere" so a self-hosted default keeps working —
+  and the ONE parse lives in ``core.alert_context.alerting_enabled_for_environment``
+  so the two channels can never disagree. An excluded environment takes
+  exactly the disabled path above: health still evaluated, state machine
+  still advanced, no send, the same rate-limited log-once.
+* **Benign, non-triggering advisories are never listed as failing checks.**
+  ``conditions()`` skips :data:`BENIGN_NON_TRIGGERING_CHECKS`
+  (``break_glass``, ``event_loop_lag``) — neither can contribute to
+  ``observed_state``, so naming them as the reason an alert fired is
+  alarm-fatigue (staging bodies listed ``break_glass`` on every page).
+  Everything else, ``db_hygiene`` included, is still reported.
 * **Send-then-commit.** The notification state advances only after the sender
   reports success, so a failed SMTP send is retried on the next confirmed
   tick instead of being swallowed. ``unique=True`` on the SAQ cron entry means
@@ -89,6 +104,7 @@ from modulo.core.alert_context import (
     alert_context_html,
     alert_context_text,
     alert_environment_line,
+    alerting_enabled_for_environment,
     stamp_stdout,
 )
 from modulo.core.email_service import EmailSendingError, send_email
@@ -119,16 +135,19 @@ _MAX_PERSISTED_CONDITIONS = 50
 #: These are exactly the advisory sweep/probe checks from the readiness
 #: ``checks`` dict (``api.routes.health`` is the taxonomy). Deliberately
 #: EXCLUDED as benign/other-channel:
-#:   * ``event_loop_lag`` — transient stall diagnostic (visible in the body;
-#:     must not page on its own),
-#:   * ``break_glass`` — expected config posture,
+#:   * ``event_loop_lag`` — transient stall diagnostic (must not page on its
+#:     own, and never listed as a failing check — see
+#:     ``BENIGN_NON_TRIGGERING_CHECKS``),
+#:   * ``break_glass`` — expected config posture (also never listed as a
+#:     failing check — see ``BENIGN_NON_TRIGGERING_CHECKS``),
 #:   * ``db_hygiene`` — a GRADED failure already gates the aggregate (so it
 #:     already alerts); its NOT-MEASURED probe is advisory (FAR-1510) and is
 #:     not a hygiene failure.
 #:
 #: ``dispatcher_reconcile`` is the one member that is ALSO a gating check: it
 #: gates the aggregate at its ``unavailable`` tier (a silently dead reconcile
-#: cron); only its ``degraded`` tier (a single missed 60s tick) is advisory —
+#: cron); only its ``degraded`` tier (a last_run_at older than 180s — 3x the
+#: 60s cadence, so a single missed tick never reads stale) is advisory —
 #: see the aggregation in ``api.routes.health``. Both routes merge into the
 #: same binary ``observed_state``, so an incident there still yields exactly
 #: ONE alert email and ONE recovery email (never double-counted, no second
@@ -145,6 +164,27 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
         "runner_health_probe",
     }
 )
+
+#: Advisory checks that are non-``ok`` in an observation but must NEVER be
+#: listed as "Failing checks" in an alert body (alarm-fatigue hygiene).
+#:
+#: Neither contributes to ``observed_state`` — both are outside
+#: ``REAL_FAILURE_ADVISORY_CHECKS``, so neither can page on its own — so
+#: naming them among the failing checks tells the operator to act on
+#: something that did not cause (and could not cause) the email:
+#:
+#:   * ``break_glass`` — an expected config posture, already documented as
+#:     excluded from alerting; its non-``ok`` reading is the feature armed,
+#:     not a fault (every staging alert body used to list it).
+#:   * ``event_loop_lag`` — a transient stall diagnostic that must never
+#:     page; it stays visible on ``/healthz/ready`` for whoever looks there.
+#:
+#: ``db_hygiene`` is deliberately NOT in this set: a graded dead-tuple
+#: failure there gates the aggregate and is a genuine gating failure, so it
+#: must keep being reported. Filtering happens ONLY in ``conditions()``
+#: (the reported bullets) — ``non_ok_names()`` still sees these checks so
+#: the recovery split never claims a still-degraded advisory cleared.
+BENIGN_NON_TRIGGERING_CHECKS: frozenset[str] = frozenset({"break_glass", "event_loop_lag"})
 
 
 #: ``settings.alert_email_to`` split into recipients (mirrors the watchdog's
@@ -171,12 +211,25 @@ def alerting_configured(settings: Settings) -> bool:
 _last_disabled_log_at: float | None = None
 
 
-def _log_disabled_once(now: float) -> None:
-    """Log that alerting is disabled — at most once per hour, per process."""
+def _log_disabled_once(now: float, *, environment_excluded: bool = False) -> None:
+    """Log that alerting is disabled — at most once per hour, per process.
+
+    Two reasons, one rate limiter (they are the same log-hygiene concern):
+    the channel is unconfigured, or this environment is excluded by
+    ``ALERT_EMAIL_ENVIRONMENTS``. The message says which, so the operator
+    knows what to change.
+    """
     global _last_disabled_log_at
     if _last_disabled_log_at is not None and now - _last_disabled_log_at < DISABLED_LOG_INTERVAL_SECONDS:
         return
     _last_disabled_log_at = now
+    if environment_excluded:
+        _log.info(
+            "health_alerts.disabled: readiness alerting is off for this environment — set "
+            "ALERT_EMAIL_ENVIRONMENTS to include it to email the operator (health is still "
+            "evaluated; no email is sent)"
+        )
+        return
     _log.info(
         "health_alerts.disabled: readiness alerting is off — set SMTP_HOST and ALERT_EMAIL_TO "
         "to email the operator when readiness degrades (health is still evaluated; no email is sent)"
@@ -237,11 +290,23 @@ class HealthObservation:
         return "degraded" if self.observed_state == "unhealthy" else "ok"
 
     def conditions(self) -> list[str]:
-        """Human-readable bullets for every non-``ok`` check (sorted, stable)."""
+        """Human-readable bullets for every non-``ok`` check (sorted, stable).
+
+        Skips :data:`BENIGN_NON_TRIGGERING_CHECKS` (``break_glass``,
+        ``event_loop_lag``): those never contribute to ``observed_state``, so
+        listing them as "Failing checks" would blame the alert on something
+        that cannot page — pure alarm fatigue (every staging alert used to
+        list ``break_glass``). Every other non-``ok`` check is reported,
+        ``db_hygiene`` included (a graded failure there is genuine).
+        ``non_ok_names()`` is deliberately unfiltered so the recovery split
+        never claims a still-degraded benign advisory as cleared.
+        """
         bullets: list[str] = []
         for name in sorted(self.checks):
             check = self.checks[name]
             if check.status == "ok":
+                continue
+            if name in BENIGN_NON_TRIGGERING_CHECKS:
                 continue
             bullet = f"{name}: {check.status}"
             if check.detail:
@@ -612,7 +677,14 @@ async def run_health_alert_check(
     current_time = now_fn()
 
     configured = alerting_configured(settings)
-    if not configured:
+    if not alerting_enabled_for_environment(settings):
+        # Excluded environment: exactly the disabled path. Health is still
+        # evaluated, the hysteresis/dedup state machine still advances, but
+        # nothing is sent — so staging (or any env the operator allowlisted
+        # out) never pages while production keeps alerting.
+        configured = False
+        _log_disabled_once(current_time, environment_excluded=True)
+    elif not configured:
         _log_disabled_once(current_time)
 
     owns_client = redis_client is None

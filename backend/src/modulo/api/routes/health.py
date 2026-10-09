@@ -89,15 +89,20 @@ _consecutive_cron_stale_probes: int = 0
 # failure inside this window reports ok without advancing any counter.
 _FLEET_BOOT_GRACE_SECONDS = 120
 
-# dispatcher_reconcile runs on a 60s system-cron tick; a last_run_at older
-# than 60s means at least one tick was missed -> report "stale" (degraded).
+# dispatcher_reconcile runs on a 60s system-cron tick. The degraded "stale"
+# tier fires at 3x that cadence (180s) — the SAME 3x-multiplier precedent as
+# the sibling runner_health_probe below (also a 60s cadence, 3 * 60 = 180s
+# "so a single missed tick never alerts"). At the old 60s threshold a single
+# slow or missed tick read stale and paged the operator, contradicting
+# FAR-199's own note that this tier "stays advisory … a single missed tick
+# must never block bluegreen".
 # FAR-199 two-tier gate: staleness past _RECONCILE_UNAVAILABLE_SECONDS (5 min
 # — 5x the cadence) flips the check to "unavailable" so readiness 503s. A
 # single missed tick must never block bluegreen, so the degraded tier stays
 # advisory; a reconcile stale 5+ minutes means the system worker's cron is
 # silently dead (a wedged worker fleet that can no longer terminalize
 # stalled/never-dispatched runs), which MUST block readiness.
-_RECONCILE_STALE_SECONDS = 60
+_RECONCILE_STALE_SECONDS = 180  # 3 * the 60s cadence (same as runner_health_probe)
 _RECONCILE_UNAVAILABLE_SECONDS = 300
 
 # stale_run_recovery (D1): the legacy sweep runs every 5 min on the system
@@ -917,9 +922,11 @@ async def _check_dispatcher_reconcile() -> CheckResult:
     (never degrade a healthy machine on a transient read).
 
     Tiering (FAR-199, updated FAR-746): the dispatcher gates readiness ONLY
-    at its unavailable tier. A last_run_at older than the 60s cadence reports
-    "stale" (degraded) to alert operators while the app remains healthy — a
-    single missed tick must not block bluegreen. A last_run_at older than
+    at its unavailable tier. A last_run_at older than
+    ``_RECONCILE_STALE_SECONDS`` (180s — 3x the 60s cadence, matching the
+    ``runner_health_probe`` precedent) reports "stale" (degraded) to alert
+    operators while the app remains healthy — a single slow or missed tick
+    must not read stale, and must not block bluegreen. A last_run_at older than
     ``_RECONCILE_UNAVAILABLE_SECONDS`` (5 min — 5x the cadence, far beyond a
     transient tick gap) means the system worker's reconcile is silently dead:
     a wedged worker fleet can no longer terminalize stalled / never-dispatched
@@ -1521,9 +1528,11 @@ async def evaluate_readiness() -> ReadinessResponse:
     # tier — reconcile stale past _RECONCILE_UNAVAILABLE_SECONDS means the
     # system worker's cron is silently dead (a wedged worker fleet that would
     # silently accumulate executor_stalled / never_dispatched runs), so
-    # bluegreen must not cut over. Its "degraded" tier (a single missed 60s
-    # tick) stays advisory and is deliberately excluded from the degraded
-    # aggregation — short staleness must never flip readiness.
+    # bluegreen must not cut over. Its "degraded" tier (stale past
+    # _RECONCILE_STALE_SECONDS — 3x the 60s cadence, so a single slow or
+    # missed tick never reads stale) stays advisory and is deliberately
+    # excluded from the degraded aggregation — short staleness must never
+    # flip readiness.
     if "unavailable" in statuses or dr_check.status == "unavailable":
         overall: Literal["ok", "degraded", "unavailable"] = "unavailable"
         unavailable_checks = sorted(name for name, check in checks.items() if check.status == "unavailable")

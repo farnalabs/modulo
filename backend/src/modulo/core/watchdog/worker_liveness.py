@@ -39,7 +39,13 @@ Design:
   Teams webhook (``alert_teams_webhook_url``, MessageCard), and/or email
   (``alert_email_to`` + SMTP settings). Each channel is isolated: one
   channel's failure never blocks the others. Default-off — nothing is sent
-  until at least one channel is configured. Every text rendering (email text
+  until at least one channel is configured. Additionally, when
+  ``ALERT_EMAIL_ENVIRONMENTS`` is set and does not include this
+  deployment's ``MODULO_ENV``, NO channel fires (the shared
+  ``core.alert_context.alerting_enabled_for_environment`` gate, identical
+  to the readiness alert's) — staging is CI-only with no live workload, so
+  a worker-death page there pages the operator about nothing. Every text
+  rendering (email text
   part, generic webhook, Teams) comes from ``_alert_text``/``_recovery_text``
   and therefore carries the deployment environment plus the operator's
   ``ALERT_CONTEXT`` exactly once (FAR-1499).
@@ -67,6 +73,7 @@ from modulo.core.alert_context import (
     alert_context_html,
     alert_context_text,
     alert_environment_line,
+    alerting_enabled_for_environment,
     stamp_stdout,
 )
 from modulo.core.email_service import EmailSendingError, send_email
@@ -501,6 +508,22 @@ async def _maybe_alert(settings: Settings, redis: aioredis.Redis, conditions: li
       cleared atomically (GETDEL) so exactly ONE machine sends the recovery
       ("all clear") email, and later healthy ticks stay silent (no state).
     """
+    if not alerting_enabled_for_environment(settings):
+        # ALERT_EMAIL_ENVIRONMENTS excludes this deployment's environment
+        # (e.g. staging: a CI-only E2E environment with no live workload, so
+        # a dead-worker page there is pure noise). Shared one-definition
+        # gate with the readiness alert (core.alert_context), so the two
+        # alert channels can never disagree about who may be paged. The
+        # watchdog still ticks and evaluates — only the fan-out is skipped,
+        # exactly like the no-channel quiet path below (no claim, so no
+        # later recovery email from a channel-less environment either).
+        _log.warning(
+            "watchdog.alert_suppressed_environment conditions=%s "
+            "(ALERT_EMAIL_ENVIRONMENTS does not include environment=%r)",
+            "; ".join(conditions),
+            settings.environment,
+        )
+        return
     if not _channel_configured(settings):
         # Default-off: the watchdog still ticks and logs, but never sends.
         _log.warning(

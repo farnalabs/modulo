@@ -7,6 +7,9 @@ environment and may carry operator-supplied free text (``ALERT_CONTEXT``:
 runbook links, escalation notes, ticket pointers). This module is the SINGLE
 source of that format so the two alert channels can never drift apart: the
 helpers here render the text part, the HTML part, and the shared line list.
+It also owns the ONE deployment-environment send gate
+(``alerting_enabled_for_environment`` — the ``ALERT_EMAIL_ENVIRONMENTS``
+allowlist), for the same drift-prevention reason.
 
 Deliberately a leaf: it imports only ``modulo.settings`` (plus stdlib
 ``html``), so neither import-linter contract is broken by either alert module
@@ -75,6 +78,39 @@ def alert_context_html(settings: Settings) -> str:
     """
     items = "".join(f"<li>{html.escape(line)}</li>" for line in alert_context_lines(settings))
     return f"<ul>{items}</ul>"
+
+
+def alerting_enabled_for_environment(settings: Settings) -> bool:
+    """May THIS deployment environment send operator alerts at all?
+
+    The ONE definition of the ``ALERT_EMAIL_ENVIRONMENTS`` gate, shared by
+    both alert channels (``core.health_alerts`` readiness emails and
+    ``core.watchdog.worker_liveness``) so their answers can never drift:
+
+    * unset / blank -> ``True``: alert in every environment. A self-hosted
+      install that never sets the allowlist keeps alerting out of the box,
+      whatever its ``MODULO_ENV`` (the compose default is ``development``)
+      — the allowlist is opt-in noise control, not a new default-off.
+    * set -> ``True`` only when ``settings.environment`` is in the list.
+      Entries are comma-split, whitespace-trimmed, empties dropped and
+      case-folded on both sides, so ``"production"``, ``" production "``
+      and ``"Production"`` are the same entry. A staging deployment
+      (``MODULO_ENV=staging``, CI-only E2E with no live workload) setting
+      ``ALERT_EMAIL_ENVIRONMENTS=production`` therefore stops paging the
+      operator while production keeps alerting.
+
+    A value that parses to an empty list (``""``, ``"  "``, ``", ,"``) is
+    treated as unset rather than as "allow nothing": blank means
+    unrestricted, and silently suppressing every alert because of a
+    whitespace typo would be a silent failure path.
+    """
+    raw = settings.alert_email_environments
+    if raw is None:
+        return True
+    allowed = {entry.strip().casefold() for entry in raw.split(",") if entry.strip()}
+    if not allowed:
+        return True
+    return settings.environment.strip().casefold() in allowed
 
 
 def stamp_stdout(message: str, *, logger: logging.Logger, log_event: str) -> None:
