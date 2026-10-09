@@ -105,7 +105,7 @@ def _run_detail_fake(run_id, **kwargs):
     return _harden_run_scalars(run)
 
 
-def _fetch_run_detail(client, request, run):
+def _fetch_run_detail(client, request, run, otel_endpoint="trace-id"):
     """GET /api/v1/runs/{id} with the detail route's read seams patched (same
     harness as the run-detail tests in test_observability.py)."""
     from decimal import Decimal
@@ -121,7 +121,11 @@ def _fetch_run_detail(client, request, run):
             new_callable=AsyncMock,
             return_value=(Decimal(0), 0),
         ),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value="trace-id"),
+        patch(
+            "modulo.api.routes.runs._do_get_otel_endpoint",
+            new_callable=AsyncMock,
+            return_value=otel_endpoint,
+        ),
         patch(
             "modulo.api.routes.runs._do_get_run_observability",
             new_callable=AsyncMock,
@@ -134,28 +138,10 @@ def _fetch_run_detail(client, request, run):
 
 def _persona_post_run(client, request, ctx, pipeline_name):
     """POST /api/v1/runs: real route + RLS/snapshot/run/dispatch seams patched."""
-    from tests.bdd.conftest import make_mock_pipeline, make_mock_run, make_mock_snapshot
+    from tests.bdd.conftest import make_mock_pipeline
 
     pipeline = getattr(request.node, "_mock_pipeline", None) or make_mock_pipeline(name=pipeline_name)
-    request.node._mock_pipeline = pipeline
-    run = make_mock_run(status="pending", pipeline_id=pipeline.id)
-    with (
-        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
-        patch("modulo.api.routes.runs.get_pipeline", new_callable=AsyncMock, return_value=pipeline),
-        patch(
-            "modulo.api.routes.runs.create_snapshot_from_live_graph",
-            new_callable=AsyncMock,
-            return_value=make_mock_snapshot(pipeline_id=pipeline.id),
-        ),
-        patch("modulo.api.routes.runs.create_run", new_callable=AsyncMock, return_value=run),
-        patch("modulo.api.routes.runs.dispatch_run", new_callable=AsyncMock),
-    ):
-        resp = client.post("/api/v1/runs", json={"pipeline_id": str(pipeline.id), "input_payload": {}})
-    request.node._mock_run = run
-    ctx["run_id"] = run.id
-    request.node._resp = resp
-    _store_response(request, resp)
-    assert resp.status_code == 202, resp.text
+    _persona_post_run_with(client, request, ctx, pipeline)
 
 
 def _library_row(data):
@@ -241,11 +227,19 @@ def _connector_row(org_id, name, conn_type, status):
 
 
 def _copy_primitive_fields(src_row, dst_row):
-    """Copy every LibraryPrimitive response column between fake rows."""
+    """Copy every LibraryPrimitive response column between fake rows.
+
+    The adapt route serialises the copied row through
+    ``LibraryPrimitiveResponse``, so every required response field must be
+    populated on the fake (it is never flushed, so column defaults do not
+    apply)."""
     from datetime import UTC, datetime
 
+    now = datetime.now(UTC)
     dst_row.id = uuid.uuid4()
+    dst_row.organisation_id = src_row.organisation_id
     dst_row.name = src_row.name
+    dst_row.slug = f"{src_row.name}-{dst_row.id.hex[:8]}"
     dst_row.description = src_row.description
     dst_row.primitive_type = src_row.primitive_type
     dst_row.source = "local"
@@ -253,9 +247,13 @@ def _copy_primitive_fields(src_row, dst_row):
     dst_row.author = src_row.author
     dst_row.tags = src_row.tags
     dst_row.content_json = src_row.content_json
+    dst_row.source_url = src_row.source_url
     dst_row.forked_from = src_row.id
+    dst_row.tier = "native"
+    dst_row.auto_update = True
     dst_row.visibility = "org"
-    dst_row.created_at = datetime.now(UTC)
+    dst_row.created_at = now
+    dst_row.updated_at = now
 
 
 def _persona_post_run_with(client, request, ctx, pipeline):
@@ -1643,7 +1641,7 @@ def jordan_community_library_has_workflow(ctx):
     }
 
 
-@when("I copy the workflow to my workspace")
+@when("I fork the community workflow into my workspace")
 def jordan_copy_workflow_to_workspace(ctx, request, client):
     from modulo.db.models.library_primitive import LibraryPrimitive
 
@@ -1669,21 +1667,19 @@ def jordan_copy_workflow_to_workspace(ctx, request, client):
 
 
 @then("a local copy is created with forked_from set to the community source")
-def jordan_forked_copy_has_forked_from(ctx):
-    body = ctx.get("response", {})
-    if isinstance(body, dict) and "source" in body:
-        assert body["source"] == "local", f"Expected source='local', got '{body.get('source')}'"
-        assert body.get("forked_from") is not None, "Missing forked_from"
-        assert str(body["forked_from"]) == str(ctx.get("forked_from_id")), (
-            "forked_from does not match the community source"
-        )
+def jordan_forked_copy_has_forked_from(request, ctx):
+    body = getattr(request.node, "_resp_body", {}) or {}
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", f"Expected source='local', got '{body.get('source')}'"
+    assert body.get("forked_from") is not None, "Missing forked_from"
+    assert str(body["forked_from"]) == str(ctx.get("forked_from_id")), "forked_from does not match the community source"
 
 
 @then("I can edit the agent prompts for my project conventions")
-def jordan_can_edit_agent_prompts(ctx):
-    body = ctx.get("response", {})
-    if isinstance(body, dict) and "source" in body:
-        assert body["source"] == "local", "Cannot edit prompts on a community primitive"
+def jordan_can_edit_agent_prompts(request):
+    body = getattr(request.node, "_resp_body", {}) or {}
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", "Cannot edit prompts on a community primitive"
 
 
 # ===========================================================================
@@ -2422,6 +2418,7 @@ def alice_update_connector_binding(provider_name: str, request, ctx, client):
         resp = client.patch(f"/api/v1/pipelines/{pipeline.id}/graph", json={"nodes": [node], "edges": []})
     request.node._resp = resp
     _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
     request.node._updated_connector = provider_name.lower()
 
 
@@ -2556,7 +2553,6 @@ def run_starts_pending(request):
 @then("the run completes successfully")
 def run_completes_successfully(request, client):
     from datetime import UTC, datetime
-    from decimal import Decimal
 
     from tests.bdd.conftest import make_mock_run
 
@@ -2572,26 +2568,7 @@ def run_completes_successfully(request, client):
         final_state="completed",
         completed_at=datetime.now(UTC),
     )
-    with (
-        patch(
-            "modulo.api.routes.runs._do_get_run_with_gate",
-            new_callable=AsyncMock,
-            return_value=(_harden_run_scalars(run), False),
-        ),
-        patch(
-            "modulo.api.routes.runs._do_get_child_run_rollup",
-            new_callable=AsyncMock,
-            return_value=(Decimal(0), 0),
-        ),
-        patch("modulo.api.routes.runs._do_get_otel_endpoint", new_callable=AsyncMock, return_value=""),
-        patch(
-            "modulo.api.routes.runs._do_get_run_observability",
-            new_callable=AsyncMock,
-            return_value=(None, None, []),
-        ),
-        patch("modulo.api.routes.runs._do_get_workspace_inputs", new_callable=AsyncMock, return_value=None),
-    ):
-        request.node._resp = resp = client.get(f"/api/v1/runs/{run.id}")
+    request.node._resp = resp = _fetch_run_detail(client, request, _harden_run_scalars(run), otel_endpoint="")
     assert resp.status_code == 200, resp.text
     body = request.node._resp_body = resp.json()
     assert body.get("status") == "completed", f"Run did not complete: {body}"
