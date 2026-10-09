@@ -33,16 +33,24 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 - [x] SAML ACS flow validates the assertion, resolves the provider, and issues a
       JWT pair (`feat-auth-jwt-auth`)
 - [x] Signed vs unsigned responses fail closed (no silent unsigned response accept)
-- [x] Invalid / unparseable `SAMLResponse` surfaces a typed `SamlAuthError`
+- [x] An assertion that parses but fails validation (bad signature, expired
+      conditions, missing assertion) surfaces a typed `SamlAuthError`; input that
+      cannot even be base64-decoded or parsed as XML fails earlier inside
+      python3-saml and never reaches the typed error — an undecodable response
+      (`binascii.Error`, a `ValueError` subclass) is mapped to 401 by the ACS
+      route, while a non-XML document (`lxml.etree.XMLSyntaxError`) falls through
+      to the generic 500
 - [x] Cross-org assertion reuse fails closed (FAR-1010): an assertion minted
       for one provider's entity ID, replayed at another provider's ACS, is
-      rejected 401 ("SAML response validation failed") — on top of
+      rejected 401 ("SAML response validation failed" — python3-saml's own
+      strict-mode audience check rejects the replayed assertion first) — on top of
       python3-saml's conditional audience/destination/recipient checks,
       `ModuloSamlAuth._enforce_audience_restriction` enforces audience
       containment itself (fail closed), and the Destination/Recipient
       validation derives from the real per-provider ACS URL rather than a
       hardcoded localhost (FAR-1011). Assertions are also validated against
-      the per-provider entity ID recovered from the request URL/RelayState
+      the per-provider entity ID recovered from the ACS URL path (RelayState is
+      an integrity signal only, never the routing key)
       (`auth/saml_handler.py`, `test_saml_audience_containment`,
       `test_saml_per_org_regression`, `test_sso`)
 - [x] Per-organisation provider isolation: metadata XML and the ACS surface
@@ -51,8 +59,10 @@ signature verification, wired into the SSO ACS flow (`feat-sso`).
 
 ## Known Gaps
 
-- **python3-saml version pinned by dependency audit** — upstream lib is vendored;
-  behaviour is verified against the pinned version in the BDD suite.
+- **python3-saml is a PyPI dependency, not vendored** — declared as
+  `python3-saml>=1.16.0` in `backend/pyproject.toml` and locked to 1.16.0 in
+  `backend/uv.lock`; behaviour is verified against that locked version in the
+  BDD suite.
 
 ## QA History
 

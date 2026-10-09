@@ -27,21 +27,30 @@ authenticated API route through `auth/dependencies.py`.
 
 ## Behaviours
 
-- [x] `create_access_token` issues a signed JWT carrying user identity, role,
-      org context, expiry, and a purpose claim
-- [x] `decode_principal` validates signature, expiry, issuer, and purpose; returns
-      an `AuthenticatedPrincipal` (with `SystemAdminPrincipal` handling) and raises
-      on wrong key, expired token, malformed/empty `sub`, missing account id, or a
-      token used outside its allowed purpose
+- [x] `create_access_token` issues a signed JWT carrying user identity (`sub`),
+      org context, role, expiry, and the credential class (`client_kind`); unlike
+      the refresh/ws/claim helpers it stamps no `purpose` claim
+- [x] `decode_principal` validates signature and expiry, and validates a token's
+      `purpose` claim only when `allowed_purposes` is supplied; returns an
+      `AuthenticatedPrincipal` (carrying the `is_system_admin` flag) and raises on
+      wrong key, expired token, malformed/empty `sub`, missing or non-string
+      account id, or a token used outside its allowed purpose. Modulo's own
+      tokens carry no `iss` claim, so no issuer check is performed
 - [x] `none` algorithm is rejected and only allowlisted signing algorithms pass
 - [x] Refresh tokens carry a `refresh` purpose and issue a new access token via
       `refresh_access_token`
-- [x] WebSocket tokens (`create_ws_token`) are accepted only with `ws` purpose
+- [x] The JWT WebSocket-token helper (`auth/jwt.py` `create_ws_token`) stamps
+      `purpose: "ws"` and is accepted only under that purpose; the production
+      run-WebSocket credential is instead the opaque single-use Redis token
+      minted by `auth/ws_token.py` (60s TTL, `GETDEL` consumption), not a JWT
 - [x] Claim tokens (`create_claim_token` / `decode_claim_token`) are purpose-scoped
       short-lived tokens
 - [x] Tenant identity is embedded in the token and validated on decode
-- [x] Access tokens for the WS purpose and refresh tokens for the WS purpose are
-      rejected (purpose isolation)
+- [x] Purpose isolation holds in the `decode_principal` contract: an access token
+      (which carries no `purpose`) or a refresh token is rejected when the caller
+      requires the `ws` purpose. On the normal API path access tokens are decoded
+      without a purpose restriction (`allowed_purposes=None`), so the restriction
+      guards the purpose-scoped token families rather than every request
 
 ## Known Gaps
 

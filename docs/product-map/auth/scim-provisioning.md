@@ -87,9 +87,14 @@ org. Every mutation runs under org RLS and is audited fail-closed (ADR 047).
       group equivalents; FAR-1472), attributed to that same resolved admin
       authority — a provisioning change that lands without an audit event fails
       the response rather than mutating membership unattributably
-- [x] Database failures map to honest SCIM status codes instead of a generic
-      500: `ProgrammingError` (missing migration) → 501, other
-      `SQLAlchemyError` → 503, `IntegrityError` → 409
+- [x] Database failures on the mutating routes map to honest SCIM status codes
+      instead of a generic 500: `ProgrammingError` (missing migration) → 501,
+      `IntegrityError` → 409 and other `SQLAlchemyError` → 503 — except a
+      session-contract violation (`InvalidRequestError` / `MissingGreenlet`),
+      which `raise_session_contract_error` classifies to 500 rather than a
+      retry-inviting 503. The `GET` list routes are the exception: their CRUD
+      helper swallows `ProgrammingError` and returns an empty collection (200),
+      so the route-level 501 arm is unreachable for a real query failure
       (`scim_provisioning.feature`, `test_scim_provisioning_programming_error.py`)
 
 ## Known Gaps
