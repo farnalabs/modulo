@@ -2,6 +2,7 @@ import uuid
 from typing import Any
 
 from sqlalchemy import JSON, ForeignKey, Index, String, Text, Uuid, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import Base, OrgScoped
@@ -29,7 +30,12 @@ class AuditEvent(OrgScoped):
     )
     resource_type: Mapped[str | None] = mapped_column(String(100))
     resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
-    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    # DB type is jsonb (0147_json_to_jsonb_standardize); the JSONB variant keeps
+    # the model in sync so Postgres gets binary storage + GIN-indexability
+    # while SQLite/MariaDB test schemas keep the generic JSON type.
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
     request_id: Mapped[str | None] = mapped_column(String(255))
     previous_hash: Mapped[str | None] = mapped_column(Text)
 
@@ -53,4 +59,4 @@ class AuditChainHead(Base):
     last_event_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("audit_events.id", ondelete="SET NULL"), index=True
     )
-    event_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    event_count: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
