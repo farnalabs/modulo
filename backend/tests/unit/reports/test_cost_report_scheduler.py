@@ -18,7 +18,7 @@ from modulo.db.crud.scheduled_report import delete_scheduled_report, list_schedu
 from tests.unit.reports.helpers import (
     MockSession,
     MockSessionFactory,
-    binary_expressions,
+    has_predicate,
     make_cost_report_mock,
 )
 
@@ -223,16 +223,6 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     assert session.execute.await_count == 1
 
 
-def _filters_on_cost_report_type(statement: object) -> bool:
-    """Structural check: the statement's WHERE clause pins report_type == 'cost'."""
-    return any(
-        pred.operator is operators.eq
-        and getattr(pred.left, "name", None) == "report_type"
-        and getattr(pred.right, "value", None) == "cost"
-        for pred in binary_expressions(statement.whereclause)
-    )
-
-
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     listed = MagicMock()
     listed.scalars.return_value.all.return_value = []
@@ -240,7 +230,7 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     org_id = uuid.uuid4()
 
     assert not await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id)
-    assert _filters_on_cost_report_type(session.execute.await_args_list[0].args[0])
+    assert has_predicate(session.execute.await_args_list[0].args[0].whereclause, operators.eq, "report_type", "cost")
 
     missing = MagicMock()
     missing.scalar_one_or_none.return_value = None
@@ -251,5 +241,5 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
         organisation_id=org_id,
     )
     assert deleted is False
-    assert _filters_on_cost_report_type(session.execute.await_args_list[0].args[0])
+    assert has_predicate(session.execute.await_args_list[0].args[0].whereclause, operators.eq, "report_type", "cost")
     session.delete.assert_not_awaited()
