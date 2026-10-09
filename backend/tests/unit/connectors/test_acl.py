@@ -1,5 +1,7 @@
 """Unit tests for ConnectorACL."""
 
+import inspect
+
 import pytest
 
 from modulo.connectors.base import ConnectorACL, ConnectorPermissionError, unrestricted_allowed_operations
@@ -14,8 +16,8 @@ def test_acl_org_visibility():
 
 def test_acl_team_visibility():
     acl = ConnectorACL(visibility="team", allowed_operations=["read"])
-    # team-scoped access on a team connector must not raise
-    assert acl.check("read", request_visibility="team") is None
+    # the allowlist still applies on a team connector
+    assert acl.check("read") is None
 
 
 def test_acl_blocks_unlisted_operation():
@@ -42,24 +44,28 @@ def test_acl_empty_allowlist_is_unrestricted():
     assert acl.check("trigger_run") is None
 
 
-def test_acl_empty_allowlist_still_enforces_visibility():
-    # Unrestricted operation scope does not bypass the visibility check.
-    acl = ConnectorACL(visibility="org", allowed_operations=[])
-    with pytest.raises(ConnectorPermissionError, match="team-scoped"):
-        acl.check("read", request_visibility="team")
+@pytest.mark.parametrize("visibility", ["org", "team"])
+def test_acl_empty_allowlist_is_unrestricted_for_every_visibility(visibility):
+    # An unrestricted operation scope is unrestricted regardless of the
+    # connector's visibility — visibility is no longer an ACL-time axis at
+    # all (FAR-1618), so it can never narrow the operation scope.
+    acl = ConnectorACL(visibility=visibility, allowed_operations=[])
+    assert acl.check("read") is None
+    assert acl.check("write") is None
 
 
 def test_acl_team_connector_allows_org_request():
-    # Team connectors serve org-scoped requests; only the reverse (team-scoped
-    # access on an org-only connector) is forbidden.
+    # FAR-1618: teams are a visibility grouping, not a credential trust
+    # boundary. Neither direction of the caller's scope is an ACL axis any
+    # more — only the allowlist is enforced here.
     acl = ConnectorACL(visibility="team")
-    assert acl.check("read", request_visibility="org") is None
+    assert acl.check("read") is None
 
 
 def test_acl_team_connector_still_enforces_allowlist():
     acl = ConnectorACL(visibility="team", allowed_operations=["read"])
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
-        acl.check("write", request_visibility="team")
+        acl.check("write")
 
 
 def test_acl_allows_any_when_none_ops():
@@ -76,10 +82,17 @@ def test_acl_allowlist_is_normalised_to_frozenset():
     assert acl.allowed_operations == frozenset({"read", "write"})
 
 
-def test_acl_blocks_wrong_visibility():
+def test_acl_org_connector_is_shared_and_carries_no_request_scope_axis():
+    # FAR-1618 (reverts the FAR-516 run-gate): an org-visibility connector is
+    # shared across the organisation and binds to ANY pipeline, including a
+    # team-owned one, so check() takes no caller-scope parameter at all. The
+    # signature assertion is the structural guard — re-threading
+    # ``request_visibility`` through the ACL fails here before any behaviour
+    # can silently regress.
     acl = ConnectorACL(visibility="org")
-    with pytest.raises(ConnectorPermissionError, match="team-scoped"):
-        acl.check("read", request_visibility="team")
+    assert "request_visibility" not in inspect.signature(acl.check).parameters
+    assert acl.check("read") is None
+    assert acl.check("write") is None
 
 
 def test_invalid_visibility_raises():

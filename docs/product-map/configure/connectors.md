@@ -224,14 +224,19 @@ and per-destination rate limiting.
       `unit-tests: test_acl.py, test_connectors_endpoint.py,
       test_guardrail_conformance_midrun.py`)
 - [x] A connector binding that crosses a team boundary is refused at graph
-      save with 409 `connector_team_mismatch` (FAR-1515, PRD §9.3). A
-      team-private connector (`visibility: team`) is only usable by a pipeline
-      owned by the SAME team, and — the reverse direction — a TEAM pipeline may
-      not pin an org-only connector (`visibility: org`): a run whose
-      `owner_team_id` is set is team-scoped and `ConnectorACL.check` fails
-      closed on team-scoped access to an org-only connector (FAR-516), so the
-      save must refuse a graph whose every run would die at the connector gate
-      (org pipelines keep org-wide connectors and never mismatch). The
+      save with 409 `connector_team_mismatch` (FAR-1515, PRD §9.3, model
+      restated by FAR-1618). Teams are a VISIBILITY GROUPING, not a
+      credential trust boundary, so the rule has exactly one shape: a
+      team-private connector (`visibility: team`) is only usable by a
+      pipeline owned by the SAME team — a different team's pipeline or an
+      org pipeline is refused — and an org-visibility connector
+      (`visibility: org`) is SHARED ACROSS THE ORGANISATION: it binds to ANY
+      pipeline, including one owned by a team, and never produces a
+      mismatch. (FAR-1618 removed the reverse direction FAR-1515 had added —
+      a TEAM pipeline pinning an org connector, mirrored at run time by the
+      FAR-516 `ConnectorACL.check` run-gate — because it contradicted this
+      shared rule; there is no save-time or run-time rejection of an
+      org-visibility connector on a team pipeline any more.) The
       candidate rows are read team-blind but org-scoped
       (`db.crud.team_scope.team_blind_org_scope`) because the
       `rls_team_isolation` policy would otherwise hide another team's

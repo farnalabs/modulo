@@ -383,15 +383,18 @@ async def test_hub_integration_query_and_write(tmp_path, hub_global_exporter: In
         assert span.attributes.get("connector.org_id") == "tenant-abc"
 
 
-async def test_hub_org_connector_rejected_for_team_scoped_invocation(tmp_path) -> None:
-    """FAR-516: an org-only connector is fail-closed rejected for a team-scoped run.
+async def test_hub_org_connector_is_shared_with_team_scoped_invocations(tmp_path) -> None:
+    """FAR-1618: an org-visibility connector is shared across the organisation.
 
-    A ConnectorHub wired with ``request_visibility="team"`` must deny a
-    ``visibility == "org"`` connector at the connector-invocation gate (both
-    ``get(operation=...)`` and ``query``/``write``), while the same connector
-    stays permitted for an org-scoped invocation.
+    Teams are a visibility grouping, not a credential trust boundary, so a
+    ``visibility == "org"`` connector binds to ANY pipeline — including a
+    team-owned one — at both the ``get(operation=...)`` gate and the
+    ``_TracedConnector`` invocation gate. This reverts the FAR-516 run-gate:
+    the hub no longer takes a ``request_visibility`` axis at all (asserted
+    structurally below), so nothing about the caller's team scope can narrow
+    which org-wide connectors it may use.
     """
-    from modulo.connectors.base import ConnectorPermissionError
+    import inspect
 
     key = Fernet.generate_key().decode()
     ci = _FakeCI(
@@ -404,29 +407,19 @@ async def test_hub_org_connector_rejected_for_team_scoped_invocation(tmp_path) -
 
     backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
-        # Team-scoped request: get(operation=...) must reject the org-only connector.
-        hub = ConnectorHub(secrets_backend=backend, org_id="org-42", request_visibility="team")
-        async with hub:
-            await hub.initialise([ci])
-            with pytest.raises(ConnectorPermissionError, match="team-scoped"):
-                hub.get(ci.id, operation="read")
+        # Structural guard: no request-visibility axis to thread a team scope
+        # through (re-adding it fails here before any behaviour can regress).
+        assert "request_visibility" not in inspect.signature(ConnectorHub.__init__).parameters
 
-        # The _TracedConnector invocation gate rejects on query too.
-        hub = ConnectorHub(secrets_backend=backend, org_id="org-42", request_visibility="team")
+        hub = ConnectorHub(secrets_backend=backend, org_id="org-42")
         async with hub:
             await hub.initialise([ci])
-            connector = hub.get(ci.id)
-            with pytest.raises(ConnectorPermissionError, match="team-scoped"):
-                await connector.query(ConnectorQuery(resource="directory"))
-
-        # Org-scoped request: the same org-only connector is permitted.
-        hub = ConnectorHub(secrets_backend=backend, org_id="org-42", request_visibility="org")
-        async with hub:
-            await hub.initialise([ci])
+            # get(operation=...) grants the org connector unconditionally.
+            assert hub.get(ci.id, operation="read") is not None
+            # The _TracedConnector invocation gate permits query too.
             connector = hub.get(ci.id)
             result = await connector.query(ConnectorQuery(resource="directory", filters={"path": str(tmp_path)}))
             assert isinstance(result, ConnectorResult)
-            assert hub.get(ci.id, operation="read") is not None
 
 
 # ---------------------------------------------------------------------------

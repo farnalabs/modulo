@@ -643,7 +643,17 @@ class ConnectorPermissionError(ValueError):
 class ConnectorACL:
     """Access-control list for connector operations.
 
-    Enforces *visibility* restrictions and an optional white-list of allowed operations.
+    Enforces the optional white-list of allowed operations. The connector's
+    ``visibility`` is carried as validated state but is NOT enforced here:
+    team-scope binding rules are enforced at the write gates that create a
+    cross-team binding (``core.team_visibility``). The FAR-516 run-gate that
+    used to reject a team-scoped request against an ``org``-visibility
+    connector was removed by FAR-1618 — teams are a VISIBILITY GROUPING, not
+    a credential trust boundary, so an org-visibility connector is shared
+    across the organisation and binds to ANY pipeline, including team-owned
+    ones. (The team-PRIVATE direction — ``visibility: team`` usable only by
+    its owner team's pipelines — is unchanged and stays enforced at those
+    write gates.)
 
     Operation-scope semantics (FAR-1564): ``None`` and an empty list BOTH mean
     UNRESTRICTED — "nothing was configured to restrict". Connectors created
@@ -699,7 +709,7 @@ class ConnectorACL:
             # Restricted to the empty allowlist: every operation is denied.
             self.allowed_operations = frozenset()
 
-    def check(self, operation: str, *, request_visibility: str | None = None) -> None:
+    def check(self, operation: str) -> None:
         """Raise ConnectorPermissionError if the operation is not permitted.
 
         ``None`` and an empty list are both unrestricted (FAR-1564); a
@@ -711,6 +721,9 @@ class ConnectorACL:
         grants a stored ``["github.read"]`` — the answer the guardrail
         conformance reader gives for that value. A request that is not a
         capability in any accepted spelling is matched raw (as before).
+
+        There is deliberately NO visibility/request-scope parameter: an
+        org-visibility connector is shared across the organisation (FAR-1618).
         """
         if not self._unrestricted:
             allowed = self.allowed_operations or frozenset()
@@ -719,8 +732,6 @@ class ConnectorACL:
                 raise ConnectorPermissionError(
                     f"Operation {operation!r} is not in allowed_operations: {sorted(allowed)}",
                 )
-        if request_visibility == "team" and self.visibility == "org":
-            raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")
 
 
 @dataclass
