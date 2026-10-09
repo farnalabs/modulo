@@ -690,6 +690,18 @@ class _BudgetSession:
         self.rows = rows
         self.statements: list[Any] = []
 
+    def get_bind(self) -> MagicMock:
+        """PostgreSQL bind — ``_reconcile_org``'s FAR-1601 lock bound runs
+        (it is this transaction's FIRST statement), but its ``lock_timeout``
+        ``set_config`` is answered WITHOUT being recorded so ``statements``
+        still holds only the row select the assertions below inspect. The
+        marker is deliberately narrow (matches ``lock_timeout``, not any
+        ``set_config``) so RLS/GUC ``set_config`` statements are not silently
+        swallowed if they ever gain assertions here."""
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        return bind
+
     async def __aenter__(self) -> Self:
         return self
 
@@ -700,6 +712,8 @@ class _BudgetSession:
         return self
 
     async def execute(self, stmt: Any, params: Any = None) -> MagicMock:
+        if "lock_timeout" in str(stmt):
+            return MagicMock()
         self.statements.append(stmt)
         result = MagicMock()
         result.all.return_value = list(self.rows)

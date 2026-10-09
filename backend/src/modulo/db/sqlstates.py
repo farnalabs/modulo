@@ -163,22 +163,24 @@ def sqlstate_of(exc: BaseException) -> str | None:
 def is_row_lock_timeout(exc: BaseException) -> bool:
     """True when *exc* is the bounded ``lock_timeout`` expiry (SQLSTATE 55P03).
 
-    The single definition shared by both sweeps of the hot ``runs`` row:
-    the dispatch path (``core.dispatch``) and the periodic reconciliation
-    sweeps (``core.run_admission``). Every write there runs under the
-    transaction-scoped ``lock_timeout`` set by
-    ``db.crud.row_lock.set_mutation_row_lock_timeout`` (FAR-1584 / FAR-1592),
-    so a contended row lock can wait at most
-    ``Settings.mutation_row_lock_timeout_ms`` — never silently past the Fly
-    HAProxy 30-minute session window (the unbounded wait that got prod
-    connections culled mid-operation; FAR-1524 O11). Deliberately one
-    predicate: a forked copy in each sweep is how a future bound change would
-    drift out of sync.
+    The single definition shared by every write path that bounds the hot
+    ``runs`` row lock with a transaction-scoped ``lock_timeout`` set by
+    ``db.crud.row_lock.set_mutation_row_lock_timeout`` (value
+    ``Settings.mutation_row_lock_timeout_ms``): the dispatch path
+    (``core.dispatch``, FAR-1584), the slot + park reconciliation sweeps
+    (``core.run_admission``, FAR-1592) and the periodic-sweep reconcile path
+    (``core.cron_helpers``, FAR-1601). So a contended row lock can wait at most
+    that long — never silently past the Fly HAProxy 30-minute session window
+    (the unbounded wait that got prod connections culled mid-operation;
+    FAR-1524 O11). Deliberately one predicate: a forked copy in each sweep is
+    how a future bound change would drift out of sync.
 
-    :func:`sqlstate_of` walks the whole chain (``.orig``/``__cause__``/
-    ``__context__``, incl. savepoint-rollback wrappers), so both the
-    raw-driver and SQLAlchemy-wrapped shapes are recognised — dialect-tolerant,
-    no exception-class import. Any OTHER failure is not a lock timeout and must
+    When the bound fires, Postgres raises ``lock_not_available``, surfacing as
+    a raw asyncpg ``LockNotAvailableError`` or a SQLAlchemy ``OperationalError``
+    wrapping it. :func:`sqlstate_of` walks the whole chain
+    (``.orig``/``__cause__``/``__context__``, incl. savepoint-rollback
+    wrappers), so both shapes are recognised — dialect-tolerant, no
+    exception-class import. Any OTHER failure is not a lock timeout and must
     keep propagating.
     """
     return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
