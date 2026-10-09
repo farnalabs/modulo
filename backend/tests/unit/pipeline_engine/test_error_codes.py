@@ -640,6 +640,63 @@ def test_dispatch_wait_timeout_alias_target_is_registered():
 
 
 # ---------------------------------------------------------------------------
+# FAR-1558 follow-up — SandboxDispatchUnboundError (dispatch-time refusal)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_unbound_exception_class_name_maps_to_its_own_code():
+    """The executor's generic catch publishes ``type(exc).__name__`` as the raw
+    ``runs.error_code``. ``SandboxDispatchUnboundError`` (raised only at
+    dispatch by ``runner_dispatch``) must resolve to its own registered code —
+    never the ``harness.unknown`` / "Unknown error" fallback, which is what the
+    raw class name resolved to before FAR-1558 added the alias."""
+    raw_name = "SandboxDispatchUnboundError"
+    assert map_legacy_code(raw_name) == "sandbox.dispatch_unbound"
+    assert map_legacy_code(raw_name) != "harness.unknown"
+    # The alias key is pinned to the REAL exception class, so renaming the
+    # class without updating LEGACY_ALIASES fails here rather than silently
+    # dropping runs back into the unknown slice.
+    from modulo.core.bundled_runner.runner_dispatch import SandboxDispatchUnboundError
+
+    assert SandboxDispatchUnboundError.__name__ == raw_name
+    assert SandboxDispatchUnboundError.__name__ in LEGACY_ALIASES
+
+
+def test_dispatch_unbound_code_is_registered_terminal_and_config_classed():
+    """Registry integrity for ``sandbox.dispatch_unbound``: a deterministic
+    profile/binding refusal like its sibling ``sandbox.tier_refused`` — config
+    class, never retried, warning-level, with actionable guidance."""
+    spec = ERROR_CODE_REGISTRY["sandbox.dispatch_unbound"]
+    assert spec.error_class == "config"
+    assert spec.retryable is False
+    assert spec.alert_severity == "warning"
+    assert spec.guidance
+    # Dotted registry spelling passes through unchanged.
+    assert map_legacy_code("sandbox.dispatch_unbound") == "sandbox.dispatch_unbound"
+    # Same classification through either spelling (class + retryability).
+    assert class_for("SandboxDispatchUnboundError") == class_for("sandbox.dispatch_unbound")
+    assert is_retryable("SandboxDispatchUnboundError") is False
+    assert is_retryable("sandbox.dispatch_unbound") is False
+
+
+def test_dispatch_unbound_code_is_known_and_expands_both_spellings():
+    """Analytics/known-code surfaces must see both spellings: the raw class
+    name rows written before/after the alias, and the dotted canonical."""
+    known = known_error_codes()
+    assert "sandbox.dispatch_unbound" in known
+    assert "SandboxDispatchUnboundError" in known
+    variants = expand_code_variants("sandbox.dispatch_unbound")
+    assert "SandboxDispatchUnboundError" in variants
+    assert "sandbox.dispatch_unbound" in expand_code_variants("SandboxDispatchUnboundError")
+    # present_error canonicalizes on read so run displays show the named code.
+    code, detail = present_error("SandboxDispatchUnboundError", "profile not dispatchable", 5000)
+    assert code == "sandbox.dispatch_unbound"
+    assert detail == "profile not dispatchable"
+    # The bare-name uniqueness guard stays clean with the new entry added.
+    assert not error_code_map_conflicts()
+
+
+# ---------------------------------------------------------------------------
 # FAR-589 D3b � bare-name uniqueness guard + unmapped-fallback signal
 # ---------------------------------------------------------------------------
 

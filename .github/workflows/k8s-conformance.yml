@@ -13,7 +13,13 @@ name: "K8s conformance (kind + managed)"
 #      the cluster afterwards (if: always()). The suite includes the negative
 #      suite: a deliberately broken adapter must FAIL, and a
 #      kill-before-collect must be detected rather than reported as a
-#      synthetic success.
+#      synthetic success. It also lints the Helm chart (helm lint
+#      deploy/helm/modulo) - since FAR-1558 the trigger paths and the
+#      step-level gate both cover deploy/helm/**, and a chart-only change
+#      lints WITHOUT creating the cluster (the `chart` output gates the helm
+#      install + lint; the cluster steps stay on `changed`). A green
+#      chart-only run does NOT stamp the "green run" summary below - that
+#      stamp asserts the conformance suite ran.
 #
 #   2. managed (weekly schedule Monday 04:00 UTC; workflow_dispatch
 #      job=managed): rotates ONE of EKS/AKS/GKE per ISO week so all three
@@ -79,6 +85,12 @@ on:
     # protection --jq '.required_status_checks'` returns null/absent (a
     # path-filtered REQUIRED check would hang unrelated PRs forever).
     # push-to-main and workflow_dispatch are deliberately NOT filtered.
+    #
+    # `deploy/helm/**` (FAR-1558 follow-up): the chart lints inside this same
+    # `kind` job, so a chart-only PR must be able to reach it at all. The
+    # step-level gate splits conformance-surface changes (`changed`, spins the
+    # kind cluster) from chart-only changes (`chart`, lints without a cluster)
+    # - see `Detect changed paths` below.
     paths:
       - "backend/src/modulo/core/runtime_provider/**"
       - "backend/src/modulo/core/bundled_runner/**"
@@ -87,6 +99,7 @@ on:
       - "backend/pyproject.toml"
       - "backend/uv.lock"
       - ".github/workflows/k8s-conformance.yml"
+      - "deploy/helm/**"
   push:
     branches: [main]
   schedule:
@@ -154,6 +167,17 @@ jobs:
         # "skipped" check), but the expensive cluster steps only run when the
         # conformance surface changed. FAIL-OPEN: any diff error runs the
         # suite rather than silently skipping it.
+        #
+        # TWO outputs (FAR-1558 follow-up), so a chart-only change reaches
+        # `helm lint` WITHOUT spinning a kind cluster:
+        #   changed - the conformance surface (cluster + suite); mirrors the
+        #             trigger-level `paths` list minus `deploy/helm/**`.
+        #   chart   - deploy/helm/** (the chart itself); gates the tool
+        #             install and `helm lint` only.
+        # The trigger-level `paths` filter is the UNION of both lists - the
+        # chart was in NEITHER before, so a chart-only PR never started this
+        # job and the chart rotted unexercised (the exact failure FAR-1053
+        # exists to prevent).
         working-directory: .
         timeout-minutes: 3
         env:
@@ -161,6 +185,7 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
         run: |
           PATHS="backend/src/modulo/core/runtime_provider/ backend/src/modulo/core/bundled_runner/ backend/src/modulo/core/pipeline_engine/ backend/tests/conformance/ backend/pyproject.toml backend/uv.lock .github/workflows/k8s-conformance.yml"
+          CHART_PATHS="deploy/helm/"
           if [ "$EVENT_NAME" = "pull_request" ]; then
             # PRs check out the merge commit: HEAD^ is the base side.
             if git rev-parse -q --verify "HEAD^2" >/dev/null 2>&1; then
@@ -171,20 +196,24 @@ jobs:
           elif [ "$EVENT_NAME" = "push" ]; then
             if [ -z "$EVENT_BEFORE" ] || [ "$EVENT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
               echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "chart=true" >> "$GITHUB_OUTPUT"
               echo "Push without a resolvable before-SHA - running the conformance suite."
               exit 0
             fi
             BASE="$EVENT_BEFORE"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "chart=true" >> "$GITHUB_OUTPUT"
             echo "Manual dispatch - running the conformance suite unconditionally."
             exit 0
           fi
           rc=0
           CHANGED="$(git diff --name-only "$BASE" HEAD -- $PATHS)" || rc=$?
+          CHART="$(git diff --name-only "$BASE" HEAD -- $CHART_PATHS)" || rc=$?
           if [ "$rc" -ne 0 ]; then
             echo "::warning::path-filter git diff failed (rc=$rc); running the conformance suite unconditionally (fail open)"
             echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "chart=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -n "$CHANGED" ]; then
@@ -195,8 +224,32 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No runtime-provider / bundled-runner / pipeline-engine / conformance changes - skipping the cluster steps."
           fi
+          if [ -n "$CHART" ]; then
+            echo "chart=true" >> "$GITHUB_OUTPUT"
+            echo "Helm chart changed:"
+            echo "$CHART"
+          else
+            echo "chart=false" >> "$GITHUB_OUTPUT"
+            echo "No Helm chart changes."
+          fi
 
-      - name: Install kind, kubectl and helm (pinned)
+      - name: Install helm (pinned)
+        if: steps.detect.outputs.changed == 'true' || steps.detect.outputs.chart == 'true'
+        working-directory: .
+        shell: bash
+        timeout-minutes: 5
+        # Split from the kind/kubectl install (FAR-1558 follow-up): `helm lint`
+        # is the ONLY step a chart-only change needs, so helm installs on
+        # either output while the cluster tooling below stays gated on
+        # `changed` alone.
+        run: |
+          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf helm.tgz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          rm -rf helm.tgz linux-amd64
+          helm version
+
+      - name: Install kind and kubectl (pinned)
         if: steps.detect.outputs.changed == 'true'
         working-directory: .
         shell: bash
@@ -206,12 +259,8 @@ jobs:
           chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind
           curl -fsSL --proto '=https' --proto-redir '=https' -o ./kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x ./kubectl && sudo mv ./kubectl /usr/local/bin/kubectl
-          curl -fsSL --proto '=https' --proto-redir '=https' -o helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
-          tar -xzf helm.tgz
-          sudo mv linux-amd64/helm /usr/local/bin/helm
           kind version
           kubectl version --client=true
-          helm version
 
       - name: Create the kind cluster
         if: steps.detect.outputs.changed == 'true'
@@ -237,7 +286,7 @@ jobs:
           kind load docker-image python:3.13-slim --name "$KIND_CLUSTER_NAME"
 
       - name: Lint the Helm chart
-        if: steps.detect.outputs.changed == 'true'
+        if: steps.detect.outputs.changed == 'true' || steps.detect.outputs.chart == 'true'
         working-directory: .
         shell: bash
         timeout-minutes: 3
@@ -246,6 +295,13 @@ jobs:
         # chart from silently breaking. It does NOT install anything: the
         # conformance suite validates the runtime provider, not chart
         # behaviour (see the parity doc for what is and is not covered).
+        #
+        # FAR-1558 follow-up: gated on EITHER surface, so a chart-only change
+        # (`chart=true`, `changed=false`) lints the chart while the cluster
+        # steps above stay skipped - no kind cluster is created for a change
+        # the suite cannot exercise anyway. Kept on `changed || chart` (not
+        # `chart` alone) so conformance runs keep linting too, exactly as
+        # before.
         run: helm lint deploy/helm/modulo
 
       - name: Sync backend deps
