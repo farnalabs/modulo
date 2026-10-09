@@ -7,7 +7,8 @@ route and copies onto every snapshot frozen afterwards.
 Lenses:
 
 * **Chain** — 0289 chains onto ``0288_runs_execution_origin``, and
-  ``0290_scheduled_reports_due_scan`` chains onto 0289 as the single
+  ``0290_scheduled_reports_due_scan`` chains onto 0289, and
+  ``0291_invitations_lookup_constraints`` chains onto 0290 as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -40,7 +41,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0290_scheduled_reports_due_scan"
+_HEAD_MIGRATION = "0291_invitations_lookup_constraints"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"
