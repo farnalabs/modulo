@@ -123,3 +123,35 @@ def test_acl_malformed_int_allowlist_fails_closed():
         acl.check("read")
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
         acl.check("write")
+
+
+# ---------------------------------------------------------------------------
+# One canonical vocabulary across certification + enforcement (FAR-1594)
+# ---------------------------------------------------------------------------
+
+
+def test_acl_legacy_type_qualified_allowlist_grants_bare_capability():
+    # FAR-1594 defect (a): a stored ["github.read"] must GRANT "read" — the
+    # exact answer the guardrail conformance reader certifies for the same
+    # value. Before the shared canonicalisation the ACL matched raw membership,
+    # so certification and enforcement gave OPPOSITE answers.
+    acl = ConnectorACL(visibility="org", allowed_operations=["github.read"])
+    assert acl.allowed_operations == frozenset({"read"})
+    assert acl.check("read") is None
+
+
+def test_acl_check_accepts_a_legacy_spelling_of_a_granted_operation():
+    # The check side canonicalises with the SAME helper as the stored side, so
+    # a legacy-qualified request matches a bare grant (mirrors a qualified
+    # conformance claim matching a bare manifest entry).
+    acl = ConnectorACL(visibility="org", allowed_operations=["read"])
+    assert acl.check("github.read") is None
+
+
+def test_acl_non_capability_entry_grants_nothing():
+    # An entry outside the capability vocabulary certifies nothing here either
+    # — the same DROP the conformance manifest reader applies.
+    acl = ConnectorACL(visibility="org", allowed_operations=["not-a-capability"])
+    assert not acl.allowed_operations
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("read")

@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
@@ -288,6 +289,108 @@ class TestCreateTriggerSuccess(_AuthContext):
         assert result.get("error") is None
         assert result["trigger_type"] == "cron"
         assert result["cron_expression"] == "0 5 * * *"
+
+
+# ---------------------------------------------------------------------------
+# create_trigger — connector team gate (FAR-1595)
+# ---------------------------------------------------------------------------
+
+_TEAM_A = uuid.UUID("7f000000-0000-0000-0000-00000000000a")
+_TEAM_B = uuid.UUID("7f000000-0000-0000-0000-00000000000b")
+
+
+def _cross_team_mismatch(connector_id: uuid.UUID) -> Any:
+    from modulo.core.team_visibility import ConnectorTeamMismatch
+
+    return ConnectorTeamMismatch(
+        connector_id=connector_id,
+        connector_name="other-teams-connector",
+        connector_owner_team_id=_TEAM_B,
+        pipeline_owner_team_id=_TEAM_A,
+        connector_visibility="team",
+    )
+
+
+class TestCreateTriggerConnectorTeamGate(_AuthContext):
+    """FAR-1595: the MCP create tool runs the SAME save-time connector gate REST does.
+
+    REST's create route team-validates ``config_json.connector_instance_id``
+    against the owning pipeline; the MCP tool named the same reference with no
+    ``ConnectorInstance`` lookup at all, and the fire job then reads that row
+    team-blind — so MCP was a bypass around the gate.
+    """
+
+    def setup_method(self) -> None:
+        super().setup_method()
+        from modulo.api.mcp_server import _ctx_role
+
+        _ctx_role.set("operator")
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_cross_team_connector_is_refused(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        from modulo.core.team_visibility import CONNECTOR_TEAM_MISMATCH
+
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        connector_id = uuid.uuid4()
+
+        with patch(
+            "modulo.api.routes.triggers.find_connector_team_mismatches",
+            new=AsyncMock(return_value=[_cross_team_mismatch(connector_id)]),
+        ) as find_mismatches:
+            result = await create_trigger(
+                pipeline_id=str(uuid.uuid4()),
+                trigger_type="polling",
+                config_json={"connector_instance_id": str(connector_id)},
+            )
+
+        assert result["error"] == CONNECTOR_TEAM_MISMATCH
+        assert "connector_team_mismatch" in result["detail"]
+        find_mismatches.assert_awaited_once()
+        mock_sesh.add.assert_not_called()
+        mock_sesh.flush.assert_not_awaited()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_gate_judges_against_the_resolved_owner_team(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """The owner handed to the gate is the team gate RESOLVED, not a fresh read.
+
+        A caller-facing read returns None for a team-scoped key, which would
+        deny a legitimate same-team reference; the team-blind gate's own owner
+        is the value REST's route uses.
+        """
+        mock_sesh = _make_add_session()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        connector_id = uuid.uuid4()
+
+        with (
+            patch(
+                "modulo.api.mcp_server._pipeline_team_gate",
+                new=AsyncMock(return_value=(_TEAM_A, None)),
+            ),
+            patch(
+                "modulo.api.routes.triggers.find_connector_team_mismatches",
+                new=AsyncMock(return_value=[]),
+            ) as find_mismatches,
+        ):
+            result = await create_trigger(
+                pipeline_id=str(uuid.uuid4()),
+                trigger_type="polling",
+                config_json={"connector_instance_id": str(connector_id)},
+            )
+
+        assert result.get("error") is None
+        assert find_mismatches.await_args.kwargs["pipeline_owner_team_id"] == _TEAM_A
+        mock_sesh.add.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

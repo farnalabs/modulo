@@ -2552,7 +2552,7 @@ class TestTriggerToolGaps(_AuthContext):
         trigger.max_concurrent_runs = 1
         with (
             patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
-            patch.object(ms, "_load_trigger_for_update", new=AsyncMock(return_value=(trigger, None))),
+            patch.object(ms, "_load_trigger_for_update", new=AsyncMock(return_value=(trigger, None, None))),
             patch.object(ms, "validate_cron_expression", return_value=None),
             patch.object(ms, "compute_next_fire", return_value=_NOW),
             patch.object(ms, "anchor_trigger_streak_epoch", new=AsyncMock(return_value=None)) as mock_anchor,

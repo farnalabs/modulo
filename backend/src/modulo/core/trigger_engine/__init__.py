@@ -985,15 +985,31 @@ class TriggerEngine:
         redis_client = None
         try:
             try:
-                connector, redis_client = await _build_polling_connector_from_instance(session, instance, org_id)
+                # FAR-1595: pass the owning trigger's pipeline so
+                # ``enforce_polling_team_scope`` has the team context to judge
+                # against. Without it a TEAM-PRIVATE instance is denied
+                # outright (no context = no verified team scope), so the
+                # forwarding is what makes a legitimate cross-check possible —
+                # this was the one place a real Trigger row was in hand but
+                # the context was not forwarded, leaving the cross-team read
+                # refused for the wrong reason (or, before the gate went
+                # fail-closed, unchecked).
+                connector, redis_client = await _build_polling_connector_from_instance(
+                    session,
+                    instance,
+                    org_id,
+                    pipeline_id=getattr(_trigger, "pipeline_id", None),
+                )
             except asyncio.CancelledError:
                 raise
             except ConnectorPermissionError as exc:
                 # FAR-1583 fail-closed: the instance's allowlist excludes
-                # ``read`` (or its allowed_operations is malformed). No
-                # credential was decrypted and no query ran. Named explicitly
-                # rather than folded into the generic "Connector init failed"
-                # arm so an ACL decision is never reported as a build error.
+                # ``read`` (or its allowed_operations is malformed), or
+                # FAR-1595: its TEAM scope does not cover the trigger's
+                # pipeline. No credential was decrypted and no query ran.
+                # Named explicitly rather than folded into the generic
+                # "Connector init failed" arm so an ACL decision is never
+                # reported as a build error.
                 return {
                     "status": "error",
                     "error": f"Connector ACL denied read: {str(exc)[:200]}",

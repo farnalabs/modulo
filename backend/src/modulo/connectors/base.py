@@ -43,6 +43,120 @@ def unrestricted_allowed_operations(value: object) -> bool:
     return value is None or value == []
 
 
+# ---------------------------------------------------------------------------
+# Canonical capability vocabulary (FAR-1582 / FAR-1594)
+# ---------------------------------------------------------------------------
+#
+# ONE vocabulary, ONE helper: ``Capability``'s own values (``read``, ``write``,
+# ``create_pr``, ...) are the vocabulary every consumer matches on, and the
+# helpers below are the single place a spelling is reduced to it. They live
+# HERE — a stdlib-only leaf — so both ``ConnectorACL`` (enforcement) and
+# ``core.guardrails.conformance`` (certification) import the same code and can
+# never again give opposite answers for the same stored value (FAR-1594 defect
+# (a): conformance certified a stored ``["github.read"]`` as ``read`` while the
+# ACL denied the read).
+#
+# NOTE the two SIDES deliberately differ (FAR-1594 defect (b)):
+#   * a stored ALLOWLIST entry is a *declaration of grant* — its type qualifier
+#     is redundant (the surface's own ``connector_type_id`` names the type), so
+#     it is reduced to the bare capability by :func:`canonical_capability`;
+#   * a conformance CLAIM is a *binding request* — ``github.read`` asks for a
+#     github surface specifically, so it keeps its qualifier (see
+#     ``qualified_capability`` and ``conformance._canonical_claim``).
+
+
+def qualified_capability(value: str) -> tuple[str, str] | None:
+    """Split a TYPE-QUALIFIED capability spelling into ``(type_id, capability)``.
+
+    Recognises ``<connector-type>[.:]<capability>`` — e.g. ``github.read``,
+    ``github:write``, ``ci-runner.list_runs`` — where the prefix parses as a
+    :class:`ConnectorType` and the suffix as a :class:`Capability`. Returns
+    ``None`` for a bare capability (``read``), for a non-connector qualified
+    string (``sandbox.egress``, ``egress:github.com`` — their surfaces own
+    their vocabulary), and for anything that is not a capability in any
+    accepted spelling.
+    """
+    for separator in (".", ":"):
+        prefix, found, suffix = value.partition(separator)
+        if not found:
+            continue
+        try:
+            ConnectorType(prefix)
+        except ValueError:
+            continue
+        try:
+            return prefix, str(Capability(suffix))
+        except ValueError:
+            continue
+    return None
+
+
+def canonical_capability(value: str) -> str | None:
+    """Reduce a capability spelling to the canonical bare :class:`Capability` form.
+
+    Accepted spellings: the bare ``Capability`` value itself (``read``) or a
+    legacy type-qualified spelling (``github.read``, ``github:write``), which
+    reduces to its bare value. Used for anything that GRANTS or DECLARES a
+    capability — a stored ``allowed_operations`` entry and a conformance
+    manifest/claim REPORT — because the qualifier adds no information there:
+    the surface's own ``connector_type_id`` names the type.
+
+    Returns ``None`` when *value* is not a capability in any accepted spelling
+    — ``sandbox.egress``, ``docker``, ``egress:github.com`` belong to the
+    sandbox/environment/agent surfaces, whose own vocabulary this must never
+    rewrite.
+
+    Consumers (both import THIS function; neither keeps a private copy):
+      * :class:`ConnectorACL` — canonicalises the stored allowlist when it
+        builds it, and the requested operation when it checks it, so
+        ``check("read")`` grants a stored ``["github.read"]`` exactly as the
+        guardrail conformance reader certifies it (FAR-1594 defect (a));
+      * ``core.guardrails.conformance`` — canonicalises the stored allowlist
+        it reads into the live manifest, and the capability names it REPORTS
+        back (``missing`` / ``unreadable``).
+    """
+    try:
+        return str(Capability(value))
+    except ValueError:
+        pass
+    qualified = qualified_capability(value)
+    if qualified is not None:
+        return qualified[1]
+    return None
+
+
+def canonical_capability_set(values: object) -> set[str]:
+    """Canonicalise a stored ``allowed_operations`` list to bare capabilities.
+
+    The SINGLE reader of a stored allowlist's ENTRIES, shared by
+    :class:`ConnectorACL` and ``core.guardrails.conformance`` so the two can
+    never certify and deny different sets for the same stored value (FAR-1594
+    defect (a)). Entries that are not capabilities in any accepted spelling are
+    DROPPED (with a log): they grant nothing, and carrying them would let an
+    arbitrary stored string satisfy a claim of the same spelling.
+
+    ``[]``/``None`` never reach here — :func:`unrestricted_allowed_operations`
+    routes them to the connector TYPE's capability set first; a non-list
+    (malformed) value yields the EMPTY set, matching the fail-closed
+    :class:`ConnectorACL` treatment of a malformed allowlist (FAR-1564).
+    """
+    canonical: set[str] = set()
+    if not isinstance(values, list):
+        return canonical
+    for raw in values:
+        if not isinstance(raw, str):
+            continue
+        capability = canonical_capability(raw)
+        if capability is None:
+            logger.warning(
+                "connectors.capability.operation_not_a_capability",
+                extra={"operation": str(raw)[:100]},
+            )
+            continue
+        canonical.add(capability)
+    return canonical
+
+
 class Capability(StrEnum):
     """Operations a connector can perform."""
 
@@ -545,6 +659,13 @@ class ConnectorACL:
     :func:`unrestricted_allowed_operations` keeps this class in step with the
     graph validator and the guardrail conformance reader, which read the same
     column.
+
+    Canonical vocabulary (FAR-1594): a RESTRICTED allowlist is canonicalised
+    through :func:`canonical_capability_set` and the requested operation
+    through :func:`canonical_capability`, so a stored legacy spelling
+    (``["github.read"]``) GRANTS ``read`` and :meth:`check` answers exactly
+    what the guardrail conformance reader certifies for the same stored value.
+    Both consume the ONE shared helper — neither keeps a private copy.
     """
 
     _VALID_VISIBILITY = frozenset({"org", "team"})
@@ -565,7 +686,11 @@ class ConnectorACL:
             # ``None``) while meaning exactly the same thing: unrestricted.
             self.allowed_operations: frozenset[str] | None = None if allowed_operations is None else frozenset()
         elif isinstance(allowed_operations, list):
-            self.allowed_operations = frozenset(allowed_operations)
+            # FAR-1594 (a): canonicalise to the ONE vocabulary — a stored
+            # ``["github.read"]`` grants ``read`` here exactly as the guardrail
+            # conformance reader certifies ``read`` for the same value. Shares
+            # the conformance reader's helper so the two can never diverge.
+            self.allowed_operations = frozenset(canonical_capability_set(allowed_operations))
         else:
             logger.warning(
                 "connectors.acl.malformed_allowed_operations",
@@ -580,10 +705,17 @@ class ConnectorACL:
         ``None`` and an empty list are both unrestricted (FAR-1564); a
         NON-EMPTY list restricts to the operations it lists, and a MALFORMED
         value restricts to nothing (fail closed — see the class docstring).
+
+        The requested operation is canonicalised (FAR-1594) with the SAME
+        helper that canonicalised the stored allowlist, so ``check("read")``
+        grants a stored ``["github.read"]`` — the answer the guardrail
+        conformance reader gives for that value. A request that is not a
+        capability in any accepted spelling is matched raw (as before).
         """
         if not self._unrestricted:
             allowed = self.allowed_operations or frozenset()
-            if operation not in allowed:
+            canonical_operation = canonical_capability(operation) or operation
+            if operation not in allowed and canonical_operation not in allowed:
                 raise ConnectorPermissionError(
                     f"Operation {operation!r} is not in allowed_operations: {sorted(allowed)}",
                 )

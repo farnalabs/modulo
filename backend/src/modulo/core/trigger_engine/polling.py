@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.connectors.base import (
     ConnectorACL,
     ConnectorBase,
+    ConnectorPermissionError,
     ConnectorResult,
 )
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, Run
@@ -143,20 +144,109 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
     ).check("read")
 
 
+async def enforce_polling_team_scope(
+    session: AsyncSession,
+    connector_instance: Any,
+    org_id: uuid.UUID | str,
+    pipeline_id: uuid.UUID | None,
+) -> None:
+    """Enforce the instance's TEAM scope against the polling trigger's pipeline (FAR-1595).
+
+    A trigger's ``connector_instance_id`` was never team-validated: the fire
+    job reads the connector row TEAM-BLIND (``app.execution_context`` is set,
+    ``cron_helpers._set_rls_org``) and selects it without a team predicate, so
+    a team-A trigger naming a team-B connector id polled it — reading
+    team-private credentials with only the allowlist gate applied. This is the
+    defence-in-depth half; the save-time half lives in
+    ``api/routes/triggers.py`` (REST) and ``api/mcp_server.py`` (the MCP
+    trigger tools), both through the shared
+    ``_validate_connector_instance_team_scope`` gate.
+
+    Scope rule: a TEAM-PRIVATE connector is only usable by a pipeline owned by
+    the SAME team — the shared
+    :func:`modulo.core.team_visibility.connector_team_mismatch` predicate, so
+    this gate cannot drift from the graph-save rule. An ORG-visible connector
+    never mismatches here: polling is a system-level read with no caller
+    visibility scope (``enforce_polling_read_acl`` deliberately normalises
+    ``visibility`` to ``org`` for exactly that reason), so an org-wide
+    connector is usable by any team's pipeline the same way it is everywhere
+    else. The reverse direction (an org-only connector on a team pipeline) is
+    a RUN-time rule — the executor's team-scoped ACL gate — and is enforced on
+    graph save, never on a poll read.
+
+    Runs BEFORE any credential is decrypted (same ordering contract as
+    :func:`enforce_polling_read_acl`), so a denied instance never exposes its
+    secrets to this path.
+
+    *pipeline_id* is the owning trigger's pipeline. When the caller supplies
+    NONE there is no team context to judge against — DENIED, on exactly the
+    same rule as an id that does not resolve in *org_id*: a read whose team
+    scope we cannot verify must not proceed. Every production caller has it
+    (the SAQ fire job passes the trigger's ``pipeline_id``, which is NOT NULL,
+    and ``TriggerEngine.evaluate_condition`` passes its own trigger's), so a
+    missing context is a wiring bug rather than an expected state — reporting
+    it as a denial is what stops the next forgotten argument from silently
+    reopening this gate. The gate is defence-in-depth on top of the save-time
+    validation and the request session's team RLS, never the sole control.
+
+    Raises :class:`ConnectorPermissionError` when the read must not proceed.
+    """
+    visibility = getattr(connector_instance, "visibility", None)
+    if (visibility or "org") != "team":
+        # Org-visible connector: usable by every team (see docstring). This
+        # short-circuit also means no pipeline read is issued at all.
+        return
+    if pipeline_id is None:
+        raise ConnectorPermissionError(
+            f"Team-private connector {getattr(connector_instance, 'id', '?')} was read with no "
+            "pipeline context; the team scope of the connector read cannot be verified",
+        )
+
+    from modulo.core.team_visibility import connector_team_mismatch
+    from modulo.db.models.pipeline import Pipeline
+
+    org_uuid = org_id if isinstance(org_id, uuid.UUID) else uuid.UUID(str(org_id))
+    pipeline = (
+        await session.execute(
+            select(Pipeline).where(Pipeline.id == pipeline_id, Pipeline.organisation_id == org_uuid),
+        )
+    ).scalar_one_or_none()
+    if pipeline is None:
+        raise ConnectorPermissionError(
+            f"Polling trigger pipeline {pipeline_id} does not resolve in this organisation; "
+            "the team scope of the connector read cannot be verified",
+        )
+    connector_owner_team_id = getattr(connector_instance, "owner_team_id", None)
+    if connector_team_mismatch(visibility, connector_owner_team_id, pipeline.owner_team_id):
+        raise ConnectorPermissionError(
+            f"Team-private connector {getattr(connector_instance, 'id', '?')} (owner team "
+            f"{connector_owner_team_id}) is not usable by pipeline {pipeline_id} "
+            f"(owner team {pipeline.owner_team_id})",
+        )
+
+
 async def _build_polling_connector_from_instance(
     session: AsyncSession,
     connector_instance: Any,
     org_id: uuid.UUID | str,
+    *,
+    pipeline_id: uuid.UUID | None = None,
 ) -> tuple[ConnectorBase, Any]:
     """Wire a polling REST connector to the shared fleet-wide rate budget (FAR-1583 ACL).
 
-    The FIRST thing this does is :func:`enforce_polling_read_acl` — every poll
-    read in the product flows through here (the SAQ cron fire job via
-    ``cron_helpers._build_polling_connector`` and the one-off
-    ``TriggerEngine.evaluate_condition``), so this is the single gate that
-    keeps a non-empty ``allowed_operations`` allowlist from being bypassed by
-    the polling/cron read path. It runs BEFORE any credential is decrypted, so
-    a denied instance never exposes its secrets.
+    The FIRST things this does are :func:`enforce_polling_read_acl` and
+    :func:`enforce_polling_team_scope` — every poll read in the product flows
+    through here (the SAQ cron fire job via ``cron_helpers._build_polling_connector``
+    and the one-off ``TriggerEngine.evaluate_condition``), so this is the single
+    gate that keeps a non-empty ``allowed_operations`` allowlist from being
+    bypassed by the polling/cron read path, and the defence-in-depth team-scope
+    gate for the same path (FAR-1595). BOTH run BEFORE any credential is
+    decrypted, so a denied instance never exposes its secrets.
+
+    *pipeline_id* is the owning trigger's pipeline — ALWAYS pass it when the
+    caller has one (both production callers do). Without it a TEAM-PRIVATE
+    instance is denied outright rather than read unchecked; see
+    :func:`enforce_polling_team_scope` for the rule and its rationale.
 
     Shared by the cron fire path (``cron_helpers``) and the sync one-off
     ``TriggerEngine.evaluate_condition`` so the three-step wiring
@@ -171,7 +261,9 @@ async def _build_polling_connector_from_instance(
     per-process local bucket — correct when no shared budget exists to multiply.
 
     Raises :class:`ConnectorPermissionError` (fail-closed) when the instance's
-    allowlist excludes ``read`` — see :func:`enforce_polling_read_acl`.
+    allowlist excludes ``read`` — see :func:`enforce_polling_read_acl` — or when
+    its team scope does not cover *pipeline_id* — see
+    :func:`enforce_polling_team_scope`.
 
     Raises :class:`SharedBudgetUnavailableError` (fail-closed) when the shared
     budget is configured but unresolvable; the caller surfaces that per its own
@@ -180,9 +272,10 @@ async def _build_polling_connector_from_instance(
     """
     import json
 
-    # FAR-1583: gate FIRST — before any credential is decrypted, so a denied
-    # instance never exposes its secrets to this path.
+    # FAR-1583 / FAR-1595: gate FIRST — before any credential is decrypted, so
+    # a denied instance never exposes its secrets to this path.
     enforce_polling_read_acl(connector_instance)
+    await enforce_polling_team_scope(session, connector_instance, org_id, pipeline_id)
 
     from modulo.core.connector_hub import resolve_shared_rate_limit_redis
     from modulo.core.secrets_backend import create_secrets_backend

@@ -41,8 +41,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.connectors.base import (
-    Capability,
     ConnectorType,
+    canonical_capability,
+    canonical_capability_set,
+    qualified_capability,
     unrestricted_allowed_operations,
 )
 from modulo.core.guardrails import (
@@ -56,80 +58,55 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Canonical capability vocabulary (FAR-1582)
+# Canonical capability vocabulary (FAR-1582, moved to the shared leaf in
+# FAR-1594)
 # ---------------------------------------------------------------------------
-
-
-def canonical_capability(value: str) -> str | None:
-    """Reduce a capability spelling to the canonical bare :class:`Capability` form.
-
-    ONE vocabulary is used for connector conformance: ``Capability``'s own
-    values (``read``, ``write``, ``create_pr``, ...). That is what
-    ``ConnectorACL.check`` enforces at every ACL call site, what
-    ``ConnectorType.capabilities`` declares, and what the determination draft
-    generator writes into a claim — so it is the vocabulary consumers actually
-    match on.
-
-    A legacy type-qualified spelling (``github.read``, ``github:write``) is
-    recognised and reduced to its bare value, which is what makes a claim
-    match IDENTICALLY whether the bound connector is allowlisted (whose stored
-    ``allowed_operations`` may still carry the legacy spelling) or
-    unrestricted (whose type capabilities are always bare).
-
-    Returns ``None`` when *value* is not a capability in any accepted
-    spelling — ``sandbox.egress``, ``docker``, ``egress:github.com`` belong to
-    the sandbox/environment/agent surfaces, whose own vocabulary this must
-    never rewrite.
-    """
-    try:
-        return str(Capability(value))
-    except ValueError:
-        pass
-    for separator in (".", ":"):
-        prefix, found, suffix = value.partition(separator)
-        if not found:
-            continue
-        try:
-            ConnectorType(prefix)
-        except ValueError:
-            continue
-        try:
-            return str(Capability(suffix))
-        except ValueError:
-            continue
-    return None
+#
+# ``canonical_capability`` / ``canonical_capability_set`` / ``qualified_capability``
+# now live in ``modulo.connectors.base`` — the stdlib-only leaf ``ConnectorACL``
+# lives in — and are imported here rather than kept as a private mapper: the ACL
+# and this reader must reduce a stored value to the SAME vocabulary or they give
+# opposite answers for it (FAR-1594 defect (a): a stored ``["github.read"]`` was
+# certified as ``read`` here while ``ConnectorACL.check`` denied the read).
+# ``canonical_capability`` stays re-exported under this module's name so
+# existing imports keep resolving.
 
 
 def _canonical_claim(value: str) -> str:
-    """Canonicalise a claim/manifest key, passing non-connector caps through."""
-    canonical = canonical_capability(value)
-    return value if canonical is None else canonical
+    """Canonicalise a claim/manifest KEY, preserving a type binding (FAR-1594).
 
+    A type-qualified claim (``github.read``) is a BINDING REQUEST: it asks for
+    a github-typed surface, so the qualifier is kept (only the separator is
+    normalised, ``github:read`` -> ``github.read``) and it matches only the
+    qualified alias :func:`_register_connector_surface` stamps for that
+    surface's type.
+    Before FAR-1594 the qualifier was dropped here, so a claim requiring
+    ``github.read`` was satisfied by ANY bound surface declaring bare ``read``
+    (defect (b)).
 
-def _canonical_capability_list(values: Any) -> set[str]:
-    """Canonicalise a stored ``allowed_operations`` list to bare capabilities.
-
-    Entries that are not capabilities in any accepted spelling are DROPPED
-    (with a log): they grant nothing, and carrying them would let an arbitrary
-    stored string satisfy a claim of the same spelling. ``[]``/``None`` never
-    reach here — :func:`unrestricted_allowed_operations` routes them to the
-    connector TYPE's capability set first.
+    A BARE capability (or a legacy spelling of one) canonicalises to its bare
+    form — the allowlist/manifest side always emits bare spellings, so a bare
+    claim matches any surface declaring the capability regardless of type.
+    Keys that are not capabilities at all (``sandbox.egress``, ``docker``, ...)
+    pass through untouched — their surfaces own their vocabulary.
     """
-    canonical: set[str] = set()
-    if not isinstance(values, list):
-        return canonical
-    for raw in values:
-        if not isinstance(raw, str):
-            continue
-        capability = canonical_capability(raw)
-        if capability is None:
-            _log.warning(
-                "guardrail.conformance.operation_not_a_capability",
-                extra={"operation": str(raw)[:100]},
-            )
-            continue
-        canonical.add(capability)
-    return canonical
+    qualified = qualified_capability(value)
+    if qualified is not None:
+        return f"{qualified[0]}.{qualified[1]}"
+    bare = canonical_capability(value)
+    return value if bare is None else bare
+
+
+def _reported(capability: str) -> str:
+    """Spell a claim the way this module REPORTS it: the canonical bare form.
+
+    ``missing``/``unreadable`` are surfaced in logs and derivation details, so a
+    qualified claim (``github.write``) reports as its canonical capability
+    (``write``) — the name the operator's capability vocabulary uses — while the
+    MATCHING above kept the qualifier for the lookup itself.
+    """
+    bare = canonical_capability(capability)
+    return capability if bare is None else bare
 
 
 @dataclass(frozen=True)
@@ -160,8 +137,9 @@ def _capabilities_for_connector(row: Any) -> set[str]:
 
     The instance's ``allowed_operations`` is the authoritative declared scope
     when it is a NON-EMPTY list; its entries are reduced to the canonical bare
-    ``Capability`` spelling by :func:`_canonical_capability_list`, so the
-    allowlisted branch and the unrestricted branch below emit the SAME
+    ``Capability`` spelling by the SHARED :func:`canonical_capability_set`
+    (the same helper ``ConnectorACL`` builds its allowlist from — FAR-1594), so
+    the allowlisted branch and the unrestricted branch below emit the SAME
     vocabulary and a canonical claim matches either identically (FAR-1582).
     ``None``/``[]`` means the connector is UNRESTRICTED (FAR-1564) — the unset
     value every connector created through REST/MCP/UI carries — so the surface
@@ -178,7 +156,7 @@ def _capabilities_for_connector(row: Any) -> set[str]:
     if unrestricted_allowed_operations(allowed):
         return _type_capabilities(row)
     if isinstance(allowed, list):
-        return _canonical_capability_list(allowed)
+        return canonical_capability_set(allowed)
     # Malformed (dict/str/int/...): fail CLOSED — certify nothing rather than
     # the connector's FULL capability set.
     _log.warning(
@@ -236,6 +214,35 @@ def _capabilities_for_agent(row: Any) -> set[str]:
     if isinstance(caps, list):
         return {str(c) for c in caps if isinstance(c, str)}
     return set()
+
+
+def _register_connector_surface(registered: dict[str, bool | None], row: Any, capabilities: set[str]) -> None:
+    """Stamp one connector surface: BARE capabilities plus its type aliases.
+
+    The manifest carries the per-surface connector TYPE only implicitly —
+    ``build_live_manifest`` flattens every bound surface into one
+    ``{capability: state}`` map, so the type had to be re-materialised here as
+    an ALIAS key ``<connector_type_id>.<capability>`` (FAR-1594 defect (b)):
+    a type-qualified claim (``github.read``) then matches ONLY a surface whose
+    ``connector_type_id`` is ``github``, instead of any surface declaring bare
+    ``read``. The bare keys are still registered, so a bare claim keeps its
+    existing "any surface declares it" semantics.
+
+    Aliases are stamped ONLY for a non-empty string type id and ONLY for bare
+    capabilities (a legacy spelling was already reduced by
+    :func:`canonical_capability_set`; a non-capability certifies nothing), so
+    an unknown/absent type — or an empty/malformed allowlist, which certifies
+    nothing at all (FAR-1564 fail closed) — contributes no alias and a
+    qualified claim against it fails CLOSED (unknown blocks).
+    """
+    for capability in capabilities:
+        registered[capability] = True
+    type_id = getattr(row, "connector_type_id", None)
+    if not isinstance(type_id, str) or not type_id:
+        return
+    for capability in capabilities:
+        if canonical_capability(capability) == capability:
+            registered[f"{type_id}.{capability}"] = True
 
 
 # Sandbox capabilities whose block-guarantee is a DENY/negative guarantee —
@@ -353,7 +360,7 @@ async def build_live_manifest(
                         extra={"org_id": str(org_id), "connector_instance_id": str(r.id)},
                     )
                     continue
-                _add(_capabilities_for_connector(r))
+                _register_connector_surface(registered, r, _capabilities_for_connector(r))
             for cid in connector_instance_ids:
                 if str(cid) not in found:
                     _log.warning(
@@ -493,12 +500,23 @@ def decide_conformance(
     """Derive the conformance state for one guardrail's claim (reuses T1).
 
     This is the single consumption point of the live manifest, so it is where
-    BOTH sides are reduced to the canonical bare ``Capability`` vocabulary
-    (FAR-1582). A claim and a manifest entry that name the same capability in
-    different accepted spellings (``github.read`` vs ``read``) therefore match
-    identically whether the bound connector is unrestricted or allowlisted.
+    BOTH sides are canonicalised (FAR-1582) — with the two sides deliberately
+    treated differently (FAR-1594 defect (b)):
+
+    * a BARE claim (or a legacy spelling of one, ``github:read``) canonicalises
+      to its bare ``Capability`` form, so it matches identically whether the
+      bound connector is unrestricted or allowlisted (FAR-1582's guarantee);
+    * a TYPE-QUALIFIED claim keeps its qualifier (``github.read`` stays
+      ``github.read``) and therefore matches ONLY the qualified alias the
+      manifest stamped for a github-typed surface
+      (:func:`_register_connector_surface`) — it is never satisfied by an
+      unrelated surface that happens to declare bare ``read``.
+
     Keys that are not capabilities (``sandbox.egress``, ``docker``, ...) pass
-    through untouched — their surfaces own their vocabulary.
+    through untouched on both sides — their surfaces own their vocabulary. The
+    reported ``missing``/``unreadable`` names are canonicalised back to the
+    bare spelling (``_reported``) so consumers see the capability vocabulary,
+    not the binding spelling that was matched.
     """
     if not required_capabilities:
         return derive_conformance_state(required_capabilities, registered)
@@ -514,7 +532,13 @@ def decide_conformance(
         buckets.setdefault(_canonical_claim(str(key)), []).append(state)
     canonical_registered = {key: _merge_states(states) for key, states in buckets.items()}
 
-    return derive_conformance_state(claims, canonical_registered)
+    derivation = derive_conformance_state(claims, canonical_registered)
+    return ConformanceDerivation(
+        state=derivation.state,
+        missing=tuple(_reported(capability) for capability in derivation.missing),
+        unreadable=tuple(_reported(capability) for capability in derivation.unreadable),
+        claimed=derivation.claimed,
+    )
 
 
 def worst_state(derivations: list[ConformanceDerivation]) -> ConformanceState:
