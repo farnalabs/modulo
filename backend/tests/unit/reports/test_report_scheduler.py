@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
+from httpx import Response
 
 from modulo.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
@@ -28,7 +30,16 @@ from modulo.core.reports.scheduler import (
     get_generator,
     register_report_type,
 )
-from tests.unit.reports.helpers import MockSession, MockSessionFactory, make_report_mock
+from tests.unit.reports.helpers import (
+    MockSession,
+    MockSessionFactory,
+    make_http_client,
+    make_http_response,
+    make_report_mock,
+)
+
+_SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
+_SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
 
 # ---------------------------------------------------------------------------
 # Registry tests
@@ -36,14 +47,6 @@ from tests.unit.reports.helpers import MockSession, MockSessionFactory, make_rep
 
 
 class TestRegistry:
-    def setup_method(self) -> None:
-        # Clear registry before each test
-        from modulo.core.reports import scheduler as sched_mod
-
-        sched_mod._generators.clear()
-        sched_mod._formatters.clear()
-        sched_mod._deliverers.clear()
-
     async def _dummy_generator(self, *args: object) -> dict[str, object]:
         return {"data": "ok"}
 
@@ -120,9 +123,15 @@ class TestSetRlsOrg:
 
         session = MagicMock()
         org_id = uuid.uuid4()
-        with patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as mock_set:
+        with (
+            patch("modulo.db.rls.set_rls_org", new_callable=AsyncMock) as mock_set,
+            patch("modulo.db.rls.set_rls_execution_context", new_callable=AsyncMock) as mock_ctx,
+        ):
             await _set_rls_org(session, org_id)
         mock_set.assert_awaited_once_with(session, org_id)
+        # The execution-context hatch is what lets this background machinery
+        # read team-scoped tables org-wide — it must be set on every call.
+        mock_ctx.assert_awaited_once_with(session)
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +140,6 @@ class TestSetRlsOrg:
 
 
 class TestFireScheduledReport:
-    def setup_method(self) -> None:
-        from modulo.core.reports import scheduler as sched_mod
-
-        sched_mod._generators.clear()
-        sched_mod._formatters.clear()
-        sched_mod._deliverers.clear()
-
     async def test_skips_when_report_missing(self) -> None:
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
@@ -281,6 +283,11 @@ class TestFireScheduledReport:
         assert result["status"] == "sent"
         assert result["next_send_at"] == "2026-07-08T09:00:00+00:00"
 
+        update_params = session.execute.await_args_list[1].args[0].compile().params
+        assert "last_sent_at" in update_params
+        assert isinstance(update_params["last_sent_at"], datetime.datetime)
+        assert update_params["last_sent_at"].tzinfo is not None
+
     async def test_reraises_cancelled_error_from_generator(self) -> None:
         report_id = uuid.uuid4()
         org_id = uuid.uuid4()
@@ -319,11 +326,8 @@ class TestFireScheduledReport:
 
 class TestDeliverSlackWebhook:
     async def test_delivers_to_multiple_urls(self) -> None:
-        import respx
-        from httpx import Response
-
-        url1 = "https://hooks.slack.com/services/T1/B1/xxx"
-        url2 = "https://hooks.slack.com/services/T1/B2/yyy"
+        url1 = _SLACK_URL
+        url2 = _SLACK_URL_2
 
         with respx.mock:
             respx.post(url1).mock(return_value=Response(200, text="ok"))
@@ -338,12 +342,12 @@ class TestDeliverSlackWebhook:
         assert all(r["status"] == "delivered" for r in results)
 
     async def test_reports_failure(self) -> None:
-        import respx
-        from httpx import Response
+        url = _SLACK_URL
 
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
-
-        with respx.mock:
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            respx.mock,
+        ):
             respx.post(url).mock(return_value=Response(500, text="Internal Server Error"))
 
             results = await _deliver_slack_webhook({"text": "hello"}, [url])
@@ -355,9 +359,6 @@ class TestDeliverSlackWebhook:
 
 class TestDeliverWebhook:
     async def test_delivers_with_custom_headers(self) -> None:
-        import respx
-        from httpx import Response
-
         url = "https://hooks.example.com/report"
         config = {"urls": [url], "headers": {"X-Custom": "value"}}
 
@@ -373,10 +374,7 @@ class TestDeliverWebhook:
 
 class TestDeliverViaConfig:
     async def test_slack_webhook_type(self) -> None:
-        import respx
-        from httpx import Response
-
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         config = {"type": "slack_webhook", "webhook_urls": [url]}
 
         with respx.mock:
@@ -388,9 +386,6 @@ class TestDeliverViaConfig:
         assert results[0]["status"] == "delivered"
 
     async def test_webhook_type_default(self) -> None:
-        import respx
-        from httpx import Response
-
         url = "https://hooks.example.com/report"
         config = {"urls": [url]}
 
@@ -785,7 +780,7 @@ class TestDeliverToUrlsRejectsInvalid:
     async def test_invalid_url_does_not_block_valid_siblings(self) -> None:
         """Per-URL isolation: one bad URL must not prevent delivery to good URLs."""
         url = "https://hooks.example.com/x"
-        good_client = _deliver_client([_ok_resp(200)])
+        good_client = make_http_client([make_http_response(status_code=200)])
         with (
             patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
         ):
@@ -845,7 +840,7 @@ class TestDeliverToUrlsTimeout:
         """Call ``_deliver_to_urls`` with *request_timeout* and return the
         ``timeout`` the underlying ``httpx.AsyncClient`` was built with."""
         url = "https://hooks.example.com/x"
-        client = _deliver_client([_ok_resp(200)])
+        client = make_http_client([make_http_response(status_code=200)])
         with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
             client_cls.return_value.__aenter__.return_value = client
             await _deliver_to_urls([url], {"a": 1}, request_timeout=request_timeout)  # type: ignore[arg-type]
@@ -881,25 +876,12 @@ class TestDeliverToUrlsTimeout:
 # ---------------------------------------------------------------------------
 
 
-def _deliver_client(side_effect: list[object]) -> MagicMock:
-    client = AsyncMock()
-    client.post = AsyncMock(side_effect=side_effect)
-    return client
-
-
-def _ok_resp(status_code: int = 200) -> MagicMock:
-    resp = MagicMock()
-    resp.is_success = status_code < 400
-    resp.status_code = status_code
-    resp.text = "ok"
-    resp.headers = {}
-    return resp
-
-
 class TestDeliverToUrls:
     async def test_retries_429_then_succeeds(self) -> None:
         url = "https://hooks.example.com/x"
-        client = _deliver_client([_ok_resp(429), _ok_resp(200)])
+        client = make_http_client(
+            [make_http_response(is_success=False, status_code=429), make_http_response(status_code=200)]
+        )
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
@@ -913,7 +895,7 @@ class TestDeliverToUrls:
 
     async def test_exhausts_retries_on_500(self) -> None:
         url = "https://hooks.example.com/x"
-        client = _deliver_client([_ok_resp(500)] * 3)
+        client = make_http_client([make_http_response(is_success=False, status_code=500)] * 3)
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
@@ -928,7 +910,7 @@ class TestDeliverToUrls:
 
     async def test_does_not_retry_4xx(self) -> None:
         url = "https://hooks.example.com/x"
-        client = _deliver_client([_ok_resp(400)])
+        client = make_http_client([make_http_response(is_success=False, status_code=400)])
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
@@ -943,7 +925,7 @@ class TestDeliverToUrls:
 
     async def test_retries_transient_request_error_then_succeeds(self) -> None:
         url = "https://hooks.example.com/x"
-        client = _deliver_client([httpx.RequestError("connection refused"), _ok_resp(200)])
+        client = make_http_client([httpx.RequestError("connection refused"), make_http_response(status_code=200)])
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
@@ -957,7 +939,7 @@ class TestDeliverToUrls:
 
     async def test_reports_error_when_all_request_attempts_fail(self) -> None:
         url = "https://hooks.example.com/x"
-        client = _deliver_client([httpx.RequestError("down")] * 3)
+        client = make_http_client([httpx.RequestError("down")] * 3)
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
@@ -977,7 +959,7 @@ class TestDeliverToUrls:
             patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 0),
             patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
         ):
-            client_cls.return_value.__aenter__.return_value = _deliver_client([])
+            client_cls.return_value.__aenter__.return_value = make_http_client([])
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -991,14 +973,7 @@ class TestDeliverToUrls:
 
 
 class TestFireInvalidCron:
-    def setup_method(self) -> None:
-        from modulo.core.reports import scheduler as sched_mod
-
-        sched_mod._generators.clear()
-        sched_mod._formatters.clear()
-        sched_mod._deliverers.clear()
-
-    async def _make_ctx(self, report: MagicMock) -> MockSession:
+    async def _make_session_with_report(self, report: MagicMock) -> MockSession:
         select_result = MagicMock()
         select_result.scalar_one_or_none.return_value = report
         return MockSession(execute_side_effect=[select_result, MagicMock()])
@@ -1014,7 +989,7 @@ class TestFireInvalidCron:
         report.id = uuid.uuid4()
         report.organisation_id = uuid.uuid4()
 
-        session = await self._make_ctx(report)
+        session = await self._make_session_with_report(report)
 
         with (
             patch("modulo.core.reports.scheduler._get_engine"),
@@ -1034,5 +1009,5 @@ class TestFireInvalidCron:
         assert "invalid_cron" in result["reason"]
 
         update_stmt = session.execute.await_args_list[1].args[0]
-        update_values = {column.key: value.value for column, value in update_stmt._values.items()}
-        assert update_values["active"] is False
+        update_params = update_stmt.compile().params
+        assert update_params["active"] is False

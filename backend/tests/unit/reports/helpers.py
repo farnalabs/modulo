@@ -10,7 +10,8 @@ different shapes. Changes to how the scheduler / CRUD layer interacts with
 from __future__ import annotations
 
 import uuid
-from typing import Self
+from collections.abc import Iterator
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
 from modulo.db.models.scheduled_report import ScheduledReport
@@ -78,3 +79,58 @@ def make_report_mock(
     report.config_json = config_json or {}
     report.recipient_config = recipient_config or {}
     return report
+
+
+def make_cost_report_mock(*, schedule_type: str) -> MagicMock:
+    """Build the cost-report ScheduledReport double shared by the cost tests."""
+    report = MagicMock(spec=ScheduledReport)
+    report.id = uuid.uuid4()
+    report.organisation_id = uuid.uuid4()
+    report.active = True
+    report.report_type = "cost"
+    report.cron_expression = "0 0 * * *"
+    report.config_json = {
+        "period": "daily",
+        "group_by": "team",
+        "format": "csv",
+        "schedule_type": schedule_type,
+    }
+    report.recipient_config = {"type": "email", "emails": ["admin@example.com"]}
+    return report
+
+
+def make_http_client(side_effect: list[object] | None = None) -> MagicMock:
+    """Build an async HTTP client double whose ``post`` replays *side_effect*."""
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=side_effect or [])
+    return client
+
+
+def make_http_response(
+    *,
+    is_success: bool = True,
+    status_code: int = 200,
+    text: str = "ok",
+    headers: dict[str, str] | None = None,
+) -> MagicMock:
+    """Build a minimal ``httpx.Response``-shaped double."""
+    resp = MagicMock()
+    resp.is_success = is_success
+    resp.status_code = status_code
+    resp.text = text
+    resp.headers = {} if headers is None else headers
+    return resp
+
+
+def binary_expressions(clause: Any) -> Iterator[Any]:
+    """Yield every ``BinaryExpression`` nested inside a SQL clause.
+
+    Lets tests assert on SQL predicate structure (operator + column) without
+    matching on rendered SQL text.
+    """
+    from sqlalchemy.sql.elements import BinaryExpression
+
+    for child in clause.get_children():
+        if isinstance(child, BinaryExpression):
+            yield child
+        yield from binary_expressions(child)

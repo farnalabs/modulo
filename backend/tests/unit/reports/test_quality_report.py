@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -10,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from sqlalchemy.sql import operators
 
 from modulo.core.reports.quality_report import (
     _fmt_delta,
@@ -23,6 +26,10 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
+from tests.unit.reports.helpers import binary_expressions, make_http_response
+
+_SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
+_SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -81,14 +88,6 @@ _REPORT_DELIVERY = {
         "previous_week": {"total_evals": 0, "passed_evals": 0, "pass_rate": None},
     },
 }
-
-
-def _mock_resp(is_success: bool = True, status_code: int = 200, text: str = "ok") -> MagicMock:
-    resp = MagicMock()
-    resp.is_success = is_success
-    resp.status_code = status_code
-    resp.text = text
-    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -440,11 +439,6 @@ class TestSlackBlockKitSchema:
             "context",
         ]
 
-    def test_slack_payload_wrapper_round_trip(self) -> None:
-        blocks = self._blocks(_REPORT_WITH_DATA)
-        payload = {"blocks": blocks}
-        assert json.dumps(payload) == json.dumps(json.loads(json.dumps(payload)))
-
 
 # ---------------------------------------------------------------------------
 # deliver_quality_report
@@ -462,9 +456,6 @@ class TestWebhookSigning:
         assert _serialize_json_body(body) == b'{"blocks":[{"text":{"text":"hi","type":"mrkdwn"},"type":"section"}]}'
 
     def test_sign_payload_matches_known_vector(self) -> None:
-        import hashlib
-        import hmac
-
         from modulo.core.reports.scheduler import _sign_payload
 
         secret = "secret-key"
@@ -473,9 +464,6 @@ class TestWebhookSigning:
         assert _sign_payload(secret, body) == f"sha256={expected}"
 
     def test_sign_payload_accepts_non_string_secret(self) -> None:
-        import hashlib
-        import hmac
-
         from modulo.core.reports.scheduler import _sign_payload
 
         body = b'{"a":1}'
@@ -485,7 +473,7 @@ class TestWebhookSigning:
 
 class TestDeliverQualityReport:
     async def test_returns_success_for_2xx(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -494,7 +482,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -503,9 +491,13 @@ class TestDeliverQualityReport:
         assert results[0]["status_code"] == 200
         assert results[0]["error"] is None
 
-    async def test_returns_failure_for_non_2xx_after_exhaustion(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+    async def test_accepts_preformatted_json_string(self) -> None:
+        """The scheduler always hands ``deliver_quality_report`` the formatter's
+        JSON *string*, so that production branch must be exercised, not just the
+        raw-dict convenience path."""
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url]}
+        preformatted = format_slack_message(_REPORT_DELIVERY)
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
@@ -513,7 +505,31 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp(is_success=False, status_code=500, text="error"))
+            mock_client.post = AsyncMock(return_value=make_http_response())
+
+            results = await deliver_quality_report(preformatted, recipient_config)
+
+        assert results[0]["status"] == "delivered"
+        assert mock_client.post.await_args.kwargs["json"] == {"blocks": json.loads(preformatted)}
+
+    async def test_rejects_malformed_json_string(self) -> None:
+        with pytest.raises(json.JSONDecodeError):
+            await deliver_quality_report("not json", {"webhook_urls": [_SLACK_URL]})
+
+    async def test_returns_failure_for_non_2xx_after_exhaustion(self) -> None:
+        url = _SLACK_URL
+        recipient_config = {"webhook_urls": [url]}
+
+        with (
+            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__.return_value = mock_client
+            mock_client.post = AsyncMock(
+                return_value=make_http_response(is_success=False, status_code=500, text="error")
+            )
 
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -522,16 +538,19 @@ class TestDeliverQualityReport:
         assert results[0]["status_code"] == 500
 
     async def test_error_text_truncated_to_200_chars(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp(is_success=False, status_code=500, text="x" * 500))
+            mock_client.post = AsyncMock(
+                return_value=make_http_response(is_success=False, status_code=500, text="x" * 500)
+            )
 
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -539,20 +558,21 @@ class TestDeliverQualityReport:
         assert len(results[0]["error"]) == 200
 
     async def test_single_url_failure_does_not_block_others(self) -> None:
-        url1 = "https://hooks.slack.com/services/T1/B1/xxx"
-        url2 = "https://hooks.slack.com/services/T1/B2/yyy"
+        url1 = _SLACK_URL
+        url2 = _SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with (
             patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
             patch.object(httpx, "AsyncClient") as mock_client_cls,
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
             mock_client.post = AsyncMock(
                 side_effect=[
-                    _mock_resp(is_success=False, status_code=500, text="fail"),
-                    _mock_resp(),
+                    make_http_response(is_success=False, status_code=500, text="fail"),
+                    make_http_response(),
                 ]
             )
 
@@ -563,8 +583,8 @@ class TestDeliverQualityReport:
         assert results[1]["status"] == "delivered"
 
     async def test_request_error_caught_per_url(self) -> None:
-        url1 = "https://hooks.slack.com/services/T1/B1/xxx"
-        url2 = "https://hooks.slack.com/services/T1/B2/yyy"
+        url1 = _SLACK_URL
+        url2 = _SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
         with (
@@ -576,7 +596,7 @@ class TestDeliverQualityReport:
             mock_client.post = AsyncMock(
                 side_effect=[
                     httpx.RequestError("Connection refused"),
-                    _mock_resp(),
+                    make_http_response(),
                 ]
             )
 
@@ -592,7 +612,7 @@ class TestDeliverQualityReport:
     async def test_signed_delivery_sends_signature_header_and_bytes(self) -> None:
         from modulo.core.reports.scheduler import _serialize_json_body, _sign_payload
 
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         secret = "super-secret"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
 
@@ -602,7 +622,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -621,7 +641,7 @@ class TestDeliverQualityReport:
         assert kwargs["headers"]["X-Modulo-Signature"] == expected_sig
 
     async def test_unsigned_delivery_sends_json_without_signature(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -630,7 +650,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -642,10 +662,7 @@ class TestDeliverQualityReport:
         assert "X-Modulo-Signature" not in kwargs["headers"]
 
     async def test_signature_is_verifiable_from_raw_body(self) -> None:
-        import hashlib
-        import hmac
-
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         secret = "verify-me"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
 
@@ -655,7 +672,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -668,7 +685,7 @@ class TestDeliverQualityReport:
         assert received_signature == f"sha256={recomputed}"
 
     async def test_empty_signing_secret_treated_as_unsigned(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url], "signing_secret": ""}
 
         with (
@@ -677,7 +694,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -689,7 +706,7 @@ class TestDeliverQualityReport:
     # --- Configurable delivery timeout ---
 
     async def test_custom_timeout_used(self) -> None:
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 5.0}
 
         with (
@@ -698,7 +715,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -707,7 +724,7 @@ class TestDeliverQualityReport:
     async def test_default_timeout_used_when_absent(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
         with (
@@ -716,7 +733,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -725,7 +742,7 @@ class TestDeliverQualityReport:
     async def test_invalid_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": "abc"}
 
         with (
@@ -734,7 +751,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -743,7 +760,7 @@ class TestDeliverQualityReport:
     async def test_zero_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
 
-        url = "https://hooks.slack.com/services/T1/B1/xxx"
+        url = _SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 0}
 
         with (
@@ -752,7 +769,7 @@ class TestDeliverQualityReport:
         ):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=_mock_resp())
+            mock_client.post = AsyncMock(return_value=make_http_response())
 
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
@@ -935,3 +952,56 @@ class TestGenerateQualityReport:
 
         with pytest.raises(asyncio.CancelledError):
             await generate_quality_report(session, org_id)
+
+
+# ---------------------------------------------------------------------------
+# generate_quality_report — SQL predicate structure
+# ---------------------------------------------------------------------------
+
+
+class TestQualityReportSqlPredicates:
+    async def test_weekly_rollup_scopes_team_and_excludes_guardrails(self) -> None:
+        """Pin the two load-bearing predicates the report's numbers depend on:
+        the weekly roll-up must exclude team-scoped rows (``team_id IS NULL``),
+        and the eval summary must exclude guardrail results (``eval_id NOT IN
+        ...``). Dropping either would silently change every reported figure."""
+        org_id = uuid.uuid4()
+        statements: list[object] = []
+
+        def _one_result(**cols: object) -> MagicMock:
+            result = MagicMock()
+            result.one.return_value = MagicMock(**cols)
+            return result
+
+        def _all_result(rows: list) -> MagicMock:
+            result = MagicMock()
+            result.all.return_value = rows
+            return result
+
+        queue = [
+            _one_result(run_count=0, total_spend=0.0),
+            _one_result(run_count=0, total_spend=0.0),
+            _one_result(total_evals=0, passed_evals=0),
+            _one_result(total_evals=0, passed_evals=0),
+            _all_result([]),
+            _all_result([]),
+        ]
+
+        session = AsyncMock()
+
+        async def _record(stmt: object) -> MagicMock:
+            statements.append(stmt)
+            return queue.pop(0)
+
+        session.execute = AsyncMock(side_effect=_record)
+
+        await generate_quality_report(session, org_id)
+
+        predicates = [pred for stmt in statements for pred in binary_expressions(stmt.whereclause)]
+        assert any(
+            pred.operator is operators.is_ and getattr(pred.left, "name", None) == "team_id" for pred in predicates
+        )
+        assert any(
+            pred.operator is operators.not_in_op and getattr(pred.left, "name", None) == "eval_id"
+            for pred in predicates
+        )

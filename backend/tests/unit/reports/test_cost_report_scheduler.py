@@ -9,30 +9,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import operators
 
 from modulo.core.email_service import EmailSendingError
 from modulo.core.reports.cost_report import deliver_cost_report, format_cost_report, generate_cost_report
 from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
-from modulo.db.models.scheduled_report import ScheduledReport
-from tests.unit.reports.helpers import MockSession, MockSessionFactory
-
-
-def _report(*, schedule_type: str) -> MagicMock:
-    report = MagicMock(spec=ScheduledReport)
-    report.id = uuid.uuid4()
-    report.organisation_id = uuid.uuid4()
-    report.active = True
-    report.report_type = "cost"
-    report.cron_expression = "0 0 * * *"
-    report.config_json = {
-        "period": "daily",
-        "group_by": "team",
-        "format": "csv",
-        "schedule_type": schedule_type,
-    }
-    report.recipient_config = {"type": "email", "emails": ["admin@example.com"]}
-    return report
+from tests.unit.reports.helpers import (
+    MockSession,
+    MockSessionFactory,
+    binary_expressions,
+    make_cost_report_mock,
+)
 
 
 def test_cost_report_generator_is_registered() -> None:
@@ -76,6 +64,12 @@ async def test_generate_format_and_deliver_cost_report() -> None:
         ({"period": "daily", "group_by": "department", "format": "csv"}, "grouping"),
         ({"period": "daily", "group_by": "team", "format": "xml"}, "format"),
         ({}, "period"),
+    ],
+    ids=[
+        "unsupported-period-hourly",
+        "unsupported-group-by-department",
+        "unsupported-format-xml",
+        "empty-config",
     ],
 )
 async def test_generate_cost_report_rejects_unsupported_config(config: dict[str, str], match: str) -> None:
@@ -136,6 +130,13 @@ def test_format_cost_report_rejects_unknown_format() -> None:
         ({"type": "email", "emails": [""]}, "non-empty"),
         ({"type": "email", "emails": ["admin@example.com", 42]}, "non-empty"),
     ],
+    ids=[
+        "non-email-type",
+        "emails-not-a-list",
+        "emails-empty-list",
+        "emails-blank-only",
+        "emails-non-string-entry",
+    ],
 )
 async def test_deliver_cost_report_rejects_invalid_recipients(recipient_config: dict[str, object], match: str) -> None:
     payload = {"subject": "Cost", "body_html": "<p />", "body_text": "cost"}
@@ -171,7 +172,7 @@ async def test_due_report_executes_and_transitions_schedule(
     expected_active: bool,
     expected_next: datetime.datetime | None,
 ) -> None:
-    report = _report(schedule_type=schedule_type)
+    report = make_cost_report_mock(schedule_type=schedule_type)
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
     session = MockSession([selected, MagicMock()])
@@ -195,13 +196,13 @@ async def test_due_report_executes_and_transitions_schedule(
     generator.assert_awaited_once()
     deliverer.assert_awaited_once()
     update_statement = session.execute.await_args_list[1].args[0]
-    update_values = {column.key: value.value for column, value in update_statement._values.items()}
-    assert update_values["active"] is expected_active
-    assert update_values["next_send_at"] == expected_next
+    update_params = update_statement.compile().params
+    assert update_params["active"] is expected_active
+    assert update_params["next_send_at"] == expected_next
 
 
 async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
-    report = _report(schedule_type="one_time")
+    report = make_cost_report_mock(schedule_type="one_time")
     selected = MagicMock()
     selected.scalar_one_or_none.return_value = report
     session = MockSession([selected])
@@ -222,6 +223,16 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     assert session.execute.await_count == 1
 
 
+def _filters_on_cost_report_type(statement: object) -> bool:
+    """Structural check: the statement's WHERE clause pins report_type == 'cost'."""
+    return any(
+        pred.operator is operators.eq
+        and getattr(pred.left, "name", None) == "report_type"
+        and getattr(pred.right, "value", None) == "cost"
+        for pred in binary_expressions(statement.whereclause)
+    )
+
+
 async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     listed = MagicMock()
     listed.scalars.return_value.all.return_value = []
@@ -229,8 +240,7 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
     org_id = uuid.uuid4()
 
     assert not await list_scheduled_reports(cast(AsyncSession, session), organisation_id=org_id)
-    list_sql = str(session.execute.await_args_list[0].args[0])
-    assert "scheduled_reports.report_type =" in list_sql
+    assert _filters_on_cost_report_type(session.execute.await_args_list[0].args[0])
 
     missing = MagicMock()
     missing.scalar_one_or_none.return_value = None
@@ -241,6 +251,5 @@ async def test_cost_crud_filters_and_cannot_delete_quality_report() -> None:
         organisation_id=org_id,
     )
     assert deleted is False
-    delete_lookup_sql = str(session.execute.await_args_list[0].args[0])
-    assert "scheduled_reports.report_type =" in delete_lookup_sql
+    assert _filters_on_cost_report_type(session.execute.await_args_list[0].args[0])
     session.delete.assert_not_awaited()
