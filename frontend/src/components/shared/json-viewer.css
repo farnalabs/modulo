@@ -21,9 +21,12 @@
   color: hsl(var(--primary));
 }
 
+/* FAR-1605: --warning is a fill/accent hue — ~2.14:1 amber-on-white in light
+   mode, below WCAG AA 4.5:1. --warning-text (FAR-1587) keeps dark themes
+   identical and darkens light mode to 5.40:1. */
 .json-viewer .vjs-value-null,
 .json-viewer .vjs-value-undefined {
-  color: hsl(var(--warning));
+  color: hsl(var(--warning-text));
 }
 
 .json-viewer .vjs-comment {
