@@ -29,7 +29,7 @@ from pydantic import (
     model_validator,
 )
 from sqlalchemy import Select, select
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_PIPELINE_NOT_FOUND, MSG_THIS_FEATURE_NOT_AVAILABLE
@@ -3978,6 +3978,12 @@ class PipelineCloneRequest(BaseModel):
     )
 
 
+def _is_pipeline_name_conflict(exc: IntegrityError) -> bool:
+    """True when ``exc`` is the (organisation_id, name) unique violation on pipelines."""
+    text_ = str(exc.orig if exc.orig is not None else exc).lower()
+    return "uq_pipelines_org_name" in text_ or "pipelines.name" in text_
+
+
 async def _clone_pipeline_into_org(
     session: AsyncSession,
     *,
@@ -4035,15 +4041,33 @@ async def _clone_pipeline_into_org(
         # after step (a) commits (see the docstring's ordering note).
         await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
 
-    cloned = await clone_pipeline(
-        session,
-        org_id=org_id,
-        pipeline_id=pipeline_id,
-        account_id=account_id,
-        org_role=org_role,
-        new_name=requested_name,
-        _on_step_a_committed=_in_txn_team_gate,
-    )
+    try:
+        cloned = await clone_pipeline(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            org_role=org_role,
+            new_name=requested_name,
+            _on_step_a_committed=_in_txn_team_gate,
+        )
+    except IntegrityError as exc:
+        # #1178: the availability check above cannot lock a not-yet-existing
+        # row, so two concurrent same-name clones can both pass it. The
+        # (organisation_id, name) unique constraint is the real guard; map its
+        # violation to a clean 409 instead of a 500. Other integrity errors
+        # propagate to ``handle_db_errors`` unchanged.
+        if not _is_pipeline_name_conflict(exc):
+            raise
+        logger.warning(
+            "Copy aborted: name '%s' taken concurrently in org %s",
+            _sanitise_log_value(target_name),
+            org_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(f"pipeline_copy_failed: A pipeline named '{target_name}' already exists in this organisation"),
+        ) from None
     if cloned is None:
         logger.warning("Copy aborted: source pipeline %s disappeared during copy", pipeline_id)
         raise HTTPException(

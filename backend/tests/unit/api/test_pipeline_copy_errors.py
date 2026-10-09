@@ -9,9 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
+from sqlalchemy.exc import IntegrityError
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
+from modulo.api.routes.pipelines import PipelineResponse
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -274,3 +277,105 @@ def test_clone_pipeline_disappears_returns_404(client: TestClient) -> None:
     body = resp.json()
     msg = body.get("detail", body.get("error", {}).get("message", ""))
     assert "disappeared" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/pipelines/{id}/clone - concurrent same-name race (#1178)
+# ---------------------------------------------------------------------------
+
+
+def _clone_response() -> PipelineResponse:
+    return PipelineResponse(
+        id=uuid.uuid4(),
+        organisation_id=_ORG_ID,
+        name="Dup",
+        description=None,
+        visibility="org",
+        max_concurrent_runs=5,
+        lock_wait_timeout_seconds=300,
+        node_timeout_seconds=300,
+        run_context_defaults={},
+        account_id=_USER_ID,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[Response]:
+    source = _make_pipeline()
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=outcomes),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+        patch("modulo.api.routes.pipelines.append_audit_event"),
+        patch("modulo.api.routes.pipelines._pipeline_response", side_effect=lambda _p: _clone_response()),
+    ):
+        return [client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"}) for _ in outcomes]
+
+
+def test_clone_pipeline_concurrent_same_name_yields_one_success_one_409(client: TestClient) -> None:
+    """Both requests pass the availability check; the unique constraint rejects the
+    loser with the *named* conflict 409, not ``handle_db_errors``' generic 409."""
+    violation = IntegrityError(
+        "INSERT INTO pipelines", {}, Exception('duplicate key value violates unique constraint "uq_pipelines_org_name"')
+    )
+    winner = _make_pipeline()
+    winner.id = uuid.uuid4()
+    winner.name = "Dup"
+
+    responses = _clone_with_outcomes(client, [winner, violation])
+
+    by_status = {r.status_code: r for r in responses}
+    assert sorted(by_status) == [201, 409]
+    conflict = by_status[409]
+    msg = conflict.json().get("detail", "")
+    assert "already exists" in msg
+    assert "Resource conflict" not in msg
+
+
+def test_clone_pipeline_name_race_409_detail_names_conflict(client: TestClient) -> None:
+    violation = IntegrityError("INSERT INTO pipelines", {}, Exception("uq_pipelines_org_name"))
+    source = _make_pipeline()
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=violation),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"})
+
+    assert resp.status_code == 409
+    body = resp.json()
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
+    assert "already exists" in msg
+
+
+def test_clone_pipeline_unrelated_integrity_error_is_not_reported_as_name_conflict(
+    client: TestClient,
+) -> None:
+    """An IntegrityError that is NOT the (org, name) unique violation must not be
+    mapped to the clone's name-conflict 409; it re-raises to ``handle_db_errors``'
+    generic integrity arm (409 "Resource conflict") unchanged."""
+    violation = IntegrityError(
+        "INSERT INTO pipelines",
+        {},
+        Exception('null value in column "organisation_id" violates not-null constraint'),
+    )
+    source = _make_pipeline()
+    with (
+        patch("modulo.api.routes.pipelines.get_pipeline", return_value=source),
+        patch("modulo.api.routes.pipelines.check_pipeline_name_available", return_value=True),
+        patch("modulo.api.routes.pipelines.clone_pipeline", side_effect=violation),
+        patch("modulo.api.routes.pipelines.set_rls_org"),
+        patch("modulo.api.routes.pipelines.set_rls_user_context"),
+    ):
+        resp = client.post(f"/api/v1/pipelines/{_PIPELINE_ID}/clone", json={"name": "Dup"})
+
+    assert resp.status_code == 409
+    body = resp.json()
+    msg = body.get("detail", body.get("error", {}).get("message", ""))
+    assert msg == "Resource conflict. The operation could not be completed."
+    assert "already exists" not in msg
