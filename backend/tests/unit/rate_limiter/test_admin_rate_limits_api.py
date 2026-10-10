@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.unit.rate_limiter.helpers import make_settings
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.middleware import rate_limiter as rl_mod
@@ -69,13 +70,7 @@ def client() -> Generator[TestClient, None, None]:
         yield mock_session
 
     def override_settings() -> Settings:
-        return Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-            redis_url="",
-        )
+        return make_settings(redis_url="")
 
     app = FastAPI()
     app.include_router(router)

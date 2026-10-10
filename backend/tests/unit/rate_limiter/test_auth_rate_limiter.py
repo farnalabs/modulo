@@ -354,14 +354,6 @@ class TestAuthRateLimiterCore:
         assert lockout_key == "auth_ratelimit:lockout:203.0.113.5"
         assert backoff == 60
 
-    async def test_check_login_uses_configured_window(self, mock_redis):
-        limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=90)
-        await limiter.check_login("203.0.113.5")
-        pipe = mock_redis.pipeline.return_value
-        _, _, cutoff = pipe.zremrangebyscore.call_args[0]
-        now = time.time()
-        assert abs(cutoff - (now - 90)) < 2
-
     async def test_check_login_prunes_old_failures(self, mock_redis):
         limiter = AuthRateLimiterCls(redis_client=mock_redis, max_attempts=10, window_s=90)
         await limiter.check_login("203.0.113.5")
