@@ -763,6 +763,42 @@ def test_test_trigger_storage_exhausted_returns_503(client: TestClient) -> None:
     assert resp.json().get("type") == "urn:problem:modulo:storage_exhausted"
 
 
+def test_test_trigger_snapshot_lock_busy_returns_503(client: TestClient) -> None:
+    """FAR-527 parity: losing the per-pipeline snapshot advisory lock race while
+    creating the manual test run's snapshot must surface an honest, retryable
+    503 — never a generic 500 (matches the webhook + MCP trigger paths)."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    trigger = _make_mock_trigger(trigger_type="manual")
+    with (
+        patch("modulo.api.routes.triggers.set_rls_org"),
+        patch(
+            "modulo.api.routes.triggers.create_snapshot_from_live_graph",
+            new=AsyncMock(side_effect=SnapshotLockNotAvailableError("busy")),
+        ),
+        patch("modulo.api.routes.triggers.create_run", new_callable=AsyncMock) as create_run_mock,
+    ):
+        session = _make_mock_session()
+        session.execute = AsyncMock(return_value=_make_trigger_result([trigger]))
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield session
+
+        client.app.dependency_overrides[get_db_session] = override_session
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/test",
+            json={"payload": {}},
+        )
+        client.app.dependency_overrides[get_db_session] = app.dependency_overrides[get_db_session]
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail
+    assert "retry" in detail.lower()
+    # No run is created once the snapshot cannot be produced.
+    create_run_mock.assert_not_called()
+
+
 def test_list_pipeline_triggers_returns_200(client: TestClient) -> None:
     trigger = _make_mock_trigger()
     with (
