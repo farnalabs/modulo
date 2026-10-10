@@ -1460,6 +1460,17 @@ def _start_ui_engine(request: pytest.FixtureRequest, ctx: dict, tool_calls: list
                 new_callable=AsyncMock,
                 return_value=config,
             ),
+            # Force the single-worker in-memory registry for the scenario. In
+            # CI REDIS_URL is set, so the unpatched ``_get_registry`` returns a
+            # process-wide ``AssistantRedisRegistry`` whose asyncio connections
+            # bind to the first event loop that uses them. This harness drives
+            # the engine on a fresh event loop per scenario and asserts on the
+            # in-memory events the routes signal, so the shared Redis singleton
+            # gets reused across closed loops -> ``Event loop is closed`` /
+            # ``Future attached to a different loop``. The in-memory
+            # registry is the real default path when REDIS_URL is unset
+            # (assistant.py:110-116), so this exercises production flow logic.
+            patch.object(assistant_routes, "_get_registry", return_value=None),
         ):
             stream_ctx = assistant_routes._StreamContext(
                 db_session=engine_db,
