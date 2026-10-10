@@ -2181,3 +2181,23 @@ def test_update_connector_resolves_secretref_credential(client: TestClient) -> N
     ciphertext = updates["credentials_ciphertext"]
     assert isinstance(ciphertext, bytes)
     assert Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode() == '{"token": "rotated"}'
+
+
+def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> None:
+    """FAR-1640: PATCH with an unresolvable secretref:// is a typed 422, never a write."""
+    stub = _StubVaultBackend({})
+    with (
+        patch("modulo.api.routes.connectors.update_connector_instance") as update_mock,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": "secretref://vault/missing"},
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "credential_reference_error" in detail
+    assert "vault/missing" in detail
+    update_mock.assert_not_awaited()

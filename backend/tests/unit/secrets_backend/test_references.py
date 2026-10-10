@@ -7,6 +7,8 @@ fall back to treating a reference as a literal credential.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from modulo.core.secrets_backend import (
@@ -82,6 +84,12 @@ class TestParseSecretRef:
             parse_secret_ref("secretref://vault/open ai")
         assert exc_info.value.key == "vault/open ai"
 
+    def test_non_string_reference_raises(self) -> None:
+        with pytest.raises(CredentialReferenceError) as exc_info:
+            parse_secret_ref(123)  # type: ignore[arg-type]
+        assert not exc_info.value.key
+        assert "must be a string" in exc_info.value.reason
+
 
 class TestResolveCredentialReference:
     async def test_resolves_value_under_backend(self) -> None:
@@ -124,6 +132,12 @@ class TestResolveCredentialReference:
         assert detail[0]["type"] == "credential_reference_error"
         assert detail[0]["loc"] == ["body", "api_key"]
         assert "vault/missing" in detail[0]["msg"]
+
+    async def test_cancelled_error_propagates_unwrapped(self) -> None:
+        """A cancellation is re-raised, not swallowed into a typed reference error."""
+        backend = _FakeBackend({}, error=asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await resolve_credential_reference(backend, "secretref://vault/openai")
 
 
 class TestResolveCredential:
