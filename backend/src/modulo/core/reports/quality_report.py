@@ -63,6 +63,11 @@ async def generate_quality_report(
             .where(
                 OrgDailyRunCount.organisation_id == org_id,
                 OrgDailyRunCount.run_date >= current_start,
+                # Org-level rows only: the org row already includes team-owned
+                # runs (cost_controller writes org row + team breakdown), so
+                # summing team rows too would double-count. Matches the
+                # summary's _query_weekly_agg scoping.
+                OrgDailyRunCount.team_id.is_(None),
             )
             .group_by(OrgDailyRunCount.run_date)
             .order_by(OrgDailyRunCount.run_date)

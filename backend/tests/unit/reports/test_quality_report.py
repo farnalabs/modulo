@@ -8,10 +8,12 @@ import hmac
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.sql import operators
 
 from modulo.core.reports.quality_report import (
@@ -26,6 +28,10 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
+from modulo.db.models.base import Base
+from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval_result import EvalResult
 from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
@@ -1015,6 +1021,11 @@ class TestQualityReportSqlPredicates:
         assert has_predicate(statements[0].whereclause, operators.is_, "team_id")
         assert has_predicate(statements[1].whereclause, operators.is_, "team_id")
 
+        # The daily run-count query is org-level scoped too — without the
+        # team_id filter it sums the org row PLUS every team row, and trend[]
+        # double-counts against the org-level-filtered summary.
+        assert has_predicate(statements[4].whereclause, operators.is_, "team_id")
+
         # Both eval summaries and the daily eval rates exclude guardrail results.
         for statement in (statements[2], statements[3], statements[5]):
             assert has_predicate(statement.whereclause, operators.not_in_op, "eval_id")
@@ -1022,3 +1033,74 @@ class TestQualityReportSqlPredicates:
         # Every statement is tenant-scoped to the requested organisation.
         for statement in statements:
             assert has_predicate(statement.whereclause, operators.eq, "organisation_id", org_id)
+
+
+# ---------------------------------------------------------------------------
+# generate_quality_report — daily trend org-level scoping (real DB)
+# ---------------------------------------------------------------------------
+
+
+class TestDailyTrendOrgLevelScope:
+    """trend[] must sum org-level ledger rows only (``team_id IS NULL``).
+
+    ``check_and_record_spend`` writes the org row AND a team row for a
+    team-owned run, so the org row already includes team runs. A daily query
+    without the ``team_id IS NULL`` filter sums both and double-counts,
+    making trend[] disagree with the report's own summary (which is filtered
+    via ``_query_weekly_agg``). These tests run against a real in-memory
+    SQLite DB — the double-count is in the SQL SUM, so a mocked session
+    cannot demonstrate it.
+    """
+
+    async def test_trend_excludes_team_rows_and_matches_summary(self) -> None:
+        eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with eng.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[
+                        OrgDailyRunCount.__table__,
+                        EvalResult.__table__,
+                        EvalDefinition.__table__,
+                    ],
+                )
+            )
+        try:
+            maker = async_sessionmaker(eng, expire_on_commit=False)
+            org_id = uuid.uuid4()
+            today = datetime.now(UTC).date()
+            async with maker() as session, session.begin():
+                # Org-level row (team_id IS NULL): 10 runs, $5.00.
+                session.add(
+                    OrgDailyRunCount(
+                        organisation_id=org_id,
+                        team_id=None,
+                        run_date=today,
+                        run_count=10,
+                        total_spend_usd=Decimal("5.00"),
+                    )
+                )
+                # Team-scoped row for the SAME date: 4 runs, $2.00.
+                session.add(
+                    OrgDailyRunCount(
+                        organisation_id=org_id,
+                        team_id=uuid.uuid4(),
+                        run_date=today,
+                        run_count=4,
+                        total_spend_usd=Decimal("2.00"),
+                    )
+                )
+            async with maker() as session:
+                report = await generate_quality_report(session, org_id)
+        finally:
+            await eng.dispose()
+
+        entry = next(e for e in report["trend"] if e["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert entry["run_count"] == 10
+        assert entry["token_spend_usd"] == 5.0
+        # Trend agrees with the summary (both org-level scoped).
+        assert report["summary"]["total_runs"] == 10
+        assert report["summary"]["total_cost_usd"] == 5.0
+        assert entry["run_count"] == report["summary"]["total_runs"]
+        assert entry["token_spend_usd"] == report["summary"]["total_cost_usd"]
