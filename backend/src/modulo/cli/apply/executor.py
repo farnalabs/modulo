@@ -140,7 +140,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"GET {path} returned invalid JSON: {exc}",
@@ -160,7 +160,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"POST {path} returned invalid JSON: {exc}",
@@ -180,7 +180,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"PATCH {path} returned invalid JSON: {exc}",
@@ -200,7 +200,7 @@ class ApplyExecutor:
                 path=path,
             )
         try:
-            return cast("dict[str, Any]", response.json())
+            return cast(dict[str, Any], response.json())
         except ValueError as exc:
             raise ApplyHttpError(
                 f"PUT {path} returned invalid JSON: {exc}",

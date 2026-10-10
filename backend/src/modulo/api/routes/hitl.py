@@ -99,6 +99,11 @@ from modulo.settings import get_settings
 
 _CODE_HITL_APPROVE = "hitl.approve"
 
+_CODE_HITL_RUN_HITL_MANAGER = "hitl._run_hitl_manager"
+_CODE_HITL_LIST_RUN_PENDING_REVIEWS = "hitl.list_run_pending_reviews"
+_CODE_HITL_LIST_ORG_PENDING_REVIEWS = "hitl.list_org_pending_reviews"
+_CODE_HITL_LIST_ORG_REVIEWS = "hitl.list_org_reviews"
+
 logger = logging.getLogger(__name__)
 
 
@@ -718,9 +723,9 @@ async def claim_review(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except PendingRollbackError as exc:
-        _raise_pending_rollback_error(exc, "hitl.claim_review")
+        _raise_pending_rollback_error(exc, _CODE_HITL_CLAIM_REVIEW)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "hitl.claim_review")
+        raise_session_contract_error(exc, _CODE_HITL_CLAIM_REVIEW)
         logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -862,16 +867,16 @@ async def _run_hitl_manager(
         await _emit_human_only_denial_audit(exc)
         raise
     except ProgrammingError as exc:
-        logger.exception("hitl._run_hitl_manager")
+        logger.exception(_CODE_HITL_RUN_HITL_MANAGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except PendingRollbackError as exc:
-        _raise_pending_rollback_error(exc, "hitl._run_hitl_manager")
+        _raise_pending_rollback_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "hitl._run_hitl_manager")
-        logger.exception("hitl._run_hitl_manager")
+        raise_session_contract_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
+        logger.exception(_CODE_HITL_RUN_HITL_MANAGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1299,7 +1304,7 @@ async def submit_manual_output(
 @router.get(
     "/runs/{run_id}/hitl/pending",
 )
-@handle_db_errors("hitl.list_run_pending_reviews")
+@handle_db_errors(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
 async def list_run_pending_reviews(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1373,16 +1378,16 @@ async def list_run_pending_reviews(
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_run_pending_reviews")
+        logger.exception(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except PendingRollbackError as exc:
-        _raise_pending_rollback_error(exc, "hitl.list_run_pending_reviews")
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_RUN_PENDING_REVIEWS)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "hitl.list_run_pending_reviews")
-        logger.exception("hitl.list_run_pending_reviews")
+        raise_session_contract_error(exc, _CODE_HITL_LIST_RUN_PENDING_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_RUN_PENDING_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1414,7 +1419,7 @@ async def list_run_pending_reviews(
 @router.get(
     "/hitl/pending",
 )
-@handle_db_errors("hitl.list_org_pending_reviews")
+@handle_db_errors(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
 async def list_org_pending_reviews(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_PERM_HITL_LIST),
@@ -1459,16 +1464,16 @@ async def list_org_pending_reviews(
             # stamp, resolved inside the same transaction/RLS context.
             claimant_names = await _load_claimant_name_map(session, gates)
     except ProgrammingError as exc:
-        logger.exception("hitl.list_org_pending_reviews")
+        logger.exception(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except PendingRollbackError as exc:
-        _raise_pending_rollback_error(exc, "hitl.list_org_pending_reviews")
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_ORG_PENDING_REVIEWS)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "hitl.list_org_pending_reviews")
-        logger.exception("hitl.list_org_pending_reviews")
+        raise_session_contract_error(exc, _CODE_HITL_LIST_ORG_PENDING_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_ORG_PENDING_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
@@ -1506,7 +1511,7 @@ async def list_org_pending_reviews(
 @router.get(
     "/hitl/reviews",
 )
-@handle_db_errors("hitl.list_org_reviews")
+@handle_db_errors(_CODE_HITL_LIST_ORG_REVIEWS)
 async def list_org_reviews(
     status_filter: ReviewStatusFilter = Query(default="undecided", alias="status"),
     page: int = Query(default=1, ge=1),
@@ -1573,16 +1578,16 @@ async def list_org_reviews(
                 session, gates=gates, organisation_id=principal.organisation_id
             )
     except ProgrammingError as exc:
-        logger.exception("hitl.list_org_reviews")
+        logger.exception(_CODE_HITL_LIST_ORG_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except PendingRollbackError as exc:
-        _raise_pending_rollback_error(exc, "hitl.list_org_reviews")
+        _raise_pending_rollback_error(exc, _CODE_HITL_LIST_ORG_REVIEWS)
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "hitl.list_org_reviews")
-        logger.exception("hitl.list_org_reviews")
+        raise_session_contract_error(exc, _CODE_HITL_LIST_ORG_REVIEWS)
+        logger.exception(_CODE_HITL_LIST_ORG_REVIEWS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_ERROR_PLEASE_TRY,
