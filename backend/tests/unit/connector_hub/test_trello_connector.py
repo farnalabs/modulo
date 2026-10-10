@@ -319,7 +319,7 @@ async def test_query_transport_error_detail_redacts_credentials(connector):
 
 
 @respx.mock
-async def test_health_check_transport_error_detail_redacts_credentials(connector):
+async def test_health_check_transport_error_raises_request_error(connector):
     """FAR-507: a transport error escaping ``health_check`` is a bare ``httpx``
     error.
 

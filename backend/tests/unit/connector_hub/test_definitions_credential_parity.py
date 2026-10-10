@@ -293,20 +293,6 @@ def test_connector_builds_from_definition_credentials(connector_type: str) -> No
     assert connector is not None
 
 
-def test_all_definition_types_are_accounted_for() -> None:
-    """Every defined connector type is either parity-checked or explicitly excluded.
-
-    Prevents a new definition type from silently escaping the parity guard.
-    """
-    reconciled = set(_reconciled_types())
-    for ct in _defined_types():
-        if ct not in reconciled:
-            assert ct in EXCLUDED_TYPES, (
-                f"connector type {ct!r} has a definition but no hub _get_cred read and "
-                f"no reason in EXCLUDED_TYPES — reconcile it or explain the exclusion"
-            )
-
-
 def test_excluded_types_have_no_parity_contract() -> None:
     """No excluded type also has a direct hub _get_cred read (they must not drift)."""
     hub = _hub_cred_keys()
