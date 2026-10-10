@@ -751,9 +751,15 @@ class TestScopeCanonicalisation:
 
     def test_resolve_scope_requires_delegability(self) -> None:
         assert resolve_scope("trigger:run") == "run.trigger"
-        # human_only HITL canonicalises (vocabulary) but is never grantable.
+        # A still-excluded key (credential lifecycle / system administration)
+        # canonicalises but is NOT grantable.
+        assert canonicalise_scope("system.config.manage") == "system.config.manage"
+        assert resolve_scope("system.config.manage") is None
+        # HITL decisions are DELEGABLE (decision record 2026-10-09): the alias
+        # canonicalises AND resolves — the boundary for them is the gate's
+        # runtime ``human_only`` policy, not this vocabulary.
         assert canonicalise_scope("hitl:review") == "hitl.review"
-        assert resolve_scope("hitl:review") is None
+        assert resolve_scope("hitl:review") == "hitl.review"
 
 
 class TestNormalizeScopes:
@@ -786,8 +792,7 @@ class TestNormalizeScopes:
             "org.delete",
             "org.authz_enforce.manage",
             "org.guardrails.kill_switch.manage",
-            "hitl.review",
-            "hitl.approve",
+            "errors.resolve_instance",
         ],
         ids=[
             "system_config_manage",
@@ -797,17 +802,35 @@ class TestNormalizeScopes:
             "org_delete",
             "org_authz_enforce_manage",
             "org_guardrails_kill_switch_manage",
-            "hitl_review",
-            "hitl_approve",
+            "errors_resolve_instance",
         ],
     )
     def test_excluded_permissions_are_rejected(self, scope: str) -> None:
         with pytest.raises(InvalidScopeError, match=scope):
             normalize_scopes(scope)
 
-    def test_excluded_alias_is_rejected(self) -> None:
-        with pytest.raises(InvalidScopeError, match="hitl:review"):
-            normalize_scopes("hitl:review")
+    @pytest.mark.parametrize(
+        "scope",
+        ["hitl.review", "hitl.claim", "hitl.approve", "hitl.reject", "hitl.deliver_manual"],
+        ids=["hitl_review", "hitl_claim", "hitl_approve", "hitl_reject", "hitl_deliver_manual"],
+    )
+    def test_hitl_decision_scopes_are_accepted(self, scope: str) -> None:
+        """Decision record 2026-10-09: HITL decisions are delegable.
+
+        A human-linked credential (a human's OAuth connection) may be granted
+        them; the gate's runtime ``human_only`` policy is the boundary
+        (``mcp_server._check_human_only_gate`` / ``routes/hitl``), not this
+        vocabulary. Pinned so a regression back to a registry bar fails here.
+        """
+        assert normalize_scopes(scope) == [scope]
+        assert resolve_scope(scope) == scope
+
+    def test_legacy_aliases_are_accepted_input(self) -> None:
+        # All three pre-FAR-1476 spellings canonicalise to a DELEGABLE key,
+        # so none of them is rejected at the registration boundary.
+        assert normalize_scopes("hitl:review") == ["hitl.review"]
+        assert normalize_scopes("trigger:run") == ["run.trigger"]
+        assert normalize_scopes("library:browse") == ["resource.read_only"]
 
     def test_unresolvable_scope_is_not_silently_dropped(self) -> None:
         with pytest.raises(InvalidScopeError, match="bogus"):

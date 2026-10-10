@@ -100,9 +100,12 @@ def resolve_scope(scope: str) -> str | None:
 
     Returns the registry permission key a credential may be granted, or
     ``None`` when the scope is unknown OR falls in the registry's exclusion
-    set (``is_delegable``: human_only HITL decisions, credential lifecycle
-    ``api_key.*`` / ``oauth.client.*``, ``system.*``, ``org.delete`` and the
-    break-glass controls). The exclusion is read LIVE on every call, so
+    set (``is_delegable``: ``org.delete``, the break-glass controls,
+    instance-scope ``errors.resolve_instance``, and the prefix-excluded
+    credential lifecycle ``api_key.*`` / ``oauth.client.*`` and ``system.*``).
+    The HITL decision keys are deliberately DELEGABLE (decision record
+    2026-10-09): the boundary for them is the gate's runtime ``human_only``
+    policy, not this vocabulary. The exclusion is read LIVE on every call, so
     tightening it applies immediately — never a snapshot at mint time.
     """
     canonical = canonicalise_scope(scope)
@@ -1091,8 +1094,8 @@ def normalize_scopes(requested: str) -> list[str]:
     Every entry must resolve to exactly one DELEGABLE
     :data:`~modulo.auth.permissions.PERMISSIONS` key — the legacy aliases in
     :data:`SCOPE_ALIASES` are canonicalised first. An unknown scope, or a
-    scope in the registry's exclusion set (human_only HITL, credential
-    lifecycle, ``system.*``, ``org.delete``, break-glass), raises
+    scope in the registry's exclusion set (``org.delete``, break-glass,
+    ``api_key.*`` / ``oauth.client.*`` / ``system.*``), raises
     :class:`InvalidScopeError`: fail closed, never dropped-and-widened and
     never defaulted wider. Duplicates collapse; the result is sorted.
     """

@@ -143,45 +143,85 @@
 
       <fieldset>
         <legend class="mb-1 block text-sm font-medium">{{ $t('views.SettingsMcpView.scopes') }}</legend>
-        <label for="settingsmcpview-oauth-scope-trigger-run" class="mb-2 flex items-start gap-3 rounded-lg border p-3">
-          <input id="settingsmcpview-oauth-scope-trigger-run"
-            type="checkbox"
-            class="mt-1 h-4 w-4 rounded border-muted-foreground"
-            data-testid="settings-mcp-oauth-scope-trigger-run"
-            :checked="oauthScopes.includes('trigger:run')"
-            @change="toggleOauthScope('trigger:run')"
+
+        <div v-if="scopesLoaded" class="mb-2">
+          <label for="settingsmcpview-oauth-scope-search" class="mb-1 block text-xs font-medium text-muted-foreground">
+            {{ $t('views.SettingsMcpView.scope_search_label') }}
+          </label>
+          <input
+            id="settingsmcpview-oauth-scope-search"
+            v-model="scopeFilter"
+            type="search"
+            data-testid="settings-mcp-oauth-scope-filter"
+            :placeholder="$t('views.SettingsMcpView.scope_search_placeholder')"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
-          <span>
-            <span class="block text-sm font-mono">trigger:run</span>
-            <span class="block text-xs text-muted-foreground">{{ $t('views.SettingsMcpView.scope_trigger_run_desc') }}</span>
-          </span>
-        </label>
-        <label for="settingsmcpview-oauth-scope-hitl-review" class="mb-2 flex items-start gap-3 rounded-lg border p-3">
-          <input id="settingsmcpview-oauth-scope-hitl-review"
-            type="checkbox"
-            class="mt-1 h-4 w-4 rounded border-muted-foreground"
-            data-testid="settings-mcp-oauth-scope-hitl-review"
-            :checked="oauthScopes.includes('hitl:review')"
-            @change="toggleOauthScope('hitl:review')"
-          />
-          <span>
-            <span class="block text-sm font-mono">hitl:review</span>
-            <span class="block text-xs text-muted-foreground">{{ $t('views.SettingsMcpView.scope_hitl_review_desc') }}</span>
-          </span>
-        </label>
-        <label for="settingsmcpview-oauth-scope-library-browse" class="flex items-start gap-3 rounded-lg border p-3">
-          <input id="settingsmcpview-oauth-scope-library-browse"
-            type="checkbox"
-            class="mt-1 h-4 w-4 rounded border-muted-foreground"
-            data-testid="settings-mcp-oauth-scope-library-browse"
-            :checked="oauthScopes.includes('library:browse')"
-            @change="toggleOauthScope('library:browse')"
-          />
-          <span>
-            <span class="block text-sm font-mono">library:browse</span>
-            <span class="block text-xs text-muted-foreground">{{ $t('views.SettingsMcpView.scope_library_browse_desc') }}</span>
-          </span>
-        </label>
+        </div>
+
+        <p
+          v-if="scopesLoading"
+          class="mb-2 text-sm text-muted-foreground"
+          data-testid="settings-mcp-oauth-scopes-loading"
+          aria-live="polite"
+        >{{ $t('views.SettingsMcpView.scopes_loading') }}</p>
+
+        <div v-else-if="scopesLoadFailed" class="mb-2 space-y-2">
+          <p
+            class="text-sm text-destructive"
+            data-testid="settings-mcp-oauth-scopes-load-error"
+            aria-live="assertive"
+          >{{ $t('views.SettingsMcpView.scopes_load_failed') }}</p>
+          <Button
+            severity="secondary"
+            outlined
+            size="small"
+            data-testid="settings-mcp-oauth-scopes-retry"
+            @click="retryScopeLoad"
+          >{{ $t('views.SettingsMcpView.scopes_retry') }}</Button>
+        </div>
+
+        <div
+          v-else-if="scopesLoaded"
+          class="max-h-72 space-y-3 overflow-y-auto rounded-lg border p-3"
+          data-testid="settings-mcp-oauth-scope-list"
+        >
+          <div
+            v-for="group in filteredScopeGroups"
+            :key="group.namespace"
+            role="group"
+            :aria-labelledby="`settingsmcpview-oauth-scope-group-${group.namespace}`"
+          >
+            <p
+              :id="`settingsmcpview-oauth-scope-group-${group.namespace}`"
+              class="mb-1 text-xs font-semibold uppercase text-muted-foreground"
+            >{{ scopeGroupLabel(group.namespace) }}</p>
+            <label
+              v-for="scope in group.items"
+              :key="scope.key"
+              :for="scopeInputId(scope.key)"
+              class="flex items-center gap-2 py-0.5"
+            >
+              <input
+                :id="scopeInputId(scope.key)"
+                type="checkbox"
+                class="h-4 w-4 rounded border-muted-foreground"
+                :data-testid="scopeTestid(scope.key)"
+                :checked="oauthScopes.includes(scope.key)"
+                @change="toggleOauthScope(scope.key)"
+              />
+              <span class="font-mono text-xs">{{ scope.key }}</span>
+              <span aria-hidden="true" class="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{{ scope.min_role }}</span>
+              <span class="sr-only">{{ $t('views.SettingsMcpView.scope_min_role', { role: scope.min_role }) }}</span>
+            </label>
+          </div>
+          <p
+            v-if="filteredScopeCount === 0"
+            class="text-sm text-muted-foreground"
+            data-testid="settings-mcp-oauth-scope-no-match"
+            aria-live="polite"
+          >{{ $t('views.SettingsMcpView.scope_search_empty') }}</p>
+        </div>
+
         <p
           v-if="oauthScopesTouched && oauthScopes.length === 0"
           class="mt-1 text-sm text-destructive"
@@ -293,8 +333,11 @@ import Dialog from 'primevue/dialog'
 import FormDialog from '../shared/FormDialog.vue'
 import { formatDateShort } from '../../lib/formatDate'
 import { useSecretReveal } from '../../composables/useSecretReveal'
+import { useI18n } from 'vue-i18n'
 
 type OAuthClientItem = components['schemas']['OAuthClientItem']
+/** Wire shape of one row from `GET /api/v1/mcp/oauth/scopes`. */
+type OAuthScopeItem = components['schemas']['OAuthScopeItem']
 
 const props = defineProps<{
   /** Registered OAuth clients from `GET /api/v1/mcp/oauth/clients`. */
@@ -335,6 +378,88 @@ const oauthScopes = ref<string[]>([])
 const oauthScopesTouched = ref(false)
 const registeringOauth = ref(false)
 const registerOauthError = ref<string | null>(null)
+
+// ─── Scope vocabulary: fetched from the backend, never hardcoded ────────
+//
+// FAR-1476 widened the grantable scope vocabulary to the whole delegable
+// permission registry (~150 keys), so a checkbox list hardcoded here would
+// offer scopes the backend rejects and miss every newly added key. The list
+// is fetched from `GET /api/v1/mcp/oauth/scopes` (registry -> `is_delegable`
+// -> filtered to the caller's role) when the register dialog opens, and the
+// picker groups it by namespace and filters it by search term.
+const { te: translationExists, t: translate } = useI18n()
+const scopeFilter = ref('')
+const availableScopes = ref<OAuthScopeItem[]>([])
+const scopesLoading = ref(false)
+const scopesLoadFailed = ref(false)
+const scopesLoaded = ref(false)
+
+async function loadOauthScopes(): Promise<void> {
+  if (scopesLoading.value) return
+  scopesLoading.value = true
+  scopesLoadFailed.value = false
+  try {
+    const { data, error } = await api.GET('/api/v1/mcp/oauth/scopes')
+    if (error || !Array.isArray(data)) {
+      scopesLoadFailed.value = true
+      return
+    }
+    availableScopes.value = data
+    scopesLoaded.value = true
+  } catch (e: unknown) {
+    console.warn('Failed to load OAuth scopes', e)
+    scopesLoadFailed.value = true
+  } finally {
+    scopesLoading.value = false
+  }
+}
+
+/** Failed initial load: clear the loaded latch so the fetch runs again. */
+function retryScopeLoad(): void {
+  scopesLoaded.value = false
+  void loadOauthScopes()
+}
+
+/** A scope id fragment that is a valid HTML id / testid (lowercase, dashed). */
+function scopeSlug(key: string): string {
+  return key.replace(/[^a-zA-Z0-9]+/g, '-')
+}
+
+function scopeTestid(key: string): string {
+  return `settings-mcp-oauth-scope-${scopeSlug(key)}`
+}
+
+function scopeInputId(key: string): string {
+  return `settingsmcpview-oauth-scope-${scopeSlug(key).toLowerCase()}`
+}
+
+const filteredScopes = computed(() => {
+  const query = scopeFilter.value.trim().toLowerCase()
+  if (!query) return availableScopes.value
+  return availableScopes.value.filter(
+    (scope) => scope.key.toLowerCase().includes(query) || scope.min_role.toLowerCase().includes(query),
+  )
+})
+
+const filteredScopeGroups = computed(() => {
+  const byNamespace = new Map<string, OAuthScopeItem[]>()
+  for (const scope of filteredScopes.value) {
+    const namespace = scope.key.split('.')[0]
+    const bucket = byNamespace.get(namespace) ?? []
+    bucket.push(scope)
+    byNamespace.set(namespace, bucket)
+  }
+  return [...byNamespace.entries()].map(([namespace, items]) => ({ namespace, items }))
+})
+
+const filteredScopeCount = computed(() => filteredScopes.value.length)
+
+/** Namespace heading: reuse the grants group label when one exists, else title-case. */
+function scopeGroupLabel(namespace: string): string {
+  const key = `views.SettingsMcpView.grants_group_${namespace}`
+  if (translationExists(key)) return translate(key)
+  return namespace.charAt(0).toUpperCase() + namespace.slice(1).replace(/_/g, ' ')
+}
 
 const oauthCreatedDialogOpen = ref(false)
 const createdOauthClientId = ref('')
@@ -436,8 +561,13 @@ function openRegisterOauthDialog() {
   oauthRedirectTouched.value = false
   oauthScopes.value = []
   oauthScopesTouched.value = false
+  scopeFilter.value = ''
   registerOauthError.value = null
   registerOauthDialogOpen.value = true
+  // The scope list is fetched on first open and cached for the session; a
+  // failed first fetch shows an inline error + Retry rather than an empty,
+  // unusable picker.
+  if (!scopesLoaded.value) void loadOauthScopes()
 }
 
 async function registerOauthClient() {
