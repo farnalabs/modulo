@@ -3,12 +3,14 @@
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -17,9 +19,15 @@ from modulo.api.routes.dashboard import (
     _facts_status_counts,
     _facts_window,
     _load_config_warnings,
+    _load_daily_trend,
+    _load_trend_run_and_spend,
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.db.models.base import Base
+from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval_result import EvalResult
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
 
@@ -1027,3 +1035,106 @@ class TestDashboardSummaryEdgeCases:
             app.dependency_overrides.clear()
 
         assert response.status_code == 403
+
+
+class TestTrendQueriesOrgLevelScope:
+    """Both dashboard trend queries must sum org-level ledger rows only.
+
+    ``check_and_record_spend`` writes BOTH the org-level row (``team_id IS
+    NULL``) and a team-scoped row for a team-owned run — the org-level row
+    already includes that run. A daily query without the ``team_id IS NULL``
+    filter sums both rows and double-counts, so the trend disagrees with the
+    dashboard's own org-level ledger window (``_ledger_spend_window``).
+
+    The defect lives in the SQL SUM, so a mocked session cannot demonstrate
+    it — these tests run against a real in-memory SQLite DB, the same
+    approach as
+    ``tests/unit/reports/test_quality_report.py::TestDailyTrendOrgLevelScope``.
+    """
+
+    _ORG_RUN_COUNT: ClassVar[int] = 10
+    _ORG_SPEND: ClassVar[Decimal] = Decimal("5.00")
+    _TEAM_RUN_COUNT: ClassVar[int] = 4
+    _TEAM_SPEND: ClassVar[Decimal] = Decimal("2.00")
+
+    @pytest.fixture
+    async def ledger_maker(self) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+        engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[
+                        OrgDailyRunCount.__table__,
+                        EvalResult.__table__,
+                        EvalDefinition.__table__,
+                    ],
+                )
+            )
+        try:
+            yield async_sessionmaker(engine, expire_on_commit=False)
+        finally:
+            await engine.dispose()
+
+    async def _seed_org_and_team_rows(
+        self, maker: async_sessionmaker[AsyncSession], org_id: uuid.UUID, run_date: date
+    ) -> None:
+        """Seed the row pair ``check_and_record_spend`` leaves for one date.
+
+        The org-level row already contains the team-owned run's count/spend;
+        the team row is a second copy of the same runs under the team key.
+        """
+        async with maker() as session, session.begin():
+            session.add(
+                OrgDailyRunCount(
+                    organisation_id=org_id,
+                    team_id=None,
+                    run_date=run_date,
+                    run_count=self._ORG_RUN_COUNT,
+                    total_spend_usd=self._ORG_SPEND,
+                )
+            )
+            session.add(
+                OrgDailyRunCount(
+                    organisation_id=org_id,
+                    team_id=uuid.uuid4(),
+                    run_date=run_date,
+                    run_count=self._TEAM_RUN_COUNT,
+                    total_spend_usd=self._TEAM_SPEND,
+                )
+            )
+
+    async def test_load_daily_trend_is_org_level_scoped(self, ledger_maker: async_sessionmaker[AsyncSession]) -> None:
+        org_id = uuid.uuid4()
+        today = datetime.now(UTC).date()
+        await self._seed_org_and_team_rows(ledger_maker, org_id, today)
+
+        async with ledger_maker() as session:
+            trend = await _load_daily_trend(session, org_id)
+
+        dates = [point["date"] for point in trend]
+        assert today.isoformat() in dates
+        entry = next(point for point in trend if point["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert entry["run_count"] == self._ORG_RUN_COUNT
+        assert entry["token_spend_usd"] == 5.0
+
+    async def test_load_trend_run_and_spend_is_org_level_scoped(
+        self, ledger_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        org_id = uuid.uuid4()
+        today = datetime.now(UTC).date()
+        await self._seed_org_and_team_rows(ledger_maker, org_id, today)
+
+        async with ledger_maker() as session:
+            run_counts, token_spend = await _load_trend_run_and_spend(session, org_id, today - timedelta(days=6))
+
+        count_dates = [row["date"] for row in run_counts]
+        assert today.isoformat() in count_dates
+        counts = next(row for row in run_counts if row["date"] == today.isoformat())
+        spend_dates = [row["date"] for row in token_spend]
+        assert today.isoformat() in spend_dates
+        spend = next(row for row in token_spend if row["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert counts["run_count"] == self._ORG_RUN_COUNT
+        assert spend["total_spend_usd"] == 5.0
