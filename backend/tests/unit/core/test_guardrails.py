@@ -631,3 +631,14 @@ def test_non_conformant_collision_all_unknown_folds_to_unknown():
     non_conformant = non_conformant_blocking_guardrails([guardrail], {"github.read": None, "read": None})
     assert [g.name for g, _derivation in non_conformant] == ["g_collide_unknown"]
     assert non_conformant[0][1].state == "unknown"
+
+
+def test_non_conformant_empty_key_certifies_nothing():
+    """FAR-1615 edge: an empty-string registered key names no capability, so
+    the bare-reduction DROPS it rather than folding it into the map under the
+    empty string. A bare claim therefore stays non-conformant (unknown) when
+    only an empty key is present — the empty key satisfies nothing."""
+    guardrail = _guardrail(name="g_empty", required_capabilities=["read"])
+    non_conformant = non_conformant_blocking_guardrails([guardrail], {"": True})
+    assert [g.name for g, _derivation in non_conformant] == ["g_empty"]
+    assert non_conformant[0][1].state == "unknown"

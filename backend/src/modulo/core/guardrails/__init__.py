@@ -51,7 +51,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
-from modulo.connectors.base import canonical_capability
 from modulo.core.eval_engine import (
     EvalBlockedError,
     EvalDefinition,
@@ -1286,18 +1285,25 @@ def _bare_registered_capability_map(registered: dict[str, bool | None]) -> dict[
     Collisions fold with the conformance matcher's state merge (present wins,
     else absent, else unknown); non-capability keys (``sandbox.egress``,
     ``docker``, ...) pass through untouched.
+
+    The bare-reduction and the collision fold are the mid-run matcher's OWN
+    helpers (:func:`~modulo.core.guardrails.conformance._bare_capability` /
+    :func:`~modulo.core.guardrails.conformance._merge_states`) reused here, so
+    the run-creation seam and the mid-run matcher can never diverge — the same
+    one-vocabulary invariant FAR-1615 enforces elsewhere. Imported lazily
+    because ``conformance`` imports this package, so a module-level import
+    would cycle. An empty key reduces to the empty string and is DROPPED: it
+    names no capability and certifies nothing.
     """
-    merged: dict[str, bool | None] = {}
+    from modulo.core.guardrails.conformance import _bare_capability, _merge_states
+
+    buckets: dict[str, list[bool | None]] = {}
     for key, state in registered.items():
-        bare = canonical_capability(str(key)) or str(key)
-        existing = merged.get(bare)
-        if existing is True or state is True:
-            merged[bare] = True
-        elif existing is False or state is False:
-            merged[bare] = False
-        else:
-            merged[bare] = None
-    return merged
+        bare = _bare_capability(str(key))
+        if not bare:
+            continue
+        buckets.setdefault(bare, []).append(state)
+    return {bare: _merge_states(states) for bare, states in buckets.items()}
 
 
 def non_conformant_blocking_guardrails(
