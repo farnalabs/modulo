@@ -214,10 +214,17 @@ jobs:
       # -----------------------------------------------------------------
       # Smoke check: verify the frontend image starts and nginx config is
       # valid. Complements the backend import check above.
+      #
+      # The baked-in config proxies to http://backend:8000 (see
+      # frontend/Dockerfile.prod). nginx resolves upstream hostnames at
+      # config-test time, so running `nginx -t` with no compose network
+      # fails with `host not found in upstream "backend"` even though the
+      # config itself is valid. --add-host gives the name a resolvable
+      # address so the syntax/config test can run standalone.
       # -----------------------------------------------------------------
       - name: Smoke check — nginx -t
         shell: bash
         run: |
           IMAGE="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
           echo "Checking image: $IMAGE"
-          docker run --rm --entrypoint nginx "$IMAGE" -t
+          docker run --rm --add-host backend:127.0.0.1 --entrypoint nginx "$IMAGE" -t
