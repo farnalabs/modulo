@@ -101,8 +101,12 @@ def _admin_token(org_id: uuid.UUID, user_id: uuid.UUID) -> str:
 async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uuid.UUID) -> uuid.UUID:
     """Minimal committed, org-visible pipeline owned by the test org.
 
-    ``lock_wait_timeout_seconds`` is generous — the burst must measure the
-    allocation serialisation, never an incidental lock-timeout expiry.
+    ``lock_wait_timeout_seconds`` is a pipeline-level column that the
+    snapshot-allocation path never consults; the FAR-1625 allocation row lock
+    is bounded by the transaction-scoped
+    ``Settings.mutation_row_lock_timeout_ms`` (raised in the
+    ``runs_route_client`` fixture for the burst). This column is set
+    generously only so no unrelated admission path trips during the burst.
     """
     pipeline_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
@@ -186,6 +190,16 @@ async def runs_route_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenera
         modulo_auth_rate_limit_enabled=False,
         redis_url="",
         modulo_admin_password="",
+        # The FAR-1625 snapshot-allocation row lock is bounded by the
+        # *transaction-scoped* ``Settings.mutation_row_lock_timeout_ms`` — NOT
+        # by the pipeline's ``lock_wait_timeout_seconds`` column (that column
+        # never reaches ``set_mutation_row_lock_timeout``). At the 5 s factory
+        # default a 12-deep serialised burst can exceed the budget on a cold
+        # run, and the loser gets a retryable ``SnapshotLockNotAvailableError``
+        # -> 503. 30 s sits comfortably above the 12-way serialisation time, so
+        # the test measures allocation serialisation, not an incidental
+        # lock-timeout expiry.
+        mutation_row_lock_timeout_ms=30_000,
     )
 
     app.dependency_overrides[get_settings] = lambda: settings
@@ -194,8 +208,15 @@ async def runs_route_client(db_url: str, app_engine: AsyncEngine) -> AsyncGenera
     app.dependency_overrides[get_plan_context] = lambda: _AllFeatures()
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", timeout=120.0) as client:
-        yield client
+    # ``set_mutation_row_lock_timeout`` calls ``get_settings()`` DIRECTLY (a
+    # module-level import in ``db.crud.row_lock``), so the
+    # ``dependency_overrides[get_settings]`` above does NOT reach it — the
+    # direct call would read the lru_cached real settings and keep the 5 s
+    # default. Patch the ``row_lock`` module's binding so the raised budget
+    # actually applies to the allocation lock.
+    with patch("modulo.db.crud.row_lock.get_settings", return_value=settings):
+        async with AsyncClient(transport=transport, base_url="http://test", timeout=120.0) as client:
+            yield client
 
     app.dependency_overrides.clear()
 
@@ -269,8 +290,10 @@ async def test_concurrent_route_triggers_all_succeed_with_distinct_runs_and_vers
 
         # (4) Every returned run id is persisted and belongs to one of the
         # burst's snapshots (a phantom 202 or a mis-linked run would fail here).
+        # The returned set is already asserted distinct and N-strong, so this
+        # equality also pins the persisted set to exactly N — a separate
+        # ``len`` assertion would be redundant.
         persisted_ids = await _persisted_run_ids(db_engine, pipeline_id)
         assert {uuid.UUID(run_id) for run_id in run_ids} == persisted_ids
-        assert len(persisted_ids) == _CONCURRENT_TRIGGERS
     finally:
         await _cleanup(db_engine, pipeline_id)
