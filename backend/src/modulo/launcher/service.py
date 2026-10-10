@@ -131,7 +131,7 @@ def assert_linux() -> None:
             "`modulo start` directly meanwhile."
         )
     if sys.platform == "win32":
-        # NOTE(P3): Windows service seam (sc.exe / Task Scheduler).
+        # TODO(P3): Windows service seam (sc.exe / Task Scheduler).
         raise ServiceError(
             "The service install is not implemented on Windows yet (TODO(P3)); the native "
             "launcher is Linux-first (ADR 031). Use `modulo start` directly meanwhile."

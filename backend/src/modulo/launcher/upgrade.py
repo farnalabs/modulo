@@ -159,7 +159,7 @@ def assert_not_held(data_dir: Path) -> None:
     if holder is None:
         return
     if sys.platform == "win32":
-        # NOTE(P3): holder liveness must be verified with the Windows lock
+        # TODO(P3): holder liveness must be verified with the Windows lock
         # primitive before any destructive step can run unguarded.
         raise UpgradeError(
             f"The data-dir lock record exists (holder PID {holder.pid}, mode {holder.mode!r}) and "
@@ -288,7 +288,7 @@ def pre_upgrade_dump(
     (snapshot_dir / SNAPSHOT_MANIFEST_NAME).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     _write_restore_manifest(snapshot_dir, created_at=created_at)
     if os.name == "posix":
-        # NOTE(P3): Windows ACL hardening (chmod is a silent no-op there).
+        # TODO(P3): Windows ACL hardening (chmod is a silent no-op there).
         # DIRECTORIES get 0700 â€” the e(xecute) bit is the DIRECTORY search
         # bit: at 0600 the snapshot dir is unsearchable and even the dump
         # (written moments earlier) can no longer be RESOLVED to read it.
@@ -432,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
 #      else the foreground lock holder) + no-live-process abort (exe/cwd
 #      scan naming the PID - the locked-file failure class).
 #   5. Atomic `current` symlink swap (POSIX rename(2); Windows
-#      junction/rename swap = NOTE(P3)) + the upgrade.json marker written
+#      junction/rename swap = TODO(P3)) + the upgrade.json marker written
 #      BEFORE the boot (the FAR-674 degraded-within-N seam).
 #   6. Boot the new bundle's lifespan migrations via its own launcher
 #      (`launcher start`) + /healthz gate; on failure: hard refusal

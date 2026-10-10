@@ -2483,7 +2483,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # Node starts, then completes well within its 1200s deadline.
@@ -2518,7 +2517,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=0.05,
                 )
             )
             # Node starts but never completes -> deadline exceeded.
@@ -2560,7 +2558,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # A starts and stalls (short deadline).
@@ -2604,7 +2601,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
 
@@ -2631,7 +2627,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
         assert not exec_task.cancelled()

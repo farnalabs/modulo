@@ -212,7 +212,7 @@ def assert_supported_platform() -> None:
     fake-runner tests validate orchestration logic, not the OS.
     """
     if sys.platform == "win32":
-        # NOTE(P3): Windows initdb (locale, ACLs, .exe resolution) lands with
+        # TODO(P3): Windows initdb (locale, ACLs, .exe resolution) lands with
         # the P3 delivery; refuse loudly instead of mis-initialising.
         raise InitdbError("Bundled Postgres bootstrap is not supported on Windows yet (TODO(P3))")
 
