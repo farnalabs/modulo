@@ -384,13 +384,13 @@ def _shaped_execute(session: MagicMock, shapes: "list[MagicMock]") -> None:
     Shapes are consumed one per call, so a wrong count is an explicit failure
     on the next read rather than a silently reused truthy default.
     """
-    shape_iterator: SequentialShaper | None = SequentialShaper(shapes) if shapes is not None else None
+    shape_iterator = SequentialShaper(shapes)
 
     def _dispatch_execute(_stmt: object, *args: object, **kwargs: object) -> "MagicMock":
         if "authz_enforce" in str(_stmt):
             # require_permission's kill-switch read: fail closed by default.
             return none_scalar_result()
-        if shape_iterator is not None and shape_iterator.has_next():
+        if shape_iterator.has_next():
             return shape_iterator.pop()
         return none_scalar_result()
 

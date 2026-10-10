@@ -134,13 +134,17 @@ def user_requests_pipeline(username: str, pipeline_name: str, request) -> None:
 def user_uses_old_jwt(username: str, request) -> None:
     """Get the pipeline list through the REAL ``GET /api/v1/pipelines`` route.
 
-    This is the grace-period check: the JWT still carries the role it was
-    minted with, so the response must behave as that OLD role. The route's
-    ``require_permission`` floor runs for real against the token-minted role;
-    the service read behind listing is shaped so the org pipeline row the
-    scenario registered comes back through a genuine serialisation path.
-    Organisations can therefore observe that the stale token still enjoys
-    its old access until revocation closes it (documented grace window).
+    The route's ``require_permission`` floor runs for real against the injected
+    principal's role; the service read behind listing is shaped so the org
+    pipeline row the scenario registered comes back through a genuine
+    serialisation path.
+
+    FAR-1600 follow-up: this drives the route end-to-end but injects the user's
+    CURRENT ``org_role`` as the principal, and the scenario's
+    ``response_respects_old_role`` / ``documented_acceptable_gap`` then-steps
+    are still no-ops - so the "grace period" scenario is exercised but never
+    asserted. A faithful grace-window test must mint the principal with the
+    PRE-change role and assert the response against it.
     """
     state = _shared_state(request)
     org_role = state["users"].get(username, {}).get("org_role", "viewer")
