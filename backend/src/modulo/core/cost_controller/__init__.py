@@ -29,6 +29,7 @@ from modulo.core.cost_controller.breakdown.metrics import (
     record_ledger_clamped,
     record_ledger_refused_clamped,
 )
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -428,10 +429,10 @@ async def _sum_created_at_day(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date == day_start.date(),
     )
-    if team_id is not None:
+    if team_id is not None:  # noqa: SIM108 — if/else reads clearer than a ternary over two where() calls
         stmt = stmt.where(OrgDailyRunCount.team_id == team_id)
     else:
-        stmt = stmt.where(OrgDailyRunCount.team_id.is_(None))
+        stmt = stmt.where(org_level_predicate())
     result = await session.execute(stmt)
     value = result.scalar_one()
     return Decimal(value or 0)
@@ -830,7 +831,7 @@ async def get_cost_report(
     ).where(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date >= since,
-        OrgDailyRunCount.team_id.is_(None),
+        org_level_predicate(),
     )
     result = await session.execute(org_q)
     org_row = result.one_or_none()
@@ -1052,7 +1053,7 @@ async def build_cost_report_buckets(
         select(func.sum(OrgDailyRunCount.run_count)).where(
             OrgDailyRunCount.organisation_id == org_id,
             OrgDailyRunCount.run_date >= since,
-            OrgDailyRunCount.team_id.is_(None),
+            org_level_predicate(),
         )
     )
     org_run_count_value = org_run_count_result.scalar_one_or_none()

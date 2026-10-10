@@ -108,6 +108,7 @@ from modulo.core.spend_ceiling import (
     cents_from_usd,
     evaluate_spend_ceilings,
 )
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
 from modulo.db.lifecycle_refs import (
@@ -1597,7 +1598,7 @@ async def _handle_limit_refused(
             await session.execute(
                 select(OrgDailyRunCount.total_spend_usd).where(
                     OrgDailyRunCount.organisation_id == org_id,
-                    OrgDailyRunCount.team_id.is_(None),
+                    org_level_predicate(),
                     OrgDailyRunCount.run_date == locked.created_at.date(),
                 )
             )

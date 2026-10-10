@@ -101,6 +101,6 @@ Two independent sites shipped with the omission: `core/reports/quality_report.py
 
 Rules:
 
-1. Any `select(func.sum(OrgDailyRunCount.run_count/.total_spend_usd))` intended as an ORG-LEVEL figure must include `OrgDailyRunCount.team_id.is_(None)`. Only the deliberate per-team breakdown aggregates (`cost_controller` `group_by=team`) omit it.
+1. Any `select(func.sum(OrgDailyRunCount.run_count/.total_spend_usd))` intended as an ORG-LEVEL figure must include the canonical predicate `org_level_predicate()` imported from `modulo.db.crud.daily_run_count` (which is the `team_id IS NULL` scope) — never a hand-written `OrgDailyRunCount.team_id.is_(None)` literal and never an omitted scope. Only the deliberate per-team breakdown aggregates (`cost_controller` `group_by=team`) omit it.
 2. When you add an org-level ledger read, grep for every sibling `OrgDailyRunCount` aggregation in the same change and confirm each applies the same scope — the org-row-includes-team-row model is the thing that makes an unscoped SUM silently wrong.
 3. An aggregation that disagrees with the endpoint/report's own summary number is the symptom; a mocked session cannot expose it (the defect is in the SQL SUM) — prove such a fix against a real DB (in-memory SQLite is sufficient; the SUM/filter logic is dialect-independent) with both an org row and a team row seeded for one date.
