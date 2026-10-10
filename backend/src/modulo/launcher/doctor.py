@@ -93,6 +93,7 @@ import socket
 import struct
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -784,8 +785,6 @@ def check_tls_expiry(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Chec
             "no TLS keypair in the data dir — expiry check skipped (modulo does not ship a "
             "TLS keypair generator yet; wire tls_expiry to surface a real near-expiry WARNING once one lands)",
         )
-    import time
-
     now = time.time()
     remaining = expiry - now
     if remaining <= 0:
@@ -817,8 +816,6 @@ def check_stale_backup(_data_dir: Path, _state: Any, probes: DoctorProbes) -> Ch
             True,
             "no last-backup timestamp recorded (state.json schema v1 does not record one yet) — skipped",
         )
-    import time
-
     age = time.time() - last_backup
     if age > STALE_BACKUP_SECONDS:
         return CheckResult(
