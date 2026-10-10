@@ -165,5 +165,5 @@ def downgrade() -> None:
               AND jsonb_array_length(agent_commands) > 0
             """
         )
-    except Exception:  # noqa: S110 — best-effort downgrade, non-critical
+    except Exception:  # noqa: S110 — best-effort downgrade; non-critical
         pass

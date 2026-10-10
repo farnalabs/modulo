@@ -211,7 +211,7 @@ def parse_git_content_ref(value: str) -> GitContentRef:
         msg = f"git content ref is missing the repository URL (got {value!r})"
         raise GitContentRefError(msg)
 
-    ref, repo_url = _split_ref_suffix(repo_part, value)
+    ref, repo_url = _split_ref_suffix(repo_part)
     _validate_repo_url(repo_url, value)
     return GitContentRef(repo_url=repo_url, ref=ref, path=path)
 
@@ -235,7 +235,7 @@ def _validate_ref_path(path: str, original: str) -> None:
         raise GitContentRefError(msg)
 
 
-def _split_ref_suffix(repo_part: str, original: str) -> tuple[str | None, str]:
+def _split_ref_suffix(repo_part: str) -> tuple[str | None, str]:
     """Split an optional ``@<ref>`` suffix off the repository part.
 
     The LAST ``@`` is the separator when the tail after it looks like a ref

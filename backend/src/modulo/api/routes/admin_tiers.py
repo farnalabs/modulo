@@ -35,9 +35,9 @@ router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
 )
 @handle_db_errors("admin.tiers.list_tiers_endpoint")
 async def list_tiers_endpoint(
-    settings: Settings = Depends(get_settings),
+    settings: typing.Annotated[Settings, Depends(get_settings)],
+    session: typing.Annotated[AsyncSession, Depends(get_db_session)],
     current_user: TenantPrincipal = require_permission("org.config"),
-    session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     # Attempt Redis cache read (300s TTL — tiers don't change often)
     redis: Redis | None = None

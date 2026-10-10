@@ -475,7 +475,6 @@ def check_tool_scope(
             key_scope=key_scope,
             auth_type=auth_type,
             allowed_set=allowed_set,
-            kill_switch=authz_enforce_enabled(),
             grants=grants,
         )
         _log.warning("Scope check failed: %s", message)
@@ -492,7 +491,6 @@ def _denial_message(
     key_scope: str | None,
     auth_type: str | None,
     allowed_set: set[str] | None,
-    kill_switch: bool,
     grants: frozenset[str] | None = None,
 ) -> str:
     """Re-derive the specific denial message for a resolver denial.

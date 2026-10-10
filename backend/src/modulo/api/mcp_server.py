@@ -4971,17 +4971,7 @@ async def _update_eval_definition_impl(
         except PolicyGateBindingViolationError as exc:
             return {"error": "validation_failed", "detail": f"PolicyGate binding violation: {exc}"}
 
-        # Reload the PolicyGate for the response mapping.
-        gate_result = await s.execute(
-            select(PolicyGateModel).where(
-                PolicyGateModel.eval_id == eval_row.id,
-                PolicyGateModel.organisation_id == org_id,
-                PolicyGateModel.deleted_at.is_(None),
-            )
-        )
-        policy_gate = gate_result.scalar_one_or_none()
-
-        return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+        return _eval_def_to_dict(eval_row)
 
 
 @mcp.tool(

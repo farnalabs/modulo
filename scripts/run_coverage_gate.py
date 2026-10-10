@@ -1267,7 +1267,7 @@ def _compute_branch_coverage_from_raw(
             )
             if result.returncode == 0 and result.stdout:
                 added_lines[filepath] = _parse_added_line_numbers(result.stdout)
-        except Exception:  # noqa: S112 — best-effort per-file parse, skip on any error
+        except Exception:  # noqa: S112 — best-effort per-file parse; skip on any error
             continue
 
     raw_branch_data = (

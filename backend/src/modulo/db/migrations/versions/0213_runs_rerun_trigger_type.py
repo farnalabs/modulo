@@ -47,7 +47,7 @@ _FACTS_TRIGGER_TYPE_OLD = (
 _FACTS_TRIGGER_TYPE_NEW = "trigger_type IN ('manual','webhook','cron','polling','agent_signal','ongoing','correction','slack_app_mention','rerun')"
 
 
-def _widen(table: str, name: str, old_expr: str, new_expr: str) -> None:
+def _widen(table: str, name: str, new_expr: str) -> None:
     """Drop + re-add a trigger-vocabulary CHECK with the widened vocabulary."""
     op.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT {name}"))
     # NOT VALID: new writes are checked immediately, existing rows are not
@@ -63,11 +63,10 @@ def upgrade() -> None:
         # SQLite (ORM-created unit-test schemas) carries the widened vocabulary
         # via the Run model's CheckConstraint; no DDL to apply.
         return
-    _widen("runs", "ck_runs_trigger_type", _RUNS_TRIGGER_TYPE_OLD, _RUNS_TRIGGER_TYPE_NEW)
+    _widen("runs", "ck_runs_trigger_type", _RUNS_TRIGGER_TYPE_NEW)
     _widen(
         "run_daily_facts",
         "ck_run_daily_facts_trigger_type",
-        _FACTS_TRIGGER_TYPE_OLD,
         _FACTS_TRIGGER_TYPE_NEW,
     )
 
@@ -76,10 +75,9 @@ def downgrade() -> None:
     bind = op.get_bind()
     if not _is_postgres(bind):
         return
-    _widen("runs", "ck_runs_trigger_type", _RUNS_TRIGGER_TYPE_NEW, _RUNS_TRIGGER_TYPE_OLD)
+    _widen("runs", "ck_runs_trigger_type", _RUNS_TRIGGER_TYPE_OLD)
     _widen(
         "run_daily_facts",
         "ck_run_daily_facts_trigger_type",
-        _FACTS_TRIGGER_TYPE_NEW,
         _FACTS_TRIGGER_TYPE_OLD,
     )

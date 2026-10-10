@@ -178,10 +178,8 @@ class EvalDefinitionResponse(BaseModel):
 
 def _eval_def_to_dict(
     eval_row: Eval,
-    *,
-    policy_gate: PolicyGate | None = None,
 ) -> dict[str, Any]:
-    """Convert an ``Eval`` row (and optional ``PolicyGate``) to the response dict.
+    """Convert an ``Eval`` row to the response dict.
 
     Returns the public fields only; ``failure_behaviour`` is excluded from the
     response shape (it is an internal column, not exposed to callers).
@@ -1346,25 +1344,6 @@ async def list_eval_definitions(
                 .limit(page_size)
             )
             rows = (await session.execute(q)).scalars().all()
-
-            # Batch-load PolicyGates for the page (one query, not N+1).
-            gate_map: dict[uuid.UUID, PolicyGate] = {}
-            if rows:
-                eval_ids = [r.id for r in rows]
-                gates = (
-                    (
-                        await session.execute(
-                            select(PolicyGate).where(
-                                PolicyGate.eval_id.in_(eval_ids),
-                                PolicyGate.organisation_id == principal.organisation_id,
-                                PolicyGate.deleted_at.is_(None),
-                            )
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                gate_map = {g.eval_id: g for g in gates}
     except HTTPException:
         raise
     except IntegrityError:
@@ -1395,7 +1374,7 @@ async def list_eval_definitions(
         ) from None
 
     return EvalDefinitionListResponse(
-        items=[EvalDefinitionResponse(**_eval_def_to_dict(d, policy_gate=gate_map.get(d.id))) for d in rows],
+        items=[EvalDefinitionResponse(**_eval_def_to_dict(d)) for d in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -2512,8 +2491,7 @@ async def get_eval_definition(
     """Get a single eval definition by ID.
 
     Reads from the ``evals`` table (chunk 3b cutover).  Includes
-    soft-deleted rows for historical lookups.  The associated
-    ``PolicyGate`` (if any) is loaded for the response mapping.
+    soft-deleted rows for historical lookups.
     """
     try:
         async with session.begin():
@@ -2528,19 +2506,6 @@ async def get_eval_definition(
                 )
             )
             eval_row = result.scalar_one_or_none()
-
-            # Load the associated PolicyGate (if any) for the response mapping.
-            policy_gate: PolicyGate | None = None
-            if eval_row is not None:
-                gate_result = await session.execute(
-                    include_soft_deleted(
-                        select(PolicyGate).where(
-                            PolicyGate.eval_id == eval_row.id,
-                            PolicyGate.organisation_id == principal.organisation_id,
-                        )
-                    )
-                )
-                policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -2571,7 +2536,7 @@ async def get_eval_definition(
         ) from None
     if eval_row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_EVAL_DEFINITION_NOT_FOUND)
-    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+    return _eval_def_to_dict(eval_row)
 
 
 @router.put(
@@ -2658,17 +2623,6 @@ async def update_eval_definition(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"PolicyGate binding violation: {exc}",
                 ) from exc
-
-            # Reload the PolicyGate for the response mapping (it may have
-            # been created/updated by the helper).
-            gate_result = await session.execute(
-                select(PolicyGate).where(
-                    PolicyGate.eval_id == eval_row.id,
-                    PolicyGate.organisation_id == principal.organisation_id,
-                    PolicyGate.deleted_at.is_(None),
-                )
-            )
-            policy_gate = gate_result.scalar_one_or_none()
     except HTTPException:
         raise
     except IntegrityError:
@@ -2698,7 +2652,7 @@ async def update_eval_definition(
             detail="An unexpected error occurred while updating the eval definition.",
         ) from None
 
-    return _eval_def_to_dict(eval_row, policy_gate=policy_gate)
+    return _eval_def_to_dict(eval_row)
 
 
 @router.delete(
