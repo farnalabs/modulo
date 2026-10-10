@@ -469,7 +469,7 @@ def _advisory_observation(*, sweep: ha.SubCheck, benign: ha.SubCheck | None = No
 
 
 def test_real_failure_advisory_set_matches_the_readiness_taxonomy() -> None:
-    """The classification is pinned: exactly the seven real-breakage sweeps
+    """The classification is pinned: exactly the eight real-breakage sweeps
     alert, and the three benign/other-channel advisories never do (the
     readiness ``checks`` dict in ``api.routes.health`` is the taxonomy)."""
     assert {
@@ -480,6 +480,7 @@ def test_real_failure_advisory_set_matches_the_readiness_taxonomy() -> None:
         "runner_workspace_reconcile",
         "runner_marker_sweep",
         "runner_health_probe",
+        "decision_record_reconcile",
     } == ha.REAL_FAILURE_ADVISORY_CHECKS
     benign = {"event_loop_lag", "break_glass", "db_hygiene"}
     assert not (benign & ha.REAL_FAILURE_ADVISORY_CHECKS)

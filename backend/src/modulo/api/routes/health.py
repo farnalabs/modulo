@@ -171,6 +171,16 @@ _RUNNER_MARKER_SWEEP_STALE_SECONDS = 15 * 60
 _RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
 _RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 
+# decision_record_reconcile (FAR-1108 chunk 8b): the read-only
+# decision-record corruption-detection sweep runs hourly on the system worker
+# and persists its outcome (``scanned`` + anomaly counts) to this Redis key.
+# Same advisory contract as its siblings, with the stale window tuned to the
+# hourly cadence (3h — two missed ticks before it alerts): a dead sweep means
+# the corruption-detection surface has silently stopped, so a missing or stale
+# key warns without gating readiness.
+_DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
+_DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+
 # System-cron liveness watchdog (plan F8): fire_due_triggers runs every 60s
 # (SAQ system cron, cron="* * * * *"); a machine whose heartbeat is older than
 # 2x the cadence has a silently dead cron scheduler and fails readiness so Fly
@@ -1266,6 +1276,25 @@ async def _check_runner_health_probe() -> CheckResult:
     )
 
 
+async def _check_decision_record_reconcile() -> CheckResult:
+    """ADVISORY — last decision_record_reconcile outcome (never gates readiness).
+
+    The FAR-1108 chunk-8b read-only decision-record reconciliation sweep
+    (``saq_worker.decision_record_reconcile``) runs hourly in the SYSTEM WORKER
+    process and persists its outcome (``scanned`` + anomaly counts +
+    ``last_run_at``) to ``saq:cron:stats:decision_record_reconcile``. A dead
+    sweep means the decision-record corruption-detection surface has silently
+    stopped; the sweep itself never mutates a record, so this is alert-only —
+    a missing or >3h-stale key reports "degraded" while the app stays healthy.
+    Fail-open on Redis read errors.
+    """
+    return await _check_sweep_stats_advisory(
+        _DECISION_RECORD_RECONCILE_STATS_KEY,
+        _DECISION_RECORD_RECONCILE_STALE_SECONDS,
+        "scanned",
+    )
+
+
 async def _check_fleet_system_crons() -> CheckResult:
     """Fleet-wide system-cron liveness — the sole readiness path (ADR 043 / FAR-1158).
 
@@ -1429,6 +1458,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             rwr_check,
             rms_check,
             rhp_check,
+            drr_check,
         ) = await asyncio.gather(
             _check_database(),
             _check_redis(),
@@ -1444,6 +1474,7 @@ async def evaluate_readiness() -> ReadinessResponse:
             _check_runner_workspace_reconcile(),
             _check_runner_marker_sweep(),
             _check_runner_health_probe(),
+            _check_decision_record_reconcile(),
         )
     finally:
         lag_stop.set()
@@ -1530,6 +1561,11 @@ async def evaluate_readiness() -> ReadinessResponse:
         # probe cache (strips age to "status unknown") and silences the
         # transition alerts, so it stays alert-only.
         "runner_health_probe": rhp_check,
+        # ADVISORY only — excluded from the aggregate (never gates readiness).
+        # FAR-1108 chunk 8b: a dead decision-record reconciliation sweep means
+        # the decision-record corruption-detection surface has silently
+        # stopped; the sweep mutates nothing, so it stays alert-only.
+        "decision_record_reconcile": drr_check,
     }
 
     # Aggregate over the NON-advisory checks only.
