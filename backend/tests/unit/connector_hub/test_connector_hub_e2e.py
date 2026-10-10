@@ -17,9 +17,6 @@ from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
@@ -52,21 +49,18 @@ class _FakeCI:
     allowed_operations: list[str] | None = None
 
 
-@pytest.fixture(scope="module")
-def exporter() -> InMemorySpanExporter:
-    """Module-scoped InMemorySpanExporter on the global provider.
+@pytest.fixture
+def exporter(otel_span_exporter: InMemorySpanExporter) -> InMemorySpanExporter:
+    """Per-test view of the session-scoped span exporter.
 
-    The hub binds its tracer in ``__init__``, so this fixture must run before
-    each test constructs a hub — pytest guarantees that when it is requested.
+    The exporter is bound to the global provider once per session by the package
+    conftest; clearing it here guarantees no span from a sibling test leaks into
+    this test's assertions. The hub binds its tracer in ``__init__``, so this
+    fixture must run before each test constructs a hub — pytest guarantees that
+    when it is requested.
     """
-    from modulo.otel_bridge.export import setup_otel
-
-    setup_otel(service_name="test-hub-e2e")
-    span_exporter = InMemorySpanExporter()
-    provider = trace.get_tracer_provider()
-    if isinstance(provider, TracerProvider):
-        provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    return span_exporter
+    otel_span_exporter.clear()
+    return otel_span_exporter
 
 
 async def test_e2e_full_lifecycle_spans_and_credential_cleanup(tmp_path, exporter: InMemorySpanExporter):
