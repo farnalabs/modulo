@@ -1895,6 +1895,39 @@ class TestSetRlsOrg:
         assert session.info["org_id"] == org_id
 
 
+class TestSetOrgStatementTimeout:
+    """FAR-1621: the transaction-scoped ``statement_timeout`` bound
+    (``_set_org_statement_timeout``) takes its Postgres-only path exactly the
+    way ``_set_rls_org`` does, and is a fail-safe no-op everywhere else."""
+
+    @pytest.mark.asyncio
+    async def test_postgres_sets_transaction_local_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The Postgres arm issues the transaction-local ``set_config`` with the
+        module constant's value — the bound the reconcile body relies on."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+
+        await ch._set_org_statement_timeout(session)
+
+        stmt, params = session.executed[0]
+        assert "set_config('statement_timeout'" in str(stmt)
+        assert ", true)" in str(stmt), "the bound must be transaction-local (SET LOCAL)"
+        assert params == {"val": f"{ch._RECONCILE_STATEMENT_TIMEOUT_MS}ms"}
+
+    @pytest.mark.asyncio
+    async def test_non_postgres_is_a_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SQLite/MySQL have no ``set_config``: the bound is a safety
+        improvement, never a correctness requirement, so the non-Postgres arm
+        must execute nothing and never raise."""
+        _patch_env(monkeypatch)
+        session = _MockSession([])
+        session._get_bind.return_value.dialect.name = "sqlite"
+
+        await ch._set_org_statement_timeout(session)
+
+        assert not session.executed
+
+
 class TestCountActiveRuns:
     @pytest.mark.asyncio
     async def test_counts_active_runs_excluding_cancellation_requested(self, monkeypatch: pytest.MonkeyPatch) -> None:
