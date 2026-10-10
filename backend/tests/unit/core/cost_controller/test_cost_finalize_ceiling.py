@@ -40,6 +40,50 @@ def _make_org(*, max_run_cost_cents=None, spend_ceiling_cents=None, org_cumulati
     return org
 
 
+async def test_spend_ceiling_gate_locks_org_for_no_key_update() -> None:
+    """FAR-1624: the ceiling gate must take ``FOR NO KEY UPDATE`` (not the
+    stronger ``FOR UPDATE``) on the org row.
+
+    The finalisation transaction already holds a foreign-key ``FOR KEY SHARE``
+    on the org tuple (from rows it inserted/updated that reference the org), so
+    requesting ``FOR UPDATE`` deadlocked up to 8 concurrent finalisations
+    (SQLSTATE 40P01). ``FOR NO KEY UPDATE`` is compatible with ``FOR KEY
+    SHARE`` while still conflicting with itself, so concurrent spend accrual
+    stays serialised.
+    """
+    from sqlalchemy.dialects import postgresql
+
+    from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
+
+    org = _make_org(spend_ceiling_cents=None, org_cumulative_spend_cents=0)
+    captured: list[object] = []
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=org)
+    session = AsyncMock()
+    session.flush = AsyncMock()
+
+    async def _execute(stmt: object) -> MagicMock:
+        captured.append(stmt)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+
+    run = _make_run()
+    outcome = await _apply_spend_ceiling_gate(
+        session,
+        run,
+        org_id=org.id,
+        total=Decimal("1.00"),
+        run_id=run.id,
+    )
+
+    assert outcome is False
+    assert len(captured) == 1
+    sql = str(captured[0].compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
+    assert "FOR NO KEY UPDATE" in sql
+    assert "FOR UPDATE" not in sql
+
+
 def _session_for(run: MagicMock, org: MagicMock) -> AsyncMock:
     """A session whose execute returns the Run (FOR UPDATE) then the Org (FOR UPDATE)."""
 
