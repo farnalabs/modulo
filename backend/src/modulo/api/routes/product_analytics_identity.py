@@ -28,8 +28,10 @@ from modulo.core.product_analytics.instance_identity import (
     get_secret_exists,
     rotate_secret,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.system_config import get_config, update_config
 from modulo.db.models.system_config import SystemConfig
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 _log = logging.getLogger(__name__)
 
@@ -172,6 +174,10 @@ async def rotate_identity_secret(
 
     try:
         async with session.begin():
+            # Bound every row-lock wait taken for the rest of this transaction
+            # BEFORE the first lock (canonical FAR-1313 pattern), so a contended
+            # rotation cannot wedge on an unbounded ``FOR UPDATE``.
+            await set_mutation_row_lock_timeout(session)
             instance_id, current_secret = await get_or_create_instance_identity(session)
 
             # Verify the old secret matches
@@ -218,7 +224,7 @@ async def rotate_identity_secret(
         _log.error("%s.sequence_state_inconsistent", _LOG_ROTATE)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Rotation state is inconsistent: the stored sequence record is missing. Refusing to rotate.",
+            detail="Rotation state is inconsistent: a required identity record is missing. Refusing to rotate.",
         ) from None
     except ProgrammingError:
         _log.exception(_LOG_ROTATE)
@@ -228,9 +234,20 @@ async def rotate_identity_secret(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "product_analytics_identity.rotate_identity_secret")
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # A bounded lock wait expired (55P03): the DB is healthy, another
+            # rotation simply holds the row lock. 409, never a retry-inviting 503.
+            _log.warning("%s.lock_timeout", _LOG_ROTATE)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Timed out waiting for the rotation lock; another rotation is in progress. "
+                    "Re-issue the request once it completes."
+                ),
+            ) from None
         _log.exception(_LOG_ROTATE)
         raise HTTPException(
-            status_code=503,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
@@ -273,8 +290,18 @@ async def _lock_rotation_anchor(session: AsyncSession) -> None:
     present by this point (``get_or_create_instance_identity`` runs first in the
     same transaction), so ``SELECT … FOR UPDATE`` on it serialises the whole
     read-check-write critical section until the transaction commits.
+
+    The row is verified after the select: a ``FOR UPDATE`` that matches no row
+    takes no lock, so a missing anchor row must fail closed rather than silently
+    degrading to an unserialised rotation.
     """
-    await session.execute(select(SystemConfig).where(SystemConfig.key == _INSTANCE_ID_KEY).with_for_update())
+    anchor = (
+        await session.execute(select(SystemConfig).where(SystemConfig.key == _INSTANCE_ID_KEY).with_for_update())
+    ).scalar_one_or_none()
+    if anchor is None:
+        raise SequenceStateError(
+            "Rotation identity anchor row is missing; refusing to rotate without a serialising lock."
+        )
 
 
 async def _get_last_sequence(

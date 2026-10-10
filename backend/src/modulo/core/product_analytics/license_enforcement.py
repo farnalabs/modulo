@@ -19,11 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.license import LicenseData, parse_and_verify
 from modulo.core.product_analytics.consent import kill_switch_disables_enforcement
+from modulo.core.product_analytics.constants import LICENSE_ENFORCEMENT_KILL_SWITCH_KEY
 
 _log = logging.getLogger(__name__)
 
 PRODUCT_ANALYTICS_REQUIRED_KEY = "product_analytics_required"
-ENFORCEMENT_KILL_SWITCH_KEY = "product_analytics_license_enforcement_kill_switch"
+# Alias of the ONE canonical literal owned by ``constants`` — never re-declare it
+# here, or the two enforcement helpers could silently read different rows.
+ENFORCEMENT_KILL_SWITCH_KEY = LICENSE_ENFORCEMENT_KILL_SWITCH_KEY
 _PRODUCT_ANALYTICS_SETTINGS_KEY = "product_analytics"
 
 RequirementResult = Literal["not_required", "satisfied", "pending", "degraded"]

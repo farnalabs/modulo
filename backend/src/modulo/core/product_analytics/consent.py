@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.product_analytics.constants import (
@@ -249,8 +250,16 @@ async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
     The kill switch is absent → enforced (matching authz_enforce convention).
     See :func:`kill_switch_disables_enforcement` for the canonical stored-value
     semantics.
+
+    A read failure also resolves to ``True`` (enforced): this mirrors
+    :func:`modulo.core.product_analytics.license_enforcement.is_enforcement_active`
+    so the two helpers agree on every input class, not only stored values.
     """
-    config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    try:
+        config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    except SQLAlchemyError:
+        _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
+        return True  # read failure = fail safe = enforced
     if config is None:
         return True  # absent = enforced
     return not kill_switch_disables_enforcement(config.value)

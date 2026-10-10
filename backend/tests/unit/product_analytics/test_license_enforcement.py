@@ -282,6 +282,25 @@ class TestEnforcementHelpersAgree:
 
         assert license_active is consent_active
 
+    async def test_both_helpers_fail_safe_on_read_error(self) -> None:
+        """A transient read failure resolves to enforced on BOTH helpers (no divergence)."""
+        from sqlalchemy.exc import SQLAlchemyError
+
+        session = AsyncMock()
+
+        async def boom(*_args: object, **_kwargs: object) -> object:
+            raise SQLAlchemyError("db down")
+
+        with (
+            patch("modulo.db.crud.system_config.get_config", new=AsyncMock(side_effect=boom)),
+            patch.object(consent_module, "get_config", new=AsyncMock(side_effect=boom)),
+        ):
+            license_active = await is_enforcement_active(session)
+            consent_active = await is_license_enforcement_enabled(session)
+
+        assert license_active is True
+        assert consent_active is True
+
 
 class TestShouldDegradeToCommunity:
     def test_enforcement_off_no_degrade(self) -> None:

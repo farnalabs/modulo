@@ -136,6 +136,60 @@ class TestAtomicSequenceLock:
             await pa._get_last_sequence(session, "inst-1")
         session.execute.assert_not_called()
 
+    async def test_missing_anchor_row_fails_closed(self) -> None:
+        """A FOR UPDATE that matches no row takes no lock — it must fail closed, not no-op."""
+        session = AsyncMock()
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        session.execute = AsyncMock(return_value=result)
+        with pytest.raises(pa.SequenceStateError, match="anchor"):
+            await pa._get_last_sequence(session, "inst-1", for_update=True)
+
+    async def test_lock_timeout_maps_to_409(self) -> None:
+        """A bounded-lock timeout (SQLSTATE 55P03) is a conflict, not a database outage."""
+        from sqlalchemy.exc import OperationalError
+
+        orig = Exception("lock timeout")
+        orig.pgcode = "55P03"  # type: ignore[attr-defined]
+        lock_error = OperationalError("SELECT ... FOR UPDATE", {}, orig)
+        session = _mock_session()
+        with (
+            patch.object(pa, "set_mutation_row_lock_timeout", new=AsyncMock()),
+            patch.object(
+                pa,
+                "get_or_create_instance_identity",
+                new=AsyncMock(return_value=(uuid.uuid4(), "current")),
+            ),
+            patch.object(pa, "_constant_time_equal", return_value=True),
+            patch.object(pa, "verify_hmac", return_value=True),
+            patch.object(pa, "_get_last_sequence", new=AsyncMock(side_effect=lock_error)),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await pa.rotate_identity_secret(_rotate_req(), _request("10.9.9.21"), session, _current_user=None)
+
+        assert exc_info.value.status_code == 409
+
+    async def test_route_bounds_the_lock_wait(self) -> None:
+        """The route must bound the row-lock wait before taking the lock (FAR-1313 pattern)."""
+        session = _mock_session()
+        bounded = AsyncMock()
+        with (
+            patch.object(pa, "set_mutation_row_lock_timeout", new=bounded),
+            patch.object(
+                pa,
+                "get_or_create_instance_identity",
+                new=AsyncMock(return_value=(uuid.uuid4(), "current")),
+            ),
+            patch.object(pa, "_constant_time_equal", return_value=True),
+            patch.object(pa, "verify_hmac", return_value=True),
+            patch.object(pa, "_get_last_sequence", new=AsyncMock(return_value=0)),
+            patch.object(pa, "_set_last_sequence", new=AsyncMock()),
+            patch.object(pa, "rotate_secret", new=AsyncMock(return_value="new-secret")),
+        ):
+            await pa.rotate_identity_secret(_rotate_req(), _request("10.9.9.22"), session, _current_user=None)
+
+        bounded.assert_awaited_once()
+
     async def test_route_requests_the_lock(self) -> None:
         """The rotate route must call ``_get_last_sequence`` with ``for_update=True``."""
         session = _mock_session()
