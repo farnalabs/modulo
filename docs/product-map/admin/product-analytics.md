@@ -51,7 +51,8 @@ an eligible tier.
       gate shares with the consent surface
       (`core/product_analytics/metrics_dump.py` `_check_instance_switch` delegates to
       `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
-      the transparency endpoint's raw read still lags — see Known Gaps)
+      the transparency endpoint now delegates to the same helper, so the reported
+      switch and the dump gate cannot disagree)
 - [ ] License/plan eligibility gating is not wired in production: every function
       in `core/product_analytics/license_enforcement.py`
       (`check_product_analytics_requirement`, `is_enforcement_active`,
@@ -61,6 +62,20 @@ an eligible tier.
       carve-out. Feature completion, not a QA fix — tracked for a follow-up ticket.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
+- [x] The transparency endpoint reports the instance's REAL product-analytics
+      posture, every field sourced from state a feature actually writes:
+      `instance_enabled` via `consent.is_instance_analytics_enabled` (bool/string
+      aware — a stored `"false"` is OFF, not fail-open — with the
+      `MODULO_PRODUCT_ANALYTICS_ENABLED` env fallback), `enforcement_enabled` via
+      `consent.is_license_enforcement_enabled` (the real kill switch; absent =
+      enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
+      metrics dump writes (`metrics_dump._WATERMARK_KEY`,
+      `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
+      organisation `settings_json` (`get_product_analytics_block(...).get("level")`,
+      default `off`). The dump increments `product_analytics_dump_count` once per
+      successful (non-skipped) dump in the same transaction that advances the
+      watermark (`api/routes/product_analytics_transparency.py`,
+      `tests/unit/api/routes/test_product_analytics_transparency.py`)
 - [x] The transparency endpoint derives the instance's data-residency posture:
       `egress_allowed` is true ONLY when the instance-level master switch AND an
       explicit `all` consent are BOTH on (`core/product_analytics/consent.py`),
@@ -74,33 +89,30 @@ an eligible tier.
 
 - Metrics telemetry is vendor-bound; a fully self-hosted, in-product analytics
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
-- The transparency endpoint (`api/routes/product_analytics_transparency.py`) reads
-  five `system_config` keys - `product_analytics_last_dump_at`,
-  `product_analytics_dump_count`, `product_analytics_consent_level`,
-  `product_analytics_enabled`, `product_analytics_enforcement_enabled`. The four
-  collected-metric keys (`product_analytics_last_dump_at`, `..._dump_count`,
-  `..._consent_level`, `..._enforcement_enabled`) have **no feature-code writer**
-  (only tests seed them; the metrics dump and consent routes never persist them.
-  The generic `PUT /api/v1/system-admin/config/{key}` can upsert any `system_config`
-  key, so this is "no writer in normal operation", not "unwritable").
-  The shipped `/admin/product-analytics` page therefore always renders its defaults:
-  last dump `-`, dump count `0`, consent level `off`, and enforcement `inactive`, with
-  the `warning` banner permanently `None` and the endpoint's (unrendered)
-  `egress_allowed` permanently `False` even while the dump is actively delivering for
-  consenting orgs. Completing it needs the metrics dump to
-  record successful-dump facts and the consent path to mirror the instance consent
-  level (an instance-vs-org consent semantics decision), and the transparency
-  endpoint's `instance_enabled` read should be aligned with
-  `is_instance_analytics_enabled` — both its bool/string coercion (a stored string
-  `"false"` currently reads truthy there) and its `MODULO_PRODUCT_ANALYTICS_ENABLED`
-  fallback; the dump gate now delegates to that helper. The page's
-  `enforcement_enabled` field reads a different key
-  (`product_analytics_enforcement_enabled`) from the real enforcement control
-  (`product_analytics_license_enforcement_kill_switch`), so the badge stays
-  `inactive` even after the documented steps. Feature completion, not a QA fix -
-  tracked for a follow-up ticket.
+- License/plan eligibility gating is not wired in production: every function
+  in `core/product_analytics/license_enforcement.py` plus
+  `consent.partner_license_requires_analytics` / `is_partner_carve_out_active`
+  has no production call site (unit tests only), so neither a route nor the dump
+  applies the partner `product_analytics_required` carve-out. Feature completion,
+  not a QA fix — tracked for a follow-up ticket.
+- The `/admin/product-analytics` page still cannot show in-product usage/adoption
+  metrics — it renders only the transparency endpoint's delivery/consent/enforcement
+  fields, which now reflect real state. An in-product analytics export/administration
+  surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
+  remains unshipped (warehouse scope sits under `feat-analytics`).
 
 ## QA History
+- 2026-10-10: **deliver/pa-transparency** — closed the transparency "phantom
+  keys" gap: the endpoint read five `system_config` keys that no feature wrote, so
+  `/admin/product-analytics` always rendered defaults. It now sources every field
+  from real state: `instance_enabled` / `enforcement_enabled` delegate to the shared
+  consent helpers (`is_instance_analytics_enabled`, `is_license_enforcement_enabled`),
+  `last_successful_dump_at` reads `metrics_dump._WATERMARK_KEY`, `consent_level` reads
+  the caller's org `settings_json`, and `dump_count_total` reads a new
+  `product_analytics_dump_count` the metrics dump increments once per successful
+  (non-skipped) dump. This removes the `bool("false") -> True` fail-open on the
+  instance switch and the wrong-key enforcement badge. Tests now seed the REAL
+  sources and fail without the change.
 - 2026-10-09: **Improve Architecture product-map walk** - fixed CRITICAL: the daily
   metrics dump (`core/product_analytics/metrics_dump.py`) crashed with `ValueError`
   for every consenting org. `consent.apply_consent_action` / `set_level` persist

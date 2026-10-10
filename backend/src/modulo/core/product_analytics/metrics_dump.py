@@ -30,13 +30,17 @@ from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["metrics_dump"]
+__all__ = ["DUMP_COUNT_KEY", "coerce_dump_count", "metrics_dump"]
 
 # Schema version -- bumped when the payload shape changes.
 SCHEMA_VERSION: int = 1
 
 # Watermark key in system_config.
 _WATERMARK_KEY = "product_analytics_last_dumped_date"
+
+# Successful-dump counter key in system_config. Incremented once per successful
+# (non-skipped) dump so the transparency endpoint can report a real total.
+DUMP_COUNT_KEY = "product_analytics_dump_count"
 
 # Backfill cap (design doc section 8).
 _BACKFILL_MAX_DAYS = 14
@@ -61,6 +65,34 @@ def _parse_iso_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError:
         return datetime.fromisoformat(value).date()
+
+
+def coerce_dump_count(value: Any) -> int:
+    """Coerce a stored dump-count value to a non-negative int.
+
+    Missing, malformed, or negative stored values degrade to ``0`` so a corrupt
+    row can never mask the count as a failure or produce a negative total. This
+    is the single source of truth for the key's storage format, shared by the
+    increment path and the transparency reader.
+    """
+    if value is None:
+        return 0
+    try:
+        return max(0, int(value))
+    except (ValueError, TypeError):
+        return 0
+
+
+async def _increment_dump_count(session: AsyncSession) -> None:
+    """Increment the successful-dump counter under its advisory lock.
+
+    Called only on a successful (non-skipped) dump, in the SAME transaction
+    that advances the watermark, so a crash between the two cannot count a dump
+    that never advanced the watermark.
+    """
+    await acquire_kv_lock(session, DUMP_COUNT_KEY)
+    current = coerce_dump_count(await read_system_config(session, DUMP_COUNT_KEY))
+    await write_system_config(session, DUMP_COUNT_KEY, current + 1)
 
 
 async def _get_or_create_system_config(factory: Any, key: str, create: Any) -> str:
@@ -177,6 +209,7 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
         async with factory() as session, session.begin():
             await acquire_kv_lock(session, _WATERMARK_KEY)
             await write_system_config(session, _WATERMARK_KEY, new_watermark.isoformat())
+            await _increment_dump_count(session)
 
     return {
         "dumped_dates": [str(d) for d in succeeded_dates],
@@ -271,8 +304,8 @@ async def _check_instance_switch(factory: Any) -> bool:
     on the raw stored value previously treated the stored string ``"false"`` as
     truthy and ran the dump while the consent surface reported the switch OFF
     (fail-open), and ignored the env fallback the surface honours. The
-    transparency endpoint still reads the raw key; its alignment to this helper
-    is tracked in the product map's Known Gaps.
+    transparency endpoint now delegates to the SAME helper, so the reported
+    switch and the dump gate cannot disagree.
     """
     async with factory() as session, session.begin():
         return await is_instance_analytics_enabled(session)

@@ -1,9 +1,19 @@
 """Unit tests for the product-analytics transparency endpoint (GET /transparency).
 
-Covers the config-aggregation and stale-dump warning logic that previously had
-no test coverage at all. The endpoint reads five ``system_config`` keys and
-derives a ``warning`` when the last successful dump is older than 3 days while
-consent is ``all`` — boundary behaviour that static analysis cannot vouch for.
+The endpoint reports the instance's REAL product-analytics posture. These tests
+pin that every field is sourced from the state a feature actually writes:
+
+* ``instance_enabled`` / ``enforcement_enabled`` run the REAL shared helpers
+  (``consent.is_instance_analytics_enabled`` /
+  ``consent.is_license_enforcement_enabled``) with only their ``get_config`` DB
+  seam patched — so the bool/string coercion and env fallback the dump gate
+  inherits are exercised here too (a stored ``"false"`` must be OFF, not
+  fail-open).
+* ``last_successful_dump_at`` / ``dump_count_total`` read the exact keys the
+  metrics dump writes (``metrics_dump._WATERMARK_KEY`` /
+  ``metrics_dump.DUMP_COUNT_KEY``).
+* ``consent_level`` is the caller's organisation real consent level
+  (``org.settings_json["product_analytics"]["level"]``), defaulting to ``off``.
 """
 
 from __future__ import annotations
@@ -18,10 +28,20 @@ from fastapi.testclient import TestClient
 
 from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics_transparency as pat_module
-from modulo.api.routes.product_analytics_transparency import TransparencyResponse
+from modulo.api.routes.product_analytics_transparency import (
+    TransparencyResponse,
+    _resolve_org_settings,
+)
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.product_analytics import metrics_dump
+from modulo.core.product_analytics.constants import (
+    INSTANCE_SWITCH_KEY,
+    LEVEL_ALL,
+    LEVEL_OFF,
+    LICENSE_ENFORCEMENT_KILL_SWITCH_KEY,
+)
 
 app = FastAPI()
 app.include_router(transparency_router)
@@ -39,6 +59,14 @@ _SYSTEM_ADMIN = AuthenticatedPrincipal(
     is_system_admin=True,
 )
 
+_NO_ORG_ADMIN = AuthenticatedPrincipal(
+    username="ops@test",
+    organisation_id=None,
+    account_id=_USER_ID,
+    org_role=None,
+    is_system_admin=True,
+)
+
 _NON_SYSTEM_ADMIN = AuthenticatedPrincipal(
     username="user@test",
     organisation_id=_ORG_ID,
@@ -47,6 +75,12 @@ _NON_SYSTEM_ADMIN = AuthenticatedPrincipal(
     is_system_admin=False,
 )
 
+# Sentinel distinguishing "no org row" from an org whose settings are None.
+_UNSET = object()
+
+_ORG_ALL = {"product_analytics": {"level": LEVEL_ALL}}
+_ORG_OFF = {"product_analytics": {"level": LEVEL_OFF}}
+
 
 def _config(value: object) -> MagicMock:
     config = MagicMock()
@@ -54,23 +88,34 @@ def _config(value: object) -> MagicMock:
     return config
 
 
-def _make_session() -> AsyncMock:
+def _make_session(org_settings: object = _UNSET) -> AsyncMock:
+    """Build a session mock whose single SELECT resolves to an org row.
+
+    ``org_settings`` is the returned org's ``settings_json``; ``_UNSET`` means
+    no org row is found (``scalar_one_or_none()`` -> ``None``).
+    """
     session = AsyncMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+
+    result = MagicMock()
+    if org_settings is _UNSET:
+        result.scalar_one_or_none = MagicMock(return_value=None)
+    else:
+        org = MagicMock()
+        org.settings_json = org_settings
+        result.scalar_one_or_none = MagicMock(return_value=org)
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
-def _request(client: TestClient) -> dict[str, object]:
-    resp = client.get(_URL)
-    assert resp.status_code == 200
-    return dict(resp.json())
-
-
-def _client(principal: AuthenticatedPrincipal = _SYSTEM_ADMIN) -> TestClient:
-    app.dependency_overrides[get_db_session] = _make_session
+def _client(
+    principal: AuthenticatedPrincipal = _SYSTEM_ADMIN,
+    session: AsyncMock | None = None,
+) -> TestClient:
+    app.dependency_overrides[get_db_session] = lambda: session if session is not None else _make_session()
     app.dependency_overrides[get_current_user] = lambda: principal
     return TestClient(app)
 
@@ -79,8 +124,55 @@ def _restore_overrides() -> None:
     app.dependency_overrides.clear()
 
 
+def _consent_get_config(values: dict[str, object]):
+    """A ``consent.get_config`` replacement keyed by the instance switch / kill switch."""
+
+    async def _get(session: object, key: str) -> MagicMock | None:
+        if key in values:
+            return _config(values[key])
+        return None
+
+    return _get
+
+
+def _transparency_get_config(values: dict[str, object]):
+    """A route ``get_config`` replacement keyed by the dump watermark / count."""
+
+    async def _get(session: object, key: str) -> MagicMock | None:
+        if key in values:
+            return _config(values[key])
+        return None
+
+    return _get
+
+
+def _request(client: TestClient) -> dict[str, object]:
+    resp = client.get(_URL)
+    assert resp.status_code == 200
+    return dict(resp.json())
+
+
 def _stale_timestamp_ago(days: float) -> str:
     return (datetime.now(UTC) - timedelta(days=days)).isoformat()
+
+
+def _patch_sources(
+    *,
+    consent_values: dict[str, object] | None = None,
+    transparency_values: dict[str, object] | None = None,
+    monkeypatch: pytest.MonkeyPatch | None = None,
+):
+    """Patch both DB seams and return the transparency ``AsyncMock``."""
+    if monkeypatch is not None:
+        monkeypatch.delenv("MODULO_PRODUCT_ANALYTICS_ENABLED", raising=False)
+    return patch.object(
+        pat_module,
+        "get_config",
+        new=AsyncMock(side_effect=_transparency_get_config(transparency_values or {})),
+    ), patch(
+        "modulo.core.product_analytics.consent.get_config",
+        new=AsyncMock(side_effect=_consent_get_config(consent_values or {})),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,12 +187,12 @@ class TestPermissionGate:
         assert resp.status_code == 403
         _restore_overrides()
 
-    def test_system_admin_gets_200(self) -> None:
+    def test_system_admin_gets_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client()
-        with patch.object(pat_module, "get_config", new=AsyncMock(return_value=None)) as get_config:
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
             resp = client.get(_URL)
         assert resp.status_code == 200
-        assert get_config.await_count == 5
         _restore_overrides()
 
 
@@ -110,35 +202,174 @@ class TestPermissionGate:
 
 
 class TestDefaults:
-    def test_all_absent_returns_zeros_and_off(self) -> None:
+    def test_all_absent_returns_zeros_and_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client()
-        with patch.object(pat_module, "get_config", new=AsyncMock(return_value=None)):
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
             body = _request(client)
-        assert body == {
-            "last_successful_dump_at": None,
-            "dump_count_total": 0,
-            "consent_level": "off",
-            "instance_enabled": False,
-            "enforcement_enabled": False,
-            "egress_allowed": False,
-            "warning": None,
-        }
+        assert body["last_successful_dump_at"] is None
+        assert body["dump_count_total"] == 0
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["instance_enabled"] is False
+        # The license-enforcement kill switch is ABSENT by default, which the
+        # real helper reads as "enforced" (matching the authz_enforce convention).
+        assert body["enforcement_enabled"] is True
+        assert body["egress_allowed"] is False
+        assert body["warning"] is None
         _restore_overrides()
 
-    def test_response_shape_matches_transparency_response(self) -> None:
+    def test_response_shape_matches_transparency_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client()
-        with patch.object(pat_module, "get_config", new=AsyncMock(return_value=None)):
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
             body = _request(client)
         assert set(body.keys()) == set(TransparencyResponse().model_dump().keys())
         _restore_overrides()
 
 
 # ---------------------------------------------------------------------------
-# Config aggregation
+# Real instance switch / enforcement sources
 # ---------------------------------------------------------------------------
 
 
-class TestAggregation:
+class TestRealInstanceSwitch:
+    def test_stored_false_string_reads_fail_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression: a stored string ``"false"`` must NOT read as enabled."""
+        client = _client()
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: "false"}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["instance_enabled"] is False
+        _restore_overrides()
+
+    @pytest.mark.parametrize("stored", [True, "1", "true", "yes"])
+    def test_enabling_values_read_enabled(self, stored: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client()
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: stored}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["instance_enabled"] is True
+        _restore_overrides()
+
+    def test_env_fallback_when_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client()
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        monkeypatch.setenv("MODULO_PRODUCT_ANALYTICS_ENABLED", "true")
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["instance_enabled"] is True
+        _restore_overrides()
+
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            (None, True),  # absent kill switch = enforced
+            (False, True),
+            ("false", True),
+            (True, False),  # kill switch ON = enforcement off
+            ("1", False),
+        ],
+    )
+    def test_enforcement_follows_kill_switch(
+        self,
+        stored: object,
+        expected: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client()
+        consent_values = {} if stored is None else {LICENSE_ENFORCEMENT_KILL_SWITCH_KEY: stored}
+        sources = _patch_sources(consent_values=consent_values, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["enforcement_enabled"] is expected
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Real org consent level
+# ---------------------------------------------------------------------------
+
+
+class TestRealConsentLevel:
+    def test_org_level_all_is_reflected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_ALL
+        # Egress is opt-in on BOTH axes; instance switch on + org "all" -> allowed.
+        assert body["egress_allowed"] is True
+        _restore_overrides()
+
+    def test_org_level_off_is_reflected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(_ORG_OFF))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        _restore_overrides()
+
+    def test_missing_org_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session())  # no org row
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        _restore_overrides()
+
+    def test_org_without_block_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session({"other": True}))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        _restore_overrides()
+
+    def test_org_less_principal_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(principal=_NO_ORG_ADMIN, session=_make_session(_ORG_ALL))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Real watermark / count sources
+# ---------------------------------------------------------------------------
+
+
+class TestRealDumpSources:
+    def test_watermark_key_drives_last_dump(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stamp = _stale_timestamp_ago(1)
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(
+            transparency_values={metrics_dump._WATERMARK_KEY: stamp},
+            monkeypatch=monkeypatch,
+        )
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["last_successful_dump_at"] == stamp
+        _restore_overrides()
+
+    def test_route_reads_the_dump_written_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(
+            transparency_values={
+                metrics_dump._WATERMARK_KEY: "2026-08-15",
+                metrics_dump.DUMP_COUNT_KEY: 7,
+            },
+            monkeypatch=monkeypatch,
+        )
+        with sources[0] as get_config, sources[1]:
+            body = _request(client)
+        keys = [call.args[1] for call in get_config.await_args_list]
+        assert metrics_dump._WATERMARK_KEY in keys
+        assert metrics_dump.DUMP_COUNT_KEY in keys
+        assert body["dump_count_total"] == 7
+        _restore_overrides()
+
     @pytest.mark.parametrize(
         ("dump_count", "expected"),
         [
@@ -146,99 +377,22 @@ class TestAggregation:
             ("0", 0),
             ("42", 42),
             (0, 0),
+            ("not-a-number", 0),
+            (-5, 0),
         ],
     )
-    def test_dump_count_coerces_to_int(self, dump_count: object, expected: int) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            if key == "product_analytics_dump_count":
-                return _config(dump_count) if dump_count is not None else None
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
+    def test_dump_count_coerces_to_non_negative_int(
+        self,
+        dump_count: object,
+        expected: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client(session=_make_session(_ORG_ALL))
+        transparency_values = {} if dump_count is None else {metrics_dump.DUMP_COUNT_KEY: dump_count}
+        sources = _patch_sources(transparency_values=transparency_values, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
             body = _request(client)
         assert body["dump_count_total"] == expected
-        _restore_overrides()
-
-    def test_consent_and_enabled_flags_coerced_to_bool(self) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {
-                "product_analytics_consent_level": "all",
-                "product_analytics_enabled": 1,
-                "product_analytics_enforcement_enabled": "1",
-            }
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
-            body = _request(client)
-        assert body["consent_level"] == "all"
-        assert body["instance_enabled"] is True
-        assert body["enforcement_enabled"] is True
-        _restore_overrides()
-
-    def test_non_bool_stored_values_are_bool_coerced(self) -> None:
-        """Documents the storage/coercion semantics: any non-empty stored
-        string coerces to True (even ``"false"``), while a scalar ``0`` is
-        falsy."""
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {"product_analytics_enabled": "false", "product_analytics_enforcement_enabled": 0}
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
-            body = _request(client)
-        assert body["instance_enabled"] is True
-        assert body["enforcement_enabled"] is False
-        _restore_overrides()
-
-
-# ---------------------------------------------------------------------------
-# Egress posture (the derived field)
-# ---------------------------------------------------------------------------
-
-
-class TestEgressPosture:
-    @pytest.mark.parametrize(
-        ("instance_enabled", "consent_level", "expected_egress"),
-        [
-            # Telemetry egress is opt-in on both axes: the instance-level
-            # master switch AND an explicit "all" consent level must be on.
-            (False, "off", False),
-            (False, "all", False),
-            (True, "off", False),
-            (True, "all", True),
-        ],
-    )
-    def test_egress_requires_instance_switch_and_consent(
-        self,
-        instance_enabled: bool,
-        consent_level: str,
-        expected_egress: bool,
-    ) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {
-                "product_analytics_enabled": instance_enabled,
-                "product_analytics_consent_level": consent_level,
-            }
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
-            body = _request(client)
-        assert body["consent_level"] == consent_level
-        assert body["instance_enabled"] is instance_enabled
-        assert body["egress_allowed"] is expected_egress
         _restore_overrides()
 
 
@@ -252,80 +406,86 @@ class TestStaleWarning:
         ("days_ago", "consent_level", "expected_warning"),
         [
             # Inside the 3-day threshold — never warns.
-            (2, "all", None),
+            (2, LEVEL_ALL, None),
             # Fresh dump but consent not 'all' — warning suppressed by consent.
-            (2, "off", None),
+            (2, LEVEL_OFF, None),
             # Just past the threshold with opt-in consent — warns.
-            (4, "all", "not_reaching_farnalabs"),
+            (4, LEVEL_ALL, "not_reaching_farnalabs"),
             # Stale dump but consent opt-out — not actionable, no warning.
-            (4, "off", None),
+            (4, LEVEL_OFF, None),
         ],
     )
-    def test_warning_boundary(self, days_ago: float, consent_level: str, expected_warning: str | None) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {
-                "product_analytics_last_dump_at": _stale_timestamp_ago(days_ago),
-                "product_analytics_consent_level": consent_level,
-            }
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
+    def test_warning_boundary(
+        self,
+        days_ago: float,
+        consent_level: str,
+        expected_warning: str | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client = _client(session=_make_session({"product_analytics": {"level": consent_level}}))
+        sources = _patch_sources(
+            transparency_values={metrics_dump._WATERMARK_KEY: _stale_timestamp_ago(days_ago)},
+            monkeypatch=monkeypatch,
+        )
+        with sources[0], sources[1]:
             body = _request(client)
         assert body["warning"] == expected_warning
         _restore_overrides()
 
-    def test_no_last_dump_never_warns(self) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            if key == "product_analytics_consent_level":
-                return _config("all")
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
+    def test_no_last_dump_never_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
             body = _request(client)
         assert body["last_successful_dump_at"] is None
         assert body["warning"] is None
         _restore_overrides()
 
-    def test_naive_timestamp_is_treated_as_utc(self) -> None:
+    def test_naive_timestamp_is_treated_as_utc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A naive ``last_dump_at`` (no tzinfo) is assumed UTC for age math."""
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {
-                "product_analytics_last_dump_at": (
-                    datetime.now(UTC).replace(tzinfo=None) - timedelta(days=4)
-                ).isoformat(),
-                "product_analytics_consent_level": "all",
-            }
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
+        naive = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=4)).isoformat()
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(
+            transparency_values={metrics_dump._WATERMARK_KEY: naive},
+            monkeypatch=monkeypatch,
+        )
+        with sources[0], sources[1]:
             body = _request(client)
         assert body["warning"] == "not_reaching_farnalabs"
         _restore_overrides()
 
-    def test_malformed_timestamp_does_not_raise(self) -> None:
-        client = _client()
-
-        async def _get(session: object, key: str) -> MagicMock | None:
-            values = {
-                "product_analytics_last_dump_at": "not-a-timestamp",
-                "product_analytics_consent_level": "all",
-            }
-            if key in values:
-                return _config(values[key])
-            return None
-
-        with patch.object(pat_module, "get_config", side_effect=_get):
+    def test_malformed_timestamp_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(
+            transparency_values={metrics_dump._WATERMARK_KEY: "not-a-timestamp"},
+            monkeypatch=monkeypatch,
+        )
+        with sources[0], sources[1]:
             body = _request(client)
         assert body["last_successful_dump_at"] == "not-a-timestamp"
         assert body["warning"] is None
         _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_org_settings (the org DB seam)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOrgSettings:
+    @pytest.mark.asyncio
+    async def test_returns_settings_for_existing_org(self) -> None:
+        session = _make_session(_ORG_ALL)
+        settings = await _resolve_org_settings(session, _ORG_ID)
+        assert settings == _ORG_ALL
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_org_missing(self) -> None:
+        session = _make_session()
+        assert await _resolve_org_settings(session, _ORG_ID) is None
+
+    @pytest.mark.asyncio
+    async def test_none_org_id_skips_the_query(self) -> None:
+        session = _make_session(_ORG_ALL)
+        assert await _resolve_org_settings(session, None) is None
+        session.execute.assert_not_awaited()
