@@ -12107,6 +12107,8 @@ export interface components {
              * @description Allowed scopes
              */
             scopes: string[];
+            /** Team Id */
+            team_id?: string | null;
         };
         /** CreateOAuthClientResponse */
         CreateOAuthClientResponse: {
