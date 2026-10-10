@@ -279,10 +279,12 @@ class TestRotateSequenceMonotonicity:
     ) -> None:
         """FAR-1633: two concurrent rotations with the SAME sequence → one wins.
 
-        Both requests pass HMAC auth with the same old secret and the same
+        Both requests attempt HMAC auth with the same old secret and the same
         sequence. The per-instance row lock serialises the read-check-write, so
-        exactly one rotation commits (200) and the other observes the committed
-        sequence and is rejected (400). Without the lock both can read the same
+        exactly one rotation commits (200). The loser is rejected by the
+        sequence guard (400) when it authenticated before the winner committed,
+        or by the now-rotated secret (401) when it authenticated afterwards —
+        both are correct rejections. Without the lock both can read the same
         ``last_seq`` and both rotate.
         """
         instance_id, secret = await _mint_and_get_secret(app_engine)
@@ -295,7 +297,12 @@ class TestRotateSequenceMonotonicity:
             integration_client.post("/api/v1/product-analytics/rotate", json=body, headers=headers),
         )
         statuses = sorted([first.status_code, second.status_code])
-        assert statuses == [200, 400]
+        # Exactly one rotation must commit. The loser is rejected either by the
+        # sequence guard (400, it authenticated before the winner committed) or
+        # by the now-invalid old secret (401, it authenticated afterwards); the
+        # regression this guards against is BOTH requests rotating ([200, 200]).
+        assert statuses[0] == 200, statuses
+        assert statuses[1] in (400, 401), statuses
 
     async def test_missing_sequence_row_after_rotation_fails_closed(
         self,
