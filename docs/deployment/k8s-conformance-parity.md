@@ -10,7 +10,7 @@ README for `.github/workflows/k8s-conformance.yml`.
 | --- | --- | --- | --- |
 | `kind` | pull requests and pushes to `main`, path-filtered to the runtime-provider / bundled-runner / pipeline-engine / conformance surfaces, `deploy/helm/**` (FAR-1558 follow-up: a chart-only change lints the chart without creating a cluster), + the workflow itself; manual via `workflow_dispatch` (`job=kind`) | throwaway [kind](https://kind.sigs.k8s.io) cluster, deleted `always()` | The runtime-provider conformance suite (`backend/tests/conformance/`, marker `runtime_provider_conformance`) plus the negative suite (a deliberately broken adapter must fail; a kill-before-collect must be detected, never a synthetic success), plus `helm lint` on the chart (runs whenever either the conformance surface or the chart changed). |
 | `managed` | weekly cron (Monday 04:00 UTC); manual via `workflow_dispatch` (`job=managed`) | ONE managed cloud per ISO week, rotating EKS -> AKS -> GKE so all three cycle over three weeks | The same conformance suite against a real cloud control plane. |
-| `staleness` | daily cron (05:17 UTC); manual via `workflow_dispatch` (`job=staleness`) | none | Last-green visibility on the deploy-staleness-check pattern: publishes the last-green dates to the run summary and fails when the gate goes dark. |
+| `staleness` | daily cron (05:17 UTC); manual via `workflow_dispatch` (`job=staleness`) | none | Last-green visibility on the deploy-staleness-check pattern: publishes the last-green dates to the run summary and fails when the gate goes dark. Counts only runs where the conformance suite step actually executed and passed (FAR-1620) - a path-skipped docs-only/chart-only success never refreshes last-green. |
 
 The suite itself is **deselected by default** (the `addopts` clause in
 `backend/pyproject.toml`), so a normal unit or integration run never touches a
@@ -34,9 +34,12 @@ conformance run is green.**
 
 The dates are published two ways: each green run stamps its date into its
 step summary, and the `staleness` job recomputes the authoritative
-last-green date from the workflow's run history every day (excluding its own
-cron's runs, so a green staleness run can never refresh the number it is
-measuring - the deploy-throttle self-reference lesson).
+last-green date from the workflow's run history every day - paged back past
+the widest grace window, excluding its own cron's runs (so a green
+staleness run can never refresh the number it is measuring - the
+deploy-throttle self-reference lesson), and verifying each candidate green
+run's job steps so only runs where the suite actually ran and passed count
+(FAR-1620).
 
 ## What `kind` cannot prove (CI-parity gaps, not product gaps)
 
@@ -83,11 +86,17 @@ job would read as green.
 ## Last-green visibility
 
 - Every green leg writes its date to that run's step summary.
-- The `staleness` job (daily) recomputes from the Actions API:
-  - last green run of any leg (staleness-cron runs excluded) - fails the
-    gate when this ages past the grace window (default 28 days, repo
-    variable `K8S_CONFORMANCE_STALENESS_GRACE_DAYS`) or when no green run
-    has ever existed;
+- The `staleness` job (daily) recomputes from the Actions API, scanning run
+  history back past the widest grace window and inspecting each candidate
+  green run's job steps:
+  - last suite-verified green run of any leg (staleness-cron runs excluded;
+    FAR-1620: a run counts only when the "Run the runtime-provider
+    conformance suite" step concluded `success` - a path-skipped
+    docs-only push or chart-only PR that still concludes `success` never
+    refreshes this, and a jobs-API read failure is never counted as fresh)
+    - fails the gate when this ages past the grace window (default 28
+    days, repo variable `K8S_CONFORMANCE_STALENESS_GRACE_DAYS`) or when no
+    suite-verified green exists in the scanned history;
   - last scheduled (managed) run - fails when the weekly cron has produced
     no run for 14 days (repo variable
     `K8S_CONFORMANCE_MANAGED_DARK_GRACE_DAYS`), which is the GitHub
