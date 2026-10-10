@@ -160,12 +160,14 @@ def _sweep_stale_public_rate_limit_clients(window_start: float) -> int:
     key can sit behind an in-window one; the hard bound is the LRU backstop's
     job, not the sweep's. Returns the number of keys evicted.
     """
-    evicted = 0
-    for ip in list(islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH)):
-        if not any(t > window_start for t in _public_rate_limit[ip]):
-            del _public_rate_limit[ip]
-            evicted += 1
-    return evicted
+    stale = [
+        ip
+        for ip in islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH)
+        if not any(t > window_start for t in _public_rate_limit[ip])
+    ]
+    for ip in stale:
+        del _public_rate_limit[ip]
+    return len(stale)
 
 
 def _touch_public_rate_limit_client(client_ip: str, timestamps: list[float]) -> None:
@@ -253,16 +255,16 @@ def _sweep_stale_public_daily_clients(threshold: str) -> int:
     retained. Best-effort for the same reason as its rate-limit sibling; the
     LRU backstop, not this sweep, is the hard bound. Returns the count evicted.
     """
-    evicted = 0
-    for ip in list(islice(_public_daily_event_count, _PUBLIC_SWEEP_BATCH)):
+    to_evict = []
+    for ip in islice(_public_daily_event_count, _PUBLIC_SWEEP_BATCH):
         days = _public_daily_event_count[ip]
-        for date_str in list(days):
-            if date_str < threshold:
-                del days[date_str]
+        for date_str in [key for key in days if key < threshold]:
+            del days[date_str]
         if not days:
-            del _public_daily_event_count[ip]
-            evicted += 1
-    return evicted
+            to_evict.append(ip)
+    for ip in to_evict:
+        del _public_daily_event_count[ip]
+    return len(to_evict)
 
 
 def _touch_public_daily_client(client_ip: str, days: dict[str, int]) -> None:
@@ -309,9 +311,8 @@ def _admit_public_daily_client(client_ip: str, now: float) -> dict[str, int]:
         days = {}
     else:
         threshold = _public_daily_window_start()
-        for date_str in list(days):
-            if date_str < threshold:
-                del days[date_str]
+        for date_str in [key for key in days if key < threshold]:
+            del days[date_str]
     _touch_public_daily_client(client_ip, days)
     return days
 
