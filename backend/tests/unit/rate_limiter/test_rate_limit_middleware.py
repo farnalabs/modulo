@@ -178,6 +178,22 @@ class TestShouldRateLimit:
         mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
         assert mw._should_rate_limit(make_mock_request(method=method)) is True
 
+    def test_skips_delete_and_options(self):
+        """Only POST/PUT/PATCH (and allow-listed GET reads) are gated — other methods pass through."""
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(make_mock_request(method="DELETE")) is False
+        assert mw._should_rate_limit(make_mock_request(method="OPTIONS")) is False
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/api/v1/auth/login-context", "/api/v1/auth/org-login/acme"],
+        ids=["login-context", "org-login"],
+    )
+    def test_rate_limits_anonymous_get_endpoints(self, path):
+        """FAR-856: pre-auth anonymous GET endpoints are gated by GET_RULES (enumeration defence)."""
+        mw = RateLimitMiddleware(app=FastAPI(), settings=make_settings(), registry=_registry())
+        assert mw._should_rate_limit(make_mock_request(method="GET", path=path)) is True
+
     def test_skip_when_bypass_header_matches(self):
         settings = make_settings(modulo_ratelimit_bypass_token="tok")
         mw = RateLimitMiddleware(app=FastAPI(), settings=settings, registry=_registry())
@@ -264,20 +280,18 @@ class TestClientKey:
         req = make_mock_request(headers={"Authorization": f"Bearer {token}"})
         assert middleware._client_key(req) == "user:o1:a1:/api/v1/runs"
 
-    def test_bearer_jwt_without_identity_falls_back_to_ip(self, middleware):
-        token = jwt.encode({"scope": "public"}, "a" * 32, algorithm="HS256")
-        req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
-        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
-
-    def test_bearer_jwt_without_org_id_falls_back_to_ip(self, middleware):
-        """A JWT with only user_id must not key on a missing org_id."""
-        token = jwt.encode({"user_id": "u1"}, "a" * 32, algorithm="HS256")
-        req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
-        assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
-
-    def test_bearer_jwt_without_user_id_falls_back_to_ip(self, middleware):
-        """A JWT with only org_id must not key on a missing user_id."""
-        token = jwt.encode({"org_id": "o1"}, "a" * 32, algorithm="HS256")
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"scope": "public"},
+            {"user_id": "u1"},
+            {"org_id": "o1"},
+        ],
+        ids=["no-identity", "missing-org-id", "missing-user-id"],
+    )
+    def test_bearer_jwt_missing_identity_falls_back_to_ip(self, middleware, claims):
+        """A JWT without both org_id and user_id must not key on a partial identity."""
+        token = jwt.encode(claims, "a" * 32, algorithm="HS256")
         req = make_mock_request(headers={"Authorization": f"Bearer {token}", "X-Forwarded-For": "203.0.113.9"})
         assert middleware._client_key(req) == "ip:203.0.113.9:/api/v1/runs"
 

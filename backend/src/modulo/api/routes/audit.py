@@ -42,6 +42,10 @@ _CODE_AUDIT_MANAGE = "audit.manage"
 _MSG_DATABASE_CONNECTION_FAILED_PLEASE = "Database connection failed. Please try again."
 _SCAN_NDJSON_MEDIA_TYPE = "application/x-ndjson"
 
+_DESC_ACTOR_USER_ID = "Filter by actor user ID"
+_DESC_START_DATE = "Filter by start date (ISO 8601)"
+_DESC_END_DATE = "Filter by end date (ISO 8601)"
+
 
 _log = logging.getLogger(__name__)
 
@@ -58,15 +62,15 @@ async def list_audit_events_endpoint(
     cursor: str | None = Query(None, max_length=256, description="Cursor: JSON {c:created_at, i:id}"),
     limit: int = Query(50, ge=1, le=200, description="Number of events per page"),
     event_type: str | None = Query(None, max_length=64, description="Filter by event type (action_type)"),
-    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
+    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description=_DESC_ACTOR_USER_ID),
     resource_type: str | None = Query(
         None,
         max_length=64,
         alias="entity_type",
         description="Filter by resource type (entity_type)",
     ),
-    from_date: datetime | None = Query(None, alias="from_date", description="Filter by start date (ISO 8601)"),
-    to_date: datetime | None = Query(None, alias="to_date", description="Filter by end date (ISO 8601)"),
+    from_date: datetime | None = Query(None, alias="from_date", description=_DESC_START_DATE),
+    to_date: datetime | None = Query(None, alias="to_date", description=_DESC_END_DATE),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
@@ -204,10 +208,10 @@ async def export_chain_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=1000),
     event_type: str | None = Query(None, max_length=64, description="Filter by event type"),
-    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
+    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description=_DESC_ACTOR_USER_ID),
     resource_type: str | None = Query(None, max_length=64, alias="entity_type", description="Filter by resource type"),
-    from_date: datetime | None = Query(None, description="Filter by start date (ISO 8601)"),
-    to_date: datetime | None = Query(None, description="Filter by end date (ISO 8601)"),
+    from_date: datetime | None = Query(None, description=_DESC_START_DATE),
+    to_date: datetime | None = Query(None, description=_DESC_END_DATE),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
@@ -304,10 +308,10 @@ async def _scan_body(
 async def scan_chain_endpoint(
     format: str = Query("json", pattern="^(json|csv)$"),
     event_type: str | None = Query(None, max_length=64, description="Filter by event type"),
-    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description="Filter by actor user ID"),
+    actor_user_id: str | None = Query(None, max_length=64, alias="user_id", description=_DESC_ACTOR_USER_ID),
     resource_type: str | None = Query(None, max_length=64, alias="entity_type", description="Filter by resource type"),
-    from_date: datetime | None = Query(None, description="Filter by start date (ISO 8601)"),
-    to_date: datetime | None = Query(None, description="Filter by end date (ISO 8601)"),
+    from_date: datetime | None = Query(None, description=_DESC_START_DATE),
+    to_date: datetime | None = Query(None, description=_DESC_END_DATE),
     settings: Settings = Depends(get_settings),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> Response:

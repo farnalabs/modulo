@@ -12,24 +12,29 @@ the others' ``FOR UPDATE`` upgrade — a classic foreign-key ``FOR KEY SHARE`` -
 The gate now requests ``FOR NO KEY UPDATE`` (SQLAlchemy
 ``with_for_update(key_share=True)``), which does NOT conflict with
 ``FOR KEY SHARE`` and still conflicts with itself, so concurrent spend accrual
-remains serialised while the upgrade deadlock is removed. The gate only writes
-the non-key column ``org_cumulative_spend_cents``.
+remains serialised while the upgrade deadlock is removed. The gate acquires the
+lock and returns the accrual it decided on; the lifetime
+``org_cumulative_spend_cents`` increment itself rides the ledger savepoint in
+``_record_ledger_with_retry`` (FAR-391/#1499 money-correctness), which is
+invoked by ``_ledger_block`` while the org lock is still held.
 
 Why this is an integration test
 -------------------------------
 The defect is a real Postgres row-lock interaction: no mock produces a 40P01.
-The test drives the REAL ``_apply_spend_ceiling_gate`` from N independent
-sessions/transactions, each holding a real FK ``FOR KEY SHARE`` on the org (via
-an ``audit_events`` insert, exactly as a finalising run records facts). A
-barrier synchronises every session so ALL N hold their share lock before ANY
-requests the org row lock, which makes the old ``FOR UPDATE`` code deadlock
-deterministically.
+The test drives the REAL terminal ledger block (``_ledger_block``, which
+invokes ``_apply_spend_ceiling_gate`` and the ledger-savepoint accrual) from N
+independent sessions/transactions, each holding a real FK ``FOR KEY SHARE`` on
+the org (via an ``audit_events`` insert, exactly as a finalising run records
+facts). A barrier synchronises every session so ALL N hold their share lock
+before ANY requests the org row lock, which makes the old ``FOR UPDATE`` code
+deadlock deterministically.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -37,7 +42,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
+from modulo.core.cost_controller.finalize import _ledger_block
 from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
@@ -155,7 +160,21 @@ async def _finalise_one(
         await barrier.wait()
         run = await session.get(Run, run_id)
         assert run is not None
-        await _apply_spend_ceiling_gate(session, run, org_id=org_id, total=_RUN_COST_USD, run_id=run_id)
+        # The REAL terminal ledger block: the ceiling gate acquires the org
+        # FOR NO KEY UPDATE lock, then the lifetime accrual is applied inside
+        # the ledger savepoint — all within this transaction, exactly as
+        # production finalisation does.
+        await _ledger_block(
+            session,
+            run_id=run_id,
+            org_id=org_id,
+            status="complete",
+            total=_RUN_COST_USD,
+            owner_team_id=None,
+            run_date=datetime.now(UTC).date(),
+            finalize_fields={},
+            session_factory=None,
+        )
 
 
 async def test_concurrent_finalisations_do_not_deadlock(db_engine: AsyncEngine) -> None:

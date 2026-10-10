@@ -18,6 +18,9 @@ _log = logging.getLogger(__name__)
 
 _PROVIDER_CLOSE_TIMEOUT_S = 60
 
+#: Log message when a provider name is already registered at resolution time.
+_MSG_PROVIDER_ALREADY_REGISTERED = "Provider '%s' already registered, skipping"
+
 
 def _is_unknown_provider_type(provider_type: str) -> bool:
     """Return True when *provider_type* is not in the known vocabulary at all.
@@ -169,7 +172,7 @@ class RuntimeProviderHub:
                     try:
                         self.register(provider_name, docker_provider)
                     except ValueError:
-                        _log.warning("Provider '%s' already registered, skipping", provider_name)
+                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
                 case "e2b":
                     from modulo.core.runtime_provider.e2b import E2BRuntimeProvider
 
@@ -181,7 +184,7 @@ class RuntimeProviderHub:
                     try:
                         self.register(provider_name, e2b_provider)
                     except ValueError:
-                        _log.warning("Provider '%s' already registered, skipping", provider_name)
+                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
                 case "kubernetes" | "k8s":
                     # FAR-1051: the Kubernetes provider registers here too, so
                     # both hub entry points agree (build_hub + initialise). The
@@ -209,7 +212,7 @@ class RuntimeProviderHub:
                     try:
                         self.register(provider_name, kubernetes_provider)
                     except ValueError:
-                        _log.warning("Provider '%s' already registered, skipping", provider_name)
+                        _log.warning(_MSG_PROVIDER_ALREADY_REGISTERED, provider_name)
                 case _:
                     if _is_unknown_provider_type(provider_type):
                         raise UnknownProviderTypeError(provider_type, PROVIDER_TYPES)

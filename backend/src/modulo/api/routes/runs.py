@@ -134,6 +134,17 @@ _CODE_RUNS_TRIGGER_RUN = "runs.trigger_run"
 _CODE_RUNS_TRIGGER_RERUN = "runs.trigger_rerun"
 _CODE_RUNS_REVEAL_NODE_PROMPT = "runs.reveal_node_prompt"
 
+_CODE_RUNS_GET_RUN_STATUS = "runs.get_run_status"
+_CODE_RUNS_CANCEL_RUN = "runs.cancel_run"
+_CODE_RUNS_GET_RUN_IO_ENDPOINT = "runs.get_run_io_endpoint"
+_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT = "runs.get_run_work_item_enrichment"
+_CODE_RUNS_EXPORT_RUN_FIXTURE = "runs.export_run_fixture"
+_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS = "runs.get_run_workspace_events"
+_CODE_RUNS_GET_RUN_NODE_OUTPUT = "runs.get_run_node_output"
+_CODE_RUNS_RECOVER_RUN_NODE = "runs.recover_run_node"
+_CODE_RUNS_DIFF_NODE_OUTPUT = "runs.diff_node_output"
+_CODE_RUN_STATUS = "run.status"
+
 
 _log = logging.getLogger(__name__)
 
@@ -1616,7 +1627,7 @@ async def get_run_heatmap_endpoint(
 async def get_run_status(
     run_id: uuid.UUID,
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
 ) -> RunResponse:
     try:
         # qa M15: run + gate_fired derive in ONE transaction (the removed
@@ -1629,21 +1640,21 @@ async def get_run_status(
         )
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
     except IntegrityError:
-        _log.exception("runs.get_run_status")
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
-        _log.exception("runs.get_run_status")
+        _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_status")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_STATUS)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1749,20 +1760,20 @@ async def cancel_run(
             await set_rls_org(session, principal.organisation_id)
             await _cancel_run(session, principal, run_id)
     except IntegrityError:
-        _log.exception("runs.cancel_run")
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.cancel_run")
+        _log.exception(_CODE_RUNS_CANCEL_RUN)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.cancel_run")
+        raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
             # FAR-1610: the bounded (mutation_row_lock_timeout_ms) wait on the
             # hot ``runs`` row lock expired (55P03). The DB is healthy and
@@ -2008,7 +2019,7 @@ def _build_run_io_response(run: Run, node_labels: dict[str, str], blobs: RunBlob
 
 
 @router.get("/{run_id}/io")
-@handle_db_errors("runs.get_run_io_endpoint")
+@handle_db_errors(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
 async def get_run_io_endpoint(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2039,20 +2050,20 @@ async def get_run_io_endpoint(
                 else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.get_run_io_endpoint")
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_io_endpoint")
+        _log.exception(_CODE_RUNS_GET_RUN_IO_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_io_endpoint")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_IO_ENDPOINT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2097,11 +2108,11 @@ class WorkItemEnrichmentResponse(BaseModel):
 
 
 @router.get("/{run_id}/work-items/enrichment", response_model=WorkItemEnrichmentResponse)
-@handle_db_errors("runs.get_run_work_item_enrichment")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
 async def get_run_work_item_enrichment(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
     settings: Settings = Depends(get_settings),
 ) -> WorkItemEnrichmentResponse:
     """Live GitHub enrichment for the run's PR work-item badges (FAR-737).
@@ -2126,19 +2137,19 @@ async def get_run_work_item_enrichment(
     except HTTPException:
         raise
     except IntegrityError:
-        _log.exception("runs.get_run_work_item_enrichment")
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_work_item_enrichment")
+        _log.exception(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_work_item_enrichment")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2159,7 +2170,7 @@ async def get_run_work_item_enrichment(
 
 
 @router.get("/{run_id}/export-fixture")
-@handle_db_errors("runs.export_run_fixture")
+@handle_db_errors(_CODE_RUNS_EXPORT_RUN_FIXTURE)
 async def export_run_fixture(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2186,20 +2197,20 @@ async def export_run_fixture(
             # (the response body is built after the tx closes).
             blobs = await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
     except IntegrityError:
-        _log.exception("runs.export_run_fixture")
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.export_run_fixture")
+        _log.exception(_CODE_RUNS_EXPORT_RUN_FIXTURE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.export_run_fixture")
+        raise_session_contract_error(exc, _CODE_RUNS_EXPORT_RUN_FIXTURE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2275,7 +2286,7 @@ async def get_run_workspace_lease(
 
 
 @router.get("/{run_id}/workspace-events")
-@handle_db_errors("runs.get_run_workspace_events")
+@handle_db_errors(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
 async def get_run_workspace_events(
     run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -2307,20 +2318,20 @@ async def get_run_workspace_events(
             )
             events = result.scalars().all()
     except IntegrityError:
-        _log.exception("runs.get_run_workspace_events")
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_workspace_events")
+        _log.exception(_CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_workspace_events")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_WORKSPACE_EVENTS)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2391,7 +2402,7 @@ class NodeOutputResponse(BaseModel):
 
 
 @router.get("/{run_id}/nodes/{node_id}/output")
-@handle_db_errors("runs.get_run_node_output")
+@handle_db_errors(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
 async def get_run_node_output(
     run_id: uuid.UUID,
     node_id: str,
@@ -2429,20 +2440,20 @@ async def get_run_node_output(
                 else await read_run_blobs(session, run_id=run_id, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.get_run_node_output")
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.get_run_node_output")
+        _log.exception(_CODE_RUNS_GET_RUN_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.get_run_node_output")
+        raise_session_contract_error(exc, _CODE_RUNS_GET_RUN_NODE_OUTPUT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2516,7 +2527,7 @@ async def get_run_events(
     since_seq: int = Query(0, ge=0),
     node_id: str | None = Query(None),
     factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
-    principal: TenantPrincipal = require_permission_any_credential("run.status"),
+    principal: TenantPrincipal = require_permission_any_credential(_CODE_RUN_STATUS),
 ) -> RunEventsResponse:
     """Return live events for a run since a sequence number.
 
@@ -2607,7 +2618,7 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.observe_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2649,7 +2660,7 @@ async def observe_run_node(
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.observe_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_OBSERVE_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2693,7 +2704,7 @@ class NodeRecoverResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(audited("run_node_recovered", "run_node", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("runs.recover_run_node")
+@handle_db_errors(_CODE_RUNS_RECOVER_RUN_NODE)
 async def recover_run_node(
     run_id: uuid.UUID,
     node_id: str,
@@ -2811,20 +2822,20 @@ async def recover_run_node(
             except ConcurrentRecoveryError as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError:
-        _log.exception("runs.recover_run_node")
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("runs.recover_run_node")
+        _log.exception(_CODE_RUNS_RECOVER_RUN_NODE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.recover_run_node")
+        raise_session_contract_error(exc, _CODE_RUNS_RECOVER_RUN_NODE)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3563,7 +3574,7 @@ class NodeOutputDiffResponse(BaseModel):
 # masking and returns a line-level diff - it writes nothing. Deliberately left
 # in audit_coverage_baseline.txt.
 @router.post("/diff")
-@handle_db_errors("runs.diff_node_output")
+@handle_db_errors(_CODE_RUNS_DIFF_NODE_OUTPUT)
 async def diff_node_output(
     req: NodeOutputDiffRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -3594,21 +3605,21 @@ async def diff_node_output(
                 else await read_run_blobs(session, run_id=req.run_id_b, organisation_id=principal.organisation_id)
             )
     except IntegrityError:
-        _log.exception("runs.diff_node_output")
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from None
 
     except ProgrammingError:
-        _log.exception("runs.diff_node_output")
+        _log.exception(_CODE_RUNS_DIFF_NODE_OUTPUT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE_CONTACT_SUPPORT,
         ) from None
 
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "runs.diff_node_output")
+        raise_session_contract_error(exc, _CODE_RUNS_DIFF_NODE_OUTPUT)
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

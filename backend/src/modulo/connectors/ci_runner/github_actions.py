@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
 
+#: Validation error raised when a run-dispatch call omits the pipeline id.
+_PIPELINE_ID_REQUIRED = "pipeline_id is required"
+
 #: Attempts to resolve a freshly-dispatched run through the latest-runs
 #: lookup. GitHub's runs listing is eventually consistent right after a
 #: dispatch accepts (204 No Content), so a single immediate miss must not be
@@ -226,7 +229,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         variables: dict[str, str] | None = None,
     ) -> CIRun:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         owner_repo, workflow_filename = self._split_pipeline_id(pipeline_id)
 
         # Captured BEFORE the dispatch: the lower bound that keeps the
@@ -333,7 +336,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         limit: int = 20,
     ) -> list[CIRun]:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         params: dict[str, Any] = {"per_page": limit}
         owner_repo = pipeline_id
         if pipeline_id.count("/") >= 2:
@@ -402,7 +405,7 @@ class _GitHubActionsTestDouble(CITestDoubleMixin, GitHubActionsCIRunner):
 
     def _double_trigger_id(self, pipeline_id: str) -> str:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         return f"{self._split_pipeline_id(pipeline_id)[0]}/{self._uuid.uuid4()}"
 
     def _double_listed_id(self, resolved: str) -> str:

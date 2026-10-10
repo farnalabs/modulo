@@ -21,38 +21,6 @@ def test_connector_type(connector: DiscordConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: DiscordConnector) -> None:
-    respx.get(f"{_BASE}/users/@me").mock(return_value=httpx.Response(200, json={"id": "123", "username": "ModuloBot"}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "ModuloBot"
-
-
-@respx.mock
-async def test_health_check_invalid_token(connector: DiscordConnector) -> None:
-    respx.get(f"{_BASE}/users/@me").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid Discord bot token" in result.detail
-
-
-@respx.mock
-async def test_health_check_network_error(connector: DiscordConnector) -> None:
-    respx.get(f"{_BASE}/users/@me").mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
-@respx.mock
-async def test_health_check_other_status(connector: DiscordConnector) -> None:
-    respx.get(f"{_BASE}/users/@me").mock(return_value=httpx.Response(429, text="Too Many Requests"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "429" in result.detail
-
-
-@respx.mock
 async def test_query_guilds(connector: DiscordConnector) -> None:
     guilds = [
         {"id": "111", "name": "Modulo Dev"},

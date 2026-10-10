@@ -38,6 +38,15 @@ from modulo.db.rls import set_rls_org
 _MSG_COMPOSITE_TEMPLATE_NOT_FOUND = "Composite template not found"
 _PERM_PIPELINE_UPDATE = "pipeline.update"
 
+_CODE_LIST_COMPOSITE_TEMPLATES_ENDPOINT = "composite_templates.list_composite_templates_endpoint"
+_CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT = "composite_templates.create_composite_template_endpoint"
+_CODE_GET_COMPOSITE_TEMPLATE_ENDPOINT = "composite_templates.get_composite_template_endpoint"
+_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT = "composite_templates.update_composite_template_endpoint"
+_CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT = "composite_templates.delete_composite_template_endpoint"
+_CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT = "composite_templates.restore_composite_template_endpoint"
+_CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT = "composite_templates.save_composite_editor_endpoint"
+_CODE_PUBLISH_COMPOSITE_ENDPOINT = "composite_templates.publish_composite_endpoint"
+
 
 def _mask_sub_pipeline_graph(graph: dict[str, Any] | None) -> dict[str, Any]:
     """Mask credential-bearing node fields inside a sub-pipeline graph (FAR-1181).
@@ -147,7 +156,7 @@ def _mask_template_response(template: Any) -> CompositeTemplateResponse:
 
 
 @router.get("")
-@handle_db_errors("composite_templates.list_composite_templates_endpoint")
+@handle_db_errors(_CODE_LIST_COMPOSITE_TEMPLATES_ENDPOINT)
 async def list_composite_templates_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -164,14 +173,14 @@ async def list_composite_templates_endpoint(
                 page_size=page_size,
             )
     except ProgrammingError:
-        logger.exception("composite_templates.list_composite_templates_endpoint")
+        logger.exception(_CODE_LIST_COMPOSITE_TEMPLATES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.list_composite_templates_endpoint")
-        logger.exception("composite_templates.list_composite_templates_endpoint")
+        raise_session_contract_error(exc, _CODE_LIST_COMPOSITE_TEMPLATES_ENDPOINT)
+        logger.exception(_CODE_LIST_COMPOSITE_TEMPLATES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -199,7 +208,7 @@ async def list_composite_templates_endpoint(
         Depends(audited("composite_template_created", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.create_composite_template_endpoint")
+@handle_db_errors(_CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def create_composite_template_endpoint(
     req: CompositeTemplateCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -231,14 +240,14 @@ async def create_composite_template_endpoint(
             )
         return _mask_template_response(template)
     except ProgrammingError:
-        logger.exception("composite_templates.create_composite_template_endpoint")
+        logger.exception(_CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.create_composite_template_endpoint")
-        logger.exception("composite_templates.create_composite_template_endpoint")
+        raise_session_contract_error(exc, _CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT)
+        logger.exception(_CODE_CREATE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -254,7 +263,7 @@ async def create_composite_template_endpoint(
 
 
 @router.get("/{template_id}")
-@handle_db_errors("composite_templates.get_composite_template_endpoint")
+@handle_db_errors(_CODE_GET_COMPOSITE_TEMPLATE_ENDPOINT)
 async def get_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -265,14 +274,14 @@ async def get_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await get_composite_template(session, template_id)
     except ProgrammingError:
-        logger.exception("composite_templates.get_composite_template_endpoint")
+        logger.exception(_CODE_GET_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.get_composite_template_endpoint")
-        logger.exception("composite_templates.get_composite_template_endpoint")
+        raise_session_contract_error(exc, _CODE_GET_COMPOSITE_TEMPLATE_ENDPOINT)
+        logger.exception(_CODE_GET_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -296,7 +305,7 @@ async def get_composite_template_endpoint(
         Depends(audited("composite_template_updated", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.update_composite_template_endpoint")
+@handle_db_errors(_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def update_composite_template_endpoint(
     template_id: uuid.UUID,
     req: CompositeTemplateUpdate,
@@ -332,14 +341,14 @@ async def update_composite_template_endpoint(
                 )
             template = await update_composite_template(session, template_id, updates)
     except ProgrammingError:
-        logger.exception("composite_templates.update_composite_template_endpoint")
+        logger.exception(_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.update_composite_template_endpoint")
-        logger.exception("composite_templates.update_composite_template_endpoint")
+        raise_session_contract_error(exc, _CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
+        logger.exception(_CODE_UPDATE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -364,7 +373,7 @@ async def update_composite_template_endpoint(
         Depends(audited("composite_template_deleted", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.delete_composite_template_endpoint")
+@handle_db_errors(_CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def delete_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -375,14 +384,14 @@ async def delete_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             deleted = await soft_delete_composite_template(session, template_id)
     except ProgrammingError:
-        logger.exception("composite_templates.delete_composite_template_endpoint")
+        logger.exception(_CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.delete_composite_template_endpoint")
-        logger.exception("composite_templates.delete_composite_template_endpoint")
+        raise_session_contract_error(exc, _CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT)
+        logger.exception(_CODE_DELETE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -405,7 +414,7 @@ async def delete_composite_template_endpoint(
         Depends(audited("composite_template_restored", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.restore_composite_template_endpoint")
+@handle_db_errors(_CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT)
 async def restore_composite_template_endpoint(
     template_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -416,14 +425,14 @@ async def restore_composite_template_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await restore_composite_template(session, template_id)
     except ProgrammingError:
-        logger.exception("composite_templates.restore_composite_template_endpoint")
+        logger.exception(_CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.restore_composite_template_endpoint")
-        logger.exception("composite_templates.restore_composite_template_endpoint")
+        raise_session_contract_error(exc, _CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT)
+        logger.exception(_CODE_RESTORE_COMPOSITE_TEMPLATE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -502,7 +511,7 @@ async def get_composite_editor_endpoint(
         Depends(audited("composite_template_editor_saved", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.save_composite_editor_endpoint")
+@handle_db_errors(_CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT)
 async def save_composite_editor_endpoint(
     template_id: uuid.UUID,
     req: EditorGraphUpdate,
@@ -536,14 +545,14 @@ async def save_composite_editor_endpoint(
                 },
             )
     except ProgrammingError:
-        logger.exception("composite_templates.save_composite_editor_endpoint")
+        logger.exception(_CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.save_composite_editor_endpoint")
-        logger.exception("composite_templates.save_composite_editor_endpoint")
+        raise_session_contract_error(exc, _CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT)
+        logger.exception(_CODE_SAVE_COMPOSITE_EDITOR_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -680,7 +689,7 @@ class PublishResponse(BaseModel):
         Depends(audited("composite_template_published", "composite_template", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("composite_templates.publish_composite_endpoint")
+@handle_db_errors(_CODE_PUBLISH_COMPOSITE_ENDPOINT)
 async def publish_composite_endpoint(
     template_id: uuid.UUID,
     req: PublishRequest,
@@ -693,14 +702,14 @@ async def publish_composite_endpoint(
             await set_rls_org(session, principal.organisation_id)
             template = await update_composite_template(session, template_id, {"version": version})
     except ProgrammingError:
-        logger.exception("composite_templates.publish_composite_endpoint")
+        logger.exception(_CODE_PUBLISH_COMPOSITE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "composite_templates.publish_composite_endpoint")
-        logger.exception("composite_templates.publish_composite_endpoint")
+        raise_session_contract_error(exc, _CODE_PUBLISH_COMPOSITE_ENDPOINT)
+        logger.exception(_CODE_PUBLISH_COMPOSITE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,

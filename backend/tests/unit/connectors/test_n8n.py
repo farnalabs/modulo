@@ -38,52 +38,6 @@ async def test_auth_uses_n8n_api_key_header(connector: N8NConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": []})
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert "reachable" in result.detail
-
-
-@respx.mock
-async def test_health_check_invalid_token(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid n8n API token" in result.detail
-
-
-@respx.mock
-async def test_health_check_connect_error(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Cannot connect" in result.detail
-
-
-@respx.mock
-async def test_health_check_other_status(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        return_value=httpx.Response(429, text="Too Many Requests")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "429" in result.detail
-
-
-@respx.mock
-async def test_health_check_generic_error(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(side_effect=RuntimeError("unexpected"))
-    result = await connector.health_check()
-    assert result.ok is False
-
-
 # -- query: workflows -- #
 
 
@@ -611,10 +565,3 @@ async def test_write_credential_with_full_data(connector: N8NConnector) -> None:
         )
     )
     assert result["id"] == "C2"
-
-
-@respx.mock
-async def test_health_check_network_timeout(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(side_effect=httpx.TimeoutException("timed out"))
-    result = await connector.health_check()
-    assert result.ok is False

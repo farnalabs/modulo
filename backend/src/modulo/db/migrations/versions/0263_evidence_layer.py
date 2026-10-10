@@ -32,6 +32,10 @@ _ORG_ISOLATION_POLICY = "organisation_id = nullif(current_setting('app.organisat
 
 _TABLE = "evidence"
 
+# Shared DDL fragments (S1192) — byte-identical to the inline literals.
+_RLS_ALTER_PREFIX = 'ALTER TABLE public."'
+_NOW_SERVER_DEFAULT = "now()"
+
 # Module-level tuple of org-scoped tables created by this migration.
 # The RLS coverage test (test_rls_coverage.py) detects tables via Style 2:
 # it imports migration modules and reads any module-level tuple/list whose
@@ -56,9 +60,9 @@ def _enable_rls() -> None:
         # Step 1: ownership transfer to modulo_migrate.
         op.execute(text(_OWNER_TRANSFER_SQL.format(table=table)))
         # Step 2: enable RLS.
-        op.execute(text('ALTER TABLE public."' + table + '" ENABLE ROW LEVEL SECURITY'))
+        op.execute(text(_RLS_ALTER_PREFIX + table + '" ENABLE ROW LEVEL SECURITY'))
         # Step 3: force RLS.
-        op.execute(text('ALTER TABLE public."' + table + '" FORCE ROW LEVEL SECURITY'))
+        op.execute(text(_RLS_ALTER_PREFIX + table + '" FORCE ROW LEVEL SECURITY'))
         # Step 4: org-isolation policy.
         op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + table + '"'))
         op.execute(
@@ -93,13 +97,13 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text(_NOW_SERVER_DEFAULT),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text(_NOW_SERVER_DEFAULT),
             nullable=False,
         ),
         sa.Column("key", sa.Text(), nullable=False),
@@ -109,7 +113,7 @@ def upgrade() -> None:
         sa.Column(
             "observed_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text(_NOW_SERVER_DEFAULT),
             nullable=False,
         ),
         sa.Column(
@@ -168,7 +172,7 @@ def downgrade() -> None:
 
     # Drop RLS policy first.
     op.execute(text('DROP POLICY IF EXISTS rls_org_isolation ON public."' + _TABLE + '"'))
-    op.execute(text('ALTER TABLE public."' + _TABLE + '" DISABLE ROW LEVEL SECURITY'))
+    op.execute(text(_RLS_ALTER_PREFIX + _TABLE + '" DISABLE ROW LEVEL SECURITY'))
 
     # Drop indexes.
     op.drop_index("ix_evidence_created_at", table_name=_TABLE)

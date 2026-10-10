@@ -55,6 +55,11 @@ _CODE_ENVIRONMENT_PROFILES_CREATE_PROFILE = "environment_profiles.create_profile
 _CODE_ENVIRONMENT_PROFILES_UPDATE_PROFILE = "environment_profiles.update_profile"
 _CODE_ENVIRONMENT_PROFILES_TEST_PROFILE = "environment_profiles.test_profile"
 
+_CODE_ENVIRONMENT_PROFILES_LIST_PROFILES = "environment_profiles.list_profiles"
+_CODE_ENVIRONMENT_PROFILES_GET_PROFILE = "environment_profiles.get_profile"
+_CODE_ENVIRONMENT_PROFILES_DELETE_PROFILE = "environment_profiles.delete_profile"
+_CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE = "environment_profiles.restore_profile"
+
 
 _log = logging.getLogger(__name__)
 
@@ -184,7 +189,7 @@ def _to_response(p: EnvironmentProfile) -> ProfileResponse:
 
 
 @router.get("")
-@handle_db_errors("environment_profiles.list_profiles")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_LIST_PROFILES)
 async def list_profiles(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -197,14 +202,14 @@ async def list_profiles(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             result = await list_environment_profiles(session, page=page, page_size=page_size)
     except ProgrammingError:
-        _log.exception("environment_profiles.list_profiles")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_LIST_PROFILES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "environment_profiles.list_profiles")
-        _log.exception("environment_profiles.list_profiles")
+        raise_session_contract_error(exc, _CODE_ENVIRONMENT_PROFILES_LIST_PROFILES)
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_LIST_PROFILES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
@@ -297,7 +302,7 @@ async def create_profile(
 
 
 @router.get("/{profile_id}")
-@handle_db_errors("environment_profiles.get_profile")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_GET_PROFILE)
 async def get_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -309,14 +314,14 @@ async def get_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await get_environment_profile(session, profile_id)
     except ProgrammingError:
-        _log.exception("environment_profiles.get_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_GET_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "environment_profiles.get_profile")
-        _log.exception("environment_profiles.get_profile")
+        raise_session_contract_error(exc, _CODE_ENVIRONMENT_PROFILES_GET_PROFILE)
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_GET_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
@@ -521,7 +526,7 @@ async def update_profile(
         )
     ],
 )
-@handle_db_errors("environment_profiles.delete_profile")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_DELETE_PROFILE)
 async def delete_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -533,14 +538,14 @@ async def delete_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_environment_profile(session, profile_id)
     except ProgrammingError:
-        _log.exception("environment_profiles.delete_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_DELETE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "environment_profiles.delete_profile")
-        _log.exception("environment_profiles.delete_profile")
+        raise_session_contract_error(exc, _CODE_ENVIRONMENT_PROFILES_DELETE_PROFILE)
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_DELETE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
@@ -561,7 +566,7 @@ async def delete_profile(
         Depends(audited("environment_profile_restored", "environment_profile", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("environment_profiles.restore_profile")
+@handle_db_errors(_CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE)
 async def restore_profile(
     profile_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -573,14 +578,14 @@ async def restore_profile(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             profile = await restore_environment_profile(session, profile_id)
     except ProgrammingError:
-        _log.exception("environment_profiles.restore_profile")
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "environment_profiles.restore_profile")
-        _log.exception("environment_profiles.restore_profile")
+        raise_session_contract_error(exc, _CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE)
+        _log.exception(_CODE_ENVIRONMENT_PROFILES_RESTORE_PROFILE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,

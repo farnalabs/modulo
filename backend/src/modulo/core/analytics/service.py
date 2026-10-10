@@ -88,6 +88,8 @@ _SQL_SET_STATEMENT_TIMEOUT = "SELECT set_config('statement_timeout', :ms, true)"
 _SQL_SET_TIMEZONE_UTC = "SELECT set_config('timezone', 'UTC', true)"
 _ERR_DATABASE_UNAVAILABLE = "Database temporarily unavailable."
 _ERR_RATE_LIMIT_EXCEEDED = "Rate limit exceeded"
+_MSG_MIGRATION_REQUIRED = "Feature is not available. Run database migrations to enable it."
+_MSG_QUERY_TIMEOUT = "query exceeded timeout — reduce the date range"
 
 # Max date range accepted by the bucketed query (matches the old route guard).
 _MAX_QUERY_RANGE_DAYS = 365
@@ -381,13 +383,11 @@ async def _execute_with_guards(
             raise
         except ProgrammingError:
             _log.exception("analytics.query.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.query.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.query.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:
@@ -888,13 +888,11 @@ async def export_facts(
             raise
         except ProgrammingError:
             _log.exception("analytics.export.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.export.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.export.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:
@@ -1037,13 +1035,11 @@ async def stream_export_facts(
             raise
         except ProgrammingError:
             _log.exception("analytics.scan.programming_error", extra={"org_id": str(org_id)})
-            raise AnalyticsMigrationRequiredError(
-                "Feature is not available. Run database migrations to enable it."
-            ) from None
+            raise AnalyticsMigrationRequiredError(_MSG_MIGRATION_REQUIRED) from None
         except DBAPIError as exc:
             if _is_query_canceled(exc):
                 _log.warning("analytics.scan.timeout", extra={"org_id": str(org_id)})
-                raise AnalyticsQueryTimeoutError("query exceeded timeout — reduce the date range") from None
+                raise AnalyticsQueryTimeoutError(_MSG_QUERY_TIMEOUT) from None
             _log.exception("analytics.scan.db_error", extra={"org_id": str(org_id)})
             raise AnalyticsDatabaseError(_ERR_DATABASE_UNAVAILABLE) from None
         except SQLAlchemyError:
