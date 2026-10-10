@@ -2193,8 +2193,14 @@ async def coalesce_pending_run(
     pending run instead of ratcheting the queue. Returns the updated run, or
     ``None`` when no coalesce target exists (the caller inserts a fresh run).
 
-    Only ``status='pending'`` rows are folded — a run that already started
-    (or a terminal row) is never mutated. ``FOR UPDATE SKIP LOCKED`` on
+    Only never-claimed, never-started ``status='pending'`` rows are folded —
+    a run that already started (or a terminal row) is never mutated.
+    ``claim_count = 0`` AND ``started_at IS NULL`` enforce "unstarted" (FAR-1623):
+    a claimed run reset to ``pending`` for re-dispatch (FAR-779/812 heartbeat
+    recovery) carries ``claim_count >= 1`` and must survive until the
+    dispatcher re-claims it, so it is never a coalesce target — folding it
+    would overwrite the input payload of a run the retry path is about to
+    dispatch. ``FOR UPDATE SKIP LOCKED`` on
     PostgreSQL: a run currently being dispatched is skipped and a fresh run
     is inserted (safe fallback, no blocked delivery). Non-PostgreSQL backends
     match the key in Python over a bounded candidate scan. The candidate
@@ -2228,6 +2234,13 @@ async def coalesce_pending_run(
             .where(
                 Run.pipeline_id == pipeline_id,
                 Run.status == "pending",
+                # FAR-1623: only a NEVER-claimed, NEVER-started pending run is
+                # a coalesce target. A claimed-then-reset run (claim_count >= 1,
+                # FAR-779 heartbeat recovery) is pending again but the
+                # dispatcher is about to re-claim it — folding it would
+                # overwrite its input payload mid-retry.
+                Run.claim_count == 0,
+                Run.started_at.is_(None),
                 Run.cancellation_requested.is_(False),
                 Run.organisation_id == org_id,
                 func.jsonb_extract_path_text(Run.input_payload, _COALESCE_KEY_FIELD) == coalesce_key,
@@ -2245,6 +2258,10 @@ async def coalesce_pending_run(
                     .where(
                         Run.pipeline_id == pipeline_id,
                         Run.status == "pending",
+                        # FAR-1623: never-claimed, never-started only — see the
+                        # Postgres branch above for the rationale.
+                        Run.claim_count == 0,
+                        Run.started_at.is_(None),
                         Run.cancellation_requested.is_(False),
                         Run.organisation_id == org_id,
                     )
@@ -2259,7 +2276,10 @@ async def coalesce_pending_run(
             (
                 r
                 for r in candidates
-                if getattr(r, "organisation_id", None) == org_id and read_coalesce_key(r.input_payload) == coalesce_key
+                if getattr(r, "organisation_id", None) == org_id
+                and getattr(r, "claim_count", 0) == 0
+                and getattr(r, "started_at", None) is None
+                and read_coalesce_key(r.input_payload) == coalesce_key
             ),
             None,
         )
