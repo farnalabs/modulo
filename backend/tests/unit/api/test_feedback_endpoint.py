@@ -18,6 +18,10 @@ from modulo.api.routes.feedback import (
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.core.feedback_manager.exceptions import (
+    ConcurrentModificationError,
+    InvalidTransitionError,
+)
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -340,6 +344,44 @@ class TestUpdateStatus:
 
         assert resp.status_code == 200
         assert resp.json()["feedback_status"] == "resolved"
+
+    def test_returns_409_on_invalid_transition(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.update_status",
+                side_effect=InvalidTransitionError("cannot move from resolved to pending"),
+            ),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="resolved")
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "pending"},
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "cannot move from resolved to pending"
+
+    def test_returns_409_on_concurrent_modification(self, client: TestClient) -> None:
+        with (
+            patch("modulo.api.routes.feedback.set_rls_org"),
+            patch("modulo.api.routes.feedback.FeedbackManager.get_feedback_record") as mock_get,
+            patch(
+                "modulo.api.routes.feedback.FeedbackManager.update_status",
+                side_effect=ConcurrentModificationError("record modified concurrently"),
+            ),
+        ):
+            mock_get.return_value = _make_mock_record(feedback_status="pending")
+
+            resp = client.patch(
+                f"/api/v1/feedback/{_RECORD_ID}/status",
+                json={"status": "resolved"},
+            )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == "record modified concurrently"
 
     def test_emits_status_changed_audit(self, client: TestClient) -> None:
         mock_record = _make_mock_record(feedback_status="resolved")
