@@ -6,14 +6,12 @@
       data-testid="analytics-title"
     />
 
-    <div
+    <EmptyState
       v-if="store.flagOff"
-      class="card p-6 text-center"
+      :title="$t('views.AnalyticsView.not_enabled')"
+      :description="$t('views.AnalyticsView.not_enabled_detail')"
       data-testid="analytics-not-enabled"
-    >
-      <h2 class="text-base font-semibold">{{ $t('views.AnalyticsView.not_enabled') }}</h2>
-      <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.AnalyticsView.not_enabled_detail') }}</p>
-    </div>
+    />
 
     <template v-else>
       <AnalyticsFilterBar
@@ -54,19 +52,12 @@
           </div>
         </div>
 
-        <div
+        <EmptyState
           v-if="!store.hasData"
-          class="card p-6 text-center"
+          :title="$t('views.AnalyticsView.no_data_yet')"
+          :description="emptyStateDescription"
           data-testid="analytics-empty-state"
-        >
-          <h2 class="text-base font-semibold">{{ $t('views.AnalyticsView.no_data_yet') }}</h2>
-          <p v-if="store.earliestAvailableDate" class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.AnalyticsView.data_since', { date: store.earliestAvailableDate }) }}
-          </p>
-          <p v-else class="mt-1 text-sm text-muted-foreground">
-            {{ $t('views.AnalyticsView.no_data_detail') }}
-          </p>
-        </div>
+        />
 
         <div v-else class="space-y-4">
           <div class="card p-4">
@@ -165,6 +156,7 @@ import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageHeader from "../components/shared/PageHeader.vue";
 import ErrorAlert from "../components/shared/ErrorAlert.vue";
+import EmptyState from "../components/shared/EmptyState.vue";
 import AnalyticsChart from "../components/analytics/AnalyticsChart.vue";
 import AnalyticsFilterBar from "../components/analytics/AnalyticsFilterBar.vue";
 import { formatApiError } from "../lib/api/formatError";
@@ -200,6 +192,12 @@ const chartTitle = computed(() =>
   store.showCapacityOverlay
     ? t("views.AnalyticsView.capacity_chart_title")
     : t("views.AnalyticsView.chart_title"),
+);
+
+const emptyStateDescription = computed(() =>
+  store.earliestAvailableDate
+    ? t("views.AnalyticsView.data_since", { date: store.earliestAvailableDate })
+    : t("views.AnalyticsView.no_data_detail"),
 );
 
 const currentMeasureLabel = computed(() => {
