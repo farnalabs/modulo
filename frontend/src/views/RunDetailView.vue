@@ -1114,11 +1114,14 @@ const shareSummary = computed(() => {
   if (!r) return ''
   const completed = nodeEntries.value.filter(n => n.status === 'complete').length
   const total = nodeEntries.value.length
-  const tokens = nodesReportedTokens.value
-    ? `${(totalTokens.value ?? 0).toLocaleString()} (node-reported)`
-    : costBasisTokens.value != null
-      ? `${costBasisTokens.value.toLocaleString()} (cost basis)`
-      : (totalTokens.value?.toLocaleString() ?? '—')
+  let tokens: string
+  if (nodesReportedTokens.value) {
+    tokens = `${(totalTokens.value ?? 0).toLocaleString()} (node-reported)`
+  } else if (costBasisTokens.value != null) {
+    tokens = `${costBasisTokens.value.toLocaleString()} (cost basis)`
+  } else {
+    tokens = totalTokens.value?.toLocaleString() ?? '—'
+  }
   const cost = r.total_cost_usd != null ? formatMoney(Number(r.total_cost_usd), currencyCode.value, 6) : '—'
   const runNumber = r.run_number != null ? `#${r.run_number}` : shortId(r.run_id)
   return [

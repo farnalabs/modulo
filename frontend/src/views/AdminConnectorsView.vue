@@ -400,11 +400,15 @@ function prefillRestConfig(connector: ConnectorItem) {
   const storedOnUnknown = String(cfg.on_unknown ?? '').trim().toLowerCase()
   restConfig.value.on_unknown = ON_UNKNOWN_OPTIONS.includes(storedOnUnknown) ? storedOnUnknown : 'fail_open'
   restConfig.value.records_path = typeof cfg.records_path === 'string' ? cfg.records_path : ''
-  restConfig.value.allowed_hosts = Array.isArray(cfg.allowed_hosts)
-    ? (cfg.allowed_hosts as unknown[]).join(', ')
-    : typeof cfg.allowed_hosts === 'string'
-      ? cfg.allowed_hosts
-      : ''
+  // Stored allowed_hosts may be a list (canonical) or a legacy string; anything
+  // else pre-fills as empty rather than coerced to "[object Object]".
+  let allowedHosts = ''
+  if (Array.isArray(cfg.allowed_hosts)) {
+    allowedHosts = (cfg.allowed_hosts as unknown[]).join(', ')
+  } else if (typeof cfg.allowed_hosts === 'string') {
+    allowedHosts = cfg.allowed_hosts
+  }
+  restConfig.value.allowed_hosts = allowedHosts
   const advanced: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(cfg)) {
     // Snapshot any stored config key the form does not surface as a first-class

@@ -2328,15 +2328,18 @@ async function loadParamSets() {
 
 const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerConnectorId.value !== '__all__')
 
+// Backend node types that map 1:1 onto their canvas type. Everything else
+// (including 'agent') collapses into the generic agent node — except dispatch,
+// which is a first-class canvas type (FAR-1141) and must never be collapsed.
+const CANVAS_TYPE_BY_BACKEND_TYPE: Record<string, string> = {
+  manual: 'manual',
+  router: 'router',
+  hitl: 'hitl',
+  dispatch: 'dispatch',
+}
+
 function convertBackendNode(n: any): any {
-  const nodeType =
-    n.node_type === 'manual' ? 'manual'
-    : n.node_type === 'router' ? 'router'
-    : n.node_type === 'hitl' ? 'hitl'
-    // FAR-1141: dispatch is a first-class canvas type — never collapse it
-    // into the generic `agent` node.
-    : n.node_type === 'dispatch' ? 'dispatch'
-    : 'agent'
+  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE[n.node_type] ?? 'agent'
   return {
     id: n.id,
     type: nodeType,

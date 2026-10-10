@@ -230,12 +230,14 @@ const tableRows = computed<TableRow[]>(() => {
   const previous = dimensioned ? aggregateByKey(previousBuckets) : previousBuckets;
   const measure = store.measure;
   return current.map((bucket, index) => {
-    const label =
-      bucket.key != null && store.filters.dimension === "error_code"
-        ? errorCodeLabel(bucket.key, t)
-        : bucket.key != null && store.filters.dimension === "execution_origin"
-          ? executionOriginLabel(bucket.key, t)
-          : (bucket.key ?? formatBucketDate(bucket.date));
+    let label: string;
+    if (bucket.key != null && store.filters.dimension === "error_code") {
+      label = errorCodeLabel(bucket.key, t);
+    } else if (bucket.key != null && store.filters.dimension === "execution_origin") {
+      label = executionOriginLabel(bucket.key, t);
+    } else {
+      label = bucket.key ?? formatBucketDate(bucket.date);
+    }
     // Windows are equal-length: match dimensioned buckets by key and
     // undimensioned buckets by offset within the window.
     const prev =
