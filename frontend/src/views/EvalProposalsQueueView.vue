@@ -81,7 +81,7 @@
             </div>
 
             <div v-if="isActionable(p.feedback_status)" class="flex shrink-0 items-center gap-2">
-            <Button :disabled="actioningId === p.id" data-testid="proposal-publish" @click="publishProposal(p)">
+            <Button :disabled="actioningId === p.id" data-testid="proposal-publish" @click="openPublishDialog(p)">
               {{ actioningId === p.id ? $t('views.EvalProposalsQueueView.publishing') : $t('views.EvalProposalsQueueView.publish') }}
             </Button>
               <button type="button"
@@ -95,18 +95,124 @@
             </div>
           </div>
 
-          <div v-if="actionMessages[p.id]" class="mt-3 text-sm" :class="actionMessages[p.id].type === 'error' ? 'text-destructive' : 'text-success'">
+          <div
+            v-if="actionMessages[p.id]"
+            class="mt-3 text-sm"
+            :class="actionMessages[p.id].type === 'error' ? 'text-destructive' : 'text-success'"
+            :role="actionMessages[p.id].type === 'error' ? 'alert' : 'status'"
+            :aria-live="actionMessages[p.id].type === 'error' ? 'assertive' : 'polite'"
+          >
             {{ actionMessages[p.id].text }}
           </div>
         </div>
       </div>
     </template>
+
+    <Dialog
+      v-model:visible="publishDialogVisible"
+      modal
+      :header="$t('views.EvalProposalsQueueView.publish_dialog_title')"
+      :style="{ width: '32rem' }"
+      :draggable="false"
+      :dismissable-mask="true"
+      data-testid="publish-proposal-dialog"
+      @hide="closePublishDialog"
+    >
+      <div v-if="publishTarget" class="space-y-4">
+        <div>
+          <label for="publish-proposal-name" class="mb-1 block text-sm font-medium">
+            {{ $t('views.EvalProposalsQueueView.name_label') }}
+          </label>
+          <input
+            id="publish-proposal-name"
+            v-model="publishForm.name"
+            type="text"
+            maxlength="255"
+            autocomplete="off"
+            data-testid="publish-name"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :placeholder="$t('views.EvalProposalsQueueView.name_placeholder')"
+          />
+        </div>
+
+        <div>
+          <span class="mb-1 block text-sm font-medium">
+            {{ $t('views.EvalProposalsQueueView.eval_type_label') }}
+          </span>
+          <AppSelect
+            input-id="publish-proposal-eval-type"
+            v-model="publishForm.eval_type"
+            :label="$t('views.EvalProposalsQueueView.eval_type_label')"
+            data-testid="publish-eval-type"
+            class="w-full"
+            :options="evalTypeOptions"
+            option-label="label"
+            option-value="value"
+          />
+        </div>
+
+        <div>
+          <label for="publish-proposal-config" class="mb-1 block text-sm font-medium">
+            {{ $t('views.EvalProposalsQueueView.config_label') }}
+            <span class="text-muted-foreground">{{ $t('views.EvalProposalsQueueView.config_hint') }}</span>
+          </label>
+          <textarea
+            id="publish-proposal-config"
+            v-model="publishForm.config_json"
+            rows="6"
+            data-testid="publish-config"
+            class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :placeholder="publishConfigPlaceholder"
+          />
+          <div
+            v-if="publishConfigError"
+            class="mt-1 text-xs text-destructive"
+            role="alert"
+            aria-live="assertive"
+          >
+            {{ publishConfigError }}
+          </div>
+        </div>
+
+        <div
+          v-if="publishDialogError"
+          class="text-sm text-destructive"
+          role="alert"
+          aria-live="assertive"
+          data-testid="publish-dialog-error"
+        >
+          {{ publishDialogError }}
+        </div>
+      </div>
+
+      <template #footer>
+        <div v-if="publishTarget" class="flex justify-end gap-2">
+          <Button
+            severity="secondary"
+            outlined
+            :disabled="publishSubmitting"
+            data-testid="publish-cancel"
+            @click="closePublishDialog"
+          >
+            {{ $t('common.cancel') }}
+          </Button>
+          <Button
+            :disabled="!canSubmitPublish"
+            :loading="publishSubmitting"
+            data-testid="publish-confirm"
+            @click="submitPublish"
+          >
+            {{ $t('views.EvalProposalsQueueView.publish_confirm') }}
+          </Button>
+        </div>
+      </template>
+    </Dialog>
   </div>
   </FeatureGate>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, reactive, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
@@ -116,6 +222,8 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+import AppSelect from '../components/shared/AppSelect.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import { formatDateShortWithTime } from '../lib/formatDate'
 
@@ -160,6 +268,62 @@ const proposals = computed(() => proposalsResp.value?.items ?? [])
 const actioningId = ref<string | null>(null)
 const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 
+// --- Publish dialog state -------------------------------------------------
+// FeedbackRecord stores no proposed-eval fields, so the reviewer supplies the
+// eval definition (name, type, config) at publish time. These fields feed the
+// POST /feedback/proposals/{id}/publish request body verbatim.
+const publishDialogVisible = ref(false)
+const publishTarget = ref<EvalProposalItem | null>(null)
+const publishSubmitting = ref(false)
+const publishDialogError = ref<string | null>(null)
+const publishForm = reactive({
+  name: '',
+  eval_type: 'llm_judge',
+  config_json: '{}',
+})
+
+const evalTypeOptions = computed(() => [
+  { value: 'llm_judge', label: t('views.EvalProposalsQueueView.llm_judge') },
+  { value: 'regex', label: t('views.EvalProposalsQueueView.regex') },
+  { value: 'json_schema', label: t('views.EvalProposalsQueueView.json_schema') },
+  { value: 'custom_function', label: t('views.EvalProposalsQueueView.custom_function') },
+])
+
+const publishConfigPlaceholder = computed(() =>
+  t(`views.EvalProposalsQueueView.config_placeholders.${publishForm.eval_type || 'llm_judge'}`),
+)
+
+const publishConfigError = computed<string | null>(() => {
+  const raw = publishForm.config_json.trim()
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return t('views.EvalProposalsQueueView.config_invalid')
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return t('views.EvalProposalsQueueView.config_must_be_object')
+  }
+  return null
+})
+
+const canSubmitPublish = computed(
+  () =>
+    publishForm.name.trim().length > 0 &&
+    publishForm.eval_type.length > 0 &&
+    !publishConfigError.value,
+)
+
+// A node id must be a real UUID before it is sent; the backend rejects a
+// non-UUID with a 422. When the producing node id is not a UUID the field is
+// omitted and the backend resolves the node from the record context.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function isUuid(value: string | null | undefined): value is string {
+  return typeof value === 'string' && UUID_RE.test(value)
+}
+
 function statusBadgeClass(status: string): string {
   const classMap: Record<string, string> = {
     pending: 'bg-pending/10 text-pending',
@@ -187,32 +351,76 @@ function isActionable(status: string): boolean {
   return status === 'pending' || status === 'routing'
 }
 
-async function publishProposal(p: EvalProposalItem) {
-  actioningId.value = p.id
-  delete actionMessages.value[p.id]
+function openPublishDialog(p: EvalProposalItem) {
+  publishTarget.value = p
+  publishForm.name = ''
+  publishForm.eval_type = 'llm_judge'
+  publishForm.config_json = '{}'
+  publishDialogError.value = null
+  publishDialogVisible.value = true
+}
+
+function closePublishDialog() {
+  publishDialogVisible.value = false
+  publishTarget.value = null
+  publishDialogError.value = null
+}
+
+async function submitPublish() {
+  const target = publishTarget.value
+  if (!target || !canSubmitPublish.value) return
+
+  const raw = publishForm.config_json.trim()
+  let configParsed: Record<string, unknown> = {}
+  try {
+    configParsed = raw ? JSON.parse(raw) : {}
+  } catch {
+    publishDialogError.value = t('views.EvalProposalsQueueView.config_invalid')
+    return
+  }
+
+  const body: {
+    name: string
+    eval_type: string
+    config: Record<string, unknown>
+    node_id?: string
+  } = {
+    name: publishForm.name.trim(),
+    eval_type: publishForm.eval_type,
+    config: configParsed,
+  }
+  if (isUuid(target.producing_node_id)) {
+    body.node_id = target.producing_node_id
+  }
+
+  publishSubmitting.value = true
+  publishDialogError.value = null
+  delete actionMessages.value[target.id]
   try {
     await throwOnError(
-      await api.PATCH('/api/v1/feedback/{record_id}/status', {
-        params: { path: { record_id: p.id } },
-        body: { status: 'resolved' },
+      await api.POST('/api/v1/feedback/proposals/{record_id}/publish', {
+        params: { path: { record_id: target.id } },
+        body,
       }),
     )
-    actionMessages.value[p.id] = { type: 'success', text: t('views.EvalProposalsQueueView.publish_success') }
-    // Query data is deep-readonly (FAR-630/FAR-645): an in-place item mutation
-    // would be silently dropped. Replace the whole response through the
-    // writable computed instead.
-    if (proposalsResp.value) {
-      proposalsResp.value = {
-        ...proposalsResp.value,
-        items: proposalsResp.value.items.map(x =>
-          x.id === p.id ? { ...x, feedback_status: 'resolved' } : x),
-      }
+    actionMessages.value[target.id] = {
+      type: 'success',
+      text: t('views.EvalProposalsQueueView.publish_success'),
     }
-    setTimeout(() => { delete actionMessages.value[p.id] }, 3000)
+    // Refresh so the published record surfaces its resolved status from the
+    // server rather than relying on an optimistic client-side patch.
+    await loadProposals()
+    publishDialogVisible.value = false
+    publishTarget.value = null
+    setTimeout(() => { delete actionMessages.value[target.id] }, 5000)
   } catch (e: unknown) {
-    actionMessages.value[p.id] = { type: 'error', text: `${t('views.EvalProposalsQueueView.publish_failed')} ${formatApiError(e)}` }
+    // Surface the failure in the dialog (where the reviewer's attention is)
+    // and persist it on the row so it remains visible after the dialog closes.
+    const text = `${t('views.EvalProposalsQueueView.publish_failed')} ${formatApiError(e)}`
+    publishDialogError.value = text
+    actionMessages.value[target.id] = { type: 'error', text }
   } finally {
-    actioningId.value = null
+    publishSubmitting.value = false
   }
 }
 
