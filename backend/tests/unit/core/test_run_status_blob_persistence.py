@@ -25,6 +25,7 @@ legacy-table legs run against the migrated shape.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -34,7 +35,7 @@ import pytest_asyncio
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.run import update_run_status
+from modulo.db.crud.run import update_run_status, write_run_outputs_from_run
 from modulo.db.crud.run_node_outputs import read_run_blobs
 from modulo.db.models.base import Base
 from modulo.db.models.organisation import Organisation
@@ -137,6 +138,14 @@ async def _store_rows(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID
             .scalars()
             .all()
         )
+
+
+async def _read_outputs(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> Any:
+    """The reassembled outputs dict (node-id keyed) for one run."""
+    async with maker() as session, session.begin():
+        await set_rls_org(session, _ORG)
+        blobs = await read_run_blobs(session, run_id=run_id, organisation_id=_ORG)
+    return blobs.outputs
 
 
 async def _status(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> str:
@@ -334,3 +343,57 @@ class TestStatusWriteBlobPersistence:
         assert blobs.outputs == outputs
         assert blobs.telemetry == telemetry
         assert blobs.markers is None
+
+
+class TestStatusWriteJsonbSanitisation:
+    """FAR-1602: both ``update_run_status`` branches persist through the shared
+    :func:`write_run_outputs_from_run` → :func:`replace_run_node_outputs` choke
+    point, so a payload carrying U+0000 stores sanitised and the run completes.
+
+    The fenced raw ``UPDATE`` cannot match on SQLite (its ``str(uuid)`` bind vs
+    the Uuid column's dashes-stripped storage), so the fenced branch's store leg
+    is exercised directly with its real ``origin`` label, and a structural check
+    pins that the fenced branch delegates to that same helper."""
+
+    async def test_orm_status_write_sanitises_nul_payload(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+        outputs = {"n\x001": {"text": "a\x00b"}}
+
+        result = await _write_status(sqlite_sessionmaker, run_id, "complete", outputs_json=outputs)
+
+        assert result is not None
+        assert await _status(sqlite_sessionmaker, run_id) == "complete"
+        stored = await _read_outputs(sqlite_sessionmaker, run_id)
+        assert "a\x00b" not in json.dumps(stored)
+        assert stored == {"n\ufffd1": {"text": "a\ufffdb"}}
+
+    async def test_fenced_store_leg_sanitises_nul_payload(
+        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        run_id = uuid.uuid4()
+        await _seed_run(sqlite_sessionmaker, run_id)
+
+        async with sqlite_sessionmaker() as session, session.begin():
+            await set_rls_org(session, _ORG)
+            await write_run_outputs_from_run(
+                session,
+                run_id=run_id,
+                organisation_id=_ORG,
+                outputs={"n\x001": {"text": "a\x00b"}},
+                telemetry=None,
+                origin="update_run_status.fenced",
+            )
+
+        stored = await _read_outputs(sqlite_sessionmaker, run_id)
+        assert "a\x00b" not in json.dumps(stored)
+        assert stored == {"n\ufffd1": {"text": "a\ufffdb"}}
+
+    def test_fenced_branch_reuses_the_shared_store_write_helper(self) -> None:
+        import inspect
+
+        from modulo.db.crud.run import _update_run_status_fenced
+
+        assert "write_run_outputs_from_run(" in inspect.getsource(_update_run_status_fenced)

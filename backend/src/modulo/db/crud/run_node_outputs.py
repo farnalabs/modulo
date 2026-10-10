@@ -214,6 +214,68 @@ def _jsonb_canonical_key(key: str) -> tuple[int, bytes]:
     return (len(encoded), encoded)
 
 
+# Postgres rejects U+0000 (NUL) in a TEXT bind and inside a ``jsonb`` literal
+# (``jsonb`` raises SQLSTATE 22P05, "unsupported Unicode escape sequence").
+# A Python ``str`` can also carry lone UTF-16 surrogates, whose ``\uXXXX``
+# escapes are equally illegal in a jsonb literal. Either reaching the
+# ``run_node_outputs`` INSERT aborts the write and loses the node's output
+# (FAR-1602), so the payload is sanitised at the primary-write choke point.
+# The replacement is a VISIBLE marker — U+FFFD REPLACEMENT CHARACTER, the
+# canonical character a lossy decode produces — so the sanitisation is
+# observable in the stored value rather than a silent drop.
+_JSONB_ILLEGAL_CHARS = re.compile("[\x00\ud800-\udfff]")
+_JSONB_ILLEGAL_REPLACEMENT = "\ufffd"
+
+
+def _sanitise_jsonb(value: Any) -> tuple[Any, bool]:
+    """Return ``(value, changed)`` with every Postgres/JSONB-illegal code point
+    replaced by the visible U+FFFD marker.
+
+    Postgres rejects U+0000 (NUL) in a TEXT bind and inside a ``jsonb`` literal
+    (``jsonb`` raises SQLSTATE 22P05, "unsupported Unicode escape sequence"),
+    and it also rejects the ``\\uXXXX`` escapes of lone UTF-16 surrogates that a
+    Python ``str`` can carry. Either reaching the ``run_node_outputs`` INSERT
+    aborts the write and loses the node's output (FAR-1602), so every payload
+    bound for the table is sanitised here first.
+
+    Replacement is recursive across dict KEYS and string values;
+    ``list``/``tuple`` inputs return a ``list`` (JSON has no tuple); every other
+    scalar is returned unchanged. ``changed`` reports whether anything was
+    replaced so the caller can log the sanitisation (it is otherwise visible as
+    the U+FFFD marker in the stored value).
+    """
+    if isinstance(value, str):
+        cleaned = _JSONB_ILLEGAL_CHARS.sub(_JSONB_ILLEGAL_REPLACEMENT, value)
+        return cleaned, cleaned != value
+    if isinstance(value, dict):
+        changed = False
+        sanitised: dict[Any, Any] = {}
+        for key, item in value.items():
+            new_key, key_changed = _sanitise_jsonb(key)
+            new_item, item_changed = _sanitise_jsonb(item)
+            sanitised[new_key] = new_item
+            changed = changed or key_changed or item_changed
+        return sanitised, changed
+    if isinstance(value, (list, tuple)):
+        changed = False
+        sanitised_items: list[Any] = []
+        for item in value:
+            new_item, item_changed = _sanitise_jsonb(item)
+            sanitised_items.append(new_item)
+            changed = changed or item_changed
+        return sanitised_items, changed
+    return value, False
+
+
+def _sanitise_side(side: dict[str, Any] | None) -> tuple[dict[str, Any] | None, bool]:
+    """Sanitise one outputs/telemetry side (a node-id-keyed dict) — returns
+    ``(sanitised_side, changed)``; a ``None`` side stays ``None``."""
+    if side is None:
+        return None, False
+    cleaned, changed = _sanitise_jsonb(side)
+    return cleaned, changed
+
+
 def _reassemble_markers(items: list[tuple[str, Any]]) -> dict[str, Any]:
     """The flat markers dict from (attempt_key, value) items in jsonb-canonical
     key order — the ONE reassembly site used by both the ``__final__``-row
@@ -510,7 +572,33 @@ async def replace_run_node_outputs(
     proves it was inherited).
 
     Returns ``{"outputs_dual_write_sentinel_filtered": <int>}``.
+
+    FAR-1602: the incoming outputs/telemetry dicts (and the inherited captures
+    they are filtered against) are sanitised by :func:`_sanitise_jsonb` BEFORE
+    any key-derived work, so a payload carrying U+0000 / a lone surrogate
+    stores intact instead of aborting the Postgres jsonb INSERT (22P05).
     """
+    # FAR-1602: the SINGLE write choke point for the outputs/telemetry blobs —
+    # sanitise every payload here (recursively, keys included) so a node output
+    # carrying U+0000 or a lone surrogate can never abort the Postgres jsonb
+    # INSERT (SQLSTATE 22P05). This runs BEFORE the inherited-sentinel filter
+    # and the blanking-key computation, so upsert node_ids and the delete-absent
+    # key set stay consistent. Both the ORM and fenced ``update_run_status``
+    # paths reach the store through ``write_run_outputs_from_run`` and so share
+    # this one sanitiser (no duplicated logic).
+    outputs, outputs_sanitised = _sanitise_side(outputs)
+    telemetry, telemetry_sanitised = _sanitise_side(telemetry)
+    if outputs_sanitised or telemetry_sanitised:
+        _log.warning(
+            "run_node_outputs: replaced Postgres/JSONB-illegal code points "
+            "(NUL / lone surrogate) in the outputs/telemetry payload for run %s",
+            run_id,
+        )
+    if inherited_outputs is not None:
+        inherited_outputs = _sanitise_side(inherited_outputs)[0]
+    if inherited_telemetry is not None:
+        inherited_telemetry = _sanitise_side(inherited_telemetry)[0]
+
     filtered = _split_inherited_sentinel_keys(outputs, inherited_outputs, kind="outputs node id")
     filtered |= _split_inherited_sentinel_keys(telemetry, inherited_telemetry, kind="telemetry node id")
     await assert_write_org(session, organisation_id)
