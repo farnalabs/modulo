@@ -624,12 +624,23 @@ jobs:
             RUNS_TSV="${RUNS_TSV}${PAGE_TSV}"$'\n'
             PAGE_LINES="$(printf '%s\n' "${PAGE_TSV}" | wc -l | tr -d '[:space:]')"
             # Timestamps are fixed-width UTC ISO-8601 (Z suffix), so a
-            # lexicographic min is a chronological min.
-            OLDEST="$(printf '%s\n' "${PAGE_TSV}" | cut -f5 | sort | head -n1)"
-            OLDEST_TS="$(date -u -d "${OLDEST}" +%s)"
-            if [ "${OLDEST_TS}" -le "${CUTOFF_TS}" ]; then
-              COVERED=true
-              break
+            # lexicographic min is a chronological min. Guard the probe (the
+            # per-row loop guards an empty CREATED, but this min does not): a
+            # page with an empty 5th column would make `date -d ""` fail and,
+            # under set -e, abort the whole step. Filter empties so the min is
+            # over real timestamps, and treat an unparseable value as "cannot
+            # advance the cutoff check" (keep paging, bounded by MAX_PAGES)
+            # rather than crashing.
+            OLDEST="$(printf '%s\n' "${PAGE_TSV}" | cut -f5 | grep -v '^[[:space:]]*$' | sort | head -n1 || true)"
+            if [ -z "${OLDEST}" ]; then
+              echo "::warning::run-history page ${PAGE} has no usable created_at values - cannot advance the grace-cutoff check on this page."
+            elif OLDEST_TS="$(date -u -d "${OLDEST}" +%s 2>/dev/null)"; then
+              if [ "${OLDEST_TS}" -le "${CUTOFF_TS}" ]; then
+                COVERED=true
+                break
+              fi
+            else
+              echo "::warning::run-history page ${PAGE} has an unparseable oldest created_at ('${OLDEST}') - cannot advance the grace-cutoff check on this page."
             fi
             if [ "${PAGE_LINES}" -lt 100 ]; then
               # Short page = last page; the whole run history is collected.
@@ -741,8 +752,16 @@ jobs:
                     MANAGED_GREEN_TS="${TS}"
                     MANAGED_GREEN_DATE="${CREATED}"
                   fi
+                elif [[ "${SUITE_STEPS}" =~ ^[0-9]+$ ]]; then
+                  echo "::notice::run ${RUN_ID} ('${NAME}') concluded success but its suite step did not run+pass (suite-step count=${SUITE_STEPS}) - excluded from last-green (FAR-1620)."
                 else
-                  echo "::notice::run ${RUN_ID} ('${NAME}') concluded success but its suite step did not run+pass (suite-step count='${SUITE_STEPS}') - excluded from last-green (FAR-1620)."
+                  # rc=0 but a non-numeric payload: the API/jq returned an
+                  # unexpected shape, which is a read failure - NOT a
+                  # legitimately path-skipped suite. Count it as a read error
+                  # (never green) so an unexpected response cannot be silently
+                  # misclassified as a skipped step.
+                  JOBS_READ_ERRORS=$((JOBS_READ_ERRORS + 1))
+                  echo "::warning::jobs read for run ${RUN_ID} ('${NAME}') returned an unexpected non-numeric suite-step count ('${SUITE_STEPS}') - NOT counting it as green (an unexpected response shape is treated as a read failure)."
                 fi
               fi
             fi
