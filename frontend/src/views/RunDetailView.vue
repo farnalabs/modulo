@@ -1116,7 +1116,9 @@ const shareSummary = computed(() => {
   const total = nodeEntries.value.length
   let tokens: string
   if (nodesReportedTokens.value) {
-    tokens = `${(totalTokens.value ?? 0).toLocaleString()} (node-reported)`
+    // nodesReportedTokens is true only when node_token_usage exists, which
+    // makes totalTokens non-null — the assertion cannot fail.
+    tokens = `${totalTokens.value!.toLocaleString()} (node-reported)`
   } else if (costBasisTokens.value != null) {
     tokens = `${costBasisTokens.value.toLocaleString()} (cost basis)`
   } else {
