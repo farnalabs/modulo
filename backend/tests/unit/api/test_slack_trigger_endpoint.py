@@ -571,6 +571,37 @@ def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
     assert "archived" in resp.json()["detail"]
 
 
+def test_app_mention_snapshot_lock_busy_returns_503(client: TestClient) -> None:
+    """FAR-527 parity: a busy per-pipeline snapshot advisory lock on the Slack
+    app-mention path must surface an honest, retryable 503 — never a generic
+    500 (matches the webhook + MCP trigger paths)."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            side_effect=SnapshotLockNotAvailableError("busy"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail
+    assert "retry" in detail.lower()
+    # The engine is never reached once the snapshot cannot be created.
+    m.assert_not_called()
+
+
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:
     """A non-dict config_json on the trigger must 400 at the route, not
     AttributeError -> 500 on external ingress."""
