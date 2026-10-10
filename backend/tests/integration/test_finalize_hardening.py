@@ -6,6 +6,8 @@ Two of the three finalisation-path fixes need a real database to observe:
      at the finalisation entry point BEFORE any lock, so a contended
      finalisation surfaces as a bounded 55P03 rather than queuing on
      wall-clock;
+  1b. the reduced escape's FRESH transaction sets the same bound BEFORE its
+     row-locking ``update_run_status`` (FAR-1642 item 1);
   3. the org accrual is committed IFF the ledger write succeeds — a contained
      ledger-write failure followed by a re-finalisation must NOT double-count
      ``org_cumulative_spend_cents``.
@@ -27,9 +29,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from modulo.core.cost_controller.finalize import _ledger_block, finalize_cost
+from modulo.core.cost_controller.finalize import (
+    _ledger_block,
+    _LedgerEscapeContext,
+    _reduced_escape,
+    finalize_cost,
+)
 from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
@@ -216,6 +223,58 @@ async def test_finalize_sets_transaction_scoped_lock_timeout(
     async with db_session.begin():
         reverted = (await db_session.execute(text("SHOW lock_timeout"))).scalar_one()
         assert reverted == "0", "the lock bound is transaction-scoped and must revert on commit"
+
+
+async def test_reduced_escape_bounds_lock_timeout_before_status_write(
+    db_engine: AsyncEngine,
+    db_session: AsyncSession,
+    finalize_env: tuple[uuid.UUID, uuid.UUID, uuid.UUID],
+) -> None:
+    """FAR-1642 item 1: the reduced escape's FRESH transaction must bound its
+    row-lock waits BEFORE the row-locking ``update_run_status``.
+
+    The reduced escape runs while the (aborted/rolled-back) outer transaction
+    may still hold the ``runs`` ``FOR UPDATE``, so an unbounded wait on the
+    status write is exactly the wall-clock hang the finalisation lock bound
+    exists to prevent. The observation is taken INSIDE the fresh transaction at
+    the moment the status write would take its lock: ``SHOW lock_timeout`` must
+    already report the bound (non-zero) rather than the unbounded default.
+    """
+    org_id, pipeline_id, snapshot_id = finalize_env
+    run_id = await _insert_run(db_session, org_id=org_id, pipeline_id=pipeline_id, snapshot_id=snapshot_id)
+    await db_session.commit()
+
+    observed: dict[str, str] = {}
+
+    async def _capturing_update_run_status(
+        session: AsyncSession,
+        _run_id: uuid.UUID,
+        _status: str,
+        **_kwargs: object,
+    ) -> None:
+        # This runs where the real, row-locking ``update_run_status`` would —
+        # the fresh transaction must already carry the bounded lock_timeout.
+        observed["lock_timeout"] = (await session.execute(text("SHOW lock_timeout"))).scalar_one()
+
+    ctx = _LedgerEscapeContext(
+        run_id=run_id,
+        org_id=org_id,
+        status="complete",
+        finalize_fields={},
+        session_factory=async_sessionmaker(bind=db_engine, expire_on_commit=False),
+        claim_token=None,
+    )
+
+    with patch(
+        "modulo.core.cost_controller.finalize.update_run_status",
+        new=_capturing_update_run_status,
+    ):
+        await _reduced_escape(db_session, ctx)
+
+    assert "lock_timeout" in observed, "the reduced escape must reach its status write"
+    assert observed["lock_timeout"] != "0", (
+        "the reduced escape must SET LOCAL lock_timeout before its row-locking status write"
+    )
 
 
 # ---------------------------------------------------------------------------
