@@ -115,6 +115,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    _resolve_llm_judge_callable,
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
@@ -2825,6 +2826,11 @@ class PipelineExecutor:
             org_id=org_id,
             session_factory=self._session_factory,
             node_id=node_id,
+            # FAR-315: mirror the HITL-gate path (FAR-307) — resolve the LLM
+            # judge callable from eval_def.config["model_backend_id"] via the
+            # ModelBackendHub, so llm_judge evals score against a real judge
+            # instead of returning the fail-closed 0.0 "callable not provided".
+            resolve_llm_judge=_resolve_llm_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
 
