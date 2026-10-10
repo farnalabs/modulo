@@ -781,8 +781,10 @@ class RestConnector(ConnectorBase):
         validating the target through the SSRF/allowlist guard, sending the
         credentials (``apply_auth`` headers + query params). A sub-400 status
         means the endpoint + credentials are live; any other status is a non-OK
-        result. Never raises — every escape path is degraded into a not-ok
-        ``HealthResult`` and credential-redacted, like the other connectors.
+        result. Expected failures (invalid request-spec, REST send errors,
+        ``httpx`` errors) are degraded into a not-ok ``HealthResult`` and
+        credential-redacted, like the other connectors. ``asyncio.
+        CancelledError`` is re-raised, not swallowed.
         """
         try:
             request = await self._build_health_request()
@@ -793,7 +795,7 @@ class RestConnector(ConnectorBase):
             return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {self._redact(str(request.url))}")
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (ValueError, httpx.HTTPError) as exc:
             return HealthResult(ok=False, detail=self._redact(str(exc))[:200])
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

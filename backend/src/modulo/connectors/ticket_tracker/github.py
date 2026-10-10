@@ -46,6 +46,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         return pinned_async_client_sync(self._base_url)
 
     @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         headers = self._headers()
         try:
