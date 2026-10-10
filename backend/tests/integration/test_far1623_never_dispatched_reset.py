@@ -33,11 +33,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from modulo.core.cron_helpers import _build_re_dispatch_predicate
 from modulo.core.pipeline_execution import _sweep_org_stale_runs
 from modulo.core.run_admission import reconcile_pipeline_slots
+from modulo.db.models.run import Run
 
 pytestmark = pytest.mark.integration
 
@@ -182,6 +184,34 @@ async def _sweep_never_dispatched(db_engine: AsyncEngine, org_id: uuid.UUID) -> 
         )
 
 
+async def _run_matches_re_dispatch_predicate(db_engine: AsyncEngine, run_id: uuid.UUID) -> bool:
+    """True when the run is admitted by the REAL ``dispatcher_reconcile``
+    re-dispatch predicate (F3c/F6a) — the exact admission criterion the 60s
+    reconcile scans with. Evaluated as a real SQL query against the seeded row,
+    so it proves the run's actual status/dispatched_at values match, not merely
+    the predicate's structure."""
+    predicate = _build_re_dispatch_predicate(
+        reenqueue_window=60,
+        stale_window=60,
+        capacity_redispatch_seconds=60,
+    )
+    async with db_engine.connect() as conn:
+        matched = (await conn.execute(select(Run.id).where(predicate, Run.id == run_id))).scalar_one_or_none()
+    return matched is not None
+
+
+async def _teardown_env(db_engine: AsyncEngine, env: _Env) -> None:
+    async with db_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM runs WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
+        await conn.execute(
+            text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"),
+            {"oid": str(env.org_id)},
+        )
+        await conn.execute(text("DELETE FROM pipelines WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
+        await conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": str(env.account_id)})
+        await conn.execute(text("DELETE FROM organisations WHERE id = :oid"), {"oid": str(env.org_id)})
+
+
 @pytest_asyncio.fixture
 async def far1623_env(db_engine: AsyncEngine) -> AsyncGenerator[_Env, None]:
     """A dedicated org seeded fresh per test, torn down afterwards.
@@ -194,15 +224,7 @@ async def far1623_env(db_engine: AsyncEngine) -> AsyncGenerator[_Env, None]:
     try:
         yield env
     finally:
-        async with db_engine.begin() as conn:
-            await conn.execute(text("DELETE FROM runs WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
-            await conn.execute(
-                text("DELETE FROM pipeline_snapshots WHERE organisation_id = :oid"),
-                {"oid": str(env.org_id)},
-            )
-            await conn.execute(text("DELETE FROM pipelines WHERE organisation_id = :oid"), {"oid": str(env.org_id)})
-            await conn.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": str(env.account_id)})
-            await conn.execute(text("DELETE FROM organisations WHERE id = :oid"), {"oid": str(env.org_id)})
+        await _teardown_env(db_engine, env)
 
 
 async def test_heartbeat_stale_reset_run_is_not_never_dispatched(
@@ -258,6 +280,17 @@ async def test_heartbeat_stale_reset_run_is_not_never_dispatched(
     assert after_sweep["status"] == "pending"
     assert after_sweep["error_code"] == "heartbeat_stale"
 
+    # Step 3 — the spared run is now ADMITTED by the re-dispatch predicate, so
+    # the reconcile path actually re-dispatches it. This is the positive
+    # recovery outcome the "never == 0" assertion alone does not prove: being
+    # spared is only useful if the run is then picked back up. Exercised as a
+    # real SQL match against the run's post-reset row (predicate-match, not a
+    # predicate-structure check; driving ``dispatcher_reconcile`` end-to-end
+    # would need the SAQ harness and an org-wide scan with unrelated side
+    # effects).
+    assert after_sweep["dispatched_at"] is None
+    assert await _run_matches_re_dispatch_predicate(db_engine, run_id)
+
 
 async def test_genuinely_never_dispatched_run_still_fails(
     db_engine: AsyncEngine,
@@ -285,3 +318,57 @@ async def test_genuinely_never_dispatched_run_still_fails(
     after_sweep = await _fetch_run(db_engine, run_id)
     assert after_sweep["status"] == "failed"
     assert after_sweep["error_code"] == "never_dispatched"
+
+
+async def test_sweep_is_org_scoped(
+    db_engine: AsyncEngine,
+    far1623_env: _Env,
+) -> None:
+    """The never-dispatched branch never touches another org's runs.
+
+    The sweep runs on the superuser engine (RLS bypassed), so a dropped
+    ``organisation_id`` predicate would not be caught by RLS. Seed a SECOND
+    org with its own equally-aged never-dispatched ``pending`` run, sweep only
+    the first org, and assert the second org's run is untouched.
+    """
+    org_a = far1623_env
+    org_b = await _seed_env(db_engine)
+    try:
+        run_a = await _seed_run(
+            db_engine,
+            org_a,
+            status="pending",
+            claim_count=0,
+            run_number=1,
+            heartbeat_at=None,
+            dispatched_at=None,
+            dispatcher=None,
+            error_code=None,
+        )
+        run_b = await _seed_run(
+            db_engine,
+            org_b,
+            status="pending",
+            claim_count=0,
+            run_number=1,
+            heartbeat_at=None,
+            dispatched_at=None,
+            dispatcher=None,
+            error_code=None,
+        )
+
+        never, capacity, lost = await _sweep_never_dispatched(db_engine, org_a.org_id)
+
+        # Only org A's run was swept.
+        assert never == 1
+        assert capacity == 0
+        assert lost == 0
+        after_a = await _fetch_run(db_engine, run_a)
+        assert after_a["status"] == "failed"
+        assert after_a["error_code"] == "never_dispatched"
+        # Org B's run is untouched — still pending, no error code.
+        after_b = await _fetch_run(db_engine, run_b)
+        assert after_b["status"] == "pending"
+        assert after_b["error_code"] is None
+    finally:
+        await _teardown_env(db_engine, org_b)

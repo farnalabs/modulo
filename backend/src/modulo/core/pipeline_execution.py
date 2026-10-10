@@ -2519,7 +2519,12 @@ async def stale_run_recovery_sweep(
     """Sweep stale pending and running pipeline runs.
 
     - Pending runs older than the never-dispatched window with no
-      ``dispatched_at`` are marked ``failed`` with ``never_dispatched``.
+      ``dispatched_at`` AND ``claim_count = 0`` (never claimed) are marked
+      ``failed`` with ``never_dispatched``. A run that was claimed and then
+      reset to pending for re-dispatch (``error_code='heartbeat_stale'``,
+      FAR-779/812) carries ``claim_count >= 1`` and is therefore excluded —
+      the never-dispatched branch must not kill a retry that is about to be
+      re-dispatched (FAR-1623).
     - Stranded capacity-blocked pending runs (``error_code`` in
       ``org_capacity_limited``/``pipeline_capacity``) whose heartbeat is stale
       are RE-DISPATCHED (durable restart durability — see
