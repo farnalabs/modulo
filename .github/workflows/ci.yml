@@ -861,17 +861,29 @@ jobs:
           "$SCANNER" --version
       - name: SonarCloud scan
         if: needs.changes.outputs.sonar == 'true'
-        # Transient race in SonarCloud's Python sensor: PackageRootResolver's
-        # unconditional Files.walk(baseDir) in FileProvider descends into `.git/`
-        # and races with the SCM provider's short-lived `.git/.probe-*` files,
-        # crashing the scan with `java.nio.file.NoSuchFileException:
-        # .../.git/.probe-<uuid>` (upstream SONARPY-2120; `.git/**` in
-        # sonar.exclusions cannot prevent it because FileProvider walks the
-        # filesystem, not the file index, and sonar.scm.disabled=true cannot be
-        # used because the new-code quality gate needs SCM blame). The failure is
-        # environment-only and intermittent, so retry it — but ONLY when the log
-        # shows exactly that signature, never a quality-gate failure or any other
-        # error, so a genuine red check is never masked.
+        # Two known environment-only, intermittent scanner failures are retried;
+        # any other error is genuine and fails the check immediately.
+        #
+        #   1. Transient race in SonarCloud's Python sensor: PackageRootResolver's
+        #      unconditional Files.walk(baseDir) in FileProvider descends into
+        #      `.git/` and races with the SCM provider's short-lived `.git/.probe-*`
+        #      files, crashing the scan with `java.nio.file.NoSuchFileException:
+        #      .../.git/.probe-<uuid>` (upstream SONARPY-2120; `.git/**` in
+        #      sonar.exclusions cannot prevent it because FileProvider walks the
+        #      filesystem, not the file index, and sonar.scm.disabled=true cannot
+        #      be used because the new-code quality gate needs SCM blame).
+        #   2. A plugin-classloader race in the security (taint) engine:
+        #      `java.lang.LinkageError: loader org.sonar.classloader.ClassRealm
+        #      attempted duplicate abstract class definition for
+        #      org.sonar.plugins.python.api.IssueLocation` raised from
+        #      com.sonar.security.frontend.python while two threads define the
+        #      same class on one loader. Observed on main 2026-10-10 (run
+        #      38021176294): the SAME commit 2b06bc01c scanned green 28 min
+        #      earlier (run 38019518160) and the scanner ships no code change, so
+        #      it is environment-only, never a code or quality-gate failure.
+        #
+        # Both are matched by an exact log signature, never a quality-gate
+        # failure or any other error, so a genuine red check is never masked.
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarcloud.io
@@ -892,19 +904,19 @@ jobs:
               echo "::notice::SonarCloud scan succeeded on attempt ${attempt}/3."
               exit 0
             fi
-            if grep -qE "NoSuchFileException: .*\.git/\.probe-" "$LOG"; then
+            if grep -qE "NoSuchFileException: .*\.git/\.probe-|attempted duplicate abstract class definition" "$LOG"; then
               if [ "$attempt" -lt 3 ]; then
-                echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race (attempt ${attempt}/3); retrying."
+                echo "::warning::SonarCloud scan hit a known transient scanner failure (attempt ${attempt}/3); retrying."
                 sleep $((attempt * 15))
               else
-                echo "::warning::SonarCloud scan hit the known transient .git/.probe-* race on the final attempt (3/3); not retrying."
+                echo "::warning::SonarCloud scan hit a known transient scanner failure on the final attempt (3/3); not retrying."
               fi
               continue
             fi
-            echo "::error::SonarCloud scan failed with a non-transient error (not the .git/.probe-* race); not retrying."
+            echo "::error::SonarCloud scan failed with a non-transient error (neither the .git/.probe-* race nor the security-engine duplicate-class LinkageError); not retrying."
             exit "$RC"
           done
-          echo "::error::SonarCloud scan still hit the .git/.probe-* race after 3 attempts; failing the required check (upstream SONARPY-2120)."
+          echo "::error::SonarCloud scan still hit a known transient scanner failure after 3 attempts; failing the required check (upstream SONARPY-2120 / security-engine plugin-classloader race)."
           exit 1
 
   coverage-gate:
