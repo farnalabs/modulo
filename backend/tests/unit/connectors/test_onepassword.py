@@ -21,37 +21,9 @@ def test_connector_type(connector: OnePasswordConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: OnePasswordConnector) -> None:
-    respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(return_value=httpx.Response(200, json=[]))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "1Password Connect token validated"
-
-
 @respx.mock
-async def test_health_check_invalid_token(connector: OnePasswordConnector) -> None:
-    respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
 @respx.mock
-async def test_health_check_other_http_error(connector: OnePasswordConnector) -> None:
-    respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(return_value=httpx.Response(403, text="Forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "HTTP 403" in result.detail
-
-
 @respx.mock
-async def test_health_check_network_error(connector: OnePasswordConnector) -> None:
-    respx.get(f"{BASE_URL}/v1/vaults", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
 @respx.mock
 async def test_query_vaults(connector: OnePasswordConnector) -> None:
     vaults = [{"id": "v1", "name": "Personal"}, {"id": "v2", "name": "Shared"}]

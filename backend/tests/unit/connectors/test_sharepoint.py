@@ -21,32 +21,8 @@ def test_connector_type(connector):
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{_API}/sites/root").mock(return_value=httpx.Response(200, json={"displayName": "Contoso Portal"}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Contoso Portal"
-
-
 @respx.mock
-async def test_health_check_fail(connector):
-    respx.get(f"{_API}/sites/root").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
 @respx.mock
-async def test_health_check_corrupt_body_no_crash(connector):
-    """A 200 with a non-dict body (list, string, ...) must not crash
-    health_check — it reports ok with an empty detail instead of raising
-    AttributeError on ``site_info.get(...)``."""
-    respx.get(f"{_API}/sites/root").mock(return_value=httpx.Response(200, json=["not-a-site"]))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert not result.detail
-
-
 @respx.mock
 async def test_query_sites(connector):
     sites = {

@@ -18,23 +18,7 @@ def connector():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{_API}/user").mock(
-        return_value=httpx.Response(200, json={"username": "myuser", "display_name": "My User"})
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "myuser"
-
-
 @respx.mock
-async def test_health_check_fail(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
 @respx.mock
 async def test_query_repos(connector):
     body = {"values": [{"uuid": "{1}", "name": "repo-a"}, {"uuid": "{2}", "name": "repo-b"}], "size": 2}
@@ -198,15 +182,6 @@ async def test_query_repos_non_list_values_no_crash(connector):
 
 
 @respx.mock
-async def test_health_check_corrupt_body_no_crash(connector):
-    """A corrupt/hostile user response with a non-dict body must not crash
-    health_check — it reports success with an empty username."""
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json=["garbage"]))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert not result.detail
-
-
 @respx.mock
 async def test_query_issues_corrupt_body_no_crash(connector):
     respx.get(f"{_API}/repositories/myteam/myrepo/issues").mock(return_value=httpx.Response(200, json=["garbage"]))

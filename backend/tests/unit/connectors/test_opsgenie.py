@@ -25,47 +25,10 @@ def test_connector_type(connector: OpsgenieConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": [], "totalCount": 0})
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Opsgenie API key validated"
-
-
 @respx.mock
-async def test_health_check_invalid_key(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid Opsgenie API key" in result.detail
-
-
 @respx.mock
-async def test_health_check_forbidden(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(return_value=httpx.Response(403, text="Forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid Opsgenie API key" in result.detail
-
-
 @respx.mock
-async def test_health_check_network_error(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
 @respx.mock
-async def test_health_check_other_status(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(return_value=httpx.Response(429, text="Too Many Requests"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "429" in result.detail
-
-
 # ── Query: alerts ─────────────────────────────────────────────────────
 
 

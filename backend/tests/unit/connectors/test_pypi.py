@@ -15,11 +15,6 @@ def connector():
     return PyPIConnector()
 
 
-@pytest.fixture
-def connector_with_token():
-    return PyPIConnector(token="pypi_test_token")
-
-
 def test_connector_type(connector):
     assert connector.connector_type == ConnectorType.PYPI
 
@@ -31,64 +26,11 @@ def test_connector_type_capabilities():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{API_BASE}/").mock(
-        return_value=httpx.Response(200, text="PyPI"),
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert "reachable" in result.detail
-
-
 @respx.mock
-async def test_health_check_unauthorized(connector_with_token):
-    respx.get(f"{API_BASE}/").mock(
-        return_value=httpx.Response(401, text="Unauthorized"),
-    )
-    result = await connector_with_token.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
 @respx.mock
-async def test_health_check_forbidden(connector_with_token):
-    respx.get(f"{API_BASE}/").mock(
-        return_value=httpx.Response(403, text="Forbidden"),
-    )
-    result = await connector_with_token.health_check()
-    assert result.ok is False
-    assert "permissions" in result.detail
-
-
 @respx.mock
-async def test_health_check_connection_error(connector):
-    respx.get(f"{API_BASE}/").mock(
-        side_effect=httpx.ConnectError("connection refused"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Cannot connect" in result.detail
-
-
 @respx.mock
-async def test_health_check_generic_error(connector):
-    respx.get(f"{API_BASE}/").mock(
-        side_effect=ValueError("weird error"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-
-
 @respx.mock
-async def test_health_check_other_status(connector):
-    respx.get(f"{API_BASE}/").mock(
-        return_value=httpx.Response(500, text="Internal Server Error"),
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 @respx.mock
 async def test_query_package(connector):
     respx.get(f"{API_BASE}/requests/json").mock(

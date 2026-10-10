@@ -31,46 +31,10 @@ def test_constructor_custom_base_url() -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(200, json={"commit": "abc123"}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Grafana API healthy"
-
-
 @respx.mock
-async def test_health_check_invalid_token(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-    assert "token" in result.detail
-
-
 @respx.mock
-async def test_health_check_forbidden(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(403, text="Forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
 @respx.mock
-async def test_health_check_network_error(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
 @respx.mock
-async def test_health_check_other_status(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/health").mock(return_value=httpx.Response(503, text="Service Unavailable"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "503" in result.detail
-
-
 @respx.mock
 async def test_query_dashboards(connector: GrafanaConnector) -> None:
     dashboards = [

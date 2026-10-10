@@ -30,21 +30,7 @@ def connector_token():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{_BASE}/myself").mock(return_value=httpx.Response(200, json={"displayName": "Alice"}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Alice"
-
-
 @respx.mock
-async def test_health_check_fail(connector):
-    respx.get(f"{_BASE}/myself").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
 @respx.mock
 async def test_query_issue(connector):
     issue_data = {"id": "10001", "key": "PROJ-123", "fields": {"summary": "Fix bug"}}

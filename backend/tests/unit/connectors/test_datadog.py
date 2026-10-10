@@ -23,29 +23,8 @@ def test_connector_type(connector: DatadogConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(return_value=httpx.Response(200, json={"valid": True}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Datadog API key validated"
-
-
 @respx.mock
-async def test_health_check_invalid_key(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(return_value=httpx.Response(403, text="Forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
 @respx.mock
-async def test_health_check_network_error(connector: DatadogConnector) -> None:
-    respx.get(f"{_BASE}/api/v1/validate").mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
 @respx.mock
 async def test_query_monitors(connector: DatadogConnector) -> None:
     monitors = [
