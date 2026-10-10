@@ -92,6 +92,7 @@ _ORG_SCOPED_TABLES = (_COLLECTION_INSTALL,)
 
 
 def _apply_org_isolation(
+    bind: sa.Connection,
     table: str,
     scope: str,
     app_role: bool,
@@ -230,8 +231,8 @@ def upgrade() -> None:
         # scoped to the caller's org (an unscoped child would otherwise leak
         # cross-org rows), and the app/system roles need DML grants or they
         # cannot read the rows the parent JOIN resolves.
-        _apply_org_isolation(_COLLECTION_INSTALL, _ORG_SCOPE, app_role, system_role)
-        _apply_org_isolation(_COLLECTION_INSTALL_ENTITY, _ENTITY_ORG_SCOPE, app_role, system_role)
+        _apply_org_isolation(bind, _COLLECTION_INSTALL, _ORG_SCOPE, app_role, system_role)
+        _apply_org_isolation(bind, _COLLECTION_INSTALL_ENTITY, _ENTITY_ORG_SCOPE, app_role, system_role)
 
 
 def downgrade() -> None:
