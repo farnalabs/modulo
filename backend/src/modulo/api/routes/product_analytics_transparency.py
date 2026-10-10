@@ -65,23 +65,57 @@ def _coerce_last_dump(value: Any) -> str | None:
     return None
 
 
-async def _resolve_org_settings(
+async def _resolve_org(
     session: AsyncSession,
     organisation_id: uuid.UUID | None,
-) -> dict[str, Any] | None:
-    """Read the caller's organisation ``settings_json`` (or ``None``).
+) -> Organisation | None:
+    """Load the caller's organisation row, or ``None`` when it cannot be resolved.
 
     Mirrors ``api/routes/product_analytics.py``'s org resolution: a soft-deleted
     org is still operationally live, so the read opts out of the global
-    soft-delete filter. The transparency endpoint is observability-only — a
-    missing org degrades to the default consent state rather than 404ing.
+    soft-delete filter. The transparency endpoint is observability-only — an
+    unresolvable org downgrades to the instance-level consent posture rather
+    than 404ing.
+
+    Returns the row (not just its settings) so the caller can distinguish
+    "org resolved but has no settings" from "org unresolved" — the two take
+    different consent sources.
     """
     if organisation_id is None:
         return None
     stmt = include_soft_deleted(select(Organisation).where(Organisation.id == organisation_id))
     result = await session.execute(stmt)
-    org = result.scalar_one_or_none()
-    return org.settings_json if org is not None else None
+    return result.scalar_one_or_none()
+
+
+def _level_from_org_settings(org_settings: dict[str, Any] | None) -> str:
+    """Extract the consent level from an org's ``settings_json`` (default ``off``)."""
+    raw_level = get_product_analytics_block(org_settings).get("level")
+    return str(raw_level) if raw_level else LEVEL_OFF
+
+
+async def _instance_consent_level(session: AsyncSession) -> str:
+    """Return the INSTANCE-level consent posture for an unresolved caller org.
+
+    Product decision (FAR-1635, Duncan): per-org consent is the preferred
+    source — a system admin sees their own organisation's level. But when the
+    caller's organisation cannot be resolved (no ``organisation_id``, or no
+    matching row) the transparency surface must still report a truthful
+    posture rather than a hardcoded ``off``; "per instance acceptable".
+
+    The aggregate mirrors the definition the daily dump actually uses to decide
+    what egresses (``metrics_dump._get_consenting_orgs``): an ACTIVE
+    organisation whose ``settings_json`` enables the ``all`` level. At least one
+    such org -> ``LEVEL_ALL``; otherwise ``LEVEL_OFF``. The ``organisations``
+    table is not RLS-scoped, so this cross-org read is safe on the app-role
+    session.
+    """
+    stmt = select(Organisation).where(Organisation.status == "active")
+    result = await session.execute(stmt)
+    for org in result.scalars():
+        if _level_from_org_settings(org.settings_json) == LEVEL_ALL:
+            return LEVEL_ALL
+    return LEVEL_OFF
 
 
 def _stale_dump_warning(last_dump_at: str | None, consent_level: str) -> str | None:
@@ -127,8 +161,10 @@ async def get_transparency(
     #     live in the langgraph-free constants module so the API can import them
     #     statically without violating the import-linter contract).
     #   * consent_level - the caller's organisation real consent level
-    #     (org.settings_json["product_analytics"]["level"]), defaulting to "off"
-    #     when the org cannot be resolved.
+    #     (org.settings_json["product_analytics"]["level"]) is the PREFERRED
+    #     source. When the caller org cannot be resolved the endpoint reports an
+    #     INSTANCE-level posture instead of a hardcoded "off" (see
+    #     _instance_consent_level and FAR-1635).
     #
     # Deliberately a comment, not a docstring: FastAPI publishes a handler
     # docstring as the operation description in the OpenAPI schema, which would
@@ -138,12 +174,16 @@ async def get_transparency(
         enforcement_enabled = await is_license_enforcement_enabled(session)
         last_dump_entry = await get_config(session, DUMP_WATERMARK_KEY)
         dump_count_entry = await get_config(session, DUMP_COUNT_KEY)
-        org_settings = await _resolve_org_settings(session, principal.organisation_id)
+        org = await _resolve_org(session, principal.organisation_id)
+        if org is None:
+            # Per-org is preferred, but an unresolvable caller org falls back
+            # to the instance-level posture ("per instance acceptable").
+            consent_level = await _instance_consent_level(session)
+        else:
+            consent_level = _level_from_org_settings(org.settings_json)
 
     last_dump_at = _coerce_last_dump(last_dump_entry.value if last_dump_entry else None)
     dump_count_total = coerce_dump_count(dump_count_entry.value if dump_count_entry else None)
-    raw_level = get_product_analytics_block(org_settings).get("level")
-    consent_level = str(raw_level) if raw_level else LEVEL_OFF
     warning = _stale_dump_warning(last_dump_at, consent_level)
 
     return TransparencyResponse(
