@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -57,6 +58,9 @@ class PagerDutyConnector(ConnectorBase):
         self._token = token
         self._redactor = CredentialRedactor([token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.PAGERDUTY
@@ -83,7 +87,7 @@ class PagerDutyConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid PagerDuty API token")
                 return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
                 )
         except asyncio.CancelledError:
             raise

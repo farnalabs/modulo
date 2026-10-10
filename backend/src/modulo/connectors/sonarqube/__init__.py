@@ -1,6 +1,7 @@
 """SonarQubeConnector — async SonarQube REST API connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -51,6 +52,9 @@ class SonarQubeConnector(ConnectorBase):
         self._api_base = f"{self._base_url}/api"
         self._redactor = CredentialRedactor([token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SONARQUBE
@@ -94,7 +98,7 @@ class SonarQubeConnector(ConnectorBase):
                 return HealthResult(ok=False, detail=f"SonarQube health: {status_text}")
         except httpx.HTTPStatusError as e:
             return HealthResult(
-                ok=False, detail=self._redactor.redact(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+                ok=False, detail=self._redacted_detail(f"HTTP {e.response.status_code}: {e.response.text}")[:200]
             )
         except asyncio.CancelledError:
             raise

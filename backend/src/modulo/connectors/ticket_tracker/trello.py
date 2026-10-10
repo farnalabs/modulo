@@ -9,6 +9,7 @@ otherwise it's "open".
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -59,6 +60,9 @@ class TrelloTicketTracker(TicketTrackerBase):
         # required to scrub a transport error's ``request.url`` too. The
         # ``@redacting`` wrapper covers the error paths that escape a method.
         self._redactor = CredentialRedactor([self._api_key, self._token], scrub_url=True, chain_cause=False)
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:

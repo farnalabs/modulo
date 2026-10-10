@@ -20,6 +20,7 @@ Bearer API key (the connector credential ``token``).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -71,6 +72,9 @@ class LinearConnector(TicketTrackerBase):
             raise ValueError("LinearConnector requires a 'token' credential (Linear API key)")
         self._token = token
         self._redactor = CredentialRedactor([token])
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -135,8 +139,8 @@ class LinearConnector(TicketTrackerBase):
             if exc.response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(attempt))
                 raise _RetrySignalError(exc) from exc
-            detail = exc.response.text[:200]
-            raise ValueError(self._redactor.redact(f"Linear API HTTP {exc.response.status_code}: {detail}")) from exc
+            detail = self._redacted_detail(f"Linear API HTTP {exc.response.status_code}: {exc.response.text}")[:200]
+            raise ValueError(detail) from exc
         body: dict[str, Any] = r.json()
         return body
 

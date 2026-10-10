@@ -1,6 +1,7 @@
 """ShortcutConnector — async Shortcut REST API v3 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -53,6 +54,9 @@ class ShortcutConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHORTCUT
@@ -77,7 +81,7 @@ class ShortcutConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except asyncio.CancelledError:
             raise

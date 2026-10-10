@@ -7,7 +7,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -171,9 +171,16 @@ def _request_id(response: httpx.Response) -> str | None:
     return value or None
 
 
-def _error_detail(response: httpx.Response) -> str:
-    """Build an error detail string, appending the request id when present."""
-    detail = response.text[:200]
+def _error_detail(response: httpx.Response, redact: Callable[[str], str] | None = None) -> str:
+    """Build an error detail string, appending the request id when present.
+
+    ``redact`` scrubs the FULL response body before truncation (FAR-1651):
+    truncating first can split a secret in half and leave the surviving
+    fragment unrecoverable by the redactor. The request id suffix is header
+    data (never a credential) and is appended after truncation.
+    """
+    scrub = redact if redact is not None else _identity
+    detail = scrub(response.text)[:200]
     request_id = _request_id(response)
     if request_id:
         detail = f"{detail} (request_id: {request_id})"
@@ -245,14 +252,19 @@ def _should_retry_status(status_code: int, attempt: int) -> bool:
     return should_retry_status(status_code, attempt)
 
 
+def _identity(text: str) -> str:
+    """No-op scrubber for :func:`_error_detail` callers without a redactor."""
+    return text
+
+
 def _should_retry_attempt(attempt: int) -> bool:
     """Whether a transport-level failure may be retried on this attempt."""
     return should_retry_network(attempt)
 
 
-def _http_error_message(exc: httpx.HTTPStatusError) -> str:
+def _http_error_message(exc: httpx.HTTPStatusError, redact: Callable[[str], str] | None = None) -> str:
     """Build the ValueError detail for an HTTPStatusError, adding quota info on 429."""
-    detail = _error_detail(exc.response)
+    detail = _error_detail(exc.response, redact)
     if exc.response.status_code == 429:
         quota = _rate_limit_detail(exc.response)
         if quota:
@@ -434,7 +446,7 @@ class GitLabConnector(ConnectorBase):
         if _should_retry_status(exc.response.status_code, attempt):
             await asyncio.sleep(self._sleep_delay(exc.response, attempt))
             return True
-        raise ValueError(self._redactor.redact(_http_error_message(exc))) from exc
+        raise ValueError(_http_error_message(exc, self._redactor.redact)) from exc
 
     async def _retry_network_error(self, exc: httpx.HTTPError, attempt: int) -> bool:
         """Handle a transient network error: sleep and return True to retry,
@@ -476,6 +488,9 @@ class GitLabConnector(ConnectorBase):
     def _parse_json(self, response: httpx.Response) -> dict[str, Any]:
         """Safely parse JSON response, wrapping decode errors."""
         return cast("dict[str, Any]", _safe_json(response))
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -612,7 +627,7 @@ class GitLabConnector(ConnectorBase):
         elif r.status_code == 403:
             detail = "Missing scopes: token cannot access /user (needs read_user/api)" + _id_suffix(r)
         elif r.status_code != 200:
-            detail = f"HTTP {r.status_code}: {_error_detail(r)}"
+            detail = f"HTTP {r.status_code}: {_error_detail(r, self._redactor.redact)}"
         else:
             return None
         return HealthResult(ok=False, detail=self._redactor.redact(detail))
@@ -624,7 +639,7 @@ class GitLabConnector(ConnectorBase):
         elif r.status_code == 403:
             detail = "Missing scopes: read_api/api not granted (projects API denied)" + _id_suffix(r)
         elif not r.is_success:
-            detail = f"Projects API returned HTTP {r.status_code}: {_error_detail(r)}"
+            detail = f"Projects API returned HTTP {r.status_code}: {_error_detail(r, self._redactor.redact)}"
         else:
             return None
         return HealthResult(ok=False, detail=self._redactor.redact(detail))
@@ -677,7 +692,7 @@ class GitLabConnector(ConnectorBase):
                     user_info = r.json()
                 except json.JSONDecodeError:
                     return HealthResult(
-                        ok=False, detail=self._redactor.redact(f"Invalid JSON in /user response: {r.text[:200]}")
+                        ok=False, detail=self._redacted_detail(f"Invalid JSON in /user response: {r.text}")[:200]
                     )
                 username = user_info.get("username", "")
 

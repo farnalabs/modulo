@@ -1880,8 +1880,13 @@ class RestConnector(ConnectorBase):
     def _status_detail(self, resp: httpx.Response, request: RestRequest, body_text: str) -> str:
         location = resp.headers.get("location", "")
         location_part = f" (location: {location})" if location else ""
-        body = self._redact(body_text[:200])
-        return f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body}"
+        # Redact the FULL detail string (URL, location header and body — any of
+        # which can carry the credential) BEFORE truncating (FAR-1651):
+        # truncating first can split a credential in half, leaving a fragment
+        # the redactor cannot match.
+        return self._redact(
+            f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body_text}"
+        )[:200]
 
     @staticmethod
     def _parse_json_body(body_text: str, content_type: str) -> Any:

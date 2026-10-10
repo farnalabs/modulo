@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -64,6 +65,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
 
     def __init__(self, token: str) -> None:
         self._token = token
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -139,7 +143,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
             async with self._client() as client:
                 r = await client.get("/user")
                 if r.status_code != 200:
-                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                    return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
                 return HealthResult(ok=True)
         except httpx.HTTPError as exc:
             return HealthResult(ok=False, detail=f"HTTP error: {exc}")
@@ -267,7 +271,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     f"check https://github.com/{owner_repo}/actions",
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -284,7 +290,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 return self._parse_run(r.json(), owner_repo=owner_repo)
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -325,7 +333,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     next_cursor=str(start_line + len(lines)) if cursor is not None else None,
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -369,7 +379,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 raw_runs = _safe_records(r.json(), "workflow_runs")
                 return [self._parse_run(run, owner_repo=owner_repo) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 

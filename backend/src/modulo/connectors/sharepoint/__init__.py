@@ -1,5 +1,6 @@
 """SharePointConnector — async Microsoft Graph API connector for SharePoint."""
 
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -64,6 +65,9 @@ class SharePointConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SHAREPOINT
@@ -86,7 +90,7 @@ class SharePointConnector(ConnectorBase):
                 r = await client.get("/sites/root")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             site_info = r.json()
             display_name = site_info.get("displayName", "") if isinstance(site_info, dict) else ""
@@ -94,7 +98,9 @@ class SharePointConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"SharePoint API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"SharePoint API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="SharePoint API timeout")

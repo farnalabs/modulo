@@ -7,7 +7,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NoReturn, cast
 
 import httpx
@@ -387,6 +387,9 @@ class GitHubConnector(ConnectorBase):
         self._circuit_open_until = 0.0
         self._circuit_half_open = False
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITHUB
@@ -697,7 +700,7 @@ class GitHubConnector(ConnectorBase):
         status_code = exc.response.status_code
         if self._should_trip_circuit(status_code):
             self._record_failure()
-        detail = self._redactor.redact(f"GitHub API HTTP {status_code}: {exc.response.text[:200]}")
+        detail = self._redacted_detail(f"GitHub API HTTP {status_code}: {exc.response.text}")[:200]
         if status_code == 429:
             quota = _rate_limit_detail(exc.response)
             if quota:
@@ -745,7 +748,7 @@ class GitHubConnector(ConnectorBase):
             return response.json()
         except json.JSONDecodeError as exc:
             raise GitHubAPIError(
-                self._redactor.redact(f"GitHub API returned invalid JSON: {response.text[:200]}"),
+                self._redacted_detail(f"GitHub API returned invalid JSON: {response.text}")[:200],
                 error_code="invalid_response",
             ) from exc
 

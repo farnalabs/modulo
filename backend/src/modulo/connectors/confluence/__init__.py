@@ -1,5 +1,6 @@
 """ConfluenceConnector — async Confluence Cloud REST API v2 connector."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -49,15 +50,22 @@ class ConfluenceConnector(ConnectorBase):
         self._base_url = f"https://{self._instance}"
         self._auth: httpx.Auth | None = None
         self._token: str | None = None
+        self._api_token: str | None = None
 
         if "token" in creds:
             self._token = creds["token"]
         elif "email" in creds and "api_token" in creds:
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
+            # Captured for credential redaction of echoed upstream detail
+            # (``ConnectorBase._credential_values``); the email is NOT a secret.
+            self._api_token = creds["api_token"]
         else:
             raise ValueError(
                 "Confluence credentials must contain either 'token' (PAT/Bearer) or 'email' + 'api_token' (Basic auth)",
             )
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token, self._api_token)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -92,7 +100,7 @@ class ConfluenceConnector(ConnectorBase):
                 r = await client.get("/wiki/rest/api/user/current")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             user_info = r.json()
             display_name = user_info.get("displayName", "")
@@ -101,7 +109,9 @@ class ConfluenceConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Confluence API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Confluence API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Confluence API timeout")

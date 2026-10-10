@@ -4,7 +4,7 @@ import asyncio
 import base64
 import json
 import random
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 import httpx
@@ -228,6 +228,9 @@ class JiraConnector(ConnectorBase):
             )
         self._redactor = CredentialRedactor.from_creds(creds)
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.JIRA
@@ -286,12 +289,12 @@ class JiraConnector(ConnectorBase):
         if should_retry_status(exc.response.status_code, attempt):
             await asyncio.sleep(self._sleep_delay(exc.response, attempt))
             return True
-        detail = exc.response.text[:200]
+        detail = self._redacted_detail(f"Jira API HTTP {exc.response.status_code}: {exc.response.text}")[:200]
         if exc.response.status_code == 429:
             quota = _rate_limit_detail(exc.response)
             if quota:
                 detail = f"{detail} (quota: {quota})"
-        raise ValueError(self._redactor.redact(f"Jira API HTTP {exc.response.status_code}: {detail}")) from exc
+        raise ValueError(detail) from exc
 
     async def _retry_after_network_failure(self, attempt: int) -> bool:
         """Sleep and signal a retry when the network-attempt budget allows, else ``False``."""
@@ -350,7 +353,7 @@ class JiraConnector(ConnectorBase):
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            raise ValueError(self._redactor.redact(f"Jira API invalid response: {response.text[:200]}")) from exc
+            raise ValueError(self._redacted_detail(f"Jira API invalid response: {response.text}")[:200]) from exc
 
     @redacting
     async def health_check(self) -> HealthResult:
