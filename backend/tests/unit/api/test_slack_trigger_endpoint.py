@@ -133,6 +133,10 @@ def _make_trigger_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync - a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
     # FAR-1287: create_snapshot_from_live_graph allocates the snapshot version
     # inside a ``session.begin_nested()`` SAVEPOINT. A bare AsyncMock's
     # begin_nested() returns a plain coroutine, which is not an async context
