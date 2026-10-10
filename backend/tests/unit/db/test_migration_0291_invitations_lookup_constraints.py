@@ -50,7 +50,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0291_invitations_lookup_constraints"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0290_scheduled_reports_due_scan"
-_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_HEAD_MIGRATION = "0293_eval_results_org_fk"
 
 #: Index name -> ordered key columns. The single source of truth asserted
 #: against BOTH the migration DDL and the ORM declaration.

@@ -158,7 +158,7 @@ _MIGRATION_PATH = (
 # 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0292_audit_events_resource_lookup"
+_CHAIN_HEAD_MIGRATION_NAME = "0293_eval_results_org_fk"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

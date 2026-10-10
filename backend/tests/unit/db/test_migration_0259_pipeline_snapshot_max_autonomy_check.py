@@ -65,7 +65,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_HEAD_MIGRATION = "0293_eval_results_org_fk"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

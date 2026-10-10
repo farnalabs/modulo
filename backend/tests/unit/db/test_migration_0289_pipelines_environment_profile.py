@@ -42,7 +42,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_HEAD_MIGRATION = "0293_eval_results_org_fk"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"

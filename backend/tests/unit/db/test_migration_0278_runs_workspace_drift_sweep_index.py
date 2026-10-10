@@ -57,7 +57,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_CHAIN_HEAD_MIGRATION = "0293_eval_results_org_fk"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 
