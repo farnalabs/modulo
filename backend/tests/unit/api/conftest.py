@@ -69,6 +69,11 @@ def make_system_session_mock(
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: ``AsyncSession.in_transaction()`` is SYNC (returns bool) — a
+    # bare ``AsyncMock`` auto-creates it as an async child, so a call from
+    # ``_ensure_active_transaction`` (db/rls.py) would leave an un-awaited
+    # coroutine behind. Type the double to match the real contract.
+    session.in_transaction = MagicMock(return_value=True)
 
     empty_row = MagicMock()
     empty_row.scalar_one_or_none = MagicMock(return_value=None)
