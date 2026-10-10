@@ -74,6 +74,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { parseISO } from 'date-fns'
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
@@ -93,19 +94,19 @@ const consentLevelLabel = computed(() => {
   return map[store.transparency?.consent_level ?? ''] || store.transparency?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
 })
 
-// The transparency endpoint returns ``egress_allowed`` but the store's
-// ``TransparencyData`` type does not surface it, so read it through an
-// explicit cast here rather than editing the store from this view.
-const egressAllowed = computed(
-  () => (store.transparency as { egress_allowed?: boolean } | null)?.egress_allowed === true,
-)
+// The transparency endpoint returns ``egress_allowed`` on ``TransparencyData``.
+const egressAllowed = computed(() => store.transparency?.egress_allowed === true)
 
 onMounted(() => {
   store.fetchTransparency()
 })
 
-// The dump watermark is a DATE-only value; render it without a time component.
+// The dump watermark is a DATE-only value. Parse it as a calendar date so it is
+// not shifted a day backwards in timezones behind UTC — a bare ``new Date()``
+// reads ``YYYY-MM-DD`` as UTC midnight.
 function formatDate(dateStr: string): string {
-  return formatDateShort(dateStr)
+  const d = parseISO(dateStr)
+  if (Number.isNaN(d.getTime())) return '—'
+  return formatDateShort(d)
 }
 </script>

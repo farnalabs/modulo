@@ -86,7 +86,11 @@ _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: 
 # of tracked client IPs. This route is UNAUTHENTICATED, so without the bound the
 # IP-keyed map grows forever: a key is only pruned when that same IP is seen
 # again, so one-off client IPs accumulate their timestamp lists indefinitely (a
-# memory-exhaustion DoS). The bound mirrors the pa-identity rotation limiter.
+# memory-exhaustion DoS). The pa-identity rotation limiter shares this
+# window/dict-of-timestamps shape but caps requests per client, not the number
+# of tracked clients (only the demo-floor limiter in
+# ``api/middleware/rate_limiter.py`` bounds its key set), so this key bound is
+# new for this limiter.
 _PUBLIC_RATE_LIMIT_WINDOW_SECONDS = 60.0
 _MAX_TRACKED_PUBLIC_CLIENTS = 10_000
 
@@ -142,9 +146,11 @@ def _evict_least_recently_used_public_clients(limit: int) -> None:
     """Evict least-recently-used client IPs until at most ``limit`` remain.
 
     Backstop for the case the sweep cannot help with: every tracked client still
-    holds an in-window timestamp, yet the map is at its bound. Eviction spares
-    the clients that are actively being limited, because a limited client is
-    touched on every rejected request and so is never the least-recently-used.
+    holds an in-window timestamp, yet the map is at its bound. Eviction is
+    best-effort LRU: a client that keeps being rejected is re-touched on every
+    request and so stays most-recently-used, making it the last to be evicted.
+    The hard bound is absolute, so once at capacity a client that has gone quiet
+    can still be dropped and later admitted fresh.
     """
     while len(_public_rate_limit) > limit:
         del _public_rate_limit[next(iter(_public_rate_limit))]
@@ -154,8 +160,9 @@ def _check_public_rate_limit(client_ip: str, now: float) -> None:
     """Record a public-ingest attempt, raising 429 if the client is over the limit.
 
     Allows at most one request per :data:`_PUBLIC_RATE_LIMIT_WINDOW_SECONDS`.
-    Rejection also refreshes the client's LRU position so the hard bound can
-    never evict-and-reset the window of a client that is actively being limited.
+    Rejection also refreshes the client's LRU position, so a client that is
+    actively being limited is evicted last by the hard bound — best-effort, see
+    :func:`_evict_least_recently_used_public_clients` for the caveat.
     """
     window_start = now - _PUBLIC_RATE_LIMIT_WINDOW_SECONDS
     timestamps = [t for t in _public_rate_limit.get(client_ip, ()) if t > window_start]

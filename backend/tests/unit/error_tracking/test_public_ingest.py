@@ -301,6 +301,29 @@ class TestPublicRateLimiterBoundedState:
         assert len(err_mod._public_rate_limit) == 3
         assert "new-client" in err_mod._public_rate_limit
 
+    def test_distinct_ip_flood_stays_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A flood of distinct new in-window IPs must not grow the map past the cap.
+
+        Documents the bound's trade-off: once every tracked client is in-window
+        and the map is full, admitting new IPs evicts least-recently-used keys —
+        the hard bound holds, but a client that has gone quiet may be dropped
+        and later admitted fresh (LRU is best-effort, not a per-client
+        guarantee).
+        """
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 4)
+        now = 1000.0
+        for i in range(4):
+            err_mod._public_rate_limit[f"k-{i}"] = [now]
+
+        for i in range(20):
+            err_mod._check_public_rate_limit(f"flood-{i}", now)
+
+        assert len(err_mod._public_rate_limit) == 4
+        assert "flood-19" in err_mod._public_rate_limit
+
     def test_eviction_spares_the_most_recently_used_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Eviction must drop the least-recently-used key, not the client seen most recently."""
         import modulo.api.routes.errors as err_mod
