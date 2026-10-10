@@ -65,7 +65,7 @@ class ConfluenceConnector(ConnectorBase):
             )
 
     def _credential_values(self) -> Sequence[str]:
-        return (self._token, self._api_token)
+        return tuple(v for v in (self._token, self._api_token) if isinstance(v, str))
 
     @property
     def connector_type(self) -> ConnectorType:

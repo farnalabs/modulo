@@ -64,7 +64,7 @@ class BitbucketConnector(ConnectorBase):
         self._credential: str | None = token or app_password
 
     def _credential_values(self) -> Sequence[str]:
-        return (self._credential,)
+        return (self._credential,) if self._credential else ()
 
     @property
     def connector_type(self) -> ConnectorType:
