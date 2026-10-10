@@ -1028,7 +1028,6 @@ def _build_system_probes(
     cloud_sync_hit, modulo_on_path, install_root, second_install_hint,
     degraded_reason.
     """
-    env_snapshot = dict(os.environ)
 
     def _probe_ambient_env_names() -> list[str]:
         from modulo.launcher.env_safety import AMBIENT_SERVICE_URL_VARS, _is_scrubbed
@@ -1136,9 +1135,6 @@ def _build_system_probes(
         from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
 
         return read_degraded_reason(data_dir / RUNTIME_FILENAME)
-
-    # Capture env_snapshot for the env_value probe (defined separately in orchestrator).
-    _ = env_snapshot  # ensure unused-ref lint does not trigger
 
     return (
         _probe_ambient_env_names,
