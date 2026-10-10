@@ -458,7 +458,11 @@ async def reconcile_pipeline_slots(
     the remaining orgs still run. Any other failure keeps the F6 contract
     above.
 
-    Returns ``{"released": int, "per_pipeline": {pipeline_id: count}}``.
+    Returns ``{"released": int, "retried": int,
+    "per_pipeline": {pipeline_id: count}}``: ``released`` counts heartbeat-stale
+    runs terminal-failed as ``heartbeat_stale`` (``claim_count`` over budget),
+    ``retried`` counts those reset to ``pending`` for re-dispatch (``claim_count``
+    within budget), and ``per_pipeline`` totals both classes per pipeline.
     """
     settings = get_settings()
     window = stale_seconds if stale_seconds is not None else settings.slot_reconcile_stale_seconds
