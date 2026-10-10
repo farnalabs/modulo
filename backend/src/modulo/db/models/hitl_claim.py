@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -10,7 +11,43 @@ from modulo.db.models.base import OrgScoped
 
 class HitlClaim(OrgScoped):
     __tablename__ = "hitl_claims"
-    __table_args__ = (UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "review_id", name="uq_hitl_claims_run_review"),
+        # The decision vocabulary is exactly the three _DECISION_* constants
+        # written by HITLManager._decide (approve / approve_with_modification /
+        # reject) and gate_coalescing.supersede (rejected): 'approved',
+        # 'rejected', 'deliver_manual'. NULL = undecided (passes CHECK by
+        # SQL three-valued logic). Without this, the free-form
+        # ``decision: str`` parameter would persist unchecked.
+        CheckConstraint(
+            "decision IN ('approved', 'rejected', 'deliver_manual')",
+            name="ck_hitl_claims_decision",
+        ),
+        # Gate-coalescing candidate scan (gate_coalescing.find_coalesce_candidate):
+        # WHERE pipeline_id = ? AND organisation_id = ? AND review_id = ?
+        # AND decision IS NULL AND account_id IS NULL ORDER BY created_at.
+        # Neither the single-column pipeline index nor the (run_id, review_id)
+        # unique constraint serves the (pipeline_id, review_id) equality pair.
+        Index(
+            "ix_hitl_claims_coalesce_scan",
+            "pipeline_id",
+            "review_id",
+            postgresql_where=sa_text("decision IS NULL AND account_id IS NULL"),
+            sqlite_where=sa_text("decision IS NULL AND account_id IS NULL"),
+        ),
+        # Sweep-alarm per-actor window (sweep_alarm._count_actor_decisions):
+        # WHERE organisation_id = ? AND decided_by = ? AND decision IN (...)
+        # AND decision_at >= ?. The single-column decided_by index cannot
+        # serve the org-led range scan; both equality terms are the prefix.
+        Index(
+            "ix_hitl_claims_sweep_detection",
+            "organisation_id",
+            "decided_by",
+            "decision_at",
+            postgresql_where=sa_text("decided_by IS NOT NULL AND decision_at IS NOT NULL"),
+            sqlite_where=sa_text("decided_by IS NOT NULL AND decision_at IS NOT NULL"),
+        ),
+    )
 
     run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
