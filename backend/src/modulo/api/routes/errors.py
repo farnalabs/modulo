@@ -7,6 +7,7 @@ import logging
 import time as _time
 import uuid
 from datetime import UTC, datetime, timedelta
+from itertools import islice
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -97,9 +98,16 @@ _PUBLIC_RATE_LIMIT_WINDOW_SECONDS = 60.0
 _MAX_TRACKED_PUBLIC_CLIENTS = 10_000
 
 # The stale-key sweep runs on the per-request admission path, so one sweep
-# inspects at most this many keys rather than the whole map. LRU order is by
-# last touch, so every stale key lies ahead of every in-window key — the oldest
-# batch is the only part of the map worth scanning.
+# inspects at most this many keys rather than the whole map. The front of the
+# map holds the least-recently-touched keys, which under normal traffic are the
+# idle (stale) ones, so the oldest batch is the highest-yield region to scan.
+# It is a BEST-EFFORT reclaim, not an exact one: ``_touch_*`` is also called on
+# the rejection path (to spare an actively-limited client from LRU eviction), so
+# a key's touch time can be more recent than its newest stored timestamp and a
+# stale key that was rate-limited shortly before going quiet can sit behind a
+# still-in-window key. The hard bound does NOT depend on the sweep — the
+# ``_evict_least_recently_used_*`` backstop guarantees it; the sweep only reduces
+# how often that backstop has to drop an in-window client.
 _PUBLIC_SWEEP_BATCH = 256
 # At-capacity is an expected steady state under a unique-IP flood, so log the
 # warning at most once per interval rather than on every request (log-flood
@@ -142,17 +150,18 @@ def _prepare_event_data(event: ErrorEventInput) -> dict[str, Any]:
 
 
 def _sweep_stale_public_rate_limit_clients(window_start: float) -> int:
-    """Evict up to :data:`_PUBLIC_SWEEP_BATCH` oldest idle client IPs.
+    """Best-effort eviction of stale client IPs from the front of the LRU order.
 
     A client with no in-window request can never have tripped the limiter, so
-    its key carries no rate-limiting information and is safe to drop. Iterating
-    from the FRONT of the LRU order means a bounded scan finds the same stale
-    keys a full-map scan would — every stale key is less recently touched than
-    every in-window one — without the O(n) cost under a flood. Returns the
-    number of keys evicted.
+    its key carries no rate-limiting information and is safe to drop. Only the
+    first :data:`_PUBLIC_SWEEP_BATCH` keys are materialised (``islice``), so the
+    per-request cost is O(batch) rather than O(tracked clients). This is a
+    best-effort reclaim — see the ``_PUBLIC_SWEEP_BATCH`` note for why a stale
+    key can sit behind an in-window one; the hard bound is the LRU backstop's
+    job, not the sweep's. Returns the number of keys evicted.
     """
     evicted = 0
-    for ip in list(_public_rate_limit)[:_PUBLIC_SWEEP_BATCH]:
+    for ip in list(islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH)):
         if not any(t > window_start for t in _public_rate_limit[ip]):
             del _public_rate_limit[ip]
             evicted += 1
@@ -236,15 +245,16 @@ def _public_daily_window_start(now: datetime | None = None) -> str:
 
 
 def _sweep_stale_public_daily_clients(threshold: str) -> int:
-    """Evict up to :data:`_PUBLIC_SWEEP_BATCH` oldest idle daily-cap clients.
+    """Best-effort eviction of stale daily-cap clients from the front of the LRU order.
 
-    Mirrors :func:`_sweep_stale_public_rate_limit_clients`: scan the front of the
-    LRU order, drop clients with no counter dated at/after ``threshold``, and
-    prune stale dated entries from the clients retained. Returns the count
-    evicted.
+    Mirrors :func:`_sweep_stale_public_rate_limit_clients`: materialise only the
+    first :data:`_PUBLIC_SWEEP_BATCH` keys, drop clients with no counter dated
+    at/after ``threshold``, and prune stale dated entries from the clients
+    retained. Best-effort for the same reason as its rate-limit sibling; the
+    LRU backstop, not this sweep, is the hard bound. Returns the count evicted.
     """
     evicted = 0
-    for ip in list(_public_daily_event_count)[:_PUBLIC_SWEEP_BATCH]:
+    for ip in list(islice(_public_daily_event_count, _PUBLIC_SWEEP_BATCH)):
         days = _public_daily_event_count[ip]
         for date_str in list(days):
             if date_str < threshold:

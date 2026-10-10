@@ -451,6 +451,36 @@ class TestPublicRateLimiterBoundedState:
         assert "stale-2" in err_mod._public_rate_limit
         assert "live" in err_mod._public_rate_limit
 
+    def test_front_sweep_is_best_effort_when_a_rejected_key_goes_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The bounded front scan is best-effort, not exhaustive.
+
+        Rejection re-touches a key (to spare it from LRU eviction) without
+        appending ``now``, so its LRU position can be newer than its newest
+        timestamp. A key that was rate-limited shortly before going quiet can
+        therefore sit BEHIND a still-in-window key, out of reach of a bounded
+        front scan. This pins that documented contract: the sweep reclaims what
+        it can and the LRU backstop — not the sweep — is the hard bound.
+        """
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_PUBLIC_SWEEP_BATCH", 1)
+        err_mod._check_public_rate_limit("A", 925.0)
+        err_mod._check_public_rate_limit("B", 960.0)
+        with pytest.raises(HTTPException):
+            # Re-touches "A" (no append), moving it to MRU while its stamp stays 925.
+            err_mod._check_public_rate_limit("A", 970.0)
+
+        window_start = 1000.0 - err_mod._PUBLIC_RATE_LIMIT_WINDOW_SECONDS  # 940.0
+        assert list(err_mod._public_rate_limit) == ["B", "A"]
+
+        evicted = err_mod._sweep_stale_public_rate_limit_clients(window_start)
+
+        assert evicted == 0
+        assert "A" in err_mod._public_rate_limit  # stale but behind in-window "B"
+        err_mod._evict_least_recently_used_public_clients(1)
+        assert list(err_mod._public_rate_limit) == ["A"]
+
     def test_capacity_warning_is_interval_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The at-capacity WARNING must fire at most once per interval, not per request."""
         import modulo.api.routes.errors as err_mod
