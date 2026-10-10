@@ -1176,6 +1176,29 @@ class CapabilityScope(BaseModel):
     )
 
 
+class PipelineGraphPolicyGate(BaseModel):
+    """Node-attached policy-gate configuration (FAR-1109).
+
+    Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+    config can carry the gate as part of the graph write. ``action`` is the
+    gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+    ``eval_id`` references the eval bound to this node (the CLI never
+    auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+    time).
+
+    The node model previously had no field for this block, so Pydantic's
+    default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+    before the graph write — leaving declarative gate config permanently inert
+    (the plan always reported "unchanged" and the write never carried the
+    gate). Declaring the field means the validated node dict retains the block
+    and ``replace_pipeline_graph`` persists it verbatim in
+    ``pipeline.graph_nodes_json``, and the read path round-trips it.
+    """
+
+    action: Literal["warn", "block"]
+    eval_id: uuid.UUID
+
+
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
@@ -1333,6 +1356,16 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
+    )
+    # FAR-1109: node-attached policy-gate configuration (declarative
+    # config-as-code surface). Declared here so the REST + MCP graph contracts
+    # do NOT silently drop the block on save — a dropped declarative field
+    # would create permanent plan drift in ``modulo apply`` and the write would
+    # never carry the gate. Absent = no gate declared on this node.
+    policy_gate: PipelineGraphPolicyGate | None = Field(
+        default=None,
+        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. "
+        "Absent means no gate is declared on this node.",
     )
     # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
     # sandbox_agent / composite node (NOT a new node_type). When set, the node

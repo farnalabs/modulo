@@ -64,6 +64,24 @@ def _http_error_message(exc: ApplyHttpError) -> str:
     return str(exc)
 
 
+_GATE_CHANGE_VERBS = {"added": "add", "changed": "change", "removed": "remove"}
+
+
+def _render_policy_gate_change(entry: dict[str, Any], *, scope: str | None) -> str:
+    """One human-readable line for a node-attached policy-gate change (FAR-1109).
+
+    Renders the change as a distinct class (gate add / change / remove) on a
+    named node with its action, so an operator never has to infer a gate change
+    from a generic "graph updated".
+    """
+    verb = _GATE_CHANGE_VERBS.get(str(entry.get("change")), str(entry.get("change")))
+    if entry.get("change") == "changed":
+        detail = f"{entry.get('previous_action')}->{entry.get('action')}"
+    else:
+        detail = f"{entry.get('action')}, eval {entry.get('eval_id')}"
+    return f"gate {verb} pipeline {scope!r} node {entry.get('node')} ({detail})"
+
+
 def render_table(report: dict[str, Any]) -> str:
     """Human-friendly plan/apply/drift report rendering.
 
@@ -107,6 +125,14 @@ def render_table(report: dict[str, Any]) -> str:
             f"{entry['current']!r} -> {entry['desired']!r}"
             for entry in breakdown.get("git_content") or ()
         )
+        # FAR-1109: gate changes render as their own drift-detail line (the
+        # node-level aggregate above cannot tell a gate change from any other
+        # node modification).
+        lines.extend(_render_policy_gate_change(entry, scope=key) for entry in breakdown.get("policy_gates") or ())
+    # FAR-1109: an APPLY report lists gate changes as a distinct change class.
+    lines.extend(
+        _render_policy_gate_change(entry, scope=entry.get("pipeline")) for entry in report.get("gate_changes") or ()
+    )
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
     lines.append(

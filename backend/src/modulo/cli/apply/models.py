@@ -253,6 +253,28 @@ class ApplyGraphCapabilityScope(BaseModel):
     context_scope: list[str] | None = None
 
 
+class ApplyGraphPolicyGate(BaseModel):
+    """A node-attached policy gate (FAR-1109; mirror of the API node field).
+
+    The gate is declared inline with the pipeline node it governs — it is NOT
+    a top-level entity kind (the DB binds one gate per eval, one eval per
+    node, so the gate is a property of the node's graph position).
+    ``extra="forbid"`` makes an unrecognised gate field a loud load-time error:
+    the API node model would silently drop it and a silently-dropped
+    declarative field creates permanent plan drift.
+
+    ``action`` is the gate's configured action (the ``policy_gates.action``
+    vocabulary). ``eval_id`` references the eval bound to this node by UUID
+    (eval names are not unique per-org; the CLI never auto-creates evals, so an
+    unresolved ``eval_id`` BLOCKS the entity at plan time).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["warn", "block"]
+    eval_id: uuid.UUID
+
+
 class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     """A pipeline graph node in the apply config.
 
@@ -324,6 +346,14 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     watch_globs: list[str] = Field(default_factory=list)
     router_config: dict[str, Any] | None = None
     hitl_config: dict[str, Any] | None = None
+    # FAR-1109: node-attached policy gate (API PipelineGraphNode twin).
+    # Declared here so the CLI accepts the declarative block (and so the
+    # mirror-field drift alarm in test_apply_models stays green); the executor
+    # resolves the referenced eval and the block travels in the graph write.
+    # Absent on a node means NO live gate — apply removes any current gate on
+    # that node (the CLI never writes gate rows directly; the graph replace is
+    # the single write surface).
+    policy_gate: ApplyGraphPolicyGate | None = None
     fan_out: dict[str, Any] | None = None
     collect: list[dict[str, Any]] | None = None
     aggregate: dict[str, Any] | None = None
@@ -1391,6 +1421,36 @@ class EntitySet(BaseModel):
     model_backends: list[ModelBackendEntity] = Field(default_factory=list)
     pipelines: list[PipelineEntity] = Field(default_factory=list)
     triggers: list[TriggerEntity] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_policy_gate_evals(self) -> EntitySet:
+        """Reject two nodes declaring a gate on the same eval (FAR-1109).
+
+        The database enforces ``UNIQUE(eval_id) WHERE deleted_at IS NULL`` on
+        ``policy_gates`` — one LIVE gate per eval. Two declared nodes (in the
+        same or in different pipelines) referencing the same ``eval_id`` can
+        never converge, so fail loudly at config LOAD instead of surfacing as
+        permanent drift or a server conflict mid-apply. One gate per NODE is
+        inherent: graph node ids are already unique (``ApplyGraph._unique_ids``).
+        """
+        seen: dict[str, str] = {}
+        for pipeline in self.pipelines:
+            if pipeline.graph is None:
+                continue
+            for node in pipeline.graph.nodes:
+                gate = node.policy_gate
+                if gate is None:
+                    continue
+                key = str(gate.eval_id)
+                location = f"pipeline {pipeline.name!r} node {node.id!s}"
+                if key in seen:
+                    msg = (
+                        f"policy_gate eval_id {key} is declared more than once "
+                        f"({seen[key]} and {location}) - one eval may have at most one live gate"
+                    )
+                    raise ApplyConfigError(msg)
+                seen[key] = location
+        return self
 
 
 class ApplyConfig(BaseModel):

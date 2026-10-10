@@ -41,6 +41,9 @@ _CONFLICT_HINT = "name already exists; rerun to apply as update"
 # Repeated API paths (S1192).
 _PATH_MODEL_BACKENDS = "/model-backends"
 _PATH_SCHEMAS = "/schemas"
+# FAR-1109: node policy-gate eval_id references resolve against the org's
+# evals (list route filters soft-deleted rows).
+_PATH_EVALS = "/evals"
 
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
@@ -343,6 +346,33 @@ class ApplyExecutor:
                 users_error = str(exc)
                 _log.warning("apply.fetch_users_failed: %s", users_error)
 
+        # FAR-1109: a declared node policy gate references an eval by UUID. The
+        # eval map resolves that reference at plan time (a missing eval blocks
+        # the entity). Fetched LAZILY — only when some declared pipeline node
+        # carries a ``policy_gate`` — and a fetch failure is STORED, not raised:
+        # only the gate-declaring pipelines block (per-entity containment,
+        # mirroring ``users_error`` / ``unreadable_graph_pipelines``). The
+        # /evals list route already filters soft-deleted evals (a soft-deleted
+        # eval cannot receive new results, so its gate would always resolve
+        # 'undefined').
+        needs_evals = any(
+            entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes)
+            for entity in config.entities.pipelines
+        )
+        evals: dict[str, dict[str, Any]] = {}
+        evals_error: str | None = None
+        if needs_evals:
+            try:
+                evals_list = self._get_paginated(_PATH_EVALS)
+                evals = {
+                    str(item["id"]): item
+                    for item in evals_list
+                    if item.get("id") is not None and item.get("deleted_at") is None
+                }
+            except ApplyHttpError as exc:
+                evals_error = str(exc)
+                _log.warning("apply.fetch_evals_failed: %s", evals_error)
+
         ambiguous_agent_names = _duplicate_name_counts(agents_list)
         agents = {
             item["name"]: item["id"]
@@ -407,6 +437,8 @@ class ApplyExecutor:
             "agents": agents,
             "users": users,
             "users_error": users_error,
+            "evals": evals,
+            "evals_error": evals_error,
             "ambiguous_agent_names": ambiguous_agent_names,
             "ambiguous_pipeline_names": ambiguous_pipeline_names,
             "duplicate_trigger_keys": duplicate_trigger_keys,
@@ -680,6 +712,8 @@ def _empty_current() -> dict[str, Any]:
         "agents": {},
         "users": {},
         "users_error": None,
+        "evals": {},
+        "evals_error": None,
         "ambiguous_agent_names": {},
         "ambiguous_pipeline_names": {},
         "duplicate_trigger_keys": set(),
