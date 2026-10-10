@@ -30,6 +30,7 @@ from modulo.api.dependencies import get_db_session
 from modulo.api.routes import product_analytics_transparency as pat_module
 from modulo.api.routes.product_analytics_transparency import (
     TransparencyResponse,
+    _coerce_last_dump,
     _resolve_org_settings,
 )
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
@@ -395,6 +396,38 @@ class TestRealDumpSources:
             body = _request(client)
         assert body["dump_count_total"] == expected
         _restore_overrides()
+
+    def test_non_string_watermark_is_stringified(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A stored non-string watermark is stringified, not dropped to None."""
+        client = _client(session=_make_session(_ORG_ALL))
+        sources = _patch_sources(
+            transparency_values={DUMP_WATERMARK_KEY: 12345},
+            monkeypatch=monkeypatch,
+        )
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["last_successful_dump_at"] == "12345"
+        # 12345 is not an ISO timestamp, so the staleness check fails silent.
+        assert body["warning"] is None
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# _coerce_last_dump (the watermark coercion)
+# ---------------------------------------------------------------------------
+
+
+class TestCoerceLastDump:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("2026-08-15", "2026-08-15"),  # a stored string passes through
+            (12345, "12345"),  # any other non-None scalar is stringified
+            (None, None),  # a missing value yields None
+        ],
+    )
+    def test_coerces_stored_watermark(self, value: object, expected: object) -> None:
+        assert _coerce_last_dump(value) == expected
 
 
 # ---------------------------------------------------------------------------
