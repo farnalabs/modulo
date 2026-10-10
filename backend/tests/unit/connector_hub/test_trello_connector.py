@@ -324,8 +324,9 @@ async def test_health_check_transport_error_raises_request_error(connector):
     error.
 
     NOTE: unlike ``query``/``write``, ``health_check`` is not ``@redacting``-
-    wrapped, so ``exc.request.url`` still carries the live ``key``/``token``
-    when the transport itself fails. That source gap is tracked separately; this
+    wrapped, so a transport error's ``exc.request.url`` still carries the live
+    ``key``/``token``. That is an out-of-scope ``backend/src/`` source gap,
+    surfaced by this test-only pass and reported as an outstanding item; this
     test pins only the observable exception type so the path stays exercised.
     """
     respx.get(f"{_BASE}/members/me").mock(side_effect=httpx.ConnectError("Connection refused"))

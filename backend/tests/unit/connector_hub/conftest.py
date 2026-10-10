@@ -25,33 +25,53 @@ def _pin_settings_for_tenant_paths() -> None:
     patcher.stop()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _cache_ssl_contexts_for_mocked_http():
-    """Session-cache the httpx/httpcore TLS context.
+@pytest.fixture(scope="package", autouse=True)
+def _cache_ssl_context_for_mocked_http():
+    """Package-scoped cache of the httpx TLS context (test-only speedup).
 
-    Every connector builds a fresh httpx.AsyncClient per request via
-    pinned_async_client_sync; httpcore then parses the certifi CA bundle
-    (~66 ms) for each. All HTTP in this package is mocked (respx), so the
-    context is never used for a real handshake — caching it removes a large
-    fraction of package wall time. Restored on teardown.
+    Every connector builds a fresh ``httpx.AsyncClient`` per request via
+    ``pinned_async_client_sync``; httpx then parses the certifi CA bundle
+    (~66 ms) to build the client's TLS context. All HTTP in this package is
+    mocked (respx), so the context is never used for a real handshake.
+
+    Only the ``trust_env=False`` path is cached — the ``trust_env=True`` path
+    reads ``SSL_CERT_FILE`` / ``SSL_CERT_DIR``, so caching it would be
+    env-blind. The patch is package-scoped (finalised when this package's last
+    test completes), so it cannot leak into other test packages, and the
+    original is restored in a ``finally``.
+
+    NOTE: building a fresh client per request is a real production
+    inefficiency (``rest`` already reuses one client; the other connectors do
+    not). Fixing it is a ``backend/src/`` change, out of scope for this
+    test-only pass, and is reported as an outstanding item.
     """
     import functools
 
-    import httpcore._ssl as _httpcore_ssl
     import httpx._transports.default as _httpx_default
 
-    originals = []
-    for mod, name in (
-        (_httpcore_ssl, "default_ssl_context"),
-        (_httpx_default, "create_ssl_context"),
-    ):
-        fn = getattr(mod, name)
-        if not getattr(fn, "__wrapped__", None):
-            originals.append((mod, name, fn))
-            setattr(mod, name, functools.lru_cache(maxsize=None)(fn))
-    yield
-    for mod, name, fn in originals:
-        setattr(mod, name, fn)
+    real = getattr(_httpx_default, "create_ssl_context", None)
+    if real is None or getattr(real, "__wrapped__", None) is not None:
+        yield
+        return
+
+    @functools.lru_cache(maxsize=16)
+    def _cached(verify, cert):
+        return real(verify=verify, cert=cert, trust_env=False)
+
+    def _create_ssl_context(verify=True, cert=None, trust_env=True):
+        if trust_env:
+            # Env-dependent (SSL_CERT_FILE / SSL_CERT_DIR) — never cache.
+            return real(verify=verify, cert=cert, trust_env=trust_env)
+        try:
+            return _cached(verify, cert)
+        except TypeError:  # unhashable cert — fall back to an uncached call
+            return real(verify=verify, cert=cert, trust_env=False)
+
+    _httpx_default.create_ssl_context = _create_ssl_context
+    try:
+        yield
+    finally:
+        _httpx_default.create_ssl_context = real
 
 
 @pytest.fixture
