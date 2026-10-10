@@ -647,6 +647,15 @@ _ENGINE_LOCK = threading.Lock()
 # ``sqlalchemy.exc.TimeoutError`` first and the org loop attributes it. It
 # also matches the connect bound above, so session establishment as a whole is
 # bounded to ~20s (pool wait + connect), still inside the org slice.
+#
+# SETTINGS INVARIANT (qa re-review): the connect/pool bounds stay ATTRIBUTABLE
+# (``org_connect_timeouts`` / ``org_pool_timeouts``) only while the effective
+# per-org slice exceeds ``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` + slack
+# (``_RECONCILE_ORG_CUT_SLACK_SECONDS``, i.e. ~10.5s). If
+# ``dispatcher_reconcile_org_budget_seconds`` is ever tuned below that — or the
+# slice is clamped below it by a nearly-exhausted tick budget — the asyncio cut
+# fires first and a connect/pool failure reclassifies into a generic
+# ``org_timeouts``. See the FAR-1621 docstring in ``_reconcile_org``.
 _SYSTEM_CONNECT_TIMEOUT_SECONDS = 10
 _SYSTEM_POOL_TIMEOUT_SECONDS = 10
 
@@ -6422,6 +6431,21 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         can win the race against the asyncio cut (qa F1). Every
         bounded-failure counter reaches the readiness detail via
         ``_format_reconcile_detail`` so alert emails can tell the cases apart.
+
+        SETTINGS INVARIANT (qa re-review): ``org_connect_timeouts`` and
+        ``org_pool_timeouts`` are only reachable while the effective per-org
+        slice exceeds the session-establishment bounds
+        (``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` / ``_SYSTEM_POOL_TIMEOUT_SECONDS``,
+        both 10s) plus ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` — i.e. the slice
+        must stay above ~10.5s. The coded default
+        (``dispatcher_reconcile_org_budget_seconds`` = 30s) satisfies it, but
+        the slice is ``min(org_budget, remaining tick budget - reserve)``, so a
+        nearly-exhausted tick can clamp it below the bound. If that happens, or
+        if ops tunes ``dispatcher_reconcile_org_budget_seconds`` below ~10.5s,
+        the asyncio per-org cut fires first and the connect/pool failure is
+        counted as a generic ``org_timeouts`` (with the in-pass message)
+        instead of its dedicated counter. The coded defaults are pinned by
+        tests; this invariant is documented, not enforced.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
