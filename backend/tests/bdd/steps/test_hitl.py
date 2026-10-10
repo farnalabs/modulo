@@ -122,78 +122,6 @@ def i_am_approver(ctx):
     ctx["user_id"] = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-@when(parsers.parse('I POST /api/runs/{run_id}/approve with decision "{decision}"'))
-def post_approve_decision(request, run_id, decision: str, ctx):
-    """Handle approve/reject POST for both approvers and non-approvers.
-
-    Behaviour is branched by ``ctx["user_role"]`` — a viewer (non-approver)
-    gets a 403 response, while an approver gets a 200 with the decision.
-
-    The ``run_id`` parameter is parsed from the Gherkin step text (the feature
-    file uses ``{run_id}`` as a REST URL placeholder). We fetch the actual
-    UUID from ``ctx["run_id"]`` set by the given step.
-    """
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
-
-    _ = run_id  # parsed from feature step — use ctx["run_id"] for actual UUID
-    ctx["decision"] = decision
-    run_id = ctx["run_id"]
-    role = ctx.get("user_role", "approver")
-
-    if role == "viewer":
-        # Non-approver: HITLManager raises ClaimTokenInvalidError -> 403
-        mock_mgr = MagicMock()
-        mock_mgr.approve = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
-        with patch(
-            "modulo.api.routes.hitl.HITLManager",
-            return_value=mock_mgr,
-        ):
-            resp = MagicMock()
-            resp.status_code = 403
-            resp.json = lambda: {"detail": "claim_token is invalid"}
-            request.node._resp = resp
-        return
-
-    # Approver branch
-    if decision == "approved":
-        with (
-            patch(
-                "modulo.api.routes.hitl.HITLManager",
-                return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
-            ),
-            patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
-        ):
-            mock_mgr = ctx.get("_mock_hitl_mgr")
-            if mock_mgr:
-                mock_mgr.approve = AsyncMock(return_value=ctx["mock_gate"])
-            mock_exec_cls.return_value.resume = AsyncMock()
-
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json = lambda: {"status": "approved", "run_id": str(run_id)}
-            request.node._resp = resp
-        ctx["run_status"] = "running"
-    elif decision == "rejected":
-        with (
-            patch(
-                "modulo.api.routes.hitl.HITLManager",
-                return_value=ctx.get("_mock_hitl_mgr", MagicMock()),
-            ),
-            patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
-        ):
-            mock_mgr = ctx.get("_mock_hitl_mgr")
-            if mock_mgr:
-                mock_mgr.reject = AsyncMock(return_value=ctx["mock_gate"])
-            mock_exec_cls.return_value.resume = AsyncMock()
-
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json = lambda: {"status": "rejected", "run_id": str(run_id)}
-            request.node._resp = resp
-        ctx["run_status"] = "rejected"
-
-
-@then('the run status becomes "running"')
 def run_status_running(request, ctx):
     """Assert the run actually resumed: the real approve route returns
     ``{"status": "approved"}`` and drives ``PipelineExecutor.resume``.
@@ -585,23 +513,19 @@ def post_deliver_manual_success(request, run_id, review_id, ctx, client):
 
 @when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with no claim_token and manual output"))
 def post_deliver_manual_no_token(request, run_id, review_id, ctx, client):
-    from unittest.mock import AsyncMock, MagicMock, patch
+    """Drive the real deliver-manual route without a claim_token.
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
-
+    The router's body validation rejects the payload with a real 422
+    (``claim_token`` is a required field on ``DeliverManualRequest``).
+    """
     _ = run_id, review_id
-    mock_mgr = MagicMock()
-    mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token is invalid"))
-
-    with (
-        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
-    ):
-        mock_exec_cls.return_value.resume = AsyncMock()
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 403
-        request.node._resp.json = lambda: {"detail": "claim_token is invalid"}
-        request.node._resp_status = 403
+    resp = client.post(
+        f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/deliver-manual",
+        json={
+            "output": {"status": "approved", "notes": "Manual review passed"},
+        },
+    )
+    request.node._resp = resp
 
 
 @when(
@@ -610,23 +534,24 @@ def post_deliver_manual_no_token(request, run_id, review_id, ctx, client):
     )
 )
 def post_deliver_manual_expired(request, run_id, review_id, ctx, client):
-    from unittest.mock import AsyncMock, MagicMock, patch
+    """Drive the real deliver-manual route with an expired claim token.
 
-    from modulo.core.pipeline_engine.executor import PipelineExecutor as RealExecutor
+    ``HITLManager.deliver_manual`` raises ``ClaimTokenExpiredError``, which
+    the router maps to a real 410.
+    """
+    from modulo.core.hitl_manager import ClaimTokenExpiredError
 
     _ = run_id, review_id
-    mock_mgr = MagicMock()
-    mock_mgr.deliver_manual = AsyncMock(side_effect=PermissionError("claim_token has expired"))
-
-    with (
-        patch("modulo.api.routes.hitl.HITLManager", return_value=mock_mgr),
-        patch("modulo.api.routes.hitl.PipelineExecutor", spec=RealExecutor) as mock_exec_cls,
-    ):
-        mock_exec_cls.return_value.resume = AsyncMock()
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 410
-        request.node._resp.json = lambda: {"detail": "claim_token has expired"}
-        request.node._resp_status = 410
+    with patch("modulo.api.routes.hitl.HITLManager") as mock_mgr_cls:
+        mock_mgr_cls.return_value.deliver_manual = AsyncMock(side_effect=ClaimTokenExpiredError())
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/hitl/{ctx['review_id']}/deliver-manual",
+            json={
+                "claim_token": "expired_token",
+                "output": {"status": "approved", "notes": "Manual review passed"},
+            },
+        )
+    request.node._resp = resp
 
 
 @when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with claim_token and empty output"))
@@ -736,11 +661,23 @@ def manual_output_processed(ctx):
 
 @when(parsers.parse('I submit manual output missing required field "{field}"'))
 def submit_manual_output_missing(request, field: str, ctx, client):
-    from unittest.mock import MagicMock
+    """Drive the real manual-output submit route with schema-invalid output.
 
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 422
-    request.node._resp.json = lambda: {"detail": f"Manual output missing required field {field!r}"}
+    ``HITLManager.approve`` (the manager method behind the route) raises
+    ``DecisionPayloadError`` when the output omits a schema-required field;
+    the router maps that to a real 422.
+    """
+    from modulo.core.hitl_manager import DecisionPayloadError
+
+    with patch("modulo.api.routes.hitl.HITLManager") as mock_mgr_cls:
+        mock_mgr_cls.return_value.approve = AsyncMock(
+            side_effect=DecisionPayloadError(f"Manual output missing required field {field!r}")
+        )
+        resp = client.post(
+            f"/api/v1/runs/{ctx['run_id']}/manual/{ctx['review_id']}/submit",
+            json={"claim_token": ctx.get("claim_token", "valid_token"), "output": {"notes": "no approval field"}},
+        )
+    request.node._resp = resp
 
 
 @when("I submit manual output with valid data")

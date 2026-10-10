@@ -1,10 +1,9 @@
 """Step definitions for organisation management features — onboarding, membership."""
 
 import contextlib
-import json
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,22 +27,6 @@ with contextlib.suppress(FileNotFoundError, OSError):
 def ctx():
     """Shared mutable context dict for org tests."""
     return {}
-
-
-@pytest.fixture(autouse=True)
-def _cleanup_onboarding_state():
-    """Remove test onboarding state before and after each scenario."""
-    path = _onboarding_state_path()
-    if path.exists():
-        path.unlink()
-    yield
-    if path.exists():
-        path.unlink()
-
-
-def _onboarding_state_path() -> Path:
-    """Return the real path used by the onboarding module."""
-    return Path(__file__).resolve().parent.parent.parent.parent / ".onboarding-state.json"
 
 
 # ===========================================================================
@@ -238,89 +221,83 @@ def user_deactivated(username: str, ctx):
 # ===========================================================================
 
 
+def _onboarding_seams(ctx):
+    """Patch the onboarding route's DB seams with an in-memory progress state.
+
+    The real route bodies execute; only the two module-level DB helpers they
+    call are replaced. The fake progress object is MUTATED by the real route
+    logic (completes accumulate), and the auto-completion check mirrors the
+    real one's unconditional ``login`` auto-credit.
+    """
+    state = SimpleNamespace(
+        completed_actions=list(ctx.get("_seed_completed", [])),
+        skipped_actions=list(ctx.get("_seed_skipped", [])),
+        dismissed=ctx.get("_seed_dismissed", False),
+    )
+
+    async def fake_get_or_create(session, org_id):
+        return state
+
+    async def fake_check_auto_completion(session, org_id):
+        _ = session, org_id
+        return {"login"}
+
+    return (
+        patch("modulo.api.routes.onboarding._get_or_create_progress", new=fake_get_or_create),
+        patch("modulo.api.routes.onboarding._check_auto_completion", new=fake_check_auto_completion),
+    )
+
+
 @given("a new organisation signs up")
 def new_org_signup(ctx):
-    # Ensure no onboarding state file exists
-    path = _onboarding_state_path()
-    if path.exists():
-        path.unlink()
+    ctx.pop("_seed_completed", None)
+    ctx.pop("_seed_skipped", None)
+    ctx.pop("_seed_dismissed", None)
 
 
 @given("the welcome flow is completed")
 def welcome_flow_completed(ctx):
-    path = _onboarding_state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        json.dump({"is_first_run": True, "completed_steps": []}, f)
-    ctx["all_steps_done"] = False
+    ctx.pop("_seed_completed", None)
+    ctx.pop("_seed_skipped", None)
+    ctx.pop("_seed_dismissed", None)
 
 
 @when("I GET /api/v1/onboarding/status")
 def get_onboarding_status(client, request, ctx):
-    from unittest.mock import MagicMock
-
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 200
-    request.node._resp.json = lambda: {
-        "is_first_run": True,
-        "completed_steps": [],
-        "current_step": 1,
-        "total_steps": 4,
-    }
+    with contextlib.ExitStack() as stack:
+        for seam in _onboarding_seams(ctx):
+            stack.enter_context(seam)
+        resp = client.get("/api/v1/onboarding/status")
+    request.node._resp = resp
 
 
-@when(parsers.parse('I POST /api/v1/onboarding/step with step_id "{step_id}"'))
-def post_onboarding_step(request, step_id: str, client, ctx):
-    from unittest.mock import MagicMock
-
-    valid_ids = {"connect_tools", "select_template", "configure_agent", "run_demo"}
-    if step_id not in valid_ids:
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 422
-        request.node._resp.json = lambda: {"detail": f"Invalid step_id '{step_id}'"}
-        return
-
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 200
-    request.node._resp.json = lambda: {
-        "step_id": step_id,
-        "completed": True,
-        "completed_steps": [step_id],
-    }
+@when(parsers.parse('I POST /api/v1/onboarding/actions/{path_action}/complete with action_id "{action_id}"'))
+def post_onboarding_action(request, action_id: str, path_action: str, client, ctx):
+    _ = path_action
+    with contextlib.ExitStack() as stack:
+        for seam in _onboarding_seams(ctx):
+            stack.enter_context(seam)
+        resp = client.post(f"/api/v1/onboarding/actions/{action_id}/complete")
+    request.node._resp = resp
 
 
 @when("all onboarding steps are marked complete")
 def mark_all_steps_complete(client, request, ctx):
-    from unittest.mock import MagicMock
-
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 200
-    request.node._resp.json = lambda: {
-        "is_first_run": False,
-        "completed_steps": ["connect_tools", "select_template", "configure_agent", "run_demo"],
-        "current_step": None,
-        "total_steps": 4,
-    }
-
-
-@when(parsers.parse("I GET /api/v1/onboarding/step/{step_id}"))
-def get_onboarding_step(request, step_id: str, client, ctx):
-    from unittest.mock import MagicMock
-
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 200
-    request.node._resp.json = lambda: {
-        "step_id": step_id,
-        "label": "Connect Tooling",
-        "order": 1,
-        "data": {
-            "title": "Connect Your Tools",
-            "description": "Link GitHub, Jira, or Linear to get started.",
-            "connectors": [
-                {"id": "github", "name": "GitHub", "type": "oauth", "connected": False},
-            ],
-        },
-    }
+    """Complete every non-auto action through the real API, then read status."""
+    manual_action_ids = [
+        "add_ai_model",
+        "create_first_agent",
+        "create_first_schema",
+        "create_first_pipeline",
+        "run_first_pipeline",
+    ]
+    with contextlib.ExitStack() as stack:
+        for seam in _onboarding_seams(ctx):
+            stack.enter_context(seam)
+        for action_id in manual_action_ids:
+            client.post(f"/api/v1/onboarding/actions/{action_id}/complete")
+        resp = client.get("/api/v1/onboarding/status")
+    request.node._resp = resp
 
 
 @then("the response indicates it is the first run")
@@ -329,10 +306,12 @@ def response_indicates_first_run(request):
     assert body.get("is_first_run") is True, f"Expected is_first_run=true, got {body}"
 
 
-@then("the current step is step 1")
-def current_step_is_1(request):
+@then("the onboarding status lists the login action as auto-completed")
+def onboarding_lists_login_auto_completed(request):
     body = request.node._resp.json()
-    assert body.get("current_step") == 1, f"Expected current_step=1, got {body}"
+    login_action = next((a for a in body.get("actions", []) if a.get("id") == "login"), None)
+    assert login_action is not None, f"Expected a login action in the response, got: {body}"
+    assert login_action.get("completed") is True, f"Expected the login action to be auto-completed, got: {login_action}"
 
 
 @then("the step is marked completed")
@@ -341,10 +320,10 @@ def step_marked_completed(request):
     assert body.get("completed") is True, f"Step not marked completed: {body}"
 
 
-@then('completed_steps contains "connect_tools"')
-def completed_steps_contains(request):
+@then(parsers.parse('the response echoes action_id "{action_id}"'))
+def response_echoes_action_id(action_id: str, request):
     body = request.node._resp.json()
-    assert "connect_tools" in body.get("completed_steps", []), f"connect_tools not in completed_steps: {body}"
+    assert body.get("action_id") == action_id, f"Expected action_id {action_id}, got {body}"
 
 
 @then("is_first_run becomes false")
@@ -353,8 +332,10 @@ def is_first_run_false(request):
     assert body.get("is_first_run") is False, f"Expected is_first_run=false, got {body}"
 
 
-@then("the response contains connector options")
-def response_contains_connector_options(request):
+@then('the response contains the "add_ai_model" onboarding action')
+def response_contains_add_ai_model(request):
     body = request.node._resp.json()
-    data = body.get("data", {})
-    assert "connectors" in data or "title" in data, f"Expected connector info in response: {body}"
+    action_ids = {a.get("id") for a in body.get("actions", [])}
+    assert "add_ai_model" in action_ids, (
+        f"Expected add_ai_model in the onboarding actions, got: {sorted(i for i in action_ids if i)}"
+    )
