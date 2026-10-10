@@ -16,6 +16,16 @@ no-op for this package removes the app import; behaviour is unchanged because
 no module here resolves a FastAPI dependency (verified: the whole
 ``tests/unit/cron_helpers/`` tree has zero references to ``get_current_user``,
 ``dependency_overrides``, ``TestClient`` or ``modulo.api``).
+
+Caveat (FAR-1229): pytest keys a conftest's autouse-fixture names to the exact
+``Package`` node current when that conftest was parsed, so an argv that detours
+out of ``tests/unit/cron_helpers/`` and back in -- e.g.
+``pytest tests/unit/cron_helpers/a.py tests/unit/test_x.py
+tests/unit/cron_helpers/b.py`` -- collects the later file under a fresh node
+whose autouse names were never registered, and this shadow silently drops for
+it (the app-importing parent fixture returns). Perf-only here -- no
+``cron_helpers`` test needs the overrides -- unlike the 401 breakage FAR-1229
+describes.
 """
 
 from __future__ import annotations
