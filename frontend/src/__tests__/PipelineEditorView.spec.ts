@@ -2853,6 +2853,14 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(hitlNode.type).toBe('hitl')
     expect(hitlNode.data.label).toBe('HITL')
 
+    // prototype-key node types must NOT resolve to an inherited
+    // Object.prototype member — they fall through to the generic agent node
+    // exactly as the original ternary chain did.
+    const ctorNode = vm.convertBackendNode({ id: 'c1', node_type: 'constructor', label: 'C', description: '', position: { x: 0, y: 0 } })
+    expect(ctorNode.type).toBe('agent')
+    const toStringNode = vm.convertBackendNode({ id: 't1', node_type: 'toString', label: 'T', description: '', position: { x: 0, y: 0 } })
+    expect(toStringNode.type).toBe('agent')
+
     // fallback label when label is empty
     const unlabeled = vm.convertBackendNode({ id: 'u1', node_type: 'agent', label: '', description: '', position: { x: 0, y: 0 } })
     expect(unlabeled.data.label).toContain('u1')
