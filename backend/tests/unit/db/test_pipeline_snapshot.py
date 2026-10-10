@@ -541,6 +541,40 @@ async def test_allocation_row_lock_timeout_maps_to_retryable_snapshot_lock_error
     session.flush.assert_not_awaited()
 
 
+async def test_allocation_row_lock_non_timeout_error_propagates_unchanged() -> None:
+    """FAR-1625: ONLY a 55P03 row-lock expiry is re-raised as the retryable
+    ``SnapshotLockNotAvailableError``. Any other ``SQLAlchemyError`` from the
+    allocation ``SELECT`` — a permission error, a lost connection, a missing
+    column — must propagate UNCHANGED so a real fault is never mislabelled as
+    transient contention and retried into the same failure."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+    failure = ProgrammingError(
+        "SELECT pipelines ... FOR NO KEY UPDATE",
+        {},
+        Exception("permission denied for table pipelines"),
+    )
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        failure,
+    ]
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        pytest.raises(ProgrammingError) as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    # The ORIGINAL error surfaces, not a SnapshotLockNotAvailableError wrapper.
+    assert excinfo.value is failure
+    # The fault happened before the version read/insert phase.
+    session.begin_nested.assert_not_called()
+    session.flush.assert_not_awaited()
+
+
 async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
     """FAR-527: when the lock stays unavailable for the whole budget the
     function must still raise SnapshotLockNotAvailableError — after exactly
