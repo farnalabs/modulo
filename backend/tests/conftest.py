@@ -17,8 +17,7 @@ import modulo.core.ssrf as _ssrf
 _REAL_VERIFY_IDENTITY = _auth_dependencies._verify_identity
 
 
-@pytest.fixture(autouse=True)
-def _guard_real_verify_identity() -> None:
+def _assert_real_verify_identity() -> None:
     """Fail fast when a leaked patch has replaced ``_verify_identity``.
 
     Regression guard for the FAR-1631 leak class: two fixtures patching the
@@ -36,14 +35,11 @@ def _guard_real_verify_identity() -> None:
     ``monkeypatch.setattr``. ``_patch_verify_identity`` now also uses
     ``monkeypatch.setattr`` so both restores share one LIFO-correct undo stack.
 
-    This root-level autouse guard runs at every test SETUP — before the
-    legitimate patchers, which set up strictly after this fixture — so it
-    observes the state left by the *previous* test's teardown. A leaked
-    replacement is caught here on the next test instead of silently changing its
-    behaviour.
-
     The comparison is by identity against the real function captured at import
     time, so it catches a replacement of any shape, not only ``Mock`` objects.
+    Exposed as a module-level function (not inlined in the fixture) so the
+    guard's own behaviour is covered by ``tests/architecture/
+    test_verify_identity_guard.py`` — a guard that cannot fail is not a guard.
     """
     current = _auth_dependencies._verify_identity
     if current is not _REAL_VERIFY_IDENTITY:
@@ -54,6 +50,18 @@ def _guard_real_verify_identity() -> None:
             f"{_REAL_VERIFY_IDENTITY!r} but found {current!r}. Fix the leaking "
             "fixture's teardown so it restores the original callable."
         )
+
+
+@pytest.fixture(autouse=True)
+def _guard_real_verify_identity() -> None:
+    """Run :func:`_assert_real_verify_identity` at every test SETUP.
+
+    This root-level autouse guard runs before the legitimate patchers, which
+    set up strictly after it, so it observes the state left by the *previous*
+    test's teardown. A leaked replacement is caught here on the next test
+    instead of silently changing its behaviour.
+    """
+    _assert_real_verify_identity()
 
 
 @pytest.fixture(autouse=True)
