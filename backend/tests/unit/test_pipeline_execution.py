@@ -965,6 +965,11 @@ class TestStaleRunRecoverySweep:
         assert ":fail_ttl" in joined
         assert ":ttl" in joined
         assert ":wl_window" in joined
+        # FAR-1623: the never-dispatched branch must not match a run the
+        # heartbeat-stale reset already claimed (claim_count >= 1) nor a run
+        # carrying the reset's heartbeat_stale marker.
+        assert "claim_count = 0" in joined
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" in joined
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []

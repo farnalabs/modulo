@@ -2345,6 +2345,19 @@ async def _sweep_org_stale_runs(
             "AND organisation_id = :oid "
             "AND created_at < now() - (:nd_window * interval '1 second') "
             "AND dispatched_at IS NULL "
+            # FAR-1623: a run that has ever been CLAIMED is not "never
+            # dispatched" — it was dispatched, then lost (or was reset to
+            # pending by the heartbeat-stale slot reconciliation in
+            # run_admission.reconcile_pipeline_slots, FAR-779/812). That reset
+            # NULLs dispatched_at/heartbeat_at and stamps error_code
+            # 'heartbeat_stale' so dispatcher_reconcile re-dispatches the run;
+            # without this guard the never-dispatched branch matched it
+            # immediately and killed the retry (34/34 harness.dispatch_failed
+            # deaths, FAR-1603 RCA). claim_count=0 is the discriminator: the
+            # reset run carries claim_count >= 1. The error_code exclusion is
+            # belt-and-braces against the reset marker.
+            "AND claim_count = 0 "
+            "AND (error_code IS DISTINCT FROM 'heartbeat_stale') "
             "AND cancellation_requested = false "
             "AND (error_code IS NULL OR error_code NOT IN ('org_capacity_limited', 'pipeline_capacity')) "
             "AND (dispatcher IS NULL OR dispatcher != 'saq') "
