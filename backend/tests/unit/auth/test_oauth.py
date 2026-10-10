@@ -1214,6 +1214,19 @@ class TestScopeRoleHelpers:
         assert scopes_required_role([]) == "runner"
         assert scopes_required_role(["unknown:scope"]) == "runner"
 
+    def test_excluded_scope_contributes_nothing(self) -> None:
+        # An excluded key that still canonicalises (an in-flight token minted
+        # before an exclusion tightened) must NOT raise the role ladder: the
+        # grant leg (``grants_permit``) denies it at dispatch, so it must not
+        # inflate the scope-derived role here either.
+        assert canonicalise_scope("system.config.manage") == "system.config.manage"
+        assert scopes_required_role(["system.config.manage"]) == "runner"
+        assert scopes_required_role(["org.delete"]) == "runner"
+        # A valid scope alongside an excluded admin key keeps only the valid
+        # scope's floor — the excluded key is invisible.
+        assert scopes_required_role(["pipeline.create", "system.config.manage"]) == "operator"
+        assert scopes_required_role(["trigger:run", "org.delete"]) == "runner"
+
     def test_clamp_keeps_lower_role(self) -> None:
         # live operator, scope runner → runner (token never exceeds its scopes)
         assert clamp_oauth_role("runner", "operator") == "runner"

@@ -1152,8 +1152,8 @@ def scopes_required_role(scopes: list[str]) -> str:
     """Return the minimum org role a live account must hold to carry these scopes.
 
     Derived from the ``PERMISSIONS`` registry (FAR-1476), not a fixed 3-scope
-    table: the ladder is the highest minimum role across the keys the scopes
-    canonicalise to, so a widened grant (``pipeline.create`` -> operator)
+    table: the ladder is the highest minimum role across the DELEGABLE keys the
+    scopes resolve to, so a widened grant (``pipeline.create`` -> operator)
     reaches the role it needs instead of being flattened to ``runner``.
     ``hitl:review`` still resolves to ``hitl.review`` -> ``operator``, so
     in-flight legacy tokens keep their scope-derived role.
@@ -1162,7 +1162,7 @@ def scopes_required_role(scopes: list[str]) -> str:
     grant leg (``grants_permit``) at dispatch. An empty or fully
     unresolvable set keeps the legacy ``runner`` fallback.
     """
-    roles = [PERMISSIONS[key] for key in (canonicalise_scope(scope) for scope in scopes) if key is not None]
+    roles = [PERMISSIONS[key] for key in (resolve_scope(scope) for scope in scopes) if key is not None]
     if not roles:
         return "runner"
     return max(roles, key=lambda role: ORG_ROLE_HIERARCHY[role])
