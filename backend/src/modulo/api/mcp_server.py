@@ -500,9 +500,11 @@ def _ctx_team_id_val() -> uuid.UUID | None:
     """Get the team boundary of the current request (None when no team boundary).
 
     Set by ``McpAuthMiddleware`` only when the caller authenticated with a
-    team-scoped API key (non-null ``OrgApiKey.team_id``). Org-wide API keys,
-    OAuth access tokens and regular JWTs carry no team boundary and resolve
-    to ``None`` — they are org-role-only, matching the REST layer.
+    team-scoped credential: an API key with a non-null ``OrgApiKey.team_id``
+    or a token minted by an OAuth client bound to a team. Org-wide API keys,
+    org-wide OAuth clients and regular user (Assistant) JWTs carry no team
+    boundary and resolve to ``None`` — they are org-role-only, matching the
+    REST layer.
     """
     return _ctx_team_id.get(None)
 
@@ -566,13 +568,14 @@ def _ctx_may_manage_cost() -> bool:
 
 
 def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
-    """True when a team-scoped API key must not access a resource owned by *owner_team_id*.
+    """True when a team-scoped credential must not access a resource owned by *owner_team_id*.
 
-    The boundary only applies to team-scoped API keys (non-null
-    ``_ctx_team_id``): org-wide keys and user/OAuth tokens have no team
-    boundary. A resource with no owning team (org-level pipeline) is
-    accessible to any team-scoped key; a resource owned by a different team
-    is blocked.
+    The boundary applies to any credential that carries a team (non-null
+    ``_ctx_team_id``): a team-scoped API key OR a token minted by a
+    team-bound OAuth client. Org-wide keys and plain user (Assistant) tokens
+    carry no team boundary. A resource with no owning team (org-level
+    pipeline) is accessible to any team-scoped credential; a resource owned
+    by a different team is blocked.
     """
     key_team_id = _ctx_team_id.get(None)
     if key_team_id is None:
@@ -581,12 +584,12 @@ def _team_scoped_key_mismatch(owner_team_id: uuid.UUID | None) -> bool:
 
 
 def _team_scope_error(resource_kind: str, resource_id: str) -> dict[str, Any]:
-    """Error dict for a team-boundary violation by a team-scoped API key."""
+    """Error dict for a team-boundary violation by a team-scoped credential (API key or OAuth client)."""
     key_team_id = _ctx_team_id.get(None)
     return {
         "error": "team_boundary_violation",
         "detail": (
-            f"This API key is scoped to team {key_team_id} and cannot access "
+            f"This credential is scoped to team {key_team_id} and cannot access "
             f"{resource_kind} {resource_id} owned by another team"
         ),
     }

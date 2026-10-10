@@ -1,7 +1,7 @@
 """Add the OAuth client team-boundary column (FAR-1476 slice 1).
 
-Revision ID: 0291_oauth_clients_team_id
-Revises: 0290_scheduled_reports_due_scan
+Revision ID: 0293_oauth_clients_team_id
+Revises: 0292_audit_events_resource_lookup
 Create Date: 2026-10-09
 
 FAR-1476 binds an OAuth client to a team via a nullable ``team_id`` on
@@ -27,8 +27,8 @@ index + same-org tenant trigger) and 0108's tenant-trigger statement for the
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0291_oauth_clients_team_id"
-down_revision: str | None = "0290_scheduled_reports_due_scan"
+revision: str = "0293_oauth_clients_team_id"
+down_revision: str | None = "0292_audit_events_resource_lookup"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
