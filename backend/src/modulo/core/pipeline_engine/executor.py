@@ -85,6 +85,7 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_AGENT_FAILED,
+    _CODE_SANDBOX_NO_OUTPUT_JSON,
     map_legacy_code,
     sanitize_error_text,
 )
@@ -1728,7 +1729,7 @@ def _stream_terminal_reason(
         return _terminal_failure(
             broker,
             "failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _sanitize_detail(state.session_lost_reason, limit=5000),
             usage,
         )
@@ -3431,7 +3432,7 @@ class PipelineExecutor:
             return None
         if final_status == "failed" and error_code in (
             "agent.failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _CODE_SANDBOX_AGENT_FAILED,
         ):
             return False
@@ -5581,7 +5582,7 @@ class PipelineExecutor:
                 # while its code resolves to ``node.cancelled`` — that marker
                 # keeps the generic code.
                 if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                    error_code = "sandbox.no_output_json"
+                    error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
                 # FAR-734: scan the retained stdout (embedded in the
                 # exception message) for terminal provider-error
                 # signatures.  When a signature matches, upgrade the

@@ -24,6 +24,9 @@ _DRIVER_POSTGRES_SYNC = "postgresql+psycopg"
 _DRIVER_MYSQL_SYNC = "mysql+pymysql"
 _CONFIG_KEY_SQLALCHEMY_URL = "sqlalchemy.url"
 
+#: Raised when a code path needs alembic's ``config`` before it is populated.
+_ERR_CONFIG_UNAVAILABLE = "Alembic env config unavailable"
+
 _DRIVER_MAP: dict[str, str] = {
     "postgresql+asyncpg": _DRIVER_POSTGRES_SYNC,
     "sqlite+aiosqlite": "sqlite",
@@ -483,7 +486,7 @@ def _rehearsal_plan(engine: Engine) -> tuple[list[Script], str | None, str | Non
     """
     cfg = config
     if cfg is None:
-        raise RuntimeError("Alembic env config unavailable")
+        raise RuntimeError(_ERR_CONFIG_UNAVAILABLE)
     script = ScriptDirectory.from_config(cfg)
     script_head = script.get_current_head()
     with engine.connect() as plan_conn:
@@ -519,7 +522,7 @@ def _run_migrations_rehearsal(engine: Engine, url: str) -> None:
 
     cfg = config
     if cfg is None:
-        raise RuntimeError("Alembic env config unavailable")
+        raise RuntimeError(_ERR_CONFIG_UNAVAILABLE)
     _rehearsal_mode = True
     _rehearsal_main_conn_acquired = False
     _rehearsal_current_revision = None
@@ -596,7 +599,7 @@ def run_migrations_online() -> None:
     with no pending migrations there is nothing to rehearse.
     """
     if config is None:
-        raise RuntimeError("Alembic env config unavailable")
+        raise RuntimeError(_ERR_CONFIG_UNAVAILABLE)
     url = config.get_main_option(_CONFIG_KEY_SQLALCHEMY_URL) or ""
     sync_url = _to_sync_url(url)
 
