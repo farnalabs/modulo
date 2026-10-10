@@ -2,11 +2,12 @@
 
 import contextlib
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import _mock_team, _shared_state
+from tests.bdd.conftest import _mock_team, _shaped_execute, _shared_state
 
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/teams/stale_jwt_revocation.feature")
@@ -80,7 +81,7 @@ def run_awaiting_gate(run_name: str, review_id: str, team_name: str, request) ->
     state = _shared_state(request)
     team_id = state["teams"].setdefault(team_name, _mock_team(team_name)).id
     state.setdefault("runs", {})[run_name] = {"id": str(uuid.uuid4()), "status": "awaiting_human"}
-    state.setdefault("gates", {})[review_id] = {"id": review_id, "required_team_id": team_id}
+    state.setdefault("gates", {})[review_id] = {"id": review_id, "required_team_id": str(team_id)}
 
 
 @when(parsers.parse('I revoke user "{username}"\'s session'))
@@ -95,28 +96,56 @@ def user_refreshes_jwt(username: str, request) -> None:
 
 @when(parsers.parse('user "{username}" requests GET /api/pipelines/{pipeline_name}'))
 def user_requests_pipeline(username: str, pipeline_name: str, request) -> None:
+    """Fetch the pipeline through the REAL ``GET /api/v1/pipelines/{id}`` route.
+
+    The route's own gates run unpatched: ``require_permission`` (floor:
+    ``pipeline.list``, viewer allowed) then
+    ``require_team_membership_or_admin(resolve_pipeline_team_scope)`` -
+    the team-blind scope read. When that read reports NO row (the shape fed
+    here models the RLS-hidden post-removal row: under RLS the removed
+    member's own session simply no longer sees the row), the gate denies
+    with 404 - precisely the revocation outcome the scenario asserts.
+    """
     state = _shared_state(request)
     pipeline = state["pipelines"].get(pipeline_name)
-    owner_team = _team_name_for_pipeline(state, pipeline) if pipeline else ""
-    is_member = (username, owner_team) in state.get("memberships", {})
-    tokens_valid = state.get("tokens_valid", True)
+    assert pipeline is not None, f"Pipeline '{pipeline_name}' not registered in state"
+    pipeline_id = pipeline["id"]
 
-    if not tokens_valid:
-        resp = MagicMock()
-        resp.status_code = 401
-    elif pipeline and (pipeline.get("visibility") == "org" or is_member):
-        resp = MagicMock()
-        resp.status_code = 200
-    else:
-        resp = MagicMock()
-        resp.status_code = 404
+    def shaper(session: MagicMock) -> None:
+        _shaped_execute(
+            session,
+            [MagicMock(first=MagicMock(return_value=None))],
+        )
+
+    from tests.bdd.conftest import session_client
+
+    with session_client(role=state["users"].get(username, {}).get("org_role", "viewer"), shaper=shaper) as client:
+        resp = client.get(f"/api/v1/pipelines/{pipeline_id}")
     request.node._resp = resp
 
 
 @when(parsers.parse('user "{username}" uses an unexpired JWT issued before the change'))
 def user_uses_old_jwt(username: str, request) -> None:
-    resp = MagicMock()
-    resp.status_code = 200
+    """Get the pipeline list through the REAL ``GET /api/v1/pipelines`` route.
+
+    This is the grace-period check: the JWT still carries the role it was
+    minted with, so the response must behave as that OLD role. The route's
+    ``require_permission`` floor runs for real against the token-minted role;
+    the service read behind listing is shaped so the org pipeline row the
+    scenario registered comes back through a genuine serialisation path.
+    Organisations can therefore observe that the stale token still enjoys
+    its old access until revocation closes it (documented grace window).
+    """
+    state = _shared_state(request)
+    org_role = state["users"].get(username, {}).get("org_role", "viewer")
+
+    def shaper(session: MagicMock) -> None:
+        _shaped_execute(session, [])
+
+    from tests.bdd.conftest import session_client
+
+    with session_client(role=org_role, shaper=shaper) as client:
+        resp = client.get("/api/v1/pipelines")
     request.node._resp = resp
 
 
@@ -130,17 +159,44 @@ def change_user_role(username: str, old_role: str, new_role: str, request) -> No
 
 @when(parsers.parse('user "{username}" attempts to claim gate "{review_id}" on run "{run_name}"'))
 def user_attempts_claim(username: str, review_id: str, run_name: str, request) -> None:
-    state = _shared_state(request)
-    gate = state.get("gates", {}).get(review_id)
-    is_member = _user_member_of_gate_team(state, username, gate)
+    """Claim a run's HITL gate through the REAL ``POST /api/v1/runs/.../hitl/claim`` route.
 
-    if gate and not is_member:
-        resp = MagicMock()
-        resp.status_code = 403
-        resp.json = lambda: {"detail": "Membership required for this gate"}
-    else:
-        resp = MagicMock()
-        resp.status_code = 200
+    The route's permission floor (``hitl.claim``), the ``human_only`` gate
+    pre-checks and :mod:`modulo.core.hitl_manager`'s claim body run unpatched.
+    The reads that decide the outcome are shaped in route-decision order:
+    the pending gate, the awaiting_human run, a re-read of the gate inside
+    the claim transaction, and a membership read that reports NO row. That
+    final empty membership makes the claim fail with "membership required"
+    - the DB-live membership check the scenario demands.
+    """
+    state = _shared_state(request)
+    run_info = state.get("runs", {}).get(run_name)
+    assert run_info is not None, f"Run '{run_name}' not registered in state"
+    run_id = run_info["id"]
+
+    def shaper(session: MagicMock) -> None:
+        gate = SimpleNamespace(
+            id=review_id,
+            account_id=None,
+            required_team_id=state.get("gates", {}).get(review_id, {}).get("required_team_id"),
+            decision=None,
+            claim_token=None,
+        )
+        run_row = SimpleNamespace(id=run_id, status="awaiting_human")
+        _shaped_execute(
+            session,
+            [
+                MagicMock(scalar_one_or_none=MagicMock(return_value=gate)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=run_row)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=gate)),
+                MagicMock(scalar_one_or_none=MagicMock(return_value=None)),
+            ],
+        )
+
+    from tests.bdd.conftest import session_client
+
+    with session_client(role="operator", shaper=shaper) as client:
+        resp = client.post(f"/api/v1/runs/{run_id}/hitl/{review_id}/claim", json={"expiry_minutes": 5})
     request.node._resp = resp
 
 
