@@ -201,6 +201,74 @@ describe('EvalProposalsQueueView', () => {
     expect(mockPost).not.toHaveBeenCalled()
   })
 
+  it('treats a blank config field as an empty object', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="publish-name"]').setValue('No config')
+    await wrapper.find('[data-testid="publish-config"]').setValue('   ')
+    await nextTick()
+
+    // A blank config has no parse error and is submit-able.
+    expect(wrapper.text()).not.toContain('views.EvalProposalsQueueView.config_invalid')
+    await wrapper.find('[data-testid="publish-confirm"]').trigger('click')
+    await flush()
+
+    expect(mockPost).toHaveBeenCalledWith('/api/v1/feedback/proposals/{record_id}/publish', {
+      params: { path: { record_id: 'rec-1' } },
+      body: { name: 'No config', eval_type: 'llm_judge', config: {} },
+    })
+  })
+
+  it('rejects a config that parses to a non-object', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-testid="publish-name"]').setValue('X')
+
+    // A JSON primitive is not an object.
+    await wrapper.find('[data-testid="publish-config"]').setValue('42')
+    await nextTick()
+    expect(wrapper.text()).toContain('views.EvalProposalsQueueView.config_must_be_object')
+    expect(wrapper.find('[data-testid="publish-confirm"]').attributes('disabled')).toBeDefined()
+
+    // Neither is a JSON array, even though typeof reports 'object'.
+    await wrapper.find('[data-testid="publish-config"]').setValue('[1, 2]')
+    await nextTick()
+    expect(wrapper.text()).toContain('views.EvalProposalsQueueView.config_must_be_object')
+    expect(wrapper.find('[data-testid="publish-confirm"]').attributes('disabled')).toBeDefined()
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
+  it('cancel closes the dialog without publishing', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="publish-name"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="publish-cancel"]').trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="publish-name"]').exists()).toBe(false)
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
+  it('submitPublish is a no-op when no proposal is targeted', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await (wrapper.vm as unknown as { submitPublish: () => Promise<void> }).submitPublish()
+    await flush()
+
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
   it('blocks publishing with an empty or whitespace-only name', async () => {
     const wrapper = mountView()
     await flush()

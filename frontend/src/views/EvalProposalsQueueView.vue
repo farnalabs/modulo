@@ -299,23 +299,28 @@ const evalTypeOptions = computed(() =>
 )
 
 const publishConfigPlaceholder = computed(() =>
-  t(`views.EvalProposalsQueueView.config_placeholders.${publishForm.eval_type || DEFAULT_EVAL_TYPE}`),
+  t(`views.EvalProposalsQueueView.config_placeholders.${publishForm.eval_type}`),
 )
 
-const publishConfigError = computed<string | null>(() => {
+// Parse and validate the config JSON exactly once. The inline error, the submit
+// guard and the request body all read this single result, so the value that is
+// sent can never diverge from the value that was validated.
+const publishConfigState = computed<{ error: string | null; config: Record<string, unknown> }>(() => {
   const raw = publishForm.config_json.trim()
-  if (!raw) return null
+  if (!raw) return { error: null, config: {} }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return t('views.EvalProposalsQueueView.config_invalid')
+    return { error: t('views.EvalProposalsQueueView.config_invalid'), config: {} }
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return t('views.EvalProposalsQueueView.config_must_be_object')
+    return { error: t('views.EvalProposalsQueueView.config_must_be_object'), config: {} }
   }
-  return null
+  return { error: null, config: parsed as Record<string, unknown> }
 })
+
+const publishConfigError = computed(() => publishConfigState.value.error)
 
 const canSubmitPublish = computed(
   () =>
@@ -379,15 +384,6 @@ async function submitPublish() {
   const target = publishTarget.value
   if (!target || !canSubmitPublish.value) return
 
-  const raw = publishForm.config_json.trim()
-  let configParsed: Record<string, unknown> = {}
-  try {
-    configParsed = raw ? JSON.parse(raw) : {}
-  } catch {
-    publishDialogError.value = t('views.EvalProposalsQueueView.config_invalid')
-    return
-  }
-
   const body: {
     name: string
     eval_type: string
@@ -396,7 +392,7 @@ async function submitPublish() {
   } = {
     name: publishForm.name.trim(),
     eval_type: publishForm.eval_type,
-    config: configParsed,
+    config: publishConfigState.value.config,
   }
   if (isUuid(target.producing_node_id)) {
     body.node_id = target.producing_node_id
