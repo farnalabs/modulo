@@ -2016,6 +2016,9 @@ elements:
       - testid: enforcement-enabled
         type: element
         dynamic_testid: false
+      - testid: egress-allowed
+        type: element
+        dynamic_testid: false
       - testid: product-analytics-consent-prompt
         type: element
         dynamic_testid: false

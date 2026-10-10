@@ -32,12 +32,20 @@
         </SectionCard>
 
         <SectionCard :title="$t('views.AdminProductAnalyticsView.consent_and_enforcement')">
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.consent_level') }}</span>
               <p class="mt-0.5">
                 <span :class="store.transparency.consent_level === 'all' ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="consent-level">
                   {{ consentLevelLabel }}
+                </span>
+              </p>
+            </div>
+            <div>
+              <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.egress') }}</span>
+              <p class="mt-0.5">
+                <span :class="egressAllowed ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="egress-allowed">
+                  {{ egressAllowed ? $t('views.AdminProductAnalyticsView.egress_allowed') : $t('views.AdminProductAnalyticsView.egress_blocked') }}
                 </span>
               </p>
             </div>
@@ -71,7 +79,7 @@ import SectionCard from '../components/shared/SectionCard.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
-import { formatDateShortWithTime } from '../lib/formatDate'
+import { formatDateShort } from '../lib/formatDate'
 import { useI18n } from 'vue-i18n'
 
 const store = useProductAnalyticsStore()
@@ -85,13 +93,19 @@ const consentLevelLabel = computed(() => {
   return map[store.transparency?.consent_level ?? ''] || store.transparency?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
 })
 
+// The transparency endpoint returns ``egress_allowed`` but the store's
+// ``TransparencyData`` type does not surface it, so read it through an
+// explicit cast here rather than editing the store from this view.
+const egressAllowed = computed(
+  () => (store.transparency as { egress_allowed?: boolean } | null)?.egress_allowed === true,
+)
+
 onMounted(() => {
   store.fetchTransparency()
 })
 
+// The dump watermark is a DATE-only value; render it without a time component.
 function formatDate(dateStr: string): string {
-  const d = new Date(dateStr)
-  if (Number.isNaN(d.getTime())) return '—'
-  return formatDateShortWithTime(d)
+  return formatDateShort(dateStr)
 }
 </script>

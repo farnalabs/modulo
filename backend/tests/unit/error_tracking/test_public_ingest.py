@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import ProgrammingError
 
@@ -248,6 +248,140 @@ class TestPublicIngestEndpoint:
 
         assert resp.status_code == 201
         assert len(resp.json()["results"]) == 1
+
+
+class TestPublicRateLimiterBoundedState:
+    """The public (unauthenticated) IP rate-limiter map must stay hard-bounded.
+
+    Pre-fix the route pruned only the *current* IP's expired timestamps and
+    never removed stale keys, so entries for one-off client IPs accumulated
+    forever on an unauthenticated route (a memory-exhaustion DoS). These tests
+    pin the sweep + LRU hard bound and prove an actively-limited client is never
+    evicted-and-reset by a concurrent flood of new IPs.
+    """
+
+    @staticmethod
+    def _fresh_limiter() -> dict[str, list[float]]:
+        return {}
+
+    def test_stale_clients_are_swept_and_key_set_stays_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Many stale keys must be evicted so the tracked set does not grow forever."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 10)
+        now = 1000.0
+        stale_ages = now - err_mod._PUBLIC_RATE_LIMIT_WINDOW_SECONDS - 60.0
+        for i in range(50):
+            err_mod._public_rate_limit[f"stale-{i}"] = [stale_ages]
+
+        err_mod._check_public_rate_limit("fresh-client", now)
+
+        assert len(err_mod._public_rate_limit) <= 10
+        assert "stale-0" not in err_mod._public_rate_limit
+        assert "stale-49" not in err_mod._public_rate_limit
+        assert "fresh-client" in err_mod._public_rate_limit
+
+    def test_in_window_clients_are_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The map must stay at/below the cap even when every tracked client is in-window.
+
+        This is the case the sweep alone cannot handle: all keys are live, so
+        the sweep frees nothing. The LRU eviction backstop must still bound it.
+        """
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 3)
+        now = 1000.0
+        for i in range(3):
+            err_mod._public_rate_limit[f"live-{i}"] = [now]
+
+        err_mod._check_public_rate_limit("new-client", now)
+
+        assert len(err_mod._public_rate_limit) == 3
+        assert "new-client" in err_mod._public_rate_limit
+
+    def test_eviction_spares_the_most_recently_used_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Eviction must drop the least-recently-used key, not the client seen most recently."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 2)
+        now = 1000.0
+        err_mod._public_rate_limit["a"] = [now]
+        err_mod._public_rate_limit["b"] = [now]
+        # Touch 'a' via a rejected request so it becomes most-recently-used.
+        with pytest.raises(HTTPException) as first:
+            err_mod._check_public_rate_limit("a", now)
+        assert first.value.status_code == 429
+
+        err_mod._check_public_rate_limit("c", now)
+
+        assert "a" in err_mod._public_rate_limit
+        assert "b" not in err_mod._public_rate_limit
+        assert "c" in err_mod._public_rate_limit
+
+    def test_eviction_does_not_weaken_a_limited_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Admitting a new client at cap must not reset an actively-limited client's window."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 2)
+        now = 1000.0
+        err_mod._public_rate_limit["limited"] = [now]
+        err_mod._public_rate_limit["idle"] = [now]
+        with pytest.raises(HTTPException) as first:
+            err_mod._check_public_rate_limit("limited", now)
+        assert first.value.status_code == 429
+
+        err_mod._check_public_rate_limit("new", now)
+
+        assert "limited" in err_mod._public_rate_limit
+        assert "idle" not in err_mod._public_rate_limit
+        with pytest.raises(HTTPException) as second:
+            err_mod._check_public_rate_limit("limited", now)
+        assert second.value.status_code == 429
+
+    def test_cap_of_one_still_admits_a_new_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cap of 1 must hard-evict the single live key to admit a new client."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 1)
+        now = 1000.0
+        err_mod._public_rate_limit["live"] = [now]
+
+        err_mod._check_public_rate_limit("new", now)
+
+        assert len(err_mod._public_rate_limit) == 1
+        assert "new" in err_mod._public_rate_limit
+        assert "live" not in err_mod._public_rate_limit
+
+    def test_empty_timestamp_list_is_swept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A key holding an empty list carries no rate-limit information and is swept."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_CLIENTS", 1)
+        err_mod._public_rate_limit["empty"] = []
+
+        err_mod._check_public_rate_limit("fresh", 1000.0)
+
+        assert "empty" not in err_mod._public_rate_limit
+        assert "fresh" in err_mod._public_rate_limit
+
+    def test_rate_limit_still_trips_after_eviction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The hardening must not weaken the limiter: a second request still 429s."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        now = 1000.0
+        err_mod._check_public_rate_limit("client", now)
+
+        with pytest.raises(HTTPException) as exc:
+            err_mod._check_public_rate_limit("client", now)
+
+        assert exc.value.status_code == 429
 
 
 class TestSessionKeyResponse:
