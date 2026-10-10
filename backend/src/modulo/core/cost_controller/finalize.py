@@ -108,6 +108,7 @@ from modulo.core.spend_ceiling import (
     cents_from_usd,
     evaluate_spend_ceilings,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
 from modulo.db.lifecycle_refs import (
@@ -1285,6 +1286,8 @@ async def _record_ledger_with_retry(
     run_id: uuid.UUID,
     run_date: date,
     attempts: int = 3,
+    accrued_org: Organisation | None = None,
+    accrued_cents: int = 0,
 ) -> tuple[bool, str | None]:
     """Record the terminal spend with BOUNDED RETRY (``begin_nested`` savepoints).
 
@@ -1293,6 +1296,15 @@ async def _record_ledger_with_retry(
     "daily_limit_exceeded")`` is a clean return (a PERMANENT refusal, NOT a
     failure — the refused amount was already persisted by
     ``check_and_record_spend``).
+
+    ``accrued_org`` / ``accrued_cents`` (money-correctness): the org's lifetime
+    consumed total is incremented INSIDE this savepoint — the SAME atomic unit
+    as the ledger write — instead of in the outer transaction. A contained
+    ledger-write failure (or any retry) therefore rolls the accrual back WITH
+    the ledger, so a later re-finalisation of the same run cannot double-count.
+    The accrual is written after ``check_and_record_spend`` returns (a clean
+    daily-limit refusal still commits it, preserving prior behaviour — only a
+    genuine write FAILURE drops it).
     """
     last_reason: str | None = None
     for attempt in range(attempts):
@@ -1306,6 +1318,9 @@ async def _record_ledger_with_retry(
                 run_id=run_id,
                 run_date=run_date,
             )
+            if accrued_org is not None and accrued_cents:
+                accrued_org.org_cumulative_spend_cents = (accrued_org.org_cumulative_spend_cents or 0) + accrued_cents
+                await session.flush()
         except asyncio.CancelledError:
             await savepoint.rollback()
             raise
@@ -1404,23 +1419,32 @@ async def _apply_spend_ceiling_gate(
     org_id: uuid.UUID,
     total: Decimal,
     run_id: uuid.UUID,
-) -> bool:
+) -> tuple[bool, Organisation | None]:
     """FAR-391: hard spend-ceiling gate (per-run + per-org).
 
     Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
     (the run is never billed beyond its ceiling) AND terminalizes the run as
     ``cost_ceiling_exceeded`` — a run that exceeds its per-run ceiling is
     halted (never resumed to spawn further billable steps), and an org at its
-    lifetime budget stops spawning new runs. On the success path the org's
-    consumed total is incremented by this run's cost.
+    lifetime budget stops spawning new runs.
+
+    Returns ``(skip_ledger, accrual_org)`` — ``skip_ledger`` is True when the
+    ledger write must be SKIPPED (the run was refused at its ceiling);
+    ``accrual_org`` is the LOCKED Organisation row whose lifetime consumed
+    total must be incremented by this run's cost, or ``None`` when no accrual
+    is due (the org row vanished, or the run was refused).
+
+    The accrual is deliberately NOT performed here (money-correctness): it is
+    applied INSIDE the ledger write's savepoint by
+    ``_record_ledger_with_retry`` — the SAME atomic unit as the ledger row —
+    so a contained ledger-write failure rolls the accrual back with the ledger
+    and a later re-finalisation cannot double-count the org's consumed total
+    (the ``ledger_written`` duplicate guard does not cover the accrual).
 
     FAR-1025: opt out of the global soft-delete filter — a pending-deletion
     org (deleted_at stamped at initiate, before confirm) is still
     operationally live.  Skipping the ceiling check and accrual here means
     runs bill past the org's ceiling and lifetime spend under-counts.
-
-    Returns True when the ledger write must be SKIPPED (the run was refused
-    at its ceiling); returns False to proceed with the ledger write.
     """
     from modulo.db.soft_delete import include_soft_deleted
 
@@ -1430,10 +1454,11 @@ async def _apply_spend_ceiling_gate(
         )
     ).scalar_one_or_none()
     if org_row is None:
-        return False
+        return False, None
     # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
     # gate value and the persisted org cumulative never diverge on sub-cent
-    # run costs (the accrual below also uses ``cents_from_usd``).
+    # run costs (the accrual in ``_record_ledger_with_retry`` uses the same
+    # ``cents_from_usd``).
     total_cents = cents_from_usd(total) or 0
     decision = evaluate_spend_ceilings(
         run_cost_so_far_cents=total_cents,
@@ -1443,10 +1468,9 @@ async def _apply_spend_ceiling_gate(
         spend_ceiling_cents=org_row.spend_ceiling_cents,
     )
     if decision.allowed:
-        # Success: accrue this run's cost into the org's lifetime consumed total.
-        org_row.org_cumulative_spend_cents = (org_row.org_cumulative_spend_cents or 0) + total_cents
-        await session.flush()
-        return False
+        # Billable: hand the LOCKED org row back so the ledger savepoint can
+        # accrue this run's cost atomically with the ledger row.
+        return False, org_row
     # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
     # the ceiling refuse does NOT overwrite it and feed the wrong status
     # to journey advancement. The ledger is still refused (the run is not
@@ -1455,7 +1479,7 @@ async def _apply_spend_ceiling_gate(
         locked.ledger_refused_at = datetime.now(UTC)
         record_limit_refused("spend_ceiling")
         await session.flush()
-        return True
+        return True, None
     locked.ledger_refused_at = datetime.now(UTC)
     locked.status = "cost_ceiling_exceeded"
     locked.error_code = decision.reason
@@ -1472,7 +1496,7 @@ async def _apply_spend_ceiling_gate(
     record_limit_refused("spend_ceiling")
     await _ceiling_auto_pause_if_org_crossing(session, org_row=org_row, decision=decision, run_id=run_id)
     await session.flush()
-    return True
+    return True, None
 
 
 async def _ledger_block(
@@ -1506,7 +1530,10 @@ async def _ledger_block(
 
     # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
     # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
-    if await _apply_spend_ceiling_gate(session, locked, org_id=org_id, total=total, run_id=run_id):
+    skip_ledger, accrual_org = await _apply_spend_ceiling_gate(
+        session, locked, org_id=org_id, total=total, run_id=run_id
+    )
+    if skip_ledger:
         return
 
     try:
@@ -1518,6 +1545,10 @@ async def _ledger_block(
             run_id=run_id,
             run_date=run_date,
             attempts=3,
+            # Accrual rides the ledger savepoint (same atomic unit) so a
+            # contained write failure cannot commit it without the ledger.
+            accrued_org=accrual_org,
+            accrued_cents=cents_from_usd(total) or 0,
         )
     except asyncio.CancelledError:
         raise
@@ -2276,7 +2307,21 @@ async def finalize_cost(
     successor. CANCEL-WINS (B6): finalizing an ``awaiting_human``/``complete``
     run whose row carries ``cancellation_requested`` writes ``cancelled``
     instead (the same statement is guard-atomic for the concurrent case).
+
+    FAR-1313 / FAR-1592 lock bound: ``set_mutation_row_lock_timeout`` is issued
+    FIRST, before ANY row lock this finalisation takes — it bounds (SET LOCAL)
+    the org ``FOR ... UPDATE`` in ``_apply_spend_ceiling_gate`` and the Run
+    ``FOR UPDATE`` in ``_ledger_block`` for the REST of the caller's transaction,
+    so a contended finalisation surfaces as a bounded 55P03
+    (``is_row_lock_timeout``) rather than queuing on wall-clock past the
+    gateway's session window. The executor's ownership layer retries that
+    bounded failure (40P01/55P03) and otherwise terminalises truthfully.
     """
+    # Bound every row-lock wait the finalisation takes — set at the ENTRY POINT,
+    # before any lock (never squeezed next to an individual lock). Postgres-only;
+    # a no-op on the SQLite unit fixtures.
+    await set_mutation_row_lock_timeout(session)
+
     run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one_or_none()
     if run is None:
         _log.warning("cost_finalize.run_not_found", extra={"run_id": str(run_id)})

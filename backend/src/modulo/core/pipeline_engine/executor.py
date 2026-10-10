@@ -150,6 +150,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
+from modulo.db.sqlstates import is_row_lock_timeout, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -169,6 +170,38 @@ _TERMINAL_STATUSES = TERMINAL_STATUSES
 
 _SANDBOX_AGENT_CACHE: OrderedDict[str, bool] = OrderedDict()
 _SANDBOX_AGENT_CACHE_MAX = 512
+
+# --- Bounded whole-transaction finalisation retry (money-correctness) ---
+# A deadlock (40P01) or the bounded lock_timeout expiry (55P03) taken at the
+# org / Run finalisation locks aborts the WHOLE finalisation transaction, so it
+# is re-run from its ownership layer (``_finalize_run_after_stream``, which owns
+# ``session.begin()``). Idempotent-safe: the rolled-back transaction commits
+# NOTHING — including the org accrual, which now lives inside the ledger
+# savepoint — so re-running cannot double-count. A small fixed number of
+# attempts rides out transient contention; a persisting failure propagates and
+# the executor is terminal-failed truthfully (``executor_failed``), never a raw
+# 500 and never a silent swallow.
+FINALIZE_LOCK_RETRY_ATTEMPTS = 3
+_FINALIZE_DEADLOCK_SQLSTATE = "40P01"
+# Small linear backoff between attempts (0.1s, 0.2s) — long enough for the
+# contended lock holder to release, short enough to stay well inside the
+# finalisation's bounded envelope.
+_FINALIZE_LOCK_RETRY_DELAY_SECONDS = 0.1
+
+
+def _is_finalize_lock_retryable(exc: BaseException) -> bool:
+    """True for a whole-transaction finalisation lock failure worth re-running.
+
+    Covers a deadlock (40P01) and the bounded lock_timeout expiry (55P03) —
+    both abort the transaction, so the only recovery is re-running it from its
+    ownership layer. ``is_row_lock_timeout`` recognises 55P03 across the raw
+    asyncpg ``LockNotAvailableError`` and SQLAlchemy ``OperationalError``
+    shapes; the deadlock state is read directly.
+    """
+    if is_row_lock_timeout(exc):
+        return True
+    return sqlstate_of(exc) == _FINALIZE_DEADLOCK_SQLSTATE
+
 
 _log = logging.getLogger(__name__)
 
@@ -4122,6 +4155,85 @@ class PipelineExecutor:
         except Exception:
             _log.exception("pipeline.run_completed_publish_failed", extra={"run_id": str(run_id)})
 
+    async def _run_finalize_cost_transaction(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        final_status: str,
+        error_code: str | None,
+        error_detail: str | None,
+        node_token_usage: dict[str, Any] | None,
+        completed_node_outputs: dict[str, Any],
+        node_type_map: dict[str, str],
+        work_intact: bool | None,
+    ) -> None:
+        """Own + run the finalisation transaction, re-running it on a lock failure.
+
+        The transaction is owned HERE (``session.begin()``), so re-owning it on a
+        whole-transaction lock failure (40P01 deadlock / 55P03 lock_timeout) is
+        feasible and is the only recovery — the transaction is aborted, so a
+        retry must re-run it from the top, not attempt savepoint surgery.
+        Idempotent-safe: a rolled-back transaction commits NOTHING (including
+        the org accrual, which lives inside the ledger savepoint), so a re-run
+        cannot double-count and the ``finalize_cost`` duplicate-terminal guard
+        is re-derived from the DB each attempt.
+
+        The bounded retry rides out transient contention; if it persists, the
+        exception propagates — ``run_executor_with_watchdog`` terminal-fails the
+        run as ``executor_failed`` (truthful, non-silent), never a raw 500.
+        """
+        for attempt in range(1, FINALIZE_LOCK_RETRY_ATTEMPTS + 1):
+            try:
+                async with self._session_factory() as session, session.begin():
+                    await set_rls_org(session, org_id)
+                    await set_rls_execution_context(session)
+                    await finalize_cost(
+                        session,
+                        run_id=run_id,
+                        org_id=org_id,
+                        status=final_status,
+                        segment_node_token_usage=node_token_usage,
+                        segment_completed_node_outputs=completed_node_outputs,
+                        node_type_map=node_type_map,
+                        error_code=error_code,
+                        error_detail=error_detail,
+                        is_terminal=final_status in _TERMINAL_STATUSES,
+                        session_factory=self._session_factory,
+                        claim_token=self._claim_token,
+                    )
+                    if work_intact is not None:
+                        try:
+                            await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
+                            # FAR-189 round-2 FIX 3: finalize_cost's inline
+                            # classify ran BEFORE this write (work_intact still
+                            # NULL at classify time). Re-persist the
+                            # classification with the real value — the sweep
+                            # skips already-classified rows, so this is the only
+                            # correction for executor-terminalized runs.
+                            await _reclassify_after_work_intact(session, run_id)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt < FINALIZE_LOCK_RETRY_ATTEMPTS and _is_finalize_lock_retryable(exc):
+                    _log.warning(
+                        "pipeline.finalize_lock_retry",
+                        extra={
+                            "run_id": str(run_id),
+                            "attempt": attempt,
+                            "max_attempts": FINALIZE_LOCK_RETRY_ATTEMPTS,
+                            "sqlstate": sqlstate_of(exc),
+                        },
+                    )
+                    await asyncio.sleep(_FINALIZE_LOCK_RETRY_DELAY_SECONDS * attempt)
+                    continue
+                raise
+
     async def _finalize_run_after_stream(
         self,
         *,
@@ -4198,36 +4310,17 @@ class PipelineExecutor:
         # FAR-152 §15.3 — work_intact computed at terminalization (same rule as
         # execute()).
         work_intact = self._compute_run_work_intact(final_status, error_code, completed_node_outputs, node_ids)
-        async with self._session_factory() as session, session.begin():
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-            await finalize_cost(
-                session,
-                run_id=run_id,
-                org_id=org_id,
-                status=final_status,
-                segment_node_token_usage=node_token_usage,
-                segment_completed_node_outputs=completed_node_outputs,
-                node_type_map=node_type_map,
-                error_code=error_code,
-                error_detail=error_detail,
-                is_terminal=final_status in _TERMINAL_STATUSES,
-                session_factory=self._session_factory,
-                claim_token=self._claim_token,
-            )
-            if work_intact is not None:
-                try:
-                    await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
-                    # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran
-                    # BEFORE this write (work_intact still NULL at classify
-                    # time). Re-persist the classification with the real value —
-                    # the sweep skips already-classified rows, so this is the
-                    # only correction for executor-terminalized runs.
-                    await _reclassify_after_work_intact(session, run_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+        await self._run_finalize_cost_transaction(
+            run_id=run_id,
+            org_id=org_id,
+            final_status=final_status,
+            error_code=error_code,
+            error_detail=error_detail,
+            node_token_usage=node_token_usage,
+            completed_node_outputs=completed_node_outputs,
+            node_type_map=node_type_map,
+            work_intact=work_intact,
+        )
 
         # FAR-291: run-termination compensation for a guardrail-blocked
         # MID-RUN terminalization. The terminal status write (finalize_cost

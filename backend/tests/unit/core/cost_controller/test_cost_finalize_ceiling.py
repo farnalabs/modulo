@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from modulo.core.cost_controller.finalize import _ledger_block
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
@@ -143,7 +143,7 @@ async def test_ceiling_refusal_preserves_explicit_cancelled_status() -> None:
 
 async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     """FAR-1025: an org row that vanished is treated as no ceiling — the gate
-    returns False so the ledger write proceeds without an accrual."""
+    returns ``(False, None)`` so the ledger write proceeds without an accrual."""
     from modulo.core.cost_controller.finalize import _apply_spend_ceiling_gate
 
     run = _make_run()
@@ -152,7 +152,7 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    outcome = await _apply_spend_ceiling_gate(
+    skip_ledger, accrual_org = await _apply_spend_ceiling_gate(
         session,
         run,
         org_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -160,7 +160,8 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
         run_id=run.id,
     )
 
-    assert outcome is False
+    assert skip_ledger is False
+    assert accrual_org is None
 
 
 async def test_within_ceilings_increments_org_cumulative() -> None:
@@ -168,20 +169,86 @@ async def test_within_ceilings_increments_org_cumulative() -> None:
     org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)  # $100 ceiling, $5 consumed
     session = _session_for(run, org)
 
-    await _ledger_block(
-        session,
-        run_id=run.id,
-        org_id=org.id,
-        status="complete",
-        total=Decimal("3.00"),  # $3.00 run -> cumulative $8.00
-        owner_team_id=None,
-        run_date=date(2026, 6, 24),
-        finalize_fields={},
-        session_factory=None,
-        claim_token=None,
-    )
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        # The best-effort circuit-breaker check is out of scope here and would
+        # otherwise issue real queries against the mock session.
+        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),  # $3.00 run -> cumulative $8.00
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
 
-    # No refusal — the gate increments the org's consumed total by 300 cents
-    # (the daily-ledger write that follows is out of scope for this unit test).
+    # Only a SUCCESSFUL ledger write accrues the org's consumed total (the
+    # accrual rides the ledger savepoint); $5.00 + $3.00 = $8.00.
     assert run.ledger_refused_at is None
+    assert run.ledger_written is True
     assert org.org_cumulative_spend_cents == 800
+
+
+async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> None:
+    """Money-correctness regression: a contained (non-abort) ledger-write failure
+    must NOT commit the org accrual, so a later re-finalisation of the SAME run
+    accrues exactly once (the ``ledger_written`` guard does not cover the
+    accrual)."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    session = _session_for(run, org)
+
+    # First finalisation: every ledger-write attempt fails (non-abort). The
+    # savepoint rolls back, so the accrual must NOT commit.
+    with patch(
+        "modulo.core.cost_controller.finalize.check_and_record_spend",
+        new=AsyncMock(side_effect=RuntimeError("ledger write failed")),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    assert org.org_cumulative_spend_cents == 500  # no accrual on write failure
+    assert run.ledger_written is False  # left re-finalisable by the reduced escape
+
+    # Re-finalisation: the ledger write now succeeds -> accrue exactly once.
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(True, None)),
+        ),
+        patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+        )
+
+    assert org.org_cumulative_spend_cents == 800  # 500 + 300, NOT 500 + 300 + 300
+    assert run.ledger_written is True

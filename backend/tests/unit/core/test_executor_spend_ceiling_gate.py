@@ -14,7 +14,13 @@ import uuid
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+import pytest
+
+from modulo.core.pipeline_engine.executor import (
+    FINALIZE_LOCK_RETRY_ATTEMPTS,
+    PipelineExecutor,
+    _is_finalize_lock_retryable,
+)
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -156,3 +162,117 @@ async def test_pre_gate_allows_when_no_ceiling() -> None:
         )
     assert halted is None
     update_status.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — bounded whole-transaction finalisation lock retry (40P01 / 55P03)
+# ---------------------------------------------------------------------------
+
+
+class _SqlstateError(Exception):
+    """A stand-in DBAPI error carrying a SQLSTATE for the retry classifier."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate={sqlstate}")
+        self.sqlstate = sqlstate
+
+
+def _finalize_self(session: MagicMock) -> MagicMock:
+    fake_self = MagicMock()
+    # A FRESH session context manager per attempt — a single reused
+    # ``@asynccontextmanager`` cannot be entered twice (the retry re-enters it).
+    fake_self._session_factory = MagicMock(side_effect=lambda: _acm(session))
+    fake_self._claim_token = None
+    return fake_self
+
+
+async def _run_finalize(fake_self: MagicMock) -> None:
+    await PipelineExecutor._run_finalize_cost_transaction(
+        fake_self,
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        final_status="complete",
+        error_code=None,
+        error_detail=None,
+        node_token_usage=None,
+        completed_node_outputs={},
+        node_type_map={},
+        work_intact=None,
+    )
+
+
+def test_finalize_lock_retryable_classifier() -> None:
+    assert _is_finalize_lock_retryable(_SqlstateError("40P01")) is True  # deadlock
+    assert _is_finalize_lock_retryable(_SqlstateError("55P03")) is True  # lock_timeout
+    assert _is_finalize_lock_retryable(_SqlstateError("23505")) is False  # unique violation
+    assert _is_finalize_lock_retryable(ValueError("nope")) is False
+
+
+async def test_finalize_txn_retries_deadlock_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    finalize_mock = AsyncMock(side_effect=[_SqlstateError("40P01"), None])
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+    ):
+        await _run_finalize(fake_self)
+
+    assert finalize_mock.await_count == 2, "a deadlock must re-run the whole transaction once"
+
+
+async def test_finalize_txn_retries_lock_timeout_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    finalize_mock = AsyncMock(side_effect=[_SqlstateError("55P03"), None])
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+    ):
+        await _run_finalize(fake_self)
+
+    assert finalize_mock.await_count == 2, "a bounded lock timeout must re-run the whole transaction once"
+
+
+async def test_finalize_txn_persistent_deadlock_raises_after_bounded_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    finalize_mock = AsyncMock(side_effect=_SqlstateError("40P01"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        pytest.raises(_SqlstateError),
+    ):
+        await _run_finalize(fake_self)
+
+    # Bounded: it must give up (and propagate to the truthful executor terminal)
+    # rather than loop forever.
+    assert finalize_mock.await_count == FINALIZE_LOCK_RETRY_ATTEMPTS
+
+
+async def test_finalize_txn_non_retryable_error_raises_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+    finalize_mock = AsyncMock(side_effect=ValueError("genuine failure"))
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+        pytest.raises(ValueError, match="genuine failure"),
+    ):
+        await _run_finalize(fake_self)
+
+    assert finalize_mock.await_count == 1, "a non-retryable failure must not be retried"
