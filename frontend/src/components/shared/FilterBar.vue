@@ -25,15 +25,20 @@
   @update:model-value="(val: unknown) => $emit('update:filter', filter.key, val === ALL_VALUE ? '' : String(val))"
   :placeholder="filter.label"
   :data-testid="`filter-bar-${filter.key}`"
+  :pt="FILTER_SELECT_PT"
   class="w-full sm:w-auto sm:min-w-[140px]"
   :options="[{ value: ALL_VALUE, label: allLabel(filter) }, ...filter.options.map(opt => ({ value: opt.value, label: opt.label }))]"
   option-label="label"
   option-value="value"
 >
-  <template #header
- v-if="showLabel(filter)"
->
-{{ filter.label }}
+  <template #header v-if="showLabel(filter)">
+    <!-- FAR-312: non-selectable filter-name label at the top of the dropdown.
+         Padded to match the option text inset (list 0.25rem + option 0.625rem)
+         so it never sits flush against the popover edge. -->
+    <div
+      :data-testid="`filter-bar-label-${filter.key}`"
+      class="px-3.5 pt-2 pb-1 text-xs text-muted-foreground"
+    >{{ filter.label }}</div>
   </template>
   <template #option="{ option }">
     <span :data-value="option.value">{{ option.label }}</span>
@@ -63,6 +68,39 @@ defineEmits<{
 
 const ALL_VALUE = '__all__'
 const { t } = useI18n()
+
+/**
+ * FAR-312 dropdown spacing/divider, applied to every filter select via
+ * PrimeVue's passthrough (`pt.option`). Values are inline `style` entries on
+ * purpose: the Aura theme sets `.p-select-option { padding: ...; border: 0 none }`
+ * as unlayered CSS, which outranks Tailwind utility classes on the same
+ * element (CSS cascade layers), while an inline style always wins.
+ *
+ * - every option: py 0.25rem -> 0.375rem (breathing room, ticket item 4);
+ * - the `__all__` reset option (always rendered first, so `context.index === 0`)
+ *   gets a bottom divider when real options follow it — visually separating
+ *   the selectable reset from the real filter values (ticket item 2).
+ *
+ * A module-level constant keeps the object identity stable across renders so
+ * passing it never forces extra child re-renders.
+ */
+const FILTER_SELECT_PT = {
+  option: (opts: {
+    context?: { index?: number }
+    props?: { options?: unknown[] }
+  }) => {
+    const style: Record<string, string> = {
+      paddingTop: '0.375rem',
+      paddingBottom: '0.375rem',
+    }
+    const isFirstOption = opts?.context?.index === 0
+    const hasRealOptions = (opts?.props?.options?.length ?? 0) > 1
+    if (isFirstOption && hasRealOptions) {
+      style.borderBottom = '1px solid hsl(var(--border))'
+    }
+    return { style }
+  },
+}
 
 const selectFilters = computed(() => props.filters ?? [])
 const filterValues = computed(() => props.filterValues ?? {})
