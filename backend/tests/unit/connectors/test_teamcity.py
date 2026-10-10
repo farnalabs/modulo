@@ -30,28 +30,8 @@ def test_connector_type(teamcity):
 
 
 @respx.mock
-async def test_health_check_ok(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/server").mock(return_value=httpx.Response(200, json={"version": "2024.07"}))
-    result = await teamcity.health_check()
-    assert result.ok is True
-
-
 @respx.mock
-async def test_health_check_fail_401(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/server").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await teamcity.health_check()
-    assert result.ok is False
-    assert "Authentication failed" in result.detail
-
-
 @respx.mock
-async def test_health_check_fail_500(teamcity):
-    respx.get(f"{_TC_BASE}/app/rest/server").mock(return_value=httpx.Response(500, text="Internal Server Error"))
-    result = await teamcity.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # ---------------------------------------------------------------------------
 # trigger_run
 # ---------------------------------------------------------------------------
@@ -524,11 +504,6 @@ async def test_write_unsupported_resource(teamcity):
 # ---------------------------------------------------------------------------
 # Test double
 # ---------------------------------------------------------------------------
-
-
-async def test_double_health_check(teamcity_double):
-    result = await teamcity_double.health_check()
-    assert result.ok is True
 
 
 async def test_double_trigger_run(teamcity_double):

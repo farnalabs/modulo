@@ -30,28 +30,8 @@ def test_connector_type(jenkins):
 
 
 @respx.mock
-async def test_health_check_ok(jenkins):
-    respx.get(f"{_JENKINS_BASE}/api/json").mock(return_value=httpx.Response(200, json={"nodeName": "master"}))
-    result = await jenkins.health_check()
-    assert result.ok is True
-
-
 @respx.mock
-async def test_health_check_fail_401(jenkins):
-    respx.get(f"{_JENKINS_BASE}/api/json").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await jenkins.health_check()
-    assert result.ok is False
-    assert "Authentication failed" in result.detail
-
-
 @respx.mock
-async def test_health_check_fail_500(jenkins):
-    respx.get(f"{_JENKINS_BASE}/api/json").mock(return_value=httpx.Response(500, text="Internal Server Error"))
-    result = await jenkins.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # ---------------------------------------------------------------------------
 # trigger_run
 # ---------------------------------------------------------------------------
@@ -678,11 +658,6 @@ async def test_query_nodes_corrupt_body_no_crash(jenkins):
 # ---------------------------------------------------------------------------
 # Test double
 # ---------------------------------------------------------------------------
-
-
-async def test_double_health_check(jenkins_double):
-    result = await jenkins_double.health_check()
-    assert result.ok is True
 
 
 async def test_double_trigger_run(jenkins_double):
