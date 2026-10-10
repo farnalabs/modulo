@@ -1419,6 +1419,17 @@ async def _apply_spend_ceiling_gate(
     operationally live.  Skipping the ceiling check and accrual here means
     runs bill past the org's ceiling and lifetime spend under-counts.
 
+    FAR-1624: the org row is locked with ``FOR NO KEY UPDATE`` (SQLAlchemy
+    ``with_for_update(key_share=True)``), NOT ``FOR UPDATE``.  The
+    finalisation transaction has already inserted/updated rows that
+    FK-reference the organisation (taking ``FOR KEY SHARE`` on the org tuple),
+    so requesting the stronger ``FOR UPDATE`` here deadlocked up to 8
+    concurrent finalisations (SQLSTATE 40P01): each held ``FOR KEY SHARE`` and
+    each waited for the others' ``FOR UPDATE`` upgrade.  ``FOR NO KEY UPDATE``
+    is compatible with ``FOR KEY SHARE`` and still conflicts with itself, so
+    concurrent spend accrual remains serialised — while the gate only ever
+    writes the non-key column ``org_cumulative_spend_cents``.
+
     Returns True when the ledger write must be SKIPPED (the run was refused
     at its ceiling); returns False to proceed with the ledger write.
     """
@@ -1426,7 +1437,7 @@ async def _apply_spend_ceiling_gate(
 
     org_row = (
         await session.execute(
-            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update(key_share=True))
         )
     ).scalar_one_or_none()
     if org_row is None:
