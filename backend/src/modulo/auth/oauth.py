@@ -6,7 +6,9 @@ utilities). Token format remains JWT for stateless validation.
 Supports:
 - Authorization code grant (response_type=code)
 - Token exchange (grant_type=authorization_code)
-- Scoped access tokens (trigger:run, hitl:review, library:browse)
+- Scoped access tokens whose vocabulary is the ``PERMISSIONS`` registry
+  (FAR-1476); the three pre-FAR-1476 scopes survive as aliases
+  (``SCOPE_ALIASES``)
 - Token family rotation detection (reuses pattern from jwt.py)
 - Backwards-compatible API key check
 """
@@ -39,6 +41,8 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.auth.log_redaction import truncate_token_family
+from modulo.auth.permissions import PERMISSIONS, is_delegable
+from modulo.auth.team_rbac import ORG_ROLE_HIERARCHY
 from modulo.db.models.oauth_client import OAuthClient
 from modulo.db.models.oauth_token import OAuthAuthorizationCode, OAuthConsentState, OAuthTokenFamily
 
@@ -49,7 +53,81 @@ _CODE_LENGTH = 64
 _CODE_TTL_MINUTES = 10
 _CONSENT_STATE_TTL_MINUTES = 15
 
-VALID_SCOPES = frozenset({"trigger:run", "hitl:review", "library:browse"})
+# ---------------------------------------------------------------------------
+# Scope vocabulary (FAR-1476) — the PERMISSIONS registry is the one vocabulary
+# ---------------------------------------------------------------------------
+
+#: Legacy MCP OAuth scopes accepted on the wire, each resolving to exactly ONE
+#: key in :data:`~modulo.auth.permissions.PERMISSIONS` — the key that gates the
+#: MCP tool the legacy scope was named for, so a pre-FAR-1476 client keeps a
+#: well-defined meaning instead of an open-ended role. Aliases are ACCEPTED
+#: INPUT only: they are not advertised in ``scopes_supported`` and never
+#: stored (the stored form is always the canonical registry key).
+SCOPE_ALIASES: dict[str, str] = {
+    "trigger:run": "run.trigger",
+    "hitl:review": "hitl.review",
+    # ``search_library`` (the MCP browse tool) — like every MCP read-only
+    # tool — is gated by the single coarse key ``resource.read_only``, so
+    # that is the key a browse grant has to carry to be reachable.
+    "library:browse": "resource.read_only",
+}
+
+#: The advertised/grantable scope vocabulary: every ``PERMISSIONS`` key
+#: :func:`~modulo.auth.permissions.is_delegable` accepts. This is what the
+#: OAuth metadata documents advertise as ``scopes_supported`` — the legacy
+#: aliases are deliberately absent (deprecated input spellings of the
+#: canonical keys). Computed once at import from the registry; the ENFORCEMENT
+#: paths (``resolve_scope``) re-read ``is_delegable`` live so tightening an
+#: exclusion takes effect immediately.
+VALID_SCOPES: frozenset[str] = frozenset(key for key in PERMISSIONS if is_delegable(key))
+
+
+def canonicalise_scope(scope: str) -> str | None:
+    """Map a scope string to its registry permission key, or ``None``.
+
+    Applies the legacy alias table and then requires the result to be a
+    ``PERMISSIONS`` key. Delegability is NOT checked here — this is the
+    vocabulary mapping only (``hitl:review`` -> ``hitl.review``). Use
+    :func:`resolve_scope` for the grantable vocabulary and
+    :func:`oauth_grant_set` for what a minted token may carry.
+    """
+    canonical = SCOPE_ALIASES.get(scope, scope)
+    return canonical if canonical in PERMISSIONS else None
+
+
+def resolve_scope(scope: str) -> str | None:
+    """Canonicalise ``scope`` and require it to be DELEGABLE (fail-closed).
+
+    Returns the registry permission key a credential may be granted, or
+    ``None`` when the scope is unknown OR falls in the registry's exclusion
+    set (``is_delegable``: human_only HITL decisions, credential lifecycle
+    ``api_key.*`` / ``oauth.client.*``, ``system.*``, ``org.delete`` and the
+    break-glass controls). The exclusion is read LIVE on every call, so
+    tightening it applies immediately — never a snapshot at mint time.
+    """
+    canonical = canonicalise_scope(scope)
+    if canonical is None or not is_delegable(canonical):
+        return None
+    return canonical
+
+
+def oauth_grant_set(scopes: list[str]) -> frozenset[str]:
+    """Canonical registry-key grant-set carried by an OAuth token.
+
+    The MCP tool-access resolver's grant leg consumes this directly:
+    effective access = consented set INTERSECT bundle(live role). Entries that
+    do not resolve to a registry key are dropped (a grant can only ever
+    narrow). A non-delegable key that canonicalises (e.g. an in-flight token
+    minted before an exclusion tightened) stays in the set and is denied at
+    evaluation by ``grants_permit``'s live ``is_delegable`` read — the
+    tightening is never a silent widen.
+    """
+    keys: set[str] = set()
+    for scope in scopes:
+        key = canonicalise_scope(scope)
+        if key is not None:
+            keys.add(key)
+    return frozenset(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -321,10 +399,19 @@ class AuthlibClientWrapper(ClientMixin):  # type: ignore[misc]
         return response_type == "code"
 
     def get_allowed_scope(self, scope: str) -> str:
-        if self._client.scopes is None:
-            return ""
-        allowed = set(scope_to_list(self._client.scopes))
-        requested = set(scope_to_list(scope))
+        """Authlib ClientMixin protocol: the space-joined subset of ``scope``
+        this client may hold (FAR-1476 canonical form).
+
+        Both sides are canonicalised through the registry first, so a legacy
+        alias on either side intersects with its canonical counterpart rather
+        than missing it. Entries that do not resolve to a DELEGABLE registry
+        key contribute nothing. Callers that need a rejection (rather than a
+        narrowed subset) use :func:`validate_client_scopes`, which fails closed.
+        """
+        allowed = {
+            key for key in (resolve_scope(s) for s in scope_to_list(self._client.scopes or "")) if key is not None
+        }
+        requested = {key for key in (resolve_scope(s) for s in scope_to_list(scope)) if key is not None}
         return list_to_scope(sorted(allowed & requested))  # type: ignore[no-any-return]
 
 
@@ -999,28 +1086,54 @@ def decode_oauth_refresh_token(token: str, secret_key: str) -> OAuthRefreshToken
 
 
 def normalize_scopes(requested: str) -> list[str]:
-    """Parse and validate a space-separated scope string.
+    """Parse a space-separated scope string into canonical registry keys.
 
-    Returns the sorted list of valid scopes. Raises InvalidScopeError if
-    any requested scope is not in VALID_SCOPES.
+    Every entry must resolve to exactly one DELEGABLE
+    :data:`~modulo.auth.permissions.PERMISSIONS` key — the legacy aliases in
+    :data:`SCOPE_ALIASES` are canonicalised first. An unknown scope, or a
+    scope in the registry's exclusion set (human_only HITL, credential
+    lifecycle, ``system.*``, ``org.delete``, break-glass), raises
+    :class:`InvalidScopeError`: fail closed, never dropped-and-widened and
+    never defaulted wider. Duplicates collapse; the result is sorted.
     """
     if not requested or not requested.strip():
         return []
-    parts = scope_to_list(requested)
-    for s in parts:
-        if s not in VALID_SCOPES:
-            raise InvalidScopeError(f"Unknown scope: '{s}'")
-    return sorted(parts)
+    canonical: list[str] = []
+    for scope in scope_to_list(requested):
+        key = resolve_scope(scope)
+        if key is None:
+            raise InvalidScopeError(f"Unknown or non-grantable scope: '{scope}'")
+        canonical.append(key)
+    return sorted(set(canonical))
 
 
 def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> list[str]:
-    """Intersect requested scopes with the client's allowed scopes.
+    """Canonicalise the client's ceiling and the request, then intersect.
 
-    Uses authlib's ClientMixin-compatible wrapper for scope intersection.
-    Raises UnauthorizedClientError if no scopes remain after intersection.
+    The client's registered scopes are its CEILING (FAR-1476): a requested
+    scope is canonicalised and then intersected with the canonicalised
+    ceiling, so an alias can never reach further than the registered key and
+    a request wider than the ceiling is capped at the ceiling. There is
+    deliberately no open alias map outside the registry.
+
+    Fail-closed on both sides: an unresolvable (unknown or excluded)
+    REQUESTED scope raises :class:`InvalidScopeError` — it is never silently
+    dropped alongside a valid one — while an unresolvable CEILING entry
+    narrows the ceiling only (a row registered before an exclusion tightened
+    can never widen a request, and the exclusion is re-read live at tool
+    dispatch anyway). Raises :class:`UnauthorizedClientError` when nothing
+    remains after the intersection.
     """
+    # The REQUESTED side is canonicalised first and rejects an unresolvable
+    # (unknown or excluded) scope outright rather than narrowing it away.
+    requested: set[str] = set()
+    for scope in requested_scopes:
+        key = resolve_scope(scope)
+        if key is None:
+            raise InvalidScopeError(f"Unknown or non-grantable scope: '{scope}'")
+        requested.add(key)
     wrapper = AuthlibClientWrapper(client)
-    allowed_scope = wrapper.get_allowed_scope(list_to_scope(requested_scopes))
+    allowed_scope = wrapper.get_allowed_scope(list_to_scope(sorted(requested)))
     valid = scope_to_list(allowed_scope)
     if not valid:
         raise UnauthorizedClientError("None of the requested scopes are allowed for this client")
@@ -1035,13 +1148,21 @@ def validate_client_scopes(client: OAuthClient, requested_scopes: list[str]) -> 
 def scopes_required_role(scopes: list[str]) -> str:
     """Return the minimum org role a live account must hold to carry these scopes.
 
-    Mirrors the MCP middleware's scope→role ladder: ``hitl:review`` requires
-    ``operator``; anything else is ``runner`` (ADR 047 — scope grants can never
-    exceed the account's live role).
+    Derived from the ``PERMISSIONS`` registry (FAR-1476), not a fixed 3-scope
+    table: the ladder is the highest minimum role across the keys the scopes
+    canonicalise to, so a widened grant (``pipeline.create`` -> operator)
+    reaches the role it needs instead of being flattened to ``runner``.
+    ``hitl:review`` still resolves to ``hitl.review`` -> ``operator``, so
+    in-flight legacy tokens keep their scope-derived role.
+
+    Unknown/excluded entries contribute nothing — they are gated out by the
+    grant leg (``grants_permit``) at dispatch. An empty or fully
+    unresolvable set keeps the legacy ``runner`` fallback.
     """
-    if "hitl:review" in scopes:
-        return "operator"
-    return "runner"
+    roles = [PERMISSIONS[key] for key in (canonicalise_scope(scope) for scope in scopes) if key is not None]
+    if not roles:
+        return "runner"
+    return max(roles, key=lambda role: ORG_ROLE_HIERARCHY[role])
 
 
 def clamp_oauth_role(scope_role: str, live_role: str) -> str:

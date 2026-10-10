@@ -173,7 +173,13 @@ async def register_oauth_client(
         )
 
     try:
-        normalize_scopes(" ".join(req.scopes))
+        # FAR-1476: the registered scope list is the client's CEILING, stored
+        # in canonical registry-key form (legacy aliases resolve through
+        # SCOPE_ALIASES). Unknown scopes and the registry's non-delegable
+        # exclusions (human_only HITL, credential lifecycle, system.*,
+        # org.delete, break-glass) are rejected here — fail closed at the
+        # registration boundary, never stored and never defaulted wider.
+        scopes = normalize_scopes(" ".join(req.scopes))
     except InvalidScopeError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -192,7 +198,9 @@ async def register_oauth_client(
         ) from e
 
     redirect_uris_str = " ".join(redirect_uris)
-    scopes_str = " ".join(req.scopes)
+    # Canonical registry keys only — what is stored is exactly what was
+    # validated (FAR-1281 pattern applied to scopes).
+    scopes_str = " ".join(scopes)
 
     try:
         async with session.begin():
