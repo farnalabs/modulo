@@ -54,6 +54,32 @@ def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, 
         yield
 
 
+@pytest.fixture(autouse=True)
+def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ``_verify_identity`` from connecting to a real database.
+
+    ``get_current_tenant_user`` verifies the account/org against Postgres
+    before returning the principal. That check creates its own database engine
+    and bypasses every FastAPI dependency override, so a BDD scenario driving
+    the app with a mocked session would otherwise 401 whenever the local
+    Postgres is reachable but the test UUIDs do not match real rows.
+
+    This is the BDD-scope single source for that shim, mirroring
+    ``tests/unit/conftest.py::_patch_verify_identity``. Installed through
+    ``monkeypatch`` (undone at teardown), so it can never leak into a
+    subsequent scenario.
+
+    ``tests/bdd/steps/test_personas.py`` drives the REAL seam on purpose: its
+    ``@goal-marcus-offboarding`` journey seeds real rows and asserts a removed
+    member's JWT is rejected by the live role re-read. That module is therefore
+    left with the real function, exactly as the root conftest's
+    ``_allow_test_hostnames`` leaves ``test_ssrf`` unshimmed.
+    """
+    if getattr(request.node.path, "name", "") == "test_personas.py":
+        return
+    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
+
+
 # ---------------------------------------------------------------------------
 # Playwright fixtures (E2E with ?theme=agent)
 # ---------------------------------------------------------------------------

@@ -3,7 +3,6 @@
 import uuid
 from unittest.mock import AsyncMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -13,18 +12,6 @@ from modulo.db.models.system_config import SystemConfig
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 scenarios("../../bdd/features/observability/monitor_config.feature")
-
-
-@pytest.fixture(autouse=True)
-def _prevent_identity_db_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent ``_verify_identity`` from connecting to a real database.
-
-    ``get_current_tenant_user`` verifies the account/org against Postgres
-    before returning the principal. Patch it out so BDD scenarios run
-    against the mocked DB session (mirrors tests/unit/api/conftest.py).
-    """
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
-
 
 _URL = "/api/v1/admin/monitor-config"
 
