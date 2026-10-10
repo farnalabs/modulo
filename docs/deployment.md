@@ -20,7 +20,7 @@ the launcher command surface starts at `modulo start`.
 
 - Python 3.12+
 - PostgreSQL 16+
-- Redis 8+ (for SAQ task queue, multi-replica coordination)
+- Redis 8+ (required for the SAQ task queue, scheduling, and coordination)
 
 ## Installation
 
@@ -105,7 +105,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 ## Health watchdog (Docker Compose)
 
-The root `docker-compose.yml` ships a **`watchdog` service** — a [Gatus](https://gatus.io)
+The root `docker-compose.yml` ships a **`watchdog` service** - a [Gatus](https://gatus.io)
 instance that runs **by default**, so `docker compose up -d` starts it along with
 the rest of the stack. It exists for the one failure Modulo cannot report about
 itself: Modulo being down.
@@ -113,16 +113,16 @@ itself: Modulo being down.
 | | |
 |---|---|
 | **What it monitors** | `GET http://backend:8000/healthz/ready` over the compose network, asserting **both** the HTTP status (`200`) **and** the body's top-level `status` (`ok`) |
-| **Why both** | `/healthz/ready` answers `200` with `"status": "degraded"` when a non-gating sub-check is degraded, and only answers `503` for `"unavailable"` — a status-code-only check would pass exactly the degradation it is there to catch |
+| **Why both** | `/healthz/ready` answers `200` with `"status": "degraded"` when a non-gating sub-check is degraded, and only answers `503` for `"unavailable"` - a status-code-only check would pass exactly the degradation it is there to catch |
 | **Cadence** | every 60s; alerts after **3 consecutive failures** (~3 minutes, so one blip does not page you), clears after **2 consecutive successes**, and sends a *resolved* message so an outage has a visible end |
 | **Dashboard** | <http://127.0.0.1:8082> (loopback-only, like every other published port in this file) |
 | **Health** | the service has its own Docker healthcheck, so a wedged watchdog shows as `unhealthy` in `docker ps` |
-| **Config** | [`deploy/watchdog/`](../deploy/watchdog/) — config-as-code, mounted read-only into the container |
+| **Config** | [`deploy/watchdog/`](../deploy/watchdog/) - config-as-code, mounted read-only into the container |
 
 ### Enabling email alerting
 
 Monitoring is on from the first `up`. **Email alerting is off until you set the
-SMTP variables** — the same ones the app already uses for HITL email alerts, so
+SMTP variables** - the same ones the app already uses for HITL email alerts, so
 one SMTP setup serves both:
 
 | Variable | Required for watchdog alerts | Purpose |
@@ -135,7 +135,7 @@ one SMTP setup serves both:
 | `SMTP_PASSWORD` | Only if your server requires auth | SMTP password |
 
 Leaving all of them unset is a **supported state, not a misconfiguration**: the
-watchdog still starts, still probes, still updates the dashboard — it just never
+watchdog still starts, still probes, still updates the dashboard - it just never
 sends mail. It says so once at startup, rather than failing silently:
 
 ```text
@@ -152,7 +152,7 @@ health normally.
 Two caveats on the values themselves (both are Gatus behaviour, verified against
 the pinned image):
 
-- A literal `$` in a value must be written `$$` — Gatus expands `${VAR}` in the
+- A literal `$` in a value must be written `$$` - Gatus expands `${VAR}` in the
   config before parsing it, and treats a lone `$` as a variable reference.
 - Because expansion happens *before* YAML parsing, a `"` or `\` inside
   `SMTP_PASSWORD` would break the parse. Use a password without those characters
@@ -160,7 +160,7 @@ the pinned image):
 
 ### Notes
 
-- The watchdog does **not** `depends_on` the backend — it has to start when the
+- The watchdog does **not** `depends_on` the backend - it has to start when the
   backend does not, because reporting that is its job.
 - The config lives in [`deploy/watchdog/config.yaml`](../deploy/watchdog/config.yaml);
   edits apply on the next `docker compose up -d watchdog` (the file is mounted,
@@ -169,7 +169,7 @@ the pinned image):
   (`deploy/compose/docker-compose.prod.yml`). The two probe different targets:
   the production compose runs the all-in-one image, so it probes
   `GET http://modulo:80/healthz/ready` (service `modulo` behind nginx on port
-  80 — uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container),
+  80 - uvicorn's own `127.0.0.1:8000` is loopback-bound inside the container),
   and its dashboard is loopback-bound at `127.0.0.1:8083`. The Helm chart does
   not have it.
 
@@ -376,7 +376,7 @@ For the production launch checklist, see [`docs/public-launch-checklist.md`](./p
 | `FERNET_KEY` | **Yes** | – | 44-char base64 Fernet key for credential encryption |
 | `MODULO_USERS` | No | – | Comma-separated `email:password` pairs for initial user seed (plaintext is bcrypt-hashed at seed time; `admin` gets the admin role) |
 | `MODULO_DB` | No | `postgres` | Database backend (`postgres`, `sqlite`, `mariadb`, or `mysql`) |
-| `REDIS_URL` | No | `redis://localhost:6379/0` | Redis URL for SAQ broker, event coordination, rate limiting |
+| `REDIS_URL` | **Yes** | `redis://localhost:6379/0` | Redis URL for the SAQ broker, scheduling, event coordination, and rate limiting. The API refuses to boot when this is explicitly empty. |
 | `MODULO_PUBLIC_URL` | For SSO | `http://localhost:8000` | Public-facing URL for OAuth redirects |
 | `CORS_ORIGINS` | No | `http://localhost:5173` | Comma-separated allowed CORS origins |
 | `CORS_MAX_AGE` | No | `600` | Preflight cache max-age in seconds |

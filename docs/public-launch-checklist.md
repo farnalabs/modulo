@@ -8,9 +8,9 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 
 - [ ] **PostgreSQL 16+** is provisioned and reachable
   - Connection string uses a least-privilege role (not superuser)
-  - TLS enabled — `sslmode=require` (or `verify-full` + CA) in `DATABASE_URL`;
+  - TLS enabled - `sslmode=require` (or `verify-full` + CA) in `DATABASE_URL`;
     the setting is honoured end-to-end and `prefer`/`allow` are rejected at startup
-- [ ] **Redis 8+** is provisioned (required for multi-replica)
+- [ ] **Redis 8+** is provisioned (required for every production deployment because SAQ handles dispatch and scheduling)
   - `protected-mode yes` with `requirepass`
   - TLS enabled if Redis is configured with `tls-port`
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
@@ -36,12 +36,12 @@ Production deployment readiness checklist for the Modulo V1 Core public launch. 
 - [ ] `SECRET_KEY` is 32+ random bytes, not a default or placeholder
 - [ ] `FERNET_KEY` is a valid 44-char base64 Fernet key
 - [ ] `DATABASE_URL` points to the production database
-- [ ] `REDIS_URL` is set (for multi-replica deployments)
+- [ ] `REDIS_URL` is set (required even for a single replica)
 - [ ] `MODULO_PUBLIC_URL` matches the production domain
 - [ ] `CORS_ORIGINS` lists exact production origins, with no wildcards and no trailing slashes
 - [ ] `MODULO_LOG_LEVEL` is set to `INFO` (not `DEBUG`)
 - [ ] `MODULO_TELEMETRY_ENABLED` is set appropriately for data residency requirements
-- [ ] `MODULO_USERS` uses bcrypt-hashed passwords and is **not** committed to git
+- [ ] `MODULO_USERS` contains strong plaintext seed passwords and is **not** committed to git; Modulo hashes them during seeding
 
 ---
 
@@ -147,7 +147,7 @@ See [`docs/upgrade-process.md`](./upgrade-process.md) for full upgrade and rollb
 - [ ] **All BDD scenarios pass**: `uv run pytest tests/bdd/ -v`
 - [ ] **RLS test suite passes**: `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Load tests** within baseline targets (see [`docs/performance.md`](./performance.md))
-- [ ] **Frontend builds without errors**: `npm run build` in `frontend/`
+- [ ] **Frontend builds without errors**: `pnpm run build` in `frontend/`
 - [ ] **TypeScript checks pass**: `vue-tsc --noEmit` in `frontend/`
 - [ ] **End-to-end smoke test**: create pipeline, trigger run, view results
 
