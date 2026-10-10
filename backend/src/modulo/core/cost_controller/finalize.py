@@ -1586,7 +1586,7 @@ async def _handle_limit_refused(
             await session.execute(
                 select(OrgDailyRunCount.total_spend_usd).where(
                     OrgDailyRunCount.organisation_id == org_id,
-                    OrgDailyRunCount.team_id.is_(None),
+                    OrgDailyRunCount.org_level_scope(),
                     OrgDailyRunCount.run_date == locked.created_at.date(),
                 )
             )

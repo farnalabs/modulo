@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, Uuid
+from sqlalchemy import Boolean, CheckConstraint, ColumnElement, Date, ForeignKey, Index, Integer, Numeric, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from modulo.db.models.base import OrgScoped
@@ -50,3 +50,14 @@ class OrgDailyRunCount(OrgScoped):
         Numeric(14, 6), nullable=False, default=Decimal(0), server_default="0"
     )
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
+
+    @classmethod
+    def org_level_scope(cls) -> ColumnElement[bool]:
+        """SQL predicate selecting the ORG-LEVEL ledger row (``team_id IS NULL``).
+
+        The org-level row already includes team-owned runs
+        (``check_and_record_spend`` writes it for every terminal run *in addition
+        to* a team row), so an ORG-LEVEL total must use this predicate and never
+        also sum the team rows.
+        """
+        return cls.team_id.is_(None)

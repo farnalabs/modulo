@@ -67,7 +67,7 @@ async def generate_quality_report(
                 # runs (cost_controller writes org row + team breakdown), so
                 # summing team rows too would double-count. Matches the
                 # summary's _query_weekly_agg scoping.
-                OrgDailyRunCount.team_id.is_(None),
+                OrgDailyRunCount.org_level_scope(),
             )
             .group_by(OrgDailyRunCount.run_date)
             .order_by(OrgDailyRunCount.run_date)
@@ -164,7 +164,7 @@ async def _query_weekly_agg(
     ).where(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date.between(start, end),
-        OrgDailyRunCount.team_id.is_(None),
+        OrgDailyRunCount.org_level_scope(),
     )
     result = await session.execute(q)
     row = result.one()

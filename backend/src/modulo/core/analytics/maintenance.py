@@ -570,7 +570,7 @@ async def reconcile_facts(session: Any, *, today: date | None = None) -> dict[st
                 OrgDailyRunCount.run_date,
                 OrgDailyRunCount.total_spend_usd,
             ).where(
-                OrgDailyRunCount.team_id.is_(None),
+                OrgDailyRunCount.org_level_scope(),
                 OrgDailyRunCount.run_date >= start,
                 OrgDailyRunCount.run_date < today,
             )

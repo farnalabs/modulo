@@ -1222,7 +1222,7 @@ async def get_anomalies(
                 .where(
                     OrgDailyRunCount.organisation_id == current_user.organisation_id,
                     OrgDailyRunCount.run_date >= lookback,
-                    OrgDailyRunCount.team_id.is_(None),
+                    OrgDailyRunCount.org_level_scope(),
                 )
                 .group_by(OrgDailyRunCount.run_date)
                 .order_by(OrgDailyRunCount.run_date)

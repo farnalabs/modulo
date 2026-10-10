@@ -431,7 +431,7 @@ async def _sum_created_at_day(
     if team_id is not None:
         stmt = stmt.where(OrgDailyRunCount.team_id == team_id)
     else:
-        stmt = stmt.where(OrgDailyRunCount.team_id.is_(None))
+        stmt = stmt.where(OrgDailyRunCount.org_level_scope())
     result = await session.execute(stmt)
     value = result.scalar_one()
     return Decimal(value or 0)
@@ -830,7 +830,7 @@ async def get_cost_report(
     ).where(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date >= since,
-        OrgDailyRunCount.team_id.is_(None),
+        OrgDailyRunCount.org_level_scope(),
     )
     result = await session.execute(org_q)
     org_row = result.one_or_none()
@@ -1052,7 +1052,7 @@ async def build_cost_report_buckets(
         select(func.sum(OrgDailyRunCount.run_count)).where(
             OrgDailyRunCount.organisation_id == org_id,
             OrgDailyRunCount.run_date >= since,
-            OrgDailyRunCount.team_id.is_(None),
+            OrgDailyRunCount.org_level_scope(),
         )
     )
     org_run_count_value = org_run_count_result.scalar_one_or_none()

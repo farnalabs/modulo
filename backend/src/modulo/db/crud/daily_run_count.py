@@ -79,7 +79,7 @@ async def get_daily_run_counts(
     if team_id is _UNSET:
         pass  # No team filter — return all rows
     elif team_id is None:
-        q = q.where(OrgDailyRunCount.team_id.is_(None))  # Org-level rows only
+        q = q.where(OrgDailyRunCount.org_level_scope())  # Org-level rows only
     else:
         q = q.where(OrgDailyRunCount.team_id == team_id)
     if since is not None:
@@ -100,7 +100,7 @@ async def get_org_spend_total(
     """Get the total spend for an org (excluding team-scoped rows) in a period."""
     q = select(func.sum(OrgDailyRunCount.total_spend_usd)).where(
         OrgDailyRunCount.organisation_id == org_id,
-        OrgDailyRunCount.team_id.is_(None),
+        OrgDailyRunCount.org_level_scope(),
     )
     if since is not None:
         q = q.where(OrgDailyRunCount.run_date >= since)

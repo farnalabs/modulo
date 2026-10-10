@@ -227,7 +227,7 @@ async def _org_row_watch(session: AsyncSession, org_id: uuid.UUID, runs: list[An
             OrgDailyRunCount.clamped,
         ).where(
             OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.team_id.is_(None),
+            OrgDailyRunCount.org_level_scope(),
             OrgDailyRunCount.run_date.in_(dates),
         )
     )
