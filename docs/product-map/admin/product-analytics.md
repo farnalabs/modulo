@@ -71,7 +71,7 @@ an eligible tier.
       enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
       metrics dump writes (`metrics_dump._WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
-      organisation `settings_json` (`get_product_analytics_block(...).get("level")`)
+      organisation `settings_json` (read through `consent.org_consent_level`)
       — the per-org value is the PREFERRED source; when the caller org cannot be
       resolved the endpoint reports an instance-level aggregate
       (`_instance_consent_level`: `all` if any active org has opted in, else
@@ -102,9 +102,11 @@ intentional, not an open question:
   `organisation_id`, or the org row cannot be found, the endpoint reports an
   instance-level aggregate (`_instance_consent_level`): `all` if at least one
   active organisation has opted in, else `off`. It no longer hardcodes `off`.
-- The aggregate mirrors the definition the daily dump uses to decide what
-  egresses (`metrics_dump._get_consenting_orgs`) so the reported posture cannot
-  drift from what actually leaves the instance.
+- The aggregate and the daily dump share ONE consent predicate
+  (`consent.org_consent_level` / `consent.is_org_consenting`), which both
+  `_instance_consent_level` and `metrics_dump._get_consenting_orgs` call, so the
+  reported posture cannot drift from what actually leaves the instance. A
+  malformed (non-dict) `settings_json` degrades to `off` rather than raising.
 
 ## Known Gaps
 

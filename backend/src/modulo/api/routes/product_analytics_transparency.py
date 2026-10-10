@@ -15,10 +15,11 @@ from modulo.api.db_error_handling import handle_db_errors
 from modulo.api.dependencies import get_db_session, require_system_permission
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.product_analytics.consent import (
-    get_product_analytics_block,
     is_egress_allowed,
     is_instance_analytics_enabled,
     is_license_enforcement_enabled,
+    is_org_consenting,
+    org_consent_level,
 )
 from modulo.core.product_analytics.constants import (
     DUMP_COUNT_KEY,
@@ -88,12 +89,6 @@ async def _resolve_org(
     return result.scalar_one_or_none()
 
 
-def _level_from_org_settings(org_settings: dict[str, Any] | None) -> str:
-    """Extract the consent level from an org's ``settings_json`` (default ``off``)."""
-    raw_level = get_product_analytics_block(org_settings).get("level")
-    return str(raw_level) if raw_level else LEVEL_OFF
-
-
 async def _instance_consent_level(session: AsyncSession) -> str:
     """Return the INSTANCE-level consent posture for an unresolved caller org.
 
@@ -103,17 +98,17 @@ async def _instance_consent_level(session: AsyncSession) -> str:
     matching row) the transparency surface must still report a truthful
     posture rather than a hardcoded ``off``; "per instance acceptable".
 
-    The aggregate mirrors the definition the daily dump actually uses to decide
-    what egresses (``metrics_dump._get_consenting_orgs``): an ACTIVE
-    organisation whose ``settings_json`` enables the ``all`` level. At least one
-    such org -> ``LEVEL_ALL``; otherwise ``LEVEL_OFF``. The ``organisations``
-    table is not RLS-scoped, so this cross-org read is safe on the app-role
-    session.
+    The aggregate uses the SAME consent predicate as the daily dump
+    (``metrics_dump._get_consenting_orgs``), both reading the level through
+    ``consent.org_consent_level``: an ACTIVE organisation whose ``settings_json``
+    enables the ``all`` level. At least one such org -> ``LEVEL_ALL``; otherwise
+    ``LEVEL_OFF``. The ``organisations`` table is not RLS-scoped, so this
+    cross-org read is safe on the app-role session.
     """
     stmt = select(Organisation).where(Organisation.status == "active")
     result = await session.execute(stmt)
     for org in result.scalars():
-        if _level_from_org_settings(org.settings_json) == LEVEL_ALL:
+        if is_org_consenting(org.settings_json):
             return LEVEL_ALL
     return LEVEL_OFF
 
@@ -161,10 +156,11 @@ async def get_transparency(
     #     live in the langgraph-free constants module so the API can import them
     #     statically without violating the import-linter contract).
     #   * consent_level - the caller's organisation real consent level
-    #     (org.settings_json["product_analytics"]["level"]) is the PREFERRED
-    #     source. When the caller org cannot be resolved the endpoint reports an
-    #     INSTANCE-level posture instead of a hardcoded "off" (see
-    #     _instance_consent_level and FAR-1635).
+    #     (org.settings_json["product_analytics"]["level"], read through
+    #     consent.org_consent_level) is the PREFERRED source. When the caller org
+    #     cannot be resolved the endpoint reports an INSTANCE-level posture
+    #     instead of a hardcoded "off" (see _instance_consent_level and
+    #     FAR-1635).
     #
     # Deliberately a comment, not a docstring: FastAPI publishes a handler
     # docstring as the operation description in the OpenAPI schema, which would
@@ -180,7 +176,7 @@ async def get_transparency(
             # to the instance-level posture ("per instance acceptable").
             consent_level = await _instance_consent_level(session)
         else:
-            consent_level = _level_from_org_settings(org.settings_json)
+            consent_level = org_consent_level(org.settings_json)
 
     last_dump_at = _coerce_last_dump(last_dump_entry.value if last_dump_entry else None)
     dump_count_total = coerce_dump_count(dump_count_entry.value if dump_count_entry else None)

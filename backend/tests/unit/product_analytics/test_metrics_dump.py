@@ -1561,6 +1561,24 @@ class TestGetConsentingOrgsExtended:
         assert result == []
 
     @pytest.mark.asyncio
+    async def test_skips_non_dict_settings_without_raising(self) -> None:
+        """A malformed (non-dict) ``settings_json`` is skipped, not a dump crash."""
+        rows = [
+            MagicMock(id="org-bad", settings_json=["not", "a", "dict"]),
+            MagicMock(
+                id="org-good",
+                settings_json={"product_analytics": {"level": "all"}},
+            ),
+        ]
+        mock_result = MagicMock()
+        mock_result.__iter__ = MagicMock(return_value=iter(rows))
+        mock_session = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=mock_result)
+        result = await _get_consenting_orgs(mock_session)
+        assert len(result) == 1
+        assert result[0]["id"] == "org-good"
+
+    @pytest.mark.asyncio
     async def test_no_product_analytics_key(self) -> None:
         rows = [
             MagicMock(id="org-1", settings_json={"other_key": True}),

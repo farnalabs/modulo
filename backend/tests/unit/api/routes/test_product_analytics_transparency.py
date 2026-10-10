@@ -105,12 +105,18 @@ def _org_result(org_settings: object) -> MagicMock:
     return result
 
 
-def _instances_result(levels: list[object]) -> MagicMock:
-    """A SELECT result carrying active orgs (``scalars()``) for the fallback."""
+def _instances_result(entries: list[object]) -> MagicMock:
+    """A SELECT result carrying active orgs (``scalars()``) for the fallback.
+
+    A plain-string entry is a consent level and is wrapped as the org's
+    ``settings_json`` (``{"product_analytics": {"level": ...}}``); ``None`` and
+    any non-string entry (a dict/list) are used verbatim, so a malformed
+    ``settings_json`` shape can be modelled too.
+    """
     orgs = []
-    for level in levels:
+    for entry in entries:
         org = MagicMock()
-        org.settings_json = None if level is None else {"product_analytics": {"level": level}}
+        org.settings_json = {"product_analytics": {"level": entry}} if isinstance(entry, str) else entry
         orgs.append(org)
     result = MagicMock()
     result.scalars = MagicMock(return_value=iter(orgs))
@@ -370,6 +376,18 @@ class TestRealConsentLevel:
         assert body["consent_level"] == LEVEL_OFF
         _restore_overrides()
 
+    def test_org_with_malformed_settings_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-dict ``settings_json`` must not crash the per-org read (fail-closed)."""
+        session = _make_session(["not", "a", "dict"])
+        client = _client(session=session)
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        assert session.execute.await_count == 1
+        _restore_overrides()
+
     def test_resolved_org_without_settings_ignores_instance_aggregate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A resolved org with null settings is per-org ``off``, NOT the instance posture."""
         session = _make_session(None, instance_levels=[LEVEL_ALL])
@@ -413,6 +431,25 @@ class TestInstanceConsentFallback:
         with sources[0], sources[1]:
             body = _request(client)
         assert body["consent_level"] == LEVEL_OFF
+        _restore_overrides()
+
+    def test_malformed_instance_settings_fall_back_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-dict ``settings_json`` row must not 500 the aggregate (fail-closed)."""
+        client = _client(session=_make_session(instance_levels=[["not", "a", "dict"], LEVEL_OFF]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        _restore_overrides()
+
+    def test_malformed_row_does_not_mask_a_consenting_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A malformed row must be skipped, not abort the scan before a consenting org."""
+        client = _client(session=_make_session(instance_levels=[["not", "a", "dict"], LEVEL_ALL]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_ALL
         _restore_overrides()
 
     def test_org_less_principal_falls_back_to_instance_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
