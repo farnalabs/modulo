@@ -60,6 +60,9 @@ def unrestricted_allowed_operations(value: object) -> bool:
 #   * a stored ALLOWLIST entry is a *declaration of grant* — its type qualifier
 #     is redundant (the surface's own ``connector_type_id`` names the type), so
 #     it is reduced to the bare capability by :func:`canonical_capability`;
+#     but the qualifier is only TRUSTED when it matches that surface type —
+#     :func:`canonical_capability_set` takes the surface's
+#     ``connector_type_id`` and REJECTS a mis-typed qualifier (FAR-1616);
 #   * a conformance CLAIM is a *binding request* — ``github.read`` asks for a
 #     github surface specifically, so it keeps its qualifier (see
 #     ``qualified_capability`` and ``conformance._canonical_claim``).
@@ -107,10 +110,12 @@ def canonical_capability(value: str) -> str | None:
     rewrite.
 
     Consumers (both import THIS function; neither keeps a private copy):
-      * :class:`ConnectorACL` — canonicalises the stored allowlist when it
-        builds it, and the requested operation when it checks it, so
-        ``check("read")`` grants a stored ``["github.read"]`` exactly as the
-        guardrail conformance reader certifies it (FAR-1594 defect (a));
+      * :class:`ConnectorACL` — canonicalises the REQUESTED operation when it
+        checks it; the stored allowlist goes through
+        :func:`canonical_capability_set`, which applies the same reduction per
+        entry PLUS the FAR-1616 type-qualifier check, so ``check("read")``
+        grants a stored same-type ``["github.read"]`` exactly as the guardrail
+        conformance reader certifies it (FAR-1594 defect (a));
       * ``core.guardrails.conformance`` — canonicalises the stored allowlist
         it reads into the live manifest, and the capability names it REPORTS
         back (``missing`` / ``unreadable``).
@@ -125,7 +130,7 @@ def canonical_capability(value: str) -> str | None:
     return None
 
 
-def canonical_capability_set(values: object) -> set[str]:
+def canonical_capability_set(values: object, *, connector_type_id: str | None = None) -> set[str]:
     """Canonicalise a stored ``allowed_operations`` list to bare capabilities.
 
     The SINGLE reader of a stored allowlist's ENTRIES, shared by
@@ -135,6 +140,17 @@ def canonical_capability_set(values: object) -> set[str]:
     DROPPED (with a log): they grant nothing, and carrying them would let an
     arbitrary stored string satisfy a claim of the same spelling.
 
+    Type-qualified entries (FAR-1616): ``github.write`` is a grant whose
+    qualifier names the SURFACE'S OWN connector type. It grants bare
+    ``write`` only when *connector_type_id* is supplied and matches that
+    qualifier — the same-type legacy spelling keeps granting exactly what
+    FAR-1594/FAR-1582 intend. It is REJECTED (fail closed, logged) when the
+    qualifier names a DIFFERENT type — a stored ``["github.write"]`` on a
+    FILESYSTEM connector must not grant ``write`` — and when no surface type
+    is supplied at all (an unverifiable qualifier can never grant). Before
+    FAR-1616 the qualifier was dropped unconditionally, so the mis-typed
+    entry granted on the wrong surface.
+
     ``[]``/``None`` never reach here — :func:`unrestricted_allowed_operations`
     routes them to the connector TYPE's capability set first; a non-list
     (malformed) value yields the EMPTY set, matching the fail-closed
@@ -143,8 +159,26 @@ def canonical_capability_set(values: object) -> set[str]:
     canonical: set[str] = set()
     if not isinstance(values, list):
         return canonical
+    surface_type = connector_type_id if isinstance(connector_type_id, str) and connector_type_id else None
     for raw in values:
         if not isinstance(raw, str):
+            continue
+        qualified = qualified_capability(raw)
+        if qualified is not None:
+            qualifier_type, qualified_capability_name = qualified
+            if surface_type is None or qualifier_type != surface_type:
+                # FAR-1616: mis-typed OR unverifiable qualifier -> reject the
+                # entry (fail closed). It grants nothing on this surface.
+                logger.warning(
+                    "connectors.capability.operation_type_mismatch",
+                    extra={
+                        "operation": str(raw)[:100],
+                        "surface_connector_type_id": surface_type,
+                        "qualifier_connector_type_id": qualifier_type,
+                    },
+                )
+                continue
+            canonical.add(qualified_capability_name)
             continue
         capability = canonical_capability(raw)
         if capability is None:
@@ -643,7 +677,17 @@ class ConnectorPermissionError(ValueError):
 class ConnectorACL:
     """Access-control list for connector operations.
 
-    Enforces *visibility* restrictions and an optional white-list of allowed operations.
+    Enforces the optional white-list of allowed operations. The connector's
+    ``visibility`` is carried as validated state but is NOT enforced here:
+    team-scope binding rules are enforced at the write gates that create a
+    cross-team binding (``core.team_visibility``). The FAR-516 run-gate that
+    used to reject a team-scoped request against an ``org``-visibility
+    connector was removed by FAR-1618 — teams are a VISIBILITY GROUPING, not
+    a credential trust boundary, so an org-visibility connector is shared
+    across the organisation and binds to ANY pipeline, including team-owned
+    ones. (The team-PRIVATE direction — ``visibility: team`` usable only by
+    its owner team's pipelines — is unchanged and stays enforced at those
+    write gates.)
 
     Operation-scope semantics (FAR-1564): ``None`` and an empty list BOTH mean
     UNRESTRICTED — "nothing was configured to restrict". Connectors created
@@ -666,14 +710,33 @@ class ConnectorACL:
     (``["github.read"]``) GRANTS ``read`` and :meth:`check` answers exactly
     what the guardrail conformance reader certifies for the same stored value.
     Both consume the ONE shared helper — neither keeps a private copy.
+
+    Surface type (FAR-1616): *connector_type_id* is the SURFACE'S OWN
+    connector type, supplied by every construction site that knows it (the
+    connector hub passes the instance's ``connector_type_id``). A
+    type-qualified allowlist entry (``github.write``) grants its bare
+    capability ONLY when this type matches the entry's qualifier; a mis-typed
+    qualifier — or one that cannot be verified because no type was supplied —
+    is REJECTED and grants nothing (fail closed). Without this, the FAR-1594
+    canonicalisation dropped the qualifier unconditionally, so a stored
+    ``["github.write"]`` on a FILESYSTEM connector granted bare ``write``,
+    where it must deny. ``None``/``[]`` remain UNRESTRICTED and a malformed
+    value remains fail-closed (FAR-1564) regardless of the type.
     """
 
     _VALID_VISIBILITY = frozenset({"org", "team"})
 
-    def __init__(self, visibility: str, allowed_operations: object = None) -> None:
+    def __init__(
+        self,
+        visibility: str,
+        allowed_operations: object = None,
+        *,
+        connector_type_id: str | None = None,
+    ) -> None:
         if visibility not in self._VALID_VISIBILITY:
             raise ValueError(f"visibility must be 'org' or 'team', got {visibility!r}")
         self.visibility = visibility
+        self.connector_type_id = connector_type_id
         # Decided ONCE here from the shared predicate: only ``None``/``[]``
         # are unrestricted. ``check`` reads this flag rather than re-testing
         # truthiness, because an empty frozenset is BOTH the unrestricted-``[]``
@@ -687,10 +750,15 @@ class ConnectorACL:
             self.allowed_operations: frozenset[str] | None = None if allowed_operations is None else frozenset()
         elif isinstance(allowed_operations, list):
             # FAR-1594 (a): canonicalise to the ONE vocabulary — a stored
-            # ``["github.read"]`` grants ``read`` here exactly as the guardrail
-            # conformance reader certifies ``read`` for the same value. Shares
-            # the conformance reader's helper so the two can never diverge.
-            self.allowed_operations = frozenset(canonical_capability_set(allowed_operations))
+            # same-type ``["github.read"]`` grants ``read`` here exactly as the
+            # guardrail conformance reader certifies ``read`` for the same
+            # value. Shares the conformance reader's helper so the two can
+            # never diverge. FAR-1616: the surface's own type is passed so a
+            # MIS-TYPED qualified entry (``github.write`` on a filesystem
+            # connector) is rejected instead of granting bare ``write``.
+            self.allowed_operations = frozenset(
+                canonical_capability_set(allowed_operations, connector_type_id=connector_type_id),
+            )
         else:
             logger.warning(
                 "connectors.acl.malformed_allowed_operations",
@@ -699,7 +767,7 @@ class ConnectorACL:
             # Restricted to the empty allowlist: every operation is denied.
             self.allowed_operations = frozenset()
 
-    def check(self, operation: str, *, request_visibility: str | None = None) -> None:
+    def check(self, operation: str) -> None:
         """Raise ConnectorPermissionError if the operation is not permitted.
 
         ``None`` and an empty list are both unrestricted (FAR-1564); a
@@ -711,6 +779,9 @@ class ConnectorACL:
         grants a stored ``["github.read"]`` — the answer the guardrail
         conformance reader gives for that value. A request that is not a
         capability in any accepted spelling is matched raw (as before).
+
+        There is deliberately NO visibility/request-scope parameter: an
+        org-visibility connector is shared across the organisation (FAR-1618).
         """
         if not self._unrestricted:
             allowed = self.allowed_operations or frozenset()
@@ -719,8 +790,6 @@ class ConnectorACL:
                 raise ConnectorPermissionError(
                     f"Operation {operation!r} is not in allowed_operations: {sorted(allowed)}",
                 )
-        if request_visibility == "team" and self.visibility == "org":
-            raise ConnectorPermissionError("Attempted team-scoped access on an org-only connector")
 
 
 @dataclass

@@ -75,8 +75,24 @@ _service = ErrorIngestionService()
 _key_store: SessionKeyStore | None = None
 
 # Public ingest rate limiter and daily cap (in-memory, no Redis)
+#
+# ``_public_rate_limit`` is a plain dict (not a defaultdict): every read is an
+# explicit ``.get()`` and every write an explicit assignment, so a stray read
+# can never silently grow the map past its bound.
 _public_rate_limit: dict[str, list[float]] = {}  # IP -> list of request timestamps
 _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: count}
+
+# Rate-limit window (1 request per 60 s per IP) and a hard bound on the number
+# of tracked client IPs. This route is UNAUTHENTICATED, so without the bound the
+# IP-keyed map grows forever: a key is only pruned when that same IP is seen
+# again, so one-off client IPs accumulate their timestamp lists indefinitely (a
+# memory-exhaustion DoS). The pa-identity rotation limiter shares this
+# window/dict-of-timestamps shape but caps requests per client, not the number
+# of tracked clients (only the demo-floor limiter in
+# ``api/middleware/rate_limiter.py`` bounds its key set), so this key bound is
+# new for this limiter.
+_PUBLIC_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_MAX_TRACKED_PUBLIC_CLIENTS = 10_000
 
 # System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
 # modulo.db.models.organisation at module top — the single canonical
@@ -104,8 +120,81 @@ def _prepare_event_data(event: ErrorEventInput) -> dict[str, Any]:
     return data
 
 
+def _sweep_stale_public_rate_limit_clients(window_start: float) -> None:
+    """Evict IPs with no rate-limit timestamp inside the active window.
+
+    A client with no in-window request can never have tripped the limiter, so
+    its key carries no rate-limiting information and is safe to drop.
+    """
+    stale = [ip for ip, stamps in _public_rate_limit.items() if not any(t > window_start for t in stamps)]
+    for ip in stale:
+        del _public_rate_limit[ip]
+
+
+def _touch_public_rate_limit_client(client_ip: str, timestamps: list[float]) -> None:
+    """Store ``timestamps`` for ``client_ip``, marking it most-recently-used.
+
+    Re-inserting an existing key moves it to the end of the dict's insertion
+    order, so ``_evict_least_recently_used_public_clients`` evicts the client
+    that has gone longest without a request rather than the one tracked longest.
+    """
+    _public_rate_limit.pop(client_ip, None)
+    _public_rate_limit[client_ip] = timestamps
+
+
+def _evict_least_recently_used_public_clients(limit: int) -> None:
+    """Evict least-recently-used client IPs until at most ``limit`` remain.
+
+    Backstop for the case the sweep cannot help with: every tracked client still
+    holds an in-window timestamp, yet the map is at its bound. Eviction is
+    best-effort LRU: a client that keeps being rejected is re-touched on every
+    request and so stays most-recently-used, making it the last to be evicted.
+    The hard bound is absolute, so once at capacity a client that has gone quiet
+    can still be dropped and later admitted fresh.
+    """
+    while len(_public_rate_limit) > limit:
+        del _public_rate_limit[next(iter(_public_rate_limit))]
+
+
+def _check_public_rate_limit(client_ip: str, now: float) -> None:
+    """Record a public-ingest attempt, raising 429 if the client is over the limit.
+
+    Allows at most one request per :data:`_PUBLIC_RATE_LIMIT_WINDOW_SECONDS`.
+    Rejection also refreshes the client's LRU position, so a client that is
+    actively being limited is evicted last by the hard bound — best-effort, see
+    :func:`_evict_least_recently_used_public_clients` for the caveat.
+    """
+    window_start = now - _PUBLIC_RATE_LIMIT_WINDOW_SECONDS
+    timestamps = [t for t in _public_rate_limit.get(client_ip, ()) if t > window_start]
+    if timestamps:
+        _touch_public_rate_limit_client(client_ip, timestamps)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Max 1 request per 60 seconds.",
+        )
+    # Keep the tracked-IP map hard-bounded before admitting a new key: sweep
+    # idle IPs first (cheap), then evict the least-recently-used keys if the
+    # sweep could not bring the map under the cap (all tracked clients are still
+    # in-window). Evict down to one below the cap so the incoming key fits.
+    if client_ip not in _public_rate_limit and len(_public_rate_limit) >= _MAX_TRACKED_PUBLIC_CLIENTS:
+        _sweep_stale_public_rate_limit_clients(window_start)
+        if len(_public_rate_limit) >= _MAX_TRACKED_PUBLIC_CLIENTS:
+            _log.warning(
+                "public_error_ingest: rate-limiter at capacity (%d tracked clients); evicting least-recently-used",
+                _MAX_TRACKED_PUBLIC_CLIENTS,
+            )
+            _evict_least_recently_used_public_clients(_MAX_TRACKED_PUBLIC_CLIENTS - 1)
+    timestamps.append(now)
+    _touch_public_rate_limit_client(client_ip, timestamps)
+
+
 def _prune_stale_ip_counters() -> None:
-    """Remove IP entries with no activity in the last 48 hours."""
+    """Remove IP entries with no activity in the last 48 hours.
+
+    Bounds ``_public_daily_event_count`` (a different structure from
+    ``_public_rate_limit``, which has its own LRU bound in
+    :func:`_check_public_rate_limit`).
+    """
     threshold = (datetime.now(UTC) - timedelta(hours=48)).strftime("%Y-%m-%d")
     stale_ips = []
     for ip, days in _public_daily_event_count.items():
@@ -306,14 +395,7 @@ async def ingest_errors_public(
 
     # Rate limit: 1 request per 60 seconds per IP
     now = _time.time()
-    timestamps = _public_rate_limit.setdefault(client_ip, [])
-    timestamps[:] = [t for t in timestamps if now - t < 60]
-    if timestamps:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Max 1 request per 60 seconds.",
-        )
-    timestamps.append(now)
+    _check_public_rate_limit(client_ip, now)
 
     # Parse body
     try:

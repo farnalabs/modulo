@@ -131,6 +131,36 @@ async def test_sweep_isolates_poisoned_instance(sweep, tmp_path) -> None:
     assert by_type["no-such-connector-type"].last_health_check_error
 
 
+async def test_sweep_isolates_exploding_instance(sweep, tmp_path, monkeypatch) -> None:
+    """A connector whose check raises is recorded on its own row; the sweep continues."""
+    run, seeder, rows = sweep
+    real = health_sweep._check_instance
+    calls = {"n": 0}
+
+    async def _flaky(ci, *, session, fernet_key):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return await real(ci, session=session, fernet_key=fernet_key)
+
+    monkeypatch.setattr(health_sweep, "_check_instance", _flaky)
+    await seeder(
+        [
+            _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)}),
+            _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)}),
+        ]
+    )
+
+    result = await run()
+
+    assert result["checked"] == 2
+    assert result["healthy"] == 1
+    assert result["unhealthy"] == 1
+    errors = [row.last_health_check_error for row in await rows()]
+    assert any(e is not None and "RuntimeError: boom" in e for e in errors)
+    assert any(e is None for e in errors)
+
+
 async def test_sweep_skips_disabled_instances(sweep) -> None:
     run, seeder, rows = sweep
     await seeder([_instance(connector_type_id="shell", status="disabled")])

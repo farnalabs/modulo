@@ -28,12 +28,31 @@ blocks), never fail-open.
 All DB access is org-scoped (RLS via ``set_rls_org``). No credentials, no raw
 payloads, and no decrypted state ever enter the returned decision or audit
 payloads — only capability names and their confirmed state.
+
+FAR-1615 / FAR-1617 (type-binding invariant + legacy-claim detection):
+  * a TYPE-QUALIFIED claim (``github.read``) binds to a connector-typed
+    surface ONLY — a profile/agent declaration (or any non-connector surface)
+    of the literal qualified string is reduced to its bare capability and can
+    never satisfy the qualified claim;
+  * a blocked qualified claim REPORTS its qualified name (``github.write``,
+    not ``write``) so the operator can tell which binding failed;
+  * the FAR-1594 behaviour change means a LEGACY guardrail whose
+    ``required_capabilities`` (or graph ``required_operations``) uses a
+    type-qualified spelling now resolves ``unknown`` and BLOCKS block-action
+    guardrails where it previously loose-matched. That is deliberate and
+    fail-closed — the binding is NOT weakened. Operators can find such legacy
+    claims with :func:`type_qualified_claims` /
+    :func:`find_type_qualified_claim_guardrails` (save-time validation or a
+    rollout audit), and every unsatisfied qualified claim is logged as
+    ``guardrail.conformance.type_qualified_claim_unsatisfied`` so a
+    production rollout surfaces them without a stored-data change.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -98,13 +117,21 @@ def _canonical_claim(value: str) -> str:
 
 
 def _reported(capability: str) -> str:
-    """Spell a claim the way this module REPORTS it: the canonical bare form.
+    """Spell a claim the way this module REPORTS it.
 
-    ``missing``/``unreadable`` are surfaced in logs and derivation details, so a
-    qualified claim (``github.write``) reports as its canonical capability
-    (``write``) — the name the operator's capability vocabulary uses — while the
-    MATCHING above kept the qualifier for the lookup itself.
+    A TYPE-QUALIFIED claim keeps its qualifier (``github.write`` stays
+    ``github.write``; only the separator is normalised, ``github:write`` ->
+    ``github.write``) so ``missing``/``unreadable`` tell the operator WHICH
+    type binding failed — before FAR-1615 a blocked ``github.read`` claim
+    reported as ``read``, indistinguishable from a bare-capability gap
+    (FAR-1615). A BARE claim reports as its canonical bare form — the name
+    the operator's capability vocabulary uses — while the MATCHING above kept
+    the qualifier for the lookup itself. Keys that are not capabilities at all
+    (``sandbox.egress``, ``docker``, ...) pass through untouched.
     """
+    qualified = qualified_capability(capability)
+    if qualified is not None:
+        return f"{qualified[0]}.{qualified[1]}"
     bare = canonical_capability(capability)
     return capability if bare is None else bare
 
@@ -156,7 +183,11 @@ def _capabilities_for_connector(row: Any) -> set[str]:
     if unrestricted_allowed_operations(allowed):
         return _type_capabilities(row)
     if isinstance(allowed, list):
-        return canonical_capability_set(allowed)
+        # FAR-1616: pass the row's OWN connector type so a mis-typed legacy
+        # entry (``github.write`` on a filesystem connector) is rejected here
+        # exactly as ``ConnectorACL`` rejects it at enforcement time — the two
+        # sides can never certify and deny different sets.
+        return canonical_capability_set(allowed, connector_type_id=_connector_type_id_of(row))
     # Malformed (dict/str/int/...): fail CLOSED — certify nothing rather than
     # the connector's FULL capability set.
     _log.warning(
@@ -164,6 +195,18 @@ def _capabilities_for_connector(row: Any) -> set[str]:
         extra={"allowed_operations_type": type(allowed).__name__},
     )
     return set()
+
+
+def _connector_type_id_of(row: Any) -> str | None:
+    """The row's ``connector_type_id`` when it is a usable string, else ``None``.
+
+    A non-string / empty type id is treated as UNIDENTIFIABLE: a type-qualified
+    allowlist entry against it can never be verified (FAR-1616 rejects it, fail
+    closed) and the unrestricted branch certifies nothing (see
+    :func:`_type_capabilities`).
+    """
+    type_id = getattr(row, "connector_type_id", None)
+    return type_id if isinstance(type_id, str) and type_id else None
 
 
 def _type_capabilities(row: Any) -> set[str]:
@@ -200,19 +243,46 @@ def _type_capabilities(row: Any) -> set[str]:
     return {str(cap) for cap in capabilities}
 
 
+def _bare_capability(value: str) -> str:
+    """Reduce a NON-CONNECTOR surface's declared capability to its bare form.
+
+    FAR-1615: a profile/agent/environment surface is not a connector surface,
+    so a legacy type-qualified spelling in its capability list (``github.read``)
+    is reduced to the bare capability (``read``) and can only ever satisfy a
+    BARE claim. Keys outside the connector capability vocabulary
+    (``sandbox.egress``, ``docker``, ...) pass through untouched — their
+    surfaces own their vocabulary.
+    """
+    return canonical_capability(value) or value
+
+
 def _capabilities_for_profile(row: Any) -> set[str]:
-    """Capability surface of an EnvironmentProfile row (live)."""
+    """Capability surface of an EnvironmentProfile row (live) — BARE capabilities only.
+
+    FAR-1615: profile ``capabilities_json`` is registered VERBATIM nowhere —
+    every spelling is reduced through :func:`_bare_capability`, so a profile
+    declaring the literal string ``github.read`` registers ``read`` and can
+    NEVER satisfy a type-qualified claim. A type-qualified claim requires a
+    connector-typed surface (:func:`_register_connector_surface` stamps the
+    ``<type>.<cap>`` alias); a profile is not one.
+    """
     caps = row.capabilities_json if hasattr(row, "capabilities_json") else None
     if isinstance(caps, list):
-        return {str(c) for c in caps if isinstance(c, str)}
+        return {_bare_capability(c) for c in caps if isinstance(c, str)}
     return set()
 
 
 def _capabilities_for_agent(row: Any) -> set[str]:
-    """Capability surface of an Agent row (live)."""
+    """Capability surface of an Agent row (live) — BARE capabilities only.
+
+    FAR-1615: same rule as :func:`_capabilities_for_profile` — an agent's
+    ``required_environment_capabilities`` is a NON-CONNECTOR surface, so a
+    legacy type-qualified spelling is reduced to its bare capability and
+    cannot satisfy a type-qualified connector claim.
+    """
     caps = row.required_environment_capabilities if hasattr(row, "required_environment_capabilities") else None
     if isinstance(caps, list):
-        return {str(c) for c in caps if isinstance(c, str)}
+        return {_bare_capability(c) for c in caps if isinstance(c, str)}
     return set()
 
 
@@ -550,6 +620,66 @@ def worst_state(derivations: list[ConformanceDerivation]) -> ConformanceState:
     return "present"
 
 
+# ---------------------------------------------------------------------------
+# FAR-1617: legacy type-qualified claim detection
+# ---------------------------------------------------------------------------
+#
+# FAR-1594 made a type-qualified claim bind to its connector type, so a
+# LEGACY claim that used a type-qualified spelling (``github.read``) now
+# resolves ``unknown`` and BLOCKS block-action guardrails where it previously
+# loose-matched to any surface declaring bare ``read``. Fail-closed and
+# deliberate — the binding is NOT weakened — but an existing guardrail relying
+# on the loose matching starts routing runs to HITL at rollout. The helpers
+# below are the DETECTION mechanism: they classify stored claims without
+# altering any stored data, so operators can find (and re-spell) legacy
+# claims before or at rollout. A production-DB audit additionally needs a
+# query over ``evals.config_json`` / pipeline graphs — not provided here; this
+# is the classification primitive such an audit (or a save-time validation
+# warning) calls.
+
+
+def type_qualified_claims(required_capabilities: Sequence[str]) -> list[str]:
+    """The TYPE-QUALIFIED capability claims in *required_capabilities* (FAR-1617).
+
+    Returns each spelling normalised to ``<connector-type>.<capability>``
+    (``github:read`` -> ``github.read``), de-duplicated, order-preserving.
+    These are the claims that resolve BY TYPE under FAR-1594 — satisfied only
+    by a bound connector-typed surface — and therefore the claims a legacy
+    configuration may carry unintentionally. Bare capabilities and
+    non-connector keys (``sandbox.egress``, ``docker``, ...) are not
+    included. Works on any claim list: a guardrail's ``required_capabilities``
+    or a graph binding's ``required_operations``.
+    """
+    claims: list[str] = []
+    for capability in required_capabilities:
+        qualified = qualified_capability(str(capability))
+        if qualified is None:
+            continue
+        claim = f"{qualified[0]}.{qualified[1]}"
+        if claim not in claims:
+            claims.append(claim)
+    return claims
+
+
+def find_type_qualified_claim_guardrails(guardrails: Iterable[Any]) -> dict[str, list[str]]:
+    """Map each guardrail NAME to its type-qualified claims (FAR-1617 audit).
+
+    *guardrails* is any iterable of engine ``EvalDefinition`` DTOs (or objects
+    with ``.config`` and ``.name``). Guardrails with no type-qualified claim
+    are omitted, so a non-empty result means at least one legacy-shaped claim
+    exists. Detection only — stored data is never altered; the operator
+    decides whether to re-spell the claim to the bare vocabulary or to bind a
+    connector of the named type.
+    """
+    out: dict[str, list[str]] = {}
+    for gr in guardrails:
+        config = gr.config if hasattr(gr, "config") else {}
+        qualified = type_qualified_claims(_required_of(config))
+        if qualified:
+            out[str(getattr(gr, "name", gr))] = qualified
+    return out
+
+
 def evaluate_conformance(
     guardrails: list[Any],
     registered: dict[str, bool | None],
@@ -573,6 +703,19 @@ def evaluate_conformance(
         action = _action_of(config)
         derivation = decide_conformance(required, registered)
         claimed.append(derivation)
+        if derivation.state != "present":
+            # FAR-1617: a type-qualified claim that no bound surface of that
+            # type satisfies is usually a LEGACY claim which loose-matched
+            # before FAR-1594 — log it so a rollout surfaces such claims
+            # without altering any stored data (detection only).
+            unsatisfied_qualified = [
+                name for name in (*derivation.missing, *derivation.unreadable) if qualified_capability(name) is not None
+            ]
+            if unsatisfied_qualified:
+                _log.warning(
+                    "guardrail.conformance.type_qualified_claim_unsatisfied",
+                    extra={"guardrail": gr.name, "state": derivation.state, "claims": unsatisfied_qualified},
+                )
         if derivation.state == "present":
             continue
         if action == GuardrailAction.BLOCK.value:
@@ -815,7 +958,9 @@ __all__ = [
     "check_node_start",
     "decide_conformance",
     "evaluate_conformance",
+    "find_type_qualified_claim_guardrails",
     "load_claimed_guardrails",
     "load_node_guardrails",
+    "type_qualified_claims",
     "worst_state",
 ]

@@ -2016,6 +2016,9 @@ elements:
       - testid: enforcement-enabled
         type: element
         dynamic_testid: false
+      - testid: egress-allowed
+        type: element
+        dynamic_testid: false
       - testid: product-analytics-consent-prompt
         type: element
         dynamic_testid: false
@@ -2778,6 +2781,27 @@ elements:
         type: button
         dynamic_testid: false
       - testid: proposal-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: publish-proposal-dialog
+        type: element
+        dynamic_testid: false
+      - testid: publish-name
+        type: input
+        dynamic_testid: false
+      - testid: publish-eval-type
+        type: select
+        dynamic_testid: false
+      - testid: publish-config
+        type: textarea
+        dynamic_testid: false
+      - testid: publish-dialog-error
+        type: element
+        dynamic_testid: false
+      - testid: publish-cancel
+        type: button
+        dynamic_testid: false
+      - testid: publish-confirm
         type: button
         dynamic_testid: false
     /feedback/inbox:
@@ -5557,7 +5581,7 @@ features:
             # One canonical capability vocabulary shared by ACL + conformance (FAR-1582 / FAR-1594)
             - "[x] Connector capability spellings are reduced through ONE canonical vocabulary shared by enforcement and certification (FAR-1582 / FAR-1594): qualified_capability / canonical_capability / canonical_capability_set live in the stdlib-only connectors/base.py leaf so ConnectorACL (enforcement) and core.guardrails.conformance (certification) import the SAME code and can never give opposite answers for one stored value — before FAR-1594 conformance certified a stored ['github.read'] as read while the ACL denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so its redundant type qualifier is reduced to the bare Capability (github.read / github:write -> read); a conformance CLAIM is a binding REQUEST, so it keeps its qualifier (github.read binds to the github surface specifically). ConnectorACL builds its restricted set through canonical_capability_set and canonicalises the requested operation through canonical_capability, so check('read') grants a stored ['github.read'] exactly as the conformance reader certifies read; entries that are not capabilities in any accepted spelling (sandbox.egress, egress:github.com) are never rewritten and malformed list entries are dropped with a log (they grant nothing), while a non-list value yields the empty set matching the fail-closed FAR-1564 treatment (backend/src/modulo/connectors/base.py qualified_capability + canonical_capability + canonical_capability_set, backend/src/modulo/core/guardrails/conformance.py _canonical_claim/_reported/_capabilities_for_connector, backend/tests/unit/connectors/test_acl.py, backend/tests/unit/core/test_guardrail_conformance_midrun.py)"
             # Cross-team connector binding enforcement at graph save (FAR-1515, PRD §9.3)
-            - "[x] A connector binding that crosses a team boundary is refused at graph save with 409 connector_team_mismatch (FAR-1515): a team-private connector (visibility=team) is only usable by a pipeline owned by the SAME team, and — the reverse direction — a TEAM pipeline may not pin an org-only connector (visibility=org), because a run whose owner_team_id is set is team-scoped and ConnectorACL.check fails closed on team-scoped access to an org-only connector (FAR-516), so the save must refuse a graph whose every run would die at the connector gate (org pipelines keep org-wide connectors and never mismatch). The candidate rows are read team-blind but org-scoped through db.crud.team_scope.team_blind_org_scope — the rls_team_isolation policy would otherwise hide another team's team-private row from the caller session, making the very binding under judgement look absent — so an absent id is DEFINITIVE and fails CLOSED as the same named connector_team_mismatch (ConnectorBindingMissingError), never a silent skip. The shared predicate + wire-code constants live in core/team_visibility.py and are enforced at every write path that can create the binding: the REST graph save / node-conversion chokepoint (_enforce_connector_team_bindings), the MCP graph-update tool, the workflow import confirm, the library collection install, and a connector visibility/owner re-scope (_reject_re_scope_that_breaks_a_bound_pipeline), each raising the shared 409 detail (backend/src/modulo/core/team_visibility.py, backend/src/modulo/db/crud/team_scope.py, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/routes/library.py, backend/src/modulo/api/routes/connectors.py, backend/tests/unit/api/test_pipeline_team_visibility.py, backend/tests/integration/test_pipeline_team_gate_parity.py)"
+            - "[x] A connector binding that crosses a team boundary is refused at graph save with 409 connector_team_mismatch (FAR-1515, model restated by FAR-1618): teams are a VISIBILITY GROUPING, not a credential trust boundary, so the rule has one shape — a team-private connector (visibility=team) is only usable by a pipeline owned by the SAME team (a different team's pipeline, or an org pipeline with no owner team, is refused), and an org-visibility connector (visibility=org) is SHARED ACROSS THE ORGANISATION: it binds to ANY pipeline including one owned by a team, and never produces a mismatch (FAR-1618 removed the reverse direction FAR-1515 had added — a TEAM pipeline pinning an org connector, mirrored at run time by the FAR-516 ConnectorACL.check run-gate — so neither save nor run rejects it). The candidate rows are read team-blind but org-scoped through db.crud.team_scope.team_blind_org_scope — the rls_team_isolation policy would otherwise hide another team's team-private row from the caller session, making the very binding under judgement look absent — so an absent id is DEFINITIVE and fails CLOSED as the same named connector_team_mismatch (ConnectorBindingMissingError), never a silent skip. The shared predicate + wire-code constants live in core/team_visibility.py and are enforced at every write path that can create the binding: the REST graph save / node-conversion chokepoint (_enforce_connector_team_bindings), the MCP graph-update tool, the workflow import confirm, the library collection install, and a connector visibility/owner re-scope (_reject_re_scope_that_breaks_a_bound_pipeline), each raising the shared 409 detail (backend/src/modulo/core/team_visibility.py, backend/src/modulo/db/crud/team_scope.py, backend/src/modulo/api/routes/pipelines.py, backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/routes/library.py, backend/src/modulo/api/routes/connectors.py, backend/tests/unit/api/test_pipeline_team_visibility.py, backend/tests/integration/test_pipeline_team_gate_parity.py)"
         deferrals:
             - Per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork — fan-out emits sequentially in v1 (no concurrent fork); throughput relies on pipeline-level concurrency limits and the connector's single connection-pooled client
             - "Per-ITEM fan-out outcome trace SPANS — operation-level OTel trace spans (from _TracedConnector: connector.<type>.query/write/health_check emitting connector.type/operation/resource/limit/result_total/error_type + duration) and per-destination outcome/latency METRICS are emitted in v1; only per-item trace spans are deferred"
@@ -5648,7 +5672,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
-            - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
+            - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
             # FAR-967 chunk 10: pin integrity + operator enable/disable control
@@ -5663,7 +5687,7 @@ features:
             - "[x] Feedback items can be reviewed, dismissed, and corrected with correction runs spawned"
             - "[x] Feedback-to-eval gap detection and proposal generation ship end to end: POST /api/v1/feedback/{record_id}/detect-gap runs eval-gap detection over a feedback record producing an eval proposal, GET /api/v1/feedback/proposals lists the queue, and POST /api/v1/feedback/proposals/{record_id}/publish promotes a proposal into a live eval definition — a non-eval-gap record is refused (docs/product-map/improve/feedback.md, backend/tests/unit/api/test_feedback_endpoint.py)"
         deferrals:
-            - "Eval-gap detection is model-assisted — it depends on a configured model backend; there is no deterministic fallback classifier for gap detection"
+            - "Correction runs depend on a configured model backend; eval-gap detection itself is deterministic — it replays the pipeline's existing eval suite and needs no model backend"
     feat-guardrails:
         description: Guardrail policies
         status: covered
@@ -5786,7 +5810,7 @@ features:
             - "[x] REST surface: GET/PUT/DELETE /api/v1/agents/{agent_id}/bindings bind create/update behind the model_backend.binding.manage permission with audit events (values never logged); library export carries name-based binding specs and import rebinds them by backend name"
             - "[x] Editor UI: the pipeline editor's sandbox-agent inspector shows repeatable binding rows with inline help and a Local-tier warning; i18n keys under views.PipelineEditorView.runner_bindings_*"
             # Cross-team model-backend pin enforcement at graph save (FAR-1515, PRD §9.3)
-            - "[x] A pipeline graph save that pins a model backend with visibility=team from a pipeline owned by a DIFFERENT team is refused 409 model_backend_team_mismatch (FAR-1515): the model-backend mirror of the connector team-scope rule, enforced at the shared graph-reference resolver (_enforce_model_backend_team_bindings) so a team-private backend is only usable by its own team's pipeline. It is deliberately NOT extended to reject an org-only backend on a team pipeline, unlike the connector rule, because ModelBackendHub has no invocation-time visibility gate (a run resolves a pin with hub.get(backend_id) and never consults visibility), so a save-time rejection there would refuse a graph the run would happily execute — closing that gap needs the invocation-side gate first (backend/src/modulo/core/team_visibility.py, backend/src/modulo/api/routes/pipelines.py _enforce_model_backend_team_bindings, backend/tests/unit/core/test_team_visibility.py, backend/tests/unit/api/test_pipeline_team_visibility.py)"
+            - "[x] A pipeline graph save that pins a model backend with visibility=team from a pipeline owned by a DIFFERENT team is refused 409 model_backend_team_mismatch (FAR-1515): the model-backend mirror of the connector team-scope rule, enforced at the shared graph-reference resolver (_enforce_model_backend_team_bindings) so a team-private backend is only usable by its own team's pipeline. Since FAR-1618 it says exactly the same thing as the connector rule (an org-visibility row never mismatches; a team-private row mismatches every pipeline outside its owner team, including an org pipeline): ModelBackendHub has no invocation-time visibility gate — a run resolves a pin with hub.get(backend_id) and never consults visibility — and after FAR-1618 neither does the connector hub, so neither rule has an invocation-time counterpart to mirror (backend/src/modulo/core/team_visibility.py, backend/src/modulo/api/routes/pipelines.py _enforce_model_backend_team_bindings, backend/tests/unit/core/test_team_visibility.py, backend/tests/unit/api/test_pipeline_team_visibility.py)"
     feat-notifications:
         description: Notifications, email delivery, and notification logs
         status: covered
@@ -5889,11 +5913,11 @@ features:
         description: Product usage and adoption analytics for system administrators
         status: partial
         behaviours:
-            - "[ ] The product analytics page does not yet show usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which themselves render defaults (see the next gap)"
+            - "[ ] The product analytics page does not yet show in-product usage and adoption metrics for system administrators - it renders only the transparency endpoint's delivery/consent/enforcement fields (frontend/src/views/AdminProductAnalyticsView.vue), which now reflect real state"
             - "[x] Consent and enforcement toggles are configurable per instance"
             - "[x] Metrics scheduling ships: a jittered daily metrics-dump SAQ system cron (core/product_analytics/metrics_dump.py) gates the per-instance dump window on the stored jitter offset and intersects it with the consented validity window, then delivers the batch to the vendor ingest endpoint with a stable persisted watermark"
             - "[x] The transparency endpoint (GET /api/v1/product-analytics/transparency) derives the instance's data-residency posture: egress_allowed is true ONLY when the instance-level switch AND an explicit 'all' consent are both on (core/product_analytics/consent.py), so telemetry egress is fail-closed by default (personas/marcus-ciso.feature)"
-            - "[ ] The transparency surface's collected-metrics fields (last_successful_dump_at, dump_count_total, consent_level, enforcement_enabled) have no feature-code writer - the metrics dump and consent routes never persist them (the generic system-admin config API can still upsert any key), so the /admin/product-analytics page always renders its defaults"
+            - "[x] The transparency endpoint reports the instance's real product-analytics state - instance_enabled/enforcement_enabled delegate to the shared consent helpers (is_instance_analytics_enabled / is_license_enforcement_enabled), last_successful_dump_at and dump_count_total read the keys the metrics dump writes (_WATERMARK_KEY / DUMP_COUNT_KEY, the latter incremented once per successful non-skipped dump), and consent_level reads the caller's org settings_json - so /admin/product-analytics no longer renders static defaults"
             - "[ ] License/plan eligibility gating is not wired in production - every function in core/product_analytics/license_enforcement.py (check_product_analytics_requirement, is_enforcement_active, should_degrade_to_community) and consent.partner_license_requires_analytics / is_partner_carve_out_active has no production call site (unit tests only), so no route or the dump applies the partner product_analytics_required carve-out"
             - "[ ] An in-product analytics export/administration surface (self-serve downloadable org metrics, configurable reporting schedule, or an in-app analytics warehouse) is not shipped — telemetry export is vendor-bound"
         deferrals:

@@ -37,6 +37,7 @@ member/admin reading the dependency's detail would mean the gate over-blocks.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -54,6 +55,7 @@ from tests.integration.test_pipeline_conversion_connector_team_gate import (
     _convert_body as _conv_body,
 )
 from tests.integration.test_pipeline_conversion_connector_team_gate import (
+    _seed_connector,
     _seed_org_connector,
 )
 from tests.integration.test_pipeline_conversion_connector_team_gate import (
@@ -310,44 +312,113 @@ async def test_revert_member_reaches_the_handler(
 
 
 # ---------------------------------------------------------------------------
-# FAR-1515: the connector team gate on the same conversion path
+# FAR-1515 / FAR-1618: the connector team gate on the same conversion path
 # ---------------------------------------------------------------------------
 
 
-async def test_convert_member_binds_an_org_only_connector_and_is_rejected_409(
+async def _seed_member_behind_a_conversion(
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+    label: str,
+    *,
+    pipeline_scoped_to_team: bool = True,
+) -> tuple[uuid.UUID, Any]:
+    """A plain TEAM MEMBER (not an admin) positioned to drive a conversion.
+
+    The shared ``test_user`` fixture is an org admin, which bypasses BOTH
+    team-gate layers — so the member is what makes a refusal observable as a
+    BINDING rule rather than an admin-bypass artefact. Returns
+    ``(member_account_id, scenario)``; the caller owns cleanup. The member
+    joins Team A (the team the seeded team-private rows belong to), so RLS
+    lets them see exactly those rows — a row the gate would need to judge must
+    not be hidden from the caller first.
+    """
+    from modulo.db.crud.team_membership import add_team_member
+
+    member = await _seed_operator_account(db_engine, test_org, label)
+    scenario = await _seed_conv_scenario(
+        db_engine, test_org, test_user, pipeline_scoped_to_team=pipeline_scoped_to_team
+    )
+
+    # The member joins Team A - enough to clear
+    # ``require_team_membership_or_admin`` on a Team-A pipeline AND to see
+    # Team A's team-private rows under ``rls_team_isolation``.
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session, session.begin():
+        await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
+        await add_team_member(session, org_id=test_org, team_id=scenario.team_a, account_id=member, role="operator")
+    return member, scenario
+
+
+async def test_convert_member_binds_a_team_private_connector_to_an_org_pipeline_and_is_rejected_409(
     integration_client: AsyncClient,
     db_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    """A team MEMBER (not an admin) hitting the FAR-1515 gate on convert-to-agent.
+    """A team MEMBER (not an admin) hitting the team-PRIVATE half of the gate.
 
     Every other case in the sibling conversion file drives an org admin. This
-    one puts a plain member of the PIPELINE's own team behind the request, so
-    the rejection is shown to be about the binding — not about the admin
-    bypass, and not about the membership gate, which the member passes first.
+    one puts a plain member behind the request, so the refusal is shown to be
+    about the BINDING — not about the admin bypass, and not about the
+    membership gate, which the member passes first.
+
+    The binding refused here is an ORG pipeline (no owner team) pinning Team
+    A's own team-private connector: a team-private row is usable ONLY by a
+    pipeline owned by its team, so an ownerless pipeline is the other
+    direction of the rule FAR-1618 keeps. A member driving a TEAM pipeline at
+    ANOTHER team's connector cannot be constructed honestly —
+    ``rls_team_isolation`` hides that row from them and the endpoint 404s
+    before the gate — which is exactly why the sibling file drives that case
+    as an org admin (who sees both rows).
 
     It also pins the parity half: the same request carries an ORG model
     backend, and that must NOT be rejected (ModelBackendHub has no
-    invocation-time visibility gate to mirror), so the only named error in the
-    detail is ``connector_team_mismatch``.
+    invocation-time visibility gate), so the only named error in the detail is
+    ``connector_team_mismatch``.
 
-    Uses the sibling module's seeding machinery — those helpers build the team
+    Uses the sibling module's seeding machinery — those helpers build the
     pipeline + agent + backend + node this path needs, and re-implementing
     them here would drift.
     """
-    from modulo.db.crud.team_membership import add_team_member
+    member, scenario = await _seed_member_behind_a_conversion(
+        db_engine, test_org, test_user, "conv-gate-member", pipeline_scoped_to_team=False
+    )
+    team_connector = await _seed_connector(db_engine, test_org, test_user, scenario.team_a)
+    try:
+        resp = await integration_client.post(
+            f"/api/v1/pipelines/{scenario.pipeline_id}/nodes/{scenario.node_id}/convert-to-agent",
+            json=_conv_body(scenario, connector_id=team_connector),
+            headers=_conv_auth_headers(test_org, member, role="operator"),
+        )
+        assert resp.status_code == 409, resp.text
+        detail = str(resp.json()["detail"])
+        assert "connector_team_mismatch" in detail, resp.text
+        assert "is team-private" in detail, resp.text
+        assert "model_backend_team_mismatch" not in detail, resp.text
+    finally:
+        # Removes the teams, their memberships (including the one added above)
+        # and every other row this scenario created.
+        await _cleanup_conv_scenario(db_engine, test_org, scenario, team_connector)
 
-    member = await _seed_operator_account(db_engine, test_org, "conv-gate-member")
-    scenario = await _seed_conv_scenario(db_engine, test_org, test_user)
 
-    # The member joins Team A, which owns the pipeline - enough to clear
-    # ``require_team_membership_or_admin``.
-    factory = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with factory() as session, session.begin():
-        await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
-        await add_team_member(session, org_id=test_org, team_id=scenario.team_a, account_id=member, role="operator")
+async def test_convert_member_binds_an_org_visibility_connector_and_is_accepted(
+    integration_client: AsyncClient,
+    db_engine: AsyncEngine,
+    test_org: uuid.UUID,
+    test_user: uuid.UUID,
+) -> None:
+    """FAR-1618: the same member, binding an ORG-wide connector, is NOT refused.
 
+    Org resources stay shared across the organisation, so a team pipeline's
+    member may pin an ``visibility=org`` connector — there is no
+    ``connector_team_mismatch`` (and, as before, no
+    ``model_backend_team_mismatch`` for the org backend). What matters is that
+    the request is NOT stopped by this gate; whatever the NEXT save-time gate
+    says is out of scope, exactly as in the other accepted cases.
+    """
+    member, scenario = await _seed_member_behind_a_conversion(db_engine, test_org, test_user, "conv-gate-org-member")
     org_connector = await _seed_org_connector(db_engine, test_org, test_user)
     try:
         resp = await integration_client.post(
@@ -355,11 +426,10 @@ async def test_convert_member_binds_an_org_only_connector_and_is_rejected_409(
             json=_conv_body(scenario, connector_id=org_connector),
             headers=_conv_auth_headers(test_org, member, role="operator"),
         )
-        assert resp.status_code == 409, resp.text
-        detail = str(resp.json()["detail"])
-        assert "connector_team_mismatch" in detail, resp.text
-        assert "is org-only" in detail, resp.text
-        assert "model_backend_team_mismatch" not in detail, resp.text
+        assert resp.status_code != 409, (
+            f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
+        )
+        assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         # Removes the teams, their memberships (including the one added above)
         # and every other row this scenario created.

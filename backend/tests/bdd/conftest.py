@@ -374,6 +374,54 @@ async def all_features_plan_context() -> AllFeaturesPlanContext:
 _MISSING = object()
 
 
+def _shaped_execute(session: MagicMock, shapes: "list[MagicMock]") -> None:
+    """Replace a mock session's ``execute`` with a shape-aware dispatcher.
+
+    Each awaited ``session.execute(stmt)`` either (a) returns the next shape
+    from *shapes* in order, or (b) - when the caller pushed nothing left, or
+    the statement is ``require_permission``'s authz kill-switch read - a
+    NONE-scalar shape so fail-closed / forbid-default paths behave as denied.
+    Shapes are consumed one per call, so a wrong count is an explicit failure
+    on the next read rather than a silently reused truthy default.
+    """
+    shape_iterator = SequentialShaper(shapes)
+
+    def _dispatch_execute(_stmt: object, *args: object, **kwargs: object) -> "MagicMock":
+        if "authz_enforce" in str(_stmt):
+            # require_permission's kill-switch read: fail closed by default.
+            return none_scalar_result()
+        if shape_iterator.has_next():
+            return shape_iterator.pop()
+        return none_scalar_result()
+
+    session.execute = AsyncMock(side_effect=_dispatch_execute)
+
+
+class SequentialShaper:
+    """Pops one pre-shaped result per awaited ``session.execute`` call."""
+
+    def __init__(self, shapes: "list[MagicMock]") -> None:
+        self._shapes = list(shapes)
+
+    def has_next(self) -> bool:
+        return bool(self._shapes)
+
+    def pop(self) -> MagicMock:
+        return self._shapes.pop(0)
+
+
+def none_scalar_result() -> MagicMock:
+    """A ``session.execute`` result that reads as an empty single-cell row."""
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=None)
+    result.scalar_one = MagicMock(return_value=None)
+    result.scalar = MagicMock(return_value=None)
+    result.first = MagicMock(return_value=None)
+    result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    result.all = MagicMock(return_value=[])
+    return result
+
+
 @contextlib.contextmanager
 def session_client(
     role: str = "admin",
@@ -394,7 +442,11 @@ def session_client(
         get_plan_context,
     )
     from modulo.api.main import app
-    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.dependencies import (
+        get_current_tenant_user,
+        get_current_tenant_user_or_api_key,
+        get_current_user,
+    )
     from modulo.auth.jwt import TenantPrincipal
     from modulo.settings import get_settings
 
@@ -417,6 +469,7 @@ def session_client(
         _get_engine: lambda: MagicMock(),
         get_current_user: lambda: AuthenticatedPrincipal(**principal_kwargs),
         get_current_tenant_user: lambda: TenantPrincipal(**principal_kwargs),
+        get_current_tenant_user_or_api_key: lambda: TenantPrincipal(**principal_kwargs),
         get_plan_context: all_features_plan_context,
         get_anonymous_plan_context: all_features_plan_context,
     }

@@ -1,4 +1,4 @@
-"""FAR-672 ÔÇö launcher/upgrade.py: the installer-enforced pre-upgrade pg_dump.
+"""FAR-672 — launcher/upgrade.py: the installer-enforced pre-upgrade pg_dump.
 
 Locks the upgrade-helper contract the installer depends on: the dump failure
 aborts with an actionable UpgradeError, a zero-byte dump is refused, an
@@ -220,7 +220,7 @@ def test_snapshot_carries_the_restore_compatible_manifest(tmp_path: Path, monkey
 
 
 def test_missing_secrets_file_refuses_and_generates_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dump helper is load-ONLY: a missing secrets file refuses ÔÇö it must
+    """The dump helper is load-ONLY: a missing secrets file refuses — it must
     never GENERATE one (an orphan secrets.json bricks the next boot)."""
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -247,7 +247,7 @@ def test_snapshot_directory_gets_the_search_bit(tmp_path: Path, monkeypatch: pyt
 
 @pytest.mark.skipif(os.name != "posix", reason="creation-mode guarantee is POSIX-only")
 def test_dump_file_is_born_private(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dump file is CREATED 0600 ÔÇö a mid-dump SIGKILL never leaves it at
+    """The dump file is CREATED 0600 — a mid-dump SIGKILL never leaves it at
     umask mode."""
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -258,7 +258,7 @@ def test_dump_file_is_born_private(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The postgres password travels ONLY as child-env PGPASSWORD ÔÇö never in
+    """The postgres password travels ONLY as child-env PGPASSWORD — never in
     the world-readable /proc/<pid>/cmdline argv."""
     _allow_windows_secrets(monkeypatch)
     data_dir = _seed_data_dir(tmp_path)
@@ -282,7 +282,7 @@ def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.Monk
 def test_state_with_last_backup_stamps_v2(tmp_path: Path) -> None:
     """FAR-672 forward-compat: the optional field stamps v2 so an OLD
     launcher refuses via the DESIGNED version gate (a clear "written by a
-    NEWER launcher" refusal) ÔÇö not an "unknown field(s)" integrity error."""
+    NEWER launcher" refusal) — not an "unknown field(s)" integrity error."""
     from modulo.launcher.state import (
         SCHEMA_VERSION,
         SCHEMA_VERSION_WITH_LAST_BACKUP,
@@ -340,6 +340,10 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
         _enter_fake_run(stack)
         snapshot = pre_upgrade_dump(data_dir)
     restore_manifest = json.loads((snapshot.directory / "backup-info.json").read_text(encoding="utf-8"))
+
+    # The real _take_safety_dump creates `./pre-restore-dump-*` (CWD-relative);
+    # chdir into tmp_path so it never litters the repo working tree.
+    monkeypatch.chdir(tmp_path)
 
     with contextlib.ExitStack() as stack:
         stack.enter_context(

@@ -782,6 +782,11 @@ async def _update_feedback_status_transaction(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_ERROR_OCCURRED_PLEASE,
         ) from exc
+    except (InvalidTransitionError, ConcurrentModificationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except HTTPException:
         raise
     except Exception:

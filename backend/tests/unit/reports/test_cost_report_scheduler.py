@@ -17,9 +17,9 @@ from modulo.core.reports.scheduler import _fire_scheduled_report, get_generator
 from modulo.db.crud.scheduled_report import delete_scheduled_report, list_scheduled_reports
 from tests.unit.reports.helpers import (
     MockSession,
-    MockSessionFactory,
     has_predicate,
     make_cost_report_mock,
+    report_firing_env,
 )
 
 
@@ -181,9 +181,7 @@ async def test_due_report_executes_and_transitions_schedule(
     deliverer = AsyncMock(return_value=[{"type": "email", "status": "delivered", "recipient_count": 1}])
 
     with (
-        patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
-        patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+        report_firing_env(session),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=formatter),
         patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),
@@ -210,9 +208,7 @@ async def test_failed_delivery_does_not_deactivate_one_time_report() -> None:
     deliverer = AsyncMock(side_effect=RuntimeError("SMTP unavailable"))
 
     with (
-        patch("modulo.core.reports.scheduler._get_engine"),
-        patch("modulo.core.reports.scheduler.async_sessionmaker", return_value=MockSessionFactory(session)),
-        patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+        report_firing_env(session),
         patch("modulo.core.reports.scheduler.get_generator", return_value=generator),
         patch("modulo.core.reports.scheduler.get_formatter", return_value=MagicMock()),
         patch("modulo.core.reports.scheduler.get_deliverer", return_value=deliverer),

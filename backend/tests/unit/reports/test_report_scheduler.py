@@ -6,6 +6,8 @@ import asyncio
 import datetime as dt
 import logging
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -34,10 +36,11 @@ from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
     MockSession,
-    MockSessionFactory,
     make_http_client,
     make_http_response,
     make_report_mock,
+    patched_http_client,
+    report_firing_env,
 )
 
 # ---------------------------------------------------------------------------
@@ -148,14 +151,7 @@ class TestFireScheduledReport:
 
         session = MockSession(execute_side_effect=[result_mock])
 
-        with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
-        ):
+        with report_firing_env(session):
             result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
 
         assert result["status"] == "skipped"
@@ -170,14 +166,7 @@ class TestFireScheduledReport:
 
         session = MockSession(execute_side_effect=[result_mock])
 
-        with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
-        ):
+        with report_firing_env(session):
             result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
 
         assert result["status"] == "skipped"
@@ -192,14 +181,7 @@ class TestFireScheduledReport:
 
         session = MockSession(execute_side_effect=[result_mock])
 
-        with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
-        ):
+        with report_firing_env(session):
             result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
 
         assert result["status"] == "failed"
@@ -231,12 +213,7 @@ class TestFireScheduledReport:
         session = MockSession(execute_side_effect=[select_result, update_result])
 
         with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
                 return_value=dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.UTC),
@@ -266,12 +243,7 @@ class TestFireScheduledReport:
         session = MockSession(execute_side_effect=[select_result, update_result])
 
         with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
                 return_value=dt.datetime(2026, 7, 8, 9, 0, tzinfo=dt.UTC),
@@ -303,12 +275,7 @@ class TestFireScheduledReport:
             raise asyncio.CancelledError
 
         with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.get_generator",
                 return_value=_cancelled_generator,
@@ -401,38 +368,16 @@ class TestDeliverViaConfig:
         client — and a boolean value must be rejected, not coerced to 1.0."""
         url = "https://hooks.example.com/report"
 
-        with (
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
-        ):
-            client = AsyncMock()
-            resp = MagicMock()
-            resp.is_success = True
-            resp.status_code = 200
-            client.post = AsyncMock(return_value=resp)
-            client_cls.return_value.__aenter__.return_value = client
-
-            await _deliver_via_config(
-                {"report": "data"},
-                {"urls": [url], "timeout": True},
-            )
-
-        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
-
-        client_cls.reset_mock()
-        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
-            client = AsyncMock()
-            resp = MagicMock()
-            resp.is_success = True
-            resp.status_code = 200
-            client.post = AsyncMock(return_value=resp)
-            client_cls.return_value.__aenter__.return_value = client
-
-            await _deliver_via_config(
-                {"report": "data"},
-                {"urls": [url], "timeout": 4.25},
-            )
-
-        assert client_cls.call_args.kwargs["timeout"] == 4.25
+        for raw_timeout, expected in ((True, _REPORT_HTTP_TIMEOUT), (4.25, 4.25)):
+            with (
+                patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+                patched_http_client(make_http_client([make_http_response(status_code=200)])) as client_cls,
+            ):
+                await _deliver_via_config(
+                    {"report": "data"},
+                    {"urls": [url], "timeout": raw_timeout},
+                )
+            assert client_cls.call_args.kwargs["timeout"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -440,28 +385,36 @@ class TestDeliverViaConfig:
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _engine_env(
+    database_url: str = "postgresql+asyncpg://u:p@h/db",
+    *,
+    recycle_seconds: float | None = None,
+) -> Iterator[MagicMock]:
+    """Patch the engine cache, ``create_async_engine`` and ``get_settings`` for
+    one ``_get_engine()`` probe. ``patch.object`` guarantees the cached engine
+    is restored on exit; yields the ``create_async_engine`` mock."""
+    import modulo.core.reports.scheduler as rsched
+
+    settings_mock = MagicMock()
+    settings_mock.database_url = database_url
+    if recycle_seconds is not None:
+        settings_mock.db_pool_recycle_seconds = recycle_seconds
+    with (
+        patch.object(rsched, "_ENGINE", None),
+        patch.object(rsched, "create_async_engine", return_value=MagicMock()) as mock_create,
+        patch.object(rsched, "get_settings", return_value=settings_mock),
+    ):
+        yield mock_create
+
+
 class TestGetEngine:
     def test_returns_cached_engine(self) -> None:
-        import modulo.core.reports.scheduler as rsched
-
-        saved = rsched._ENGINE
-        try:
-            rsched._ENGINE = None
-            mock_engine = MagicMock()
-            settings_mock = MagicMock()
-            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
-            settings_mock.modulo_db = "postgres"
-            with (
-                patch.object(rsched, "_ENGINE", None),
-                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings", return_value=settings_mock),
-            ):
-                e1 = _get_engine()
-                e2 = _get_engine()
-                assert e1 is e2
-                mock_create.assert_called_once()
-        finally:
-            rsched._ENGINE = saved
+        with _engine_env() as mock_create:
+            e1 = _get_engine()
+            e2 = _get_engine()
+            assert e1 is e2
+            mock_create.assert_called_once()
 
     def test_returns_test_engine_when_set(self) -> None:
         import modulo.core.reports.scheduler as rsched
@@ -485,7 +438,6 @@ class TestGetEngine:
             real = MagicMock()
             settings_mock = MagicMock()
             settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
-            settings_mock.modulo_db = "postgres"
             with (
                 patch.object(rsched, "create_async_engine", return_value=real) as mock_create,
                 patch.object(rsched, "get_settings", return_value=settings_mock),
@@ -500,104 +452,43 @@ class TestGetEngine:
             rsched._TEST_ENGINE = saved_test
 
     def test_engine_created_with_pool_pre_ping(self) -> None:
-        import modulo.core.reports.scheduler as rsched
-
-        saved = rsched._ENGINE
-        try:
-            rsched._ENGINE = None
-            settings_mock = MagicMock()
-            settings_mock.modulo_db = "postgres"
-            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
-            mock_engine = MagicMock()
-            with (
-                patch.object(rsched, "_ENGINE", None),
-                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings", return_value=settings_mock),
-            ):
-                _get_engine()
-            _, kwargs = mock_create.call_args
-            assert kwargs["pool_pre_ping"] is True
-            assert kwargs["connect_args"]["statement_cache_size"] == 0
-            assert kwargs["connect_args"]["ssl"] is False
-        finally:
-            rsched._ENGINE = saved
+        with _engine_env() as mock_create:
+            _get_engine()
+        _, kwargs = mock_create.call_args
+        assert kwargs["pool_pre_ping"] is True
+        assert kwargs["connect_args"]["statement_cache_size"] == 0
+        assert kwargs["connect_args"]["ssl"] is False
 
     def test_pool_recycle_from_settings_below_the_proxy_window(self) -> None:
         """FAR-1524: pool_recycle comes from Settings.db_pool_recycle_seconds
         and must stay strictly below the Fly HAProxy 30m session window
         (1800 s) — never the old hardcoded 3600 s."""
-        import modulo.core.reports.scheduler as rsched
-
-        saved = rsched._ENGINE
-        try:
-            rsched._ENGINE = None
-            settings_mock = MagicMock()
-            settings_mock.modulo_db = "postgres"
-            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db"
-            settings_mock.db_pool_recycle_seconds = 1500
-            mock_engine = MagicMock()
-            with (
-                patch.object(rsched, "_ENGINE", None),
-                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings", return_value=settings_mock),
-            ):
-                _get_engine()
-            _, kwargs = mock_create.call_args
-            assert kwargs["pool_recycle"] == 1500
-            assert kwargs["pool_recycle"] < 1800
-            assert kwargs["pool_pre_ping"] is True
-        finally:
-            rsched._ENGINE = saved
+        with _engine_env(recycle_seconds=1500) as mock_create:
+            _get_engine()
+        _, kwargs = mock_create.call_args
+        assert kwargs["pool_recycle"] == 1500
+        assert kwargs["pool_recycle"] < 1800
+        assert kwargs["pool_pre_ping"] is True
 
     def test_translates_sslmode_require_onto_connect_args(self) -> None:
-        import modulo.core.reports.scheduler as rsched
-
-        saved = rsched._ENGINE
-        try:
-            rsched._ENGINE = None
-            settings_mock = MagicMock()
-            settings_mock.modulo_db = "postgres"
-            settings_mock.database_url = "postgresql+asyncpg://u:p@h/db?sslmode=require"
-            mock_engine = MagicMock()
-            with (
-                patch.object(rsched, "_ENGINE", None),
-                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings", return_value=settings_mock),
-            ):
-                _get_engine()
-            args, kwargs = mock_create.call_args
-            # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
-            # leaving it in the URL raises TypeError at first connect (FAR-1440).
-            assert args[0] == "postgresql+asyncpg://u:p@h/db"
-            assert kwargs["connect_args"]["ssl"] == "require"
-            assert kwargs["connect_args"]["statement_cache_size"] == 0
-        finally:
-            rsched._ENGINE = saved
+        with _engine_env("postgresql+asyncpg://u:p@h/db?sslmode=require") as mock_create:
+            _get_engine()
+        args, kwargs = mock_create.call_args
+        # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
+        # leaving it in the URL raises TypeError at first connect (FAR-1440).
+        assert args[0] == "postgresql+asyncpg://u:p@h/db"
+        assert kwargs["connect_args"]["ssl"] == "require"
+        assert kwargs["connect_args"]["statement_cache_size"] == 0
 
     def test_non_postgres_engine_url_omits_ssl_connect_args(self) -> None:
-        import modulo.core.reports.scheduler as rsched
-
-        saved = rsched._ENGINE
-        try:
-            rsched._ENGINE = None
-            settings_mock = MagicMock()
-            settings_mock.modulo_db = "sqlite"
-            settings_mock.database_url = "sqlite+aiosqlite:///./reports.db"
-            mock_engine = MagicMock()
-            with (
-                patch.object(rsched, "_ENGINE", None),
-                patch.object(rsched, "create_async_engine", return_value=mock_engine) as mock_create,
-                patch.object(rsched, "get_settings", return_value=settings_mock),
-            ):
-                _get_engine()
-            args, kwargs = mock_create.call_args
-            # A non-asyncpg driver returns ssl=None from the shared gate, so no
-            # asyncpg-only connect args may be injected and the URL passes
-            # through unchanged (FAR-1440).
-            assert args[0] == "sqlite+aiosqlite:///./reports.db"
-            assert kwargs["connect_args"] == {"timeout": 10}
-        finally:
-            rsched._ENGINE = saved
+        with _engine_env("sqlite+aiosqlite:///./reports.db") as mock_create:
+            _get_engine()
+        args, kwargs = mock_create.call_args
+        # A non-asyncpg driver returns ssl=None from the shared gate, so no
+        # asyncpg-only connect args may be injected and the URL passes
+        # through unchanged (FAR-1440).
+        assert args[0] == "sqlite+aiosqlite:///./reports.db"
+        assert kwargs["connect_args"] == {"timeout": 10}
 
 
 # ---------------------------------------------------------------------------
@@ -751,9 +642,8 @@ class TestDeliverToUrlsRejectsInvalid:
         client = await self._spy_client()
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls(["ftp://hooks.example.com/x"], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -765,8 +655,7 @@ class TestDeliverToUrlsRejectsInvalid:
     async def test_missing_host_and_embedded_credentials_are_rejected(self) -> None:
         client = await self._spy_client()
         urls = ["https://", "https://user:pass@hooks.example.com/x", ""]
-        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
-            client_cls.return_value.__aenter__.return_value = client
+        with patched_http_client(client):
             results = await _deliver_to_urls(urls, {"a": 1})
 
         assert [r["error"] for r in results] == [
@@ -780,10 +669,7 @@ class TestDeliverToUrlsRejectsInvalid:
         """Per-URL isolation: one bad URL must not prevent delivery to good URLs."""
         url = "https://hooks.example.com/x"
         good_client = make_http_client([make_http_response(status_code=200)])
-        with (
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
-        ):
-            client_cls.return_value.__aenter__.return_value = good_client
+        with patched_http_client(good_client):
             results = await _deliver_to_urls(["notaurl", url, "file:///tmp/x"], {"a": 1})
 
         assert [r["status"] for r in results] == ["failed", "delivered", "failed"]
@@ -800,9 +686,8 @@ class TestDeliverToUrlsRejectsInvalid:
         urls = ["https://hooks.example.com:abc/x", "https://hooks.example.com:99999/x"]
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls(urls, {"a": 1})
 
         assert [r["error"] for r in results] == [
@@ -821,9 +706,8 @@ class TestDeliverToUrlsRejectsInvalid:
         credentialed = "https://user:secret@hooks.example.com/x"
         with (
             caplog.at_level(logging.WARNING, logger="modulo.core.reports.scheduler"),
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([credentialed], {"a": 1})
 
         assert results[0]["error"] == "invalid_webhook_url: url_contains_credentials"
@@ -840,8 +724,7 @@ class TestDeliverToUrlsTimeout:
         ``timeout`` the underlying ``httpx.AsyncClient`` was built with."""
         url = "https://hooks.example.com/x"
         client = make_http_client([make_http_response(status_code=200)])
-        with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
-            client_cls.return_value.__aenter__.return_value = client
+        with patched_http_client(client) as client_cls:
             await _deliver_to_urls([url], {"a": 1}, request_timeout=request_timeout)  # type: ignore[arg-type]
         return client_cls.call_args.kwargs["timeout"]
 
@@ -884,9 +767,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "delivered"
@@ -898,9 +780,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -913,9 +794,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -928,9 +808,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "delivered"
@@ -942,9 +821,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(client),
         ):
-            client_cls.return_value.__aenter__.return_value = client
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -956,9 +834,8 @@ class TestDeliverToUrls:
 
         with (
             patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 0),
-            patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls,
+            patched_http_client(make_http_client([])),
         ):
-            client_cls.return_value.__aenter__.return_value = make_http_client([])
             results = await _deliver_to_urls([url], {"a": 1})
 
         assert results[0]["status"] == "failed"
@@ -967,7 +844,7 @@ class TestDeliverToUrls:
 
 
 # ---------------------------------------------------------------------------
-# _sync_with_db tests
+# _fire_scheduled_report: invalid-cron deactivation tests
 # ---------------------------------------------------------------------------
 
 
@@ -991,12 +868,7 @@ class TestFireInvalidCron:
         session = await self._make_session_with_report(report)
 
         with (
-            patch("modulo.core.reports.scheduler._get_engine"),
-            patch(
-                "modulo.core.reports.scheduler.async_sessionmaker",
-                return_value=MockSessionFactory(session),
-            ),
-            patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+            report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
                 side_effect=ValueError("invalid cron"),

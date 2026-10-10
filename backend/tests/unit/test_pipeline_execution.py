@@ -965,6 +965,22 @@ class TestStaleRunRecoverySweep:
         assert ":fail_ttl" in joined
         assert ":ttl" in joined
         assert ":wl_window" in joined
+        # FAR-1623: the never-dispatched branch must not match a run the
+        # heartbeat-stale reset already claimed (claim_count >= 1) nor a run
+        # carrying the reset's heartbeat_stale marker. Pin the guards to the
+        # NEVER-DISPATCHED statement specifically — the capacity-timeout
+        # branch also contains "claim_count = 0", so asserting against the
+        # join would pass even if this guard were dropped.
+        never_stmts = [s for s in statements if "error_code = 'never_dispatched'" in s]
+        assert len(never_stmts) == 1
+        never_stmt = never_stmts[0]
+        assert "claim_count = 0" in never_stmt
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" in never_stmt
+        # The guards must not have landed on the capacity-timeout branch
+        # instead: that branch must NOT carry the heartbeat_stale exclusion.
+        capacity_stmts = [s for s in statements if "error_code = 'capacity_timeout'" in s]
+        assert len(capacity_stmts) == 1
+        assert "error_code IS DISTINCT FROM 'heartbeat_stale'" not in capacity_stmts[0]
 
     async def test_explicit_windows_override_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         params_seen: list[dict[str, object]] = []
@@ -2483,7 +2499,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # Node starts, then completes well within its 1200s deadline.
@@ -2518,7 +2533,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=0.05,
                 )
             )
             # Node starts but never completes -> deadline exceeded.
@@ -2560,7 +2574,6 @@ class TestNodeDeadlineWatchdog:
                     node_completed_event=completed,
                     run_done_event=done,
                     node_deadlines=deadlines,
-                    default_timeout=1200,
                 )
             )
             # A starts and stalls (short deadline).
@@ -2604,7 +2617,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
 
@@ -2631,7 +2643,6 @@ class TestNodeDeadlineWatchdog:
                 node_completed_event=completed,
                 run_done_event=done,
                 node_deadlines=deadlines,
-                default_timeout=1200,
             )
         fail.assert_not_awaited()
         assert not exec_task.cancelled()

@@ -26,6 +26,7 @@ against an in-memory SQLite database (no mocks of the function under test):
 
 import uuid
 from collections.abc import AsyncGenerator, Generator
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -844,3 +845,58 @@ class TestCoalesceRefsMerge:
         journey = await _journey_for(session, "linear", "FAR-1")
         assert journey is not None
         assert journey.provenance == "derived"
+
+    async def test_claimed_pending_run_is_not_coalesced(self, session: AsyncSession) -> None:
+        """FAR-1623: a pending run that has already been CLAIMED is not a
+        coalesce target.
+
+        A claimed-then-reset run (claim_count >= 1, FAR-779 heartbeat
+        recovery) is ``pending`` with ``dispatched_at IS NULL``, but it has
+        already started — the dispatcher is about to re-claim it. Folding a
+        new delivery into it would overwrite its input payload mid-retry.
+        Exercised against real SQLite: the row must never be folded.
+        """
+        await _seed_org(session)
+        pending = await _create_pending(
+            session,
+            trigger_type="webhook",
+            coalesce_key="github:o/r:pr:1",
+            input_payload={COALESCE_KEY_FIELD: "github:o/r:pr:1", "user": "a"},
+        )
+        pending.claim_count = 1
+        await session.flush()
+
+        merged = await coalesce_pending_run(
+            session,
+            org_id=_ORG,
+            pipeline_id=_PIPELINE,
+            coalesce_key="github:o/r:pr:1",
+            input_payload={"refreshed": True},
+        )
+        assert merged is None
+        await session.refresh(pending)
+        assert pending.input_payload == {COALESCE_KEY_FIELD: "github:o/r:pr:1", "user": "a"}
+
+    async def test_started_pending_run_is_not_coalesced(self, session: AsyncSession) -> None:
+        """FAR-1623: a pending run that has already STARTED (started_at set) is
+        not a coalesce target — defence-in-depth alongside claim_count."""
+        await _seed_org(session)
+        pending = await _create_pending(
+            session,
+            trigger_type="webhook",
+            coalesce_key="github:o/r:pr:1",
+            input_payload={COALESCE_KEY_FIELD: "github:o/r:pr:1", "user": "a"},
+        )
+        pending.started_at = datetime.now(UTC)
+        await session.flush()
+
+        merged = await coalesce_pending_run(
+            session,
+            org_id=_ORG,
+            pipeline_id=_PIPELINE,
+            coalesce_key="github:o/r:pr:1",
+            input_payload={"refreshed": True},
+        )
+        assert merged is None
+        await session.refresh(pending)
+        assert pending.input_payload == {COALESCE_KEY_FIELD: "github:o/r:pr:1", "user": "a"}

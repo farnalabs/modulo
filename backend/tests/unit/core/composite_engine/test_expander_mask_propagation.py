@@ -165,6 +165,7 @@ async def test_snapshot_hop_carries_real_credential_from_save_as_composite() -> 
         _scalar_result(pipeline),  # 1 pipeline
         _scalars_result([]),  # 2 edges
         _scalar_result(template),  # 3 composite template (expander)
+        MagicMock(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(0),  # 4 snapshot version max
         _scalars_result([]),  # 5 guardrail rows
         _scalars_result([]),  # 6 policy-gate rows (FAR-967 chunk 10 pin loader)

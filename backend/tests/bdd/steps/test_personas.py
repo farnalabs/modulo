@@ -1149,16 +1149,21 @@ def marcus_bob_refresh_revoked(request):
 # ===========================================================================
 
 
-def _transparency_test_client(principal: AuthenticatedPrincipal) -> TestClient:
+def _transparency_test_client(
+    principal: AuthenticatedPrincipal,
+    org_settings: dict | None = None,
+) -> TestClient:
     """A minimal FastAPI app hosting the REAL transparency route.
 
     ``GET /api/v1/product-analytics/transparency`` is the data-residency
     posture surface: it derives ``egress_allowed`` from the instance-level
     master switch and the org consent level via the real ``is_egress_allowed``
-    seam (``core/product_analytics/consent.py``). Only the DB config read
-    (``get_config``) and the auth principal are patched — the handler, the
-    permission gate, the pydantic response and the egress decision all run
-    for real.
+    seam (``core/product_analytics/consent.py``). The handler, the permission
+    gate, the pydantic response and the egress decision all run for real; only
+    the two DB seams the endpoint reads (``get_config`` in both the route and
+    the ``consent`` module, plus the org-row read) and the auth principal are
+    stubbed. ``org_settings`` is the caller org's ``settings_json``; ``None``
+    means no org row is found.
     """
     app = FastAPI()
     app.include_router(transparency_router)
@@ -1169,6 +1174,14 @@ def _transparency_test_client(principal: AuthenticatedPrincipal) -> TestClient:
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)
         session.begin = MagicMock(return_value=begin_cm)
+        result = MagicMock()
+        if org_settings is None:
+            result.scalar_one_or_none = MagicMock(return_value=None)
+        else:
+            org = MagicMock()
+            org.settings_json = org_settings
+            result.scalar_one_or_none = MagicMock(return_value=org)
+        session.execute = AsyncMock(return_value=result)
         return session
 
     app.dependency_overrides[get_db_session] = _session
@@ -1187,7 +1200,10 @@ _SYSTEM_ADMIN_PRINCIPAL = AuthenticatedPrincipal(
 
 @given("Modulo is deployed in a self-hosted configuration")
 def marcus_self_hosted_configuration(ctx):
-    ctx["egress_config"] = {}
+    # Pin the instance switch OFF via the stored config value (not the env
+    # fallback) so the default posture is deterministic regardless of the
+    # ambient MODULO_PRODUCT_ANALYTICS_ENABLED.
+    ctx["egress_config"] = {"product_analytics_enabled": False}
 
     async def _get(session: object, key: str) -> MagicMock | None:
         value = ctx["egress_config"].get(key)
@@ -1200,33 +1216,47 @@ def marcus_self_hosted_configuration(ctx):
     ctx["marcus_get_config"] = _get
 
 
-@when("I inspect outbound network connections")
-def marcus_inspect_outbound_connections(ctx, request):
-    client = _transparency_test_client(_SYSTEM_ADMIN_PRINCIPAL)
+def _marcus_transparency_request(ctx, request, org_settings: dict | None = None) -> None:
+    """Issue the transparency request against the REAL handler.
+
+    The endpoint reads config through TWO module bindings now — the route's own
+    ``get_config`` (dump watermark/count) and ``consent.get_config`` (instance
+    switch / enforcement kill switch) — so both are patched. ``org_settings``
+    supplies the caller org's ``settings_json`` (the consent level source).
+    """
+    client = _transparency_test_client(_SYSTEM_ADMIN_PRINCIPAL, org_settings=org_settings)
     request.node._marcus_transparency_client = client
-    with patch(
-        "modulo.api.routes.product_analytics_transparency.get_config",
-        side_effect=ctx["marcus_get_config"],
+    with (
+        patch(
+            "modulo.api.routes.product_analytics_transparency.get_config",
+            side_effect=ctx["marcus_get_config"],
+        ),
+        patch(
+            "modulo.core.product_analytics.consent.get_config",
+            side_effect=ctx["marcus_get_config"],
+        ),
     ):
         resp = client.get("/api/v1/product-analytics/transparency")
     assert resp.status_code == 200, resp.text
     request.node._marcus_transparency = resp.json()
+
+
+@when("I inspect outbound network connections")
+def marcus_inspect_outbound_connections(ctx, request):
+    _marcus_transparency_request(ctx, request)
 
 
 @when("the organisation explicitly consents to telemetry on a telemetry-enabled instance")
 def marcus_opt_in_telemetry(ctx, request):
-    ctx["egress_config"] = {
-        "product_analytics_enabled": True,
-        "product_analytics_consent_level": "all",
-    }
-    client = _transparency_test_client(_SYSTEM_ADMIN_PRINCIPAL)
-    with patch(
-        "modulo.api.routes.product_analytics_transparency.get_config",
-        side_effect=ctx["marcus_get_config"],
-    ):
-        resp = client.get("/api/v1/product-analytics/transparency")
-    assert resp.status_code == 200, resp.text
-    request.node._marcus_transparency = resp.json()
+    # The instance switch is a stored config value; the org consent level lives
+    # in the caller org's settings_json (the endpoint no longer reads a
+    # system_config consent key).
+    ctx["egress_config"] = {"product_analytics_enabled": True}
+    _marcus_transparency_request(
+        ctx,
+        request,
+        org_settings={"product_analytics": {"level": "all"}},
+    )
 
 
 @then("no agent output, source code, or credentials leave the VPC")
@@ -2327,15 +2357,15 @@ def customise_agent_prompts(ctx):
 @then("the forked workflow is saved as a local primitive")
 def forked_is_local_primitive(request):
     body = getattr(request.node, "_resp_body", {})
-    if isinstance(body, dict):
-        assert body.get("source") == "local", "Forked workflow should be local"
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", "Forked workflow should be local"
 
 
 @then(parsers.parse("the forked_from metadata points to the community original"))
 def forked_from_points_to_original(request):
     body = getattr(request.node, "_resp_body", {})
-    if isinstance(body, dict):
-        assert body.get("forked_from") is not None, "Missing forked_from metadata"
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("forked_from") is not None, "Missing forked_from metadata"
 
 
 # ===========================================================================
@@ -2491,16 +2521,26 @@ def library_contains_workflow(name: str, request):
 
 
 @when("I copy the workflow to my workspace")
-def copy_workflow_to_workspace(request, ctx):
+def copy_workflow_to_workspace(request, ctx, client):
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
     wf = getattr(request.node, "_library_workflow", None) or ctx.get("library_workflow") or {}
-    copied = {
-        **wf,
-        "id": str(uuid.uuid4()),
-        "source": "local",
-        "forked_from": wf.get("id"),
-    }
-    request.node._resp_body = copied
-    request.node._copied_workflow = copied
+    assert wf, "No library workflow configured by the given step"
+
+    original = _library_row({"id": wf["id"], "name": wf["name"], "primitive_type": "workflow"})
+    forked = LibraryPrimitive()
+    _copy_primitive_fields(original, forked)
+    forked.forked_from = original.id
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
+    ):
+        resp = client.post(f"/api/v1/libraries/{original.id}/adapt", json={"target_team_id": None})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @when("I configure my GitHub connector")

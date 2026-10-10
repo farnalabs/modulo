@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import hmac
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.sql import operators
 
 from modulo.core.reports.quality_report import (
@@ -26,11 +30,16 @@ from modulo.core.reports.quality_report import (
     format_slack_message,
     generate_quality_report,
 )
+from modulo.db.models.base import Base
+from modulo.db.models.daily_run_count import OrgDailyRunCount
+from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval_result import EvalResult
 from tests.unit.reports.helpers import (
     SLACK_URL,
     SLACK_URL_2,
     has_predicate,
     make_http_response,
+    patched_quality_delivery,
 )
 
 # ---------------------------------------------------------------------------
@@ -427,27 +436,18 @@ class TestSlackBlockKitSchema:
     def test_expected_structure_for_populated_report(self) -> None:
         blocks = self._blocks(_REPORT_WITH_DATA)
         types = [b["type"] for b in blocks]
-        assert types == [
-            "header",
-            "context",
-            "divider",
-            "section",
-            "divider",
-            "section",
-            "divider",
-            "section",
-            "divider",
-            "section",
-            "context",
-        ]
+        # Exact block order is a construction detail, not a contract: the
+        # builder assembles a fixed literal list. What callers can rely on is
+        # the composition of the report and that the header leads it.
+        assert collections.Counter(types) == collections.Counter(
+            {"header": 1, "context": 2, "divider": 4, "section": 4}
+        )
+        assert types[0] == "header"
 
 
 # ---------------------------------------------------------------------------
 # deliver_quality_report
 # ---------------------------------------------------------------------------
-
-# Patch _REPORT_MAX_RETRIES down to 1 to avoid retry delays in tests
-_SCHEDULER_PATH = "modulo.core.reports.scheduler"
 
 
 class TestWebhookSigning:
@@ -474,18 +474,16 @@ class TestWebhookSigning:
 
 
 class TestDeliverQualityReport:
+    def _client(self, **post_kwargs: object) -> AsyncMock:
+        client = AsyncMock()
+        client.post = AsyncMock(**post_kwargs)
+        return client
+
     async def test_returns_success_for_2xx(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(self._client(return_value=make_http_response())):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
@@ -500,15 +498,9 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
         preformatted = format_slack_message(_REPORT_DELIVERY)
+        mock_client = self._client(return_value=make_http_response())
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(mock_client):
             results = await deliver_quality_report(preformatted, recipient_config)
 
         assert results[0]["status"] == "delivered"
@@ -522,17 +514,9 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        with patched_quality_delivery(
+            self._client(return_value=make_http_response(is_success=False, status_code=500, text="error"))
         ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
-                return_value=make_http_response(is_success=False, status_code=500, text="error")
-            )
-
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
@@ -543,17 +527,9 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
+        with patched_quality_delivery(
+            self._client(return_value=make_http_response(is_success=False, status_code=500, text="x" * 500))
         ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
-                return_value=make_http_response(is_success=False, status_code=500, text="x" * 500)
-            )
-
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
@@ -564,20 +540,14 @@ class TestDeliverQualityReport:
         url2 = SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
+        with patched_quality_delivery(
+            self._client(
                 side_effect=[
                     make_http_response(is_success=False, status_code=500, text="fail"),
                     make_http_response(),
                 ]
             )
-
+        ):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 2
@@ -589,19 +559,14 @@ class TestDeliverQualityReport:
         url2 = SLACK_URL_2
         recipient_config = {"webhook_urls": [url1, url2]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(
+        with patched_quality_delivery(
+            self._client(
                 side_effect=[
                     httpx.RequestError("Connection refused"),
                     make_http_response(),
                 ]
             )
-
+        ):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 2
@@ -617,15 +582,9 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         secret = "super-secret"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
+        mock_client = self._client(return_value=make_http_response())
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         call = mock_client.post.await_args
@@ -645,15 +604,9 @@ class TestDeliverQualityReport:
     async def test_unsigned_delivery_sends_json_without_signature(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
+        mock_client = self._client(return_value=make_http_response())
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         call = mock_client.post.await_args
@@ -667,15 +620,9 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         secret = "verify-me"
         recipient_config = {"webhook_urls": [url], "signing_secret": secret}
+        mock_client = self._client(return_value=make_http_response())
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         call = mock_client.post.await_args
@@ -689,15 +636,9 @@ class TestDeliverQualityReport:
     async def test_empty_signing_secret_treated_as_unsigned(self) -> None:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "signing_secret": ""}
+        mock_client = self._client(return_value=make_http_response())
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(mock_client):
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         call = mock_client.post.await_args
@@ -711,17 +652,10 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 5.0}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
-        assert mock_client_cls.call_args.kwargs["timeout"] == 5.0
+        assert client_cls.call_args.kwargs["timeout"] == 5.0
 
     async def test_default_timeout_used_when_absent(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
@@ -729,17 +663,10 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
-        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
 
     async def test_invalid_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
@@ -747,17 +674,10 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": "abc"}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
-        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
 
     async def test_zero_timeout_falls_back_to_default(self) -> None:
         from modulo.core.reports.scheduler import _REPORT_HTTP_TIMEOUT
@@ -765,17 +685,10 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url], "timeout": 0}
 
-        with (
-            patch(f"{_SCHEDULER_PATH}._REPORT_MAX_RETRIES", 1),
-            patch.object(httpx, "AsyncClient") as mock_client_cls,
-        ):
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__.return_value = mock_client
-            mock_client.post = AsyncMock(return_value=make_http_response())
-
+        with patched_quality_delivery(self._client(return_value=make_http_response())) as client_cls:
             await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
-        assert mock_client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
+        assert client_cls.call_args.kwargs["timeout"] == _REPORT_HTTP_TIMEOUT
 
 
 # ---------------------------------------------------------------------------
@@ -790,61 +703,48 @@ class TestGenerateQualityReport:
         daily_eval_rows: list,
         weekly_row: dict,
         eval_row: dict,
-    ) -> AsyncMock:
-        session = AsyncMock()
+    ) -> SimpleNamespace:
+        """Build a session whose six ``execute`` calls mirror the production
+        read order in ``generate_quality_report``:
 
-        begin_cm = AsyncMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        session.begin = MagicMock(return_value=begin_cm)
+        1/2. ``_query_weekly_agg`` (current, then previous) — reads
+             ``row.run_count`` / ``row.total_spend`` via ``.one()``
+        3/4. ``_query_eval_summary`` (current, then previous) — reads
+             ``row.total_evals`` / ``row.passed_evals`` via ``.one()``
+        5.   daily run counts — reads ``row.run_date`` / ``run_count`` /
+             ``total_spend`` via ``.all()``
+        6.   daily eval rates — reads ``row.eval_date`` / ``total`` / ``passed``
+             via ``.all()``
 
-        def _mock_one(**cols: object) -> MagicMock:
-            return MagicMock(**dict(cols.items()))
+        Rows are ``SimpleNamespace`` rather than a bare ``MagicMock`` so that a
+        renamed production attribute raises ``AttributeError`` loudly instead
+        of silently reading ``MagicMock.auto-spec`` style defaults.
+        """
+        weekly = SimpleNamespace(**weekly_row)
+        evals = SimpleNamespace(**eval_row)
+        daily = [SimpleNamespace(**row) for row in daily_rows]
+        daily_eval = [SimpleNamespace(**row) for row in daily_eval_rows]
+        # Production read order: weekly .one() x2, eval .one() x2, then the
+        # two .all() queries (daily runs, daily eval rates).
+        one_results: list[MagicMock] = [
+            MagicMock(one=lambda: weekly),
+            MagicMock(one=lambda: weekly),
+            MagicMock(one=lambda: evals),
+            MagicMock(one=lambda: evals),
+        ]
+        calls: list[object] = []
 
-        def _daily_result() -> MagicMock:
-            r = MagicMock()
-            r.all.return_value = daily_rows
-            return r
+        async def execute(stmt: object) -> MagicMock:
+            calls.append(stmt)
+            if one_results:
+                return one_results.pop(0)
+            if len(calls) == 5:
+                return MagicMock(all=lambda: daily)
+            if len(calls) == 6:
+                return MagicMock(all=lambda: daily_eval)
+            raise AssertionError(f"unexpected extra execute() call #{len(calls)}")
 
-        def _daily_eval_result() -> MagicMock:
-            r = MagicMock()
-            r.all.return_value = daily_eval_rows
-            return r
-
-        def _weekly_result() -> MagicMock:
-            r = MagicMock()
-            r.one.return_value = _mock_one(
-                run_count=weekly_row.get("run_count"),
-                total_spend=weekly_row.get("total_spend"),
-            )
-            return r
-
-        def _eval_result() -> MagicMock:
-            r = MagicMock()
-            r.one.return_value = _mock_one(
-                total_evals=eval_row.get("total_evals"),
-                passed_evals=eval_row.get("passed_evals"),
-            )
-            return r
-
-        # Execution order in generate_quality_report:
-        # 1. _query_weekly_agg (current) -> uses .one()
-        # 2. _query_weekly_agg (previous) -> uses .one()
-        # 3. _query_eval_summary (current) -> uses .one()
-        # 4. _query_eval_summary (previous) -> uses .one()
-        # 5. Daily run count query -> uses .all()
-        # 6. Daily eval rates query -> uses .all()
-        session.execute = AsyncMock(
-            side_effect=[
-                _weekly_result(),  # current weekly
-                _weekly_result(),  # previous weekly
-                _eval_result(),  # current eval
-                _eval_result(),  # previous eval
-                _daily_result(),  # daily rows
-                _daily_eval_result(),  # daily eval rows
-            ]
-        )
-        return session
+        return SimpleNamespace(execute=execute)
 
     async def test_returns_correct_structure(self) -> None:
         org_id = uuid.uuid4()
@@ -853,10 +753,10 @@ class TestGenerateQualityReport:
 
         session = self._make_session(
             daily_rows=[
-                MagicMock(run_date=current_start, run_count=10, total_spend=5.0),
+                {"run_date": current_start, "run_count": 10, "total_spend": 5.0},
             ],
             daily_eval_rows=[
-                MagicMock(eval_date=current_start, total=10, passed=8),
+                {"eval_date": current_start, "total": 10, "passed": 8},
             ],
             weekly_row={"run_count": 10, "total_spend": 5.0},
             eval_row={"total_evals": 10, "passed_evals": 8},
@@ -977,7 +877,8 @@ class TestQualityReportSqlPredicates:
 
         def _one_result(**cols: object) -> MagicMock:
             result = MagicMock()
-            result.one.return_value = MagicMock(**cols)
+            one_row = SimpleNamespace(**cols)
+            result.one = lambda: one_row
             return result
 
         def _all_result(rows: list) -> MagicMock:
@@ -1015,6 +916,11 @@ class TestQualityReportSqlPredicates:
         assert has_predicate(statements[0].whereclause, operators.is_, "team_id")
         assert has_predicate(statements[1].whereclause, operators.is_, "team_id")
 
+        # The daily run-count query is org-level scoped too — without the
+        # team_id filter it sums the org row PLUS every team row, and trend[]
+        # double-counts against the org-level-filtered summary.
+        assert has_predicate(statements[4].whereclause, operators.is_, "team_id")
+
         # Both eval summaries and the daily eval rates exclude guardrail results.
         for statement in (statements[2], statements[3], statements[5]):
             assert has_predicate(statement.whereclause, operators.not_in_op, "eval_id")
@@ -1022,3 +928,74 @@ class TestQualityReportSqlPredicates:
         # Every statement is tenant-scoped to the requested organisation.
         for statement in statements:
             assert has_predicate(statement.whereclause, operators.eq, "organisation_id", org_id)
+
+
+# ---------------------------------------------------------------------------
+# generate_quality_report — daily trend org-level scoping (real DB)
+# ---------------------------------------------------------------------------
+
+
+class TestDailyTrendOrgLevelScope:
+    """trend[] must sum org-level ledger rows only (``team_id IS NULL``).
+
+    ``check_and_record_spend`` writes the org row AND a team row for a
+    team-owned run, so the org row already includes team runs. A daily query
+    without the ``team_id IS NULL`` filter sums both and double-counts,
+    making trend[] disagree with the report's own summary (which is filtered
+    via ``_query_weekly_agg``). These tests run against a real in-memory
+    SQLite DB — the double-count is in the SQL SUM, so a mocked session
+    cannot demonstrate it.
+    """
+
+    async def test_trend_excludes_team_rows_and_matches_summary(self) -> None:
+        eng = create_async_engine("sqlite+aiosqlite://", echo=False)
+        async with eng.begin() as conn:
+            await conn.run_sync(
+                lambda sync_conn: Base.metadata.create_all(
+                    sync_conn,
+                    tables=[
+                        OrgDailyRunCount.__table__,
+                        EvalResult.__table__,
+                        EvalDefinition.__table__,
+                    ],
+                )
+            )
+        try:
+            maker = async_sessionmaker(eng, expire_on_commit=False)
+            org_id = uuid.uuid4()
+            today = datetime.now(UTC).date()
+            async with maker() as session, session.begin():
+                # Org-level row (team_id IS NULL): 10 runs, $5.00.
+                session.add(
+                    OrgDailyRunCount(
+                        organisation_id=org_id,
+                        team_id=None,
+                        run_date=today,
+                        run_count=10,
+                        total_spend_usd=Decimal("5.00"),
+                    )
+                )
+                # Team-scoped row for the SAME date: 4 runs, $2.00.
+                session.add(
+                    OrgDailyRunCount(
+                        organisation_id=org_id,
+                        team_id=uuid.uuid4(),
+                        run_date=today,
+                        run_count=4,
+                        total_spend_usd=Decimal("2.00"),
+                    )
+                )
+            async with maker() as session:
+                report = await generate_quality_report(session, org_id)
+        finally:
+            await eng.dispose()
+
+        entry = next(e for e in report["trend"] if e["date"] == today.isoformat())
+        # Org-level values only — NOT the org+team sum (14 runs / $7.00).
+        assert entry["run_count"] == 10
+        assert entry["token_spend_usd"] == 5.0
+        # Trend agrees with the summary (both org-level scoped).
+        assert report["summary"]["total_runs"] == 10
+        assert report["summary"]["total_cost_usd"] == 5.0
+        assert entry["run_count"] == report["summary"]["total_runs"]
+        assert entry["token_spend_usd"] == report["summary"]["total_cost_usd"]

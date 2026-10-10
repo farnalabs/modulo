@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+import threading
+import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +14,12 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.conftest import ORG_ID, USER_ID, make_settings
+
+
+def _valid_stream_payload() -> dict[str, Any]:
+    """Payload body for POST /assistant/sessions/{id}/stream."""
+    return {"content": "Help me configure the pipeline", "provider": "openai", "model": "gpt-4o"}
+
 
 # ── Lazy-import helper — avoids MCP/server startup at module-import time ──
 
@@ -29,6 +38,114 @@ def _make_client(mock_session: Any = None):
     if mock_session is not None:
         app.dependency_overrides[get_db_session] = _override_session
     return TestClient(app)
+
+
+# ── Real-route harness helpers ───────────────────────────────────────────
+#
+# These drive the REAL production route objects (modulo.api.main.app +
+# assistant routes) with dependency overrides for the seams the BDD
+# scenario owns (auth + engine db), and use-site-only seams patched at
+# the engine call. Nothing in production is reimplemented here.
+
+_MISSING = object()
+
+
+def _restore_overrides(saved: dict[Any, Any]) -> Callable[[], None]:
+    """Build a finalizer restoring dependency-overrides to their saved state."""
+
+    def _restore() -> None:
+        from modulo.api.main import app
+
+        for key, value in saved.items():
+            if value is _MISSING:
+                app.dependency_overrides.pop(key, None)
+            else:
+                app.dependency_overrides[key] = value
+
+    return _restore
+
+
+def _auth_overrides(role: str) -> dict[Any, Any]:
+    """Build dependency overrides that authenticate as USER_ID with ``role``."""
+    from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+    from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+
+    principal = TenantPrincipal(
+        username="assistant-user",
+        organisation_id=ORG_ID,
+        account_id=USER_ID,
+        org_role=role,
+    )
+    plain = AuthenticatedPrincipal(
+        username=principal.username,
+        organisation_id=principal.organisation_id,
+        account_id=principal.account_id,
+        org_role=principal.org_role,
+    )
+
+    async def _user():
+        return plain
+
+    async def _tenant():
+        return principal
+
+    return {get_current_user: _user, get_current_tenant_user: _tenant}
+
+
+def _install_overrides(request: pytest.FixtureRequest, overrides: dict[Any, Any]) -> None:
+    """Install dependency overrides with snapshot/restore teardown.
+
+    Snapshot-and-restore (not bare .clear()) because a leaked override —
+    notably ``get_db_session`` — would hijack every later scenario that
+    needs the real dependency chain; scenarios using the ``client`` fixture
+    never reach that teardown.
+    """
+    from modulo.api.main import app
+
+    saved = {key: app.dependency_overrides.get(key, _MISSING) for key in overrides}
+    app.dependency_overrides.update(overrides)
+    request.addfinalizer(_restore_overrides(saved))
+
+
+def _engine_db_double(chat_session: Any) -> AsyncMock:
+    """AsyncSession double serving the engine's owns-session lookup path.
+
+    ``get(ChatSession, session_id)`` is the REAL ``_get_owned_session`` read
+    (assistant.py:440-448) — it returns the chat double so the account_id
+    ownership check runs against it. ``begin()`` is a synchronous context
+    manager wrapping an async-awaitable. ``flush/commit/rollback`` are
+    no-op AsyncMocks.
+    """
+    engine_db = AsyncMock()
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    # begin itself is a sync call that returns an async CM (`async with db.begin()`).
+    engine_db.begin = MagicMock(return_value=begin_cm)
+    engine_db.get = AsyncMock(return_value=chat_session)
+    return engine_db
+
+
+def _sse_payload(event: str) -> dict[str, Any]:
+    """Parse an ``event: X\\ndata: {...}\\n\\n`` frame into its JSON payload."""
+    return json.loads(event.split("\ndata: ", 1)[1].split("\n", 1)[0])
+
+
+def _detail_of_error(error_event: str) -> str:
+    return _sse_payload(error_event)["detail"]
+
+
+def _pop_engine_module_state(request: pytest.FixtureRequest, session_id: str) -> None:
+    """Finalizer: drain the engine's in-memory module state for this session."""
+    from modulo.api.routes import assistant as assistant_routes
+
+    def _drain() -> None:
+        assistant_routes._rate_limiters.pop(session_id, None)
+        assistant_routes._session_approvals.pop(session_id, None)
+        assistant_routes._permission_decisions.pop(session_id, None)
+        assistant_routes._pending_permissions.pop(session_id, None)
+
+    request.addfinalizer(_drain)
 
 
 # ── Load scenarios from feature files ──────────────────────────────────
@@ -197,47 +314,6 @@ def user_skill_exists(name: str, ctx) -> None:
     skill = _make_mock_skill(name=name, account_id=USER_ID)
     ctx["user_skills"][name] = skill
     ctx["skills"][name] = skill
-
-
-@given("the Assistant access list includes my user_id")
-def access_list_includes_user(ctx) -> None:
-    ctx["config"]["access_list"] = {
-        "user_ids": [str(USER_ID)],
-        "team_ids": [],
-        "org_roles": [],
-    }
-
-
-@given(parsers.parse('the Assistant access list includes role "{role}"'))
-def access_list_includes_role(role: str, ctx) -> None:
-    ctx["config"]["access_list"] = {
-        "user_ids": [],
-        "team_ids": [],
-        "org_roles": [role],
-    }
-
-
-@given(parsers.parse('the Assistant access list includes team_id "{team_id}"'))
-def access_list_includes_team(team_id: str, ctx) -> None:
-    ctx["config"]["access_list"] = {
-        "user_ids": [],
-        "team_ids": [team_id],
-        "org_roles": [],
-    }
-
-
-@given("the Assistant access list does not include my role or user_id")
-def access_list_excludes_user(ctx) -> None:
-    ctx["config"]["access_list"] = {
-        "user_ids": [],
-        "team_ids": [],
-        "org_roles": [],
-    }
-
-
-@given(parsers.parse('I belong to team "{team_id}"'))
-def user_belongs_to_team(team_id: str, ctx) -> None:
-    ctx["team_ids"] = [team_id]
 
 
 @given("no model backends exist for the org")
@@ -880,31 +956,90 @@ def delete_org_skill_by_id(skill_id: str, request, ctx) -> None:
 
 @when("I check assistant access")
 def check_assistant_access(request, ctx) -> None:
-    config = ctx.get("config", {})
-    viewer_auth = getattr(request.node, "_viewer_auth", False)
-    role = "viewer" if viewer_auth else "admin"
+    """Drive the REAL stream route so access control is exercised end-to-end.
 
-    config_access = config.get("access_list", {})
-    user_ids = config_access.get("user_ids", [])
-    org_roles = config_access.get("org_roles", [])
-    team_ids = config_access.get("team_ids", [])
-    user_teams = set(ctx.get("team_ids", []))
+    The scenario pins: a chat session exists for the user, no model backends
+    exist for the org. The production stream preamble resolves the API key
+    first (``_initialise_stream`` → ``_resolve_stream_api_key``) and the SSE
+    error event carries ``No active openai API key configured...`` — that is
+    the observable outcome the scenario asserts (access_control.feature).
+    All other steps that hit the stream route already drive the real route
+    elsewhere in this module (sessions/messages/_stream_* helpers), so the
+    engine db double and the permission-mode seams are the scenario's own
+    mocks, not invented new pieces.
+    """
+    from modulo.api.dependencies import get_db_session
+    from modulo.api.main import app
+    from modulo.api.routes import assistant as assistant_routes
 
-    if config_access:
-        has_access = str(USER_ID) in user_ids or role in org_roles or bool(user_teams & set(team_ids))
-    else:
-        has_access = True
+    class _ChatSessionOwned:
+        """ChatSession double owned by USER_ID (the Background's chat session)."""
 
-    response_data = {"granted": has_access}
+        id = uuid.uuid4()
+        account_id = USER_ID
+        organisation_id = ORG_ID
+        context_window_tokens = None
 
-    if ctx.get("no_backends"):
-        has_access = False
-        response_data = {"granted": False, "error": "No API key configured"}
+    chat_session = _ChatSessionOwned()
 
-    resp = MagicMock()
-    resp.status_code = 200 if has_access else 403
-    resp.json = lambda d=response_data: d
+    with (
+        patch.object(assistant_routes, "set_rls_org", new_callable=AsyncMock),
+        patch.object(assistant_routes, "set_rls_user_context", new_callable=AsyncMock),
+        patch.object(assistant_routes, "_resolve_api_key", new_callable=AsyncMock, return_value=None),
+    ):
+        engine_db = _engine_db_double(chat_session)
+
+        async def _override_session():
+            yield engine_db
+
+        engine_db_overrides = _auth_overrides("admin")
+        engine_db_overrides[get_db_session] = _override_session
+        saved = {key: app.dependency_overrides.get(key, _MISSING) for key in engine_db_overrides}
+        app.dependency_overrides.update(engine_db_overrides)
+
+        try:
+            from fastapi.testclient import TestClient
+
+            # NOT a context manager: TestClient.__enter__ runs the app
+            # lifespan, which requires a real Redis URL that BDD scenarios
+            # do not have. Plain construction skips lifespan, like _make_client.
+            http_client = TestClient(app)
+            resp = http_client.post(
+                f"/api/v1/assistant/sessions/{chat_session.id}/stream",
+                json=_valid_stream_payload(),
+            )
+        finally:
+            _restore_overrides(saved)()
+
     request.node._resp = resp
+
+
+@when("I evaluate assistant access control")
+def evaluate_assistant_access_control(ctx) -> None:
+    """Drive the REAL ``AssistantConfigService.check_access`` gate.
+
+    The admin config routes persist the ``access_list``, and the request-time
+    allow-list gate lives in ``check_access`` (user_ids / org_roles / team_ids
+    matching, deny on no match). The pre-refactor BDD step reimplemented that
+    boolean in the test itself (it was in the self-asserting baseline); this
+    calls the production function against a stored config row instead, so the
+    scenarios cover the real gate rather than a copy of it.
+    """
+    from modulo.core.assistant.config_service import AssistantConfigService
+
+    access_rules = ctx.get("access_rules") or {"user_ids": [], "team_ids": [], "org_roles": []}
+    role = ctx.get("org_role", "admin")
+    team_ids = [uuid.UUID(str(team_id)) for team_id in ctx.get("team_ids", [])]
+
+    entry = MagicMock()
+    entry.value = {"access_rules": access_rules}
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=entry)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    service = AssistantConfigService(session)
+    ctx["access_granted"] = asyncio.run(service.check_access(ORG_ID, USER_ID, role, team_ids))
 
 
 # ── When steps (Context Window) ───────────────────────────────────────
@@ -1180,22 +1315,25 @@ def skill_not_named(name: str, request) -> None:
 # ── Then steps (Access Control) ──────────────────────────────────────
 
 
+@then("the stream reports no API key configured")
+def stream_reports_no_api_key(request) -> None:
+    resp = request.node._resp
+    text = resp.text
+    # The real SSE preamble emits one error event with the resolved detail.
+    assert resp.status_code == 200
+    assert "event: error" in text
+    assert "No active" in text
+    assert "API key configured" in text
+
+
 @then("access is granted")
-def access_granted(request) -> None:
-    data = request.node._resp.json()
-    assert data.get("granted") is True
+def access_granted(ctx) -> None:
+    assert ctx.get("access_granted") is True, "the real access gate denied a user on the access list"
 
 
 @then("access is denied")
-def access_denied(request) -> None:
-    data = request.node._resp.json()
-    assert data.get("granted") is False
-
-
-@then("the error indicates no API key configured")
-def error_no_api_key(request) -> None:
-    data = request.node._resp.json()
-    assert "No API key configured" in json.dumps(data)
+def access_denied(ctx) -> None:
+    assert ctx.get("access_granted") is False, "the real access gate granted a user on no access list"
 
 
 # ── Then steps (Context Window) ──────────────────────────────────────
@@ -1278,7 +1416,255 @@ def permission_mode_is_safe(ctx) -> None:
     ctx["config"]["permission_mode"] = "safe"
 
 
+@given("the Assistant access list includes my user_id")
+def access_list_includes_user(ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [str(USER_ID)], "team_ids": [], "org_roles": []}
+
+
+@given(parsers.parse('the Assistant access list includes role "{role}"'))
+def access_list_includes_role(role: str, ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [], "org_roles": [role]}
+
+
+@given(parsers.parse('the Assistant access list includes team_id "{team_id}"'))
+def access_list_includes_team(team_id: str, ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [team_id], "org_roles": []}
+
+
+@given("the Assistant access list does not include my role or user_id")
+def access_list_excludes_user(ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [], "org_roles": []}
+
+
+@given(parsers.parse('I belong to team "{team_id}"'))
+def user_belongs_to_team(team_id: str, ctx) -> None:
+    ctx.setdefault("team_ids", []).append(team_id)
+
+
 # ── When steps (UI Commands) ──────────────────────────────────────────
+
+
+def _start_ui_engine(request: pytest.FixtureRequest, ctx: dict, tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Run the REAL ``_stream_ui_tool_flow`` engine on a dedicated event loop.
+
+    The engine is started inside a background thread with its own asyncio
+    loop. All routes the frontend would hit in real life (permission
+    response, UI command results) are driven on that same loop because the
+    engine ``await``s on events those routes set — a call from another loop
+    would never wake them. Route seams are dependency overrides (auth +
+    engine db) on the real app; everything else in the engine runs as
+    written, including the permission-mode classification and the SSE
+    merging.
+    """
+    import httpx
+
+    from modulo.api.dependencies import get_db_session
+    from modulo.api.main import app
+    from modulo.api.routes import assistant as assistant_routes
+    from modulo.auth.jwt import TenantPrincipal
+
+    session = ctx["sessions"]["ui-session"]
+    role = ctx.get("org_role", "admin")
+    config_mode = ctx.get("config", {}).get("permission_mode", "safe")
+
+    engine_db = _engine_db_double(session)
+    principal = TenantPrincipal(username="assistant-user", organisation_id=ORG_ID, account_id=USER_ID, org_role=role)
+    req = assistant_routes.StreamRequest(**_valid_stream_payload())
+    config = assistant_routes.AssistantConfig(permission_mode=config_mode)
+
+    harness: dict[str, Any] = {
+        "session": session,
+        "engine_db": engine_db,
+        "config": config,
+        "tool_calls": tool_calls,
+        "tool_results": [],
+        "events": [],
+        "lock": threading.Lock(),
+        "errors": [],
+        "flags": {marker: threading.Event() for marker in ("permission_request", "ui_command_batch", "tool_call")},
+        "batch_event": None,
+        "permission_request_id": None,
+        "loop": None,
+        "http": None,
+        "done": threading.Event(),
+    }
+    ctx["ui_engine"] = harness
+
+    async def _override_session():
+        yield engine_db
+
+    overrides = _auth_overrides(role)
+    overrides[get_db_session] = _override_session
+    _install_overrides(request, overrides)
+    _pop_engine_module_state(request, str(session.id))
+
+    def _capture(event: str) -> None:
+        with harness["lock"]:
+            harness["events"].append(event)
+            if "event: permission_request" in event:
+                harness["permission_request_id"] = _sse_payload(event)["request_id"]
+                harness["flags"]["permission_request"].set()
+            elif "event: ui_command_batch" in event:
+                harness["batch_event"] = event
+                harness["flags"]["ui_command_batch"].set()
+            elif "event: tool_call" in event:
+                harness["flags"]["tool_call"].set()
+
+    async def _engine_main() -> None:
+        http_client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
+        harness["http"] = http_client
+        with (
+            patch.object(assistant_routes, "set_rls_org", new_callable=AsyncMock),
+            patch.object(assistant_routes, "set_rls_user_context", new_callable=AsyncMock),
+            patch.object(assistant_routes, "_is_ui_driving_enabled", new_callable=AsyncMock, return_value=True),
+            patch.object(
+                assistant_routes.AssistantConfigService,
+                "get_config",
+                new_callable=AsyncMock,
+                return_value=config,
+            ),
+            # Force the single-worker in-memory registry for the scenario. In
+            # CI REDIS_URL is set, so the unpatched ``_get_registry`` returns a
+            # process-wide ``AssistantRedisRegistry`` whose asyncio connections
+            # bind to the first event loop that uses them. This harness drives
+            # the engine on a fresh event loop per scenario and asserts on the
+            # in-memory events the routes signal, so the shared Redis singleton
+            # gets reused across closed loops -> ``Event loop is closed`` /
+            # ``Future attached to a different loop``. The in-memory
+            # registry is the real default path when REDIS_URL is unset
+            # (assistant.py:110-116), so this exercises production flow logic.
+            patch.object(assistant_routes, "_get_registry", return_value=None),
+        ):
+            stream_ctx = assistant_routes._StreamContext(
+                db_session=engine_db,
+                principal=principal,
+                session_id=session.id,
+                req=req,
+                settings=make_settings(),
+                chat_session=session,
+            )
+            flow = assistant_routes._UiToolFlow()
+            async for event in assistant_routes._stream_ui_tool_flow(
+                stream_ctx, tool_calls, harness["tool_results"], flow
+            ):
+                _capture(event)
+        await http_client.aclose()
+        # Keep the loop running for the scenario's follow-up POSTs: if the
+        # loop stopped the moment the flow ended, a step's in-flight POST
+        # coroutine would be abandoned mid-await (loop starvation).
+        quit_evt = asyncio.Event()
+        harness["quit"] = quit_evt
+        await quit_evt.wait()
+
+    def _thread_main() -> None:
+        loop = asyncio.new_event_loop()
+        harness["loop"] = loop
+        try:
+            loop.run_until_complete(_engine_main())
+        except Exception as exc:
+            with harness["lock"]:
+                harness["errors"].append(repr(exc))
+        finally:
+            harness["done"].set()
+
+    thread = threading.Thread(target=_thread_main, name="assistant-ui-engine", daemon=True)
+    thread.start()
+
+    def _join_engine() -> None:
+        # Signal the engine's keep-alive wait, then bound the teardown.
+        loop = harness["loop"]
+        if harness.get("quit") is not None and loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(harness["quit"].set)
+        if not harness["done"].wait(timeout=60):
+            pytest.fail("assistant UI engine thread never finished within 60s of scenario end")
+
+    request.addfinalizer(_join_engine)
+    return harness
+
+
+def _await_engine_ready(harness: dict[str, Any], timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while harness["loop"] is None or harness["http"] is None:
+        if time.monotonic() > deadline:
+            pytest.fail("assistant UI engine thread never came up")
+        time.sleep(0.01)
+
+
+def _run_in_reactor(harness: dict[str, Any], post_coro: Callable[[], Any], timeout: float = 30.0) -> Any:
+    """Schedule an HTTP call on the engine's event loop and block for the result.
+
+    The result is box-and-thrading-Event, NOT ``future.result()``: when the
+    engine's `run_until_complete` stops right after our POST completes, the
+    concurrent-future wakeup callback starves and ``result()`` hangs forever.
+    """
+    _await_engine_ready(harness)
+    done = threading.Event()
+    box: dict[str, Any] = {}
+
+    async def _runner() -> None:
+        try:
+            box["resp"] = await post_coro()
+        except Exception as exc:
+            box["error"] = repr(exc)
+        finally:
+            done.set()
+
+    asyncio.run_coroutine_threadsafe(_runner(), harness["loop"])
+    if not done.wait(timeout=timeout):
+        loop = harness["loop"]
+        with harness["lock"]:
+            tail = harness["events"][-5:]
+            errors = list(harness["errors"])
+        pytest.fail(
+            f"POST on the engine loop did not finish within {timeout}s; "
+            f"loop_running={loop.is_running()} loop_closed={loop.is_closed()} "
+            f"engine errors={errors} last SSE events={tail}"
+        )
+    if "error" in box:
+        pytest.fail(f"POST on the engine loop raised: {box['error']}")
+    return box["resp"]
+
+
+def _assert_no_engine_errors(harness: dict[str, Any]) -> None:
+    if harness["errors"]:
+        pytest.fail(f"assistant UI engine crashed inside its loop: {harness['errors'][0]}")
+
+
+def _wait_for_marker(harness: dict[str, Any], marker: str, timeout: float = 20.0) -> None:
+    ready = harness["flags"][marker].wait(timeout=timeout)
+    _assert_no_engine_errors(harness)
+    assert ready, f"engine stream never produced {'event: ' + marker!r} within {timeout}s"
+
+
+def _submit_ui_command_results(harness: dict[str, Any], commands: list[dict[str, Any]]) -> None:
+    """Post the frontend's tool results through the REAL ui-command-results route.
+
+    The frontend's role in the scenarios: execute each command and post its
+    result row back. Result rows carry the command's id/name/success — the
+    route merges them by position with the approved calls.
+    """
+    session = harness["session"]
+    results = [
+        {"id": command["id"], "name": command["name"], "success": True, "result": {"value": True}}
+        for command in commands
+    ]
+    body = {"results": results}
+
+    async def _post():
+        return await harness["http"].post(f"/api/v1/assistant/sessions/{session.id}/ui-command-results", json=body)
+
+    resp = _run_in_reactor(harness, _post)
+    assert resp.status_code == 200, f"ui-command-results POST failed: {resp.status_code} {resp.text}"
+
+
+def _tool_calls_captured(harness: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the ``tool_call`` SSE payloads captured from the engine."""
+    calls: list[dict[str, Any]] = []
+    with harness["lock"]:
+        for event in harness["events"]:
+            if "event: tool_call" in event:
+                calls.append(_sse_payload(event))
+    return calls
 
 
 @when(parsers.parse('the LLM emits an "{tool_name}" tool call with path "{path}"'))
@@ -1290,160 +1676,128 @@ def permission_mode_is_safe(ctx) -> None:
 @when(parsers.parse('the LLM emits an "{tool_name}" tool call'))
 @when(parsers.parse('the LLM emits a "{tool_name}" tool call'))
 def llm_emits_tool_call(tool_name: str, request, ctx, selector: str = "", value: str = "", path: str = "") -> None:
-    ses = ctx.get("sessions", {}).get("ui-session")
     args: dict[str, Any] = {}
+    if path:
+        args["path"] = path
     if selector:
         args["selector"] = selector
     if value:
         args["value"] = value
-    if path:
-        args["path"] = path
-
-    # Simulate the permission check that happens in the streaming endpoint
-
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        mock_session_inst = AsyncMock()
-        mock_session_inst.begin = MagicMock()
-        begin_cm = MagicMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin.return_value = begin_cm
-
-        from modulo.api.main import app
-
-        viewer_auth = getattr(request.node, "_viewer_auth", False)
-        if viewer_auth:
-            from modulo.auth.dependencies import get_current_user
-            from modulo.auth.jwt import AuthenticatedPrincipal
-
-            app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-                username="viewer",
-                organisation_id=ORG_ID,
-                account_id=uuid.uuid4(),
-                org_role="viewer",
-            )
-
-        req_id = str(uuid.uuid4())
-        ctx["last_request_id"] = req_id
-        ctx["last_tool_call"] = {"name": tool_name, "args": args}
-
-        # Store the pending permission so we can respond to it later
-        if (
-            tool_name == "click"
-            and selector
-            and any(p in selector.lower() for p in ["delete", "remove", "destroy", "archive"])
-        ):
-            ctx["requires_approval"] = True
-        else:
-            ctx["requires_approval"] = False
-
-        verify_url = f"/api/v1/assistant/sessions/{ses.id}/ui-command-results"
-        ctx["verify_url"] = verify_url
-
-        # Don't actually call the endpoint here — let the then steps verify
-        request.node._resp = MagicMock()
-        request.node._resp.status_code = 200
-        request.node._resp.json = lambda: {"status": "ok"}
+    tool_call = {"id": str(uuid.uuid4()), "name": tool_name, "args": args}
+    _start_ui_engine(request, ctx, [tool_call])
 
 
 @when("the LLM emits a sequence of tool calls")
 def llm_emits_sequence(request, ctx) -> None:
-    ctx["sequence"] = [
-        {"name": "navigate", "args": {"path": "/admin/pipelines"}},
-        {"name": "wait", "args": {"ms": 500}},
-        {"name": "click", "args": {"selector": "[data-testid=create-btn]"}},
-        {"name": "go_back", "args": {}},
+    tool_calls = [
+        {"id": str(uuid.uuid4()), "name": "navigate", "args": {"path": "/admin/pipelines"}},
+        {"id": str(uuid.uuid4()), "name": "wait", "args": {"ms": 500}},
+        {"id": str(uuid.uuid4()), "name": "click", "args": {"selector": "[data-testid=create-btn]"}},
+        {"id": str(uuid.uuid4()), "name": "go_back", "args": {}},
     ]
-    ctx["requires_approval"] = False
-    request.node._resp = MagicMock()
-    request.node._resp.status_code = 200
-    request.node._resp.json = lambda: {"status": "ok"}
+    _start_ui_engine(request, ctx, tool_calls)
 
 
 @when("the user approves the action")
 def user_approves_action(request, ctx) -> None:
-    ses = ctx.get("sessions", {}).get("ui-session")
-    req_id = ctx.get("last_request_id", str(uuid.uuid4()))
+    """POST the approval through the REAL permission-response route, on the
+    engine's event loop (the engine's ``_await_permission_decision`` awaits
+    the event this route sets)."""
+    harness = ctx["ui_engine"]
+    request_id = harness["permission_request_id"]
+    assert request_id, "no pending permission request to approve"
 
-    from modulo.api.routes.assistant import (
-        _pending_permissions,
-    )
+    session = harness["session"]
 
-    event = asyncio.Event()
-    _pending_permissions[req_id] = (event, str(ses.id))
-
-    with (
-        patch("modulo.api.routes.assistant.set_rls_org", new_callable=AsyncMock),
-    ):
-        mock_session_inst = AsyncMock()
-        mock_session_inst.begin = MagicMock()
-        begin_cm = MagicMock()
-        begin_cm.__aenter__ = AsyncMock(return_value=None)
-        begin_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_session_inst.begin.return_value = begin_cm
-        mock_chat_session = MagicMock()
-        mock_chat_session.id = ses.id
-        mock_chat_session.account_id = USER_ID
-        mock_session_inst.get = AsyncMock(return_value=mock_chat_session)
-
-        client = _make_client(mock_session_inst)
-
-        resp = client.post(
-            f"/api/v1/assistant/sessions/{ses.id}/permission-response",
-            json={"request_id": req_id, "action": "approve"},
+    async def _post():
+        return await harness["http"].post(
+            f"/api/v1/assistant/sessions/{session.id}/permission-response",
+            json={"request_id": request_id, "action": "approve"},
         )
-        request.node._resp = resp
-        ctx["permission_approved"] = True
+
+    resp = _run_in_reactor(harness, _post)
+    assert resp.status_code == 200, f"permission-response POST failed: {resp.status_code} {resp.text}"
+    ctx["permission_approved"] = True
 
 
 # ── Then steps (UI Commands) ──────────────────────────────────────────
 
 
 @then(parsers.parse('the backend yields an "ui_command_batch" event with the {command_name} command'))
-@then(parsers.parse('the backend yields an "ui_command_batch" event with the {command_name} command'))
-def backend_yields_ui_command_batch(request, command_name: str) -> None:
-    data = request.node._resp.json()
-    assert data is not None
+def backend_yields_ui_command_batch(command_name: str, request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    _wait_for_marker(harness, "ui_command_batch")
+    batch = _sse_payload(harness["batch_event"])
+    commands = batch["commands"]
+    names = [command["name"] for command in commands]
+    assert command_name in names, f"batch payload {names} does not contain a {command_name!r} command"
+    # Frontend role: execute the batch and post one result row per command.
+    _submit_ui_command_results(harness, commands)
+    _wait_for_marker(harness, "tool_call")
 
 
 @then('the backend yields a "permission_request" event')
 def backend_yields_permission_request(ctx) -> None:
-    assert ctx.get("requires_approval") is True, "Expected permission request but tool was auto-allowed"
+    harness = ctx["ui_engine"]
+    _wait_for_marker(harness, "permission_request")
 
 
 @then("the frontend shows the approval card")
 def frontend_shows_approval_card() -> None:
+    # Display-side: the wire flow (permission_request event + approval POST
+    # through the real route) is asserted by the neighbouring steps.
     pass
 
 
 @then("the frontend executes the navigate command")
-def frontend_executes_navigate() -> None:
-    pass
+def frontend_executes_navigate(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    calls = _tool_calls_captured(harness)
+    assert calls, "no tool_call event captured after the navigate batch"
+    assert calls[0].get("tool_name") == "navigate"
 
 
 @then('the URL changes to "/admin/pipelines"')
-def url_changes_to_pipelines() -> None:
-    pass
+def url_changes_to_pipelines(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    batch = _sse_payload(harness["batch_event"])
+    navigate = next(command for command in batch["commands"] if command["name"] == "navigate")
+    assert navigate["args"]["path"] == "/admin/pipelines"
 
 
 @then("the frontend fills the input field")
-def frontend_fills_input() -> None:
-    pass
+def frontend_fills_input(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    calls = _tool_calls_captured(harness)
+    assert calls, "no tool_call event captured after the fill batch"
+    assert calls[0].get("tool_name") == "fill"
 
 
 @then("the frontend returns the element's text content")
-def frontend_returns_text() -> None:
-    pass
+def frontend_returns_text(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    calls = _tool_calls_captured(harness)
+    assert calls, "no tool_call event captured after the extract batch"
+    assert calls[0].get("tool_name") == "extract"
 
 
 @then('each command is yielded as an "ui_command_batch" event')
-def each_command_yielded(ctx) -> None:
-    sequence = ctx.get("sequence", [])
-    assert len(sequence) == 4
+def each_command_yielded(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    _wait_for_marker(harness, "ui_command_batch")
+    batch = _sse_payload(harness["batch_event"])
+    commands = batch["commands"]
+    assert len(commands) == 4, f"expected the batch to carry all 4 tool calls, got {[c['name'] for c in commands]}"
+    # Frontend role: execute the whole batch, post all 4 result rows.
+    _submit_ui_command_results(harness, commands)
+    _wait_for_marker(harness, "tool_call")
 
 
 @then("the results are fed back to the LLM for the next turn")
-def results_fed_back() -> None:
-    pass
+def results_fed_back(request, ctx) -> None:
+    harness = ctx["ui_engine"]
+    calls = _tool_calls_captured(harness)
+    assert len(calls) == len(harness["tool_calls"]), f"expected one tool_call per issued tool call: {calls}"
+    names = {call.get("tool_name") for call in calls}
+    issued_names = {tc["name"] for tc in harness["tool_calls"]}
+    assert names == issued_names, f"merged tool results differ from issued tools: {names} vs {issued_names}"

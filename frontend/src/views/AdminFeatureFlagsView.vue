@@ -451,7 +451,12 @@ const overrideOptions = computed(() => {
 function openOverrideDialog(flag: FlagItem) {
   const current = planStore.orgOverrides[flag.name]
   overrideDialogFlag.value = flag
-  const preferred = current === true ? 'true' : current === false ? 'false' : 'null'
+  let preferred = 'null'
+  if (current === true) {
+    preferred = 'true'
+  } else if (current === false) {
+    preferred = 'false'
+  }
   // A locked flag cannot be force-enabled (the backend 403s), so never
   // pre-select the hidden 'true' option for it: the dialog must not appear
   // to offer an action it cannot perform.

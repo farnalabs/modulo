@@ -534,17 +534,16 @@ def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bo
 async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path, scope: _ScopeFlags) -> None:
     export_completed = False
     try:
-        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS):
-            async with AsyncSessionLocal() as session:
-                await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-                bundle = await _collect_org_data(
-                    session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only
-                )
-                hashes = _write_jsonl(bundle, output)
-                export_completed = True
-                record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
-                click.echo(f"Exported {record_count} records to {output}")
-                click.echo(f"Export hash: {hashes['__export__']}")
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+            bundle = await _collect_org_data(
+                session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only
+            )
+            hashes = _write_jsonl(bundle, output)
+            export_completed = True
+            record_count = sum(len(v) for v in bundle.values() if isinstance(v, list))
+            click.echo(f"Exported {record_count} records to {output}")
+            click.echo(f"Export hash: {hashes['__export__']}")
     except asyncio.CancelledError:
         raise
     except click.ClickException:
@@ -607,24 +606,23 @@ async def _async_import_org(
         raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
-        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS):
-            async with AsyncSessionLocal() as session:
-                await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
-                counts = await _import_org_data(
-                    session,
-                    org_id,
-                    records,
-                    strategy,
-                    pipelines_only=scope.pipelines_only,
-                    users_only=scope.users_only,
-                )
-                await session.commit()
-                click.echo(
-                    f"Import complete: {counts['created']} created, "
-                    f"{counts['overwritten']} overwritten, "
-                    f"{counts['skipped']} skipped, "
-                    f"{counts['errors']} errors"
-                )
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
+            await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
+            counts = await _import_org_data(
+                session,
+                org_id,
+                records,
+                strategy,
+                pipelines_only=scope.pipelines_only,
+                users_only=scope.users_only,
+            )
+            await session.commit()
+            click.echo(
+                f"Import complete: {counts['created']} created, "
+                f"{counts['overwritten']} overwritten, "
+                f"{counts['skipped']} skipped, "
+                f"{counts['errors']} errors"
+            )
     except asyncio.CancelledError:
         raise
     except click.ClickException:

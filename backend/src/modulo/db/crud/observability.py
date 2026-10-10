@@ -32,6 +32,10 @@ async def update_otel_config(
     # org is still operationally live; its OTel config must remain writable.
     from modulo.db.soft_delete import include_soft_deleted
 
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
+    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
+    # upgrade cycle.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )

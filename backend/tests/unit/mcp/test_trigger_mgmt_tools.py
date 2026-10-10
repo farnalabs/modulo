@@ -307,7 +307,6 @@ def _cross_team_mismatch(connector_id: uuid.UUID) -> Any:
         connector_name="other-teams-connector",
         connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=_TEAM_A,
-        connector_visibility="team",
     )
 
 

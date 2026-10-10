@@ -4,7 +4,7 @@ Structural + SQLite-model contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
   0290_scheduled_reports_due_scan parent; the migrations directory has exactly
-  one head (0292_audit_events_resource_lookup, pinned by all sibling chain
+  one head (0294_eval_results_org_fk, pinned by all sibling chain
   tests) so the pre-commit check-migration-heads hook can never be ambushed by
   a renumber.
 * **Index shape (mocked ``op``)** — the upgrade emits exactly the two
@@ -50,7 +50,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0291_invitations_lookup_constraints"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0290_scheduled_reports_due_scan"
-_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_HEAD_MIGRATION = "0294_eval_results_org_fk"
 
 #: Index name -> ordered key columns. The single source of truth asserted
 #: against BOTH the migration DDL and the ORM declaration.
@@ -128,7 +128,7 @@ class TestChain:
     def test_down_revision_is_0290_scheduled_reports_due_scan(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
-    def test_single_head_is_0292(self) -> None:
+    def test_single_head_is_0293(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
 

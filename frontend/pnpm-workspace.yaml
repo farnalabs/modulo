@@ -4,6 +4,14 @@ allowBuilds:
   esbuild: true
   vue-demi: true
 strictPeerDependencies: false
+# #1341: braces <=3.0.3 (GHSA-vfj7-8cjw-p6xm) has NO patched release upstream.
+# Dev/lint-time only (@vue/eslint-config-typescript > fast-glob > micromatch >
+# braces), globbing fixed trusted patterns (e.g. `**/*.vue`); never shipped or
+# fed untrusted input. Accepted 2026-10-10. Remove this entry when braces (or
+# micromatch/fast-glob) ships a patched release.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
 overrides:
   esbuild: ">=0.28.1"
   qs: ">=6.15.3"
@@ -174,3 +182,4 @@ minimumReleaseAgeExclude:
   - 'playwright@1.64.0'
   - 'vue-router@5.4.0'
   - '@lucide/vue@1.53.0'
+  - '@lucide/vue@1.54.0'

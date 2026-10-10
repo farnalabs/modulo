@@ -319,10 +319,33 @@ async def test_query_transport_error_detail_redacts_credentials(connector):
 
 
 @respx.mock
-async def test_health_check_transport_error_detail_redacts_credentials(connector):
+async def test_health_check_transport_error_raises_request_error(connector):
+    """FAR-507: a transport error escaping ``health_check`` is a bare ``httpx``
+    error.
+
+    NOTE: unlike ``query``/``write``, ``health_check`` is not ``@redacting``-
+    wrapped, so a transport error's ``exc.request.url`` still carries the live
+    ``key``/``token``. That is an out-of-scope ``backend/src/`` source gap,
+    surfaced by this test-only pass and reported as an outstanding item; this
+    test pins only the observable exception type so the path stays exercised.
+    """
     respx.get(f"{_BASE}/members/me").mock(side_effect=httpx.ConnectError("Connection refused"))
-    with pytest.raises(httpx.HTTPError):
+    with pytest.raises(httpx.RequestError):
         await connector.health_check()
+
+
+@respx.mock
+async def test_health_check_error_detail_redacts_credentials(connector):
+    """FAR-507: the non-200 ``health_check`` path scrubs credentials out of the
+    upstream error body (this path IS redaction-covered)."""
+    respx.get(f"{_BASE}/members/me").mock(
+        return_value=httpx.Response(401, text=f"unauthorized key={API_KEY} token={TOKEN}")
+    )
+    result = await connector.health_check()
+    assert result.ok is False
+    assert API_KEY not in result.detail
+    assert TOKEN not in result.detail
+    assert "***" in result.detail
 
 
 @respx.mock

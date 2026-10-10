@@ -129,9 +129,11 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
 
     Polling is a system-level operation with no caller visibility scope, so an
     absent/garbage ``visibility`` is normalised to ``org`` rather than raising
-    a ``ValueError`` the callers would surface as a generic build failure —
-    ``visibility`` only tightens an ACL for a team-scoped caller, and a poll
-    has none.
+    a ``ValueError`` the callers would surface as a generic build failure.
+    Visibility no longer narrows an ACL check at all (FAR-1618 removed the
+    team-scoped run-gate, and this path never passed one), but
+    :class:`ConnectorACL` still validates the value in its constructor — the
+    normalisation keeps a malformed column from failing the poll build.
 
     Raises :class:`ConnectorPermissionError` when the read is not permitted.
     """
@@ -170,9 +172,10 @@ async def enforce_polling_team_scope(
     visibility scope (``enforce_polling_read_acl`` deliberately normalises
     ``visibility`` to ``org`` for exactly that reason), so an org-wide
     connector is usable by any team's pipeline the same way it is everywhere
-    else. The reverse direction (an org-only connector on a team pipeline) is
-    a RUN-time rule — the executor's team-scoped ACL gate — and is enforced on
-    graph save, never on a poll read.
+    else. There is no reverse direction to enforce either (FAR-1618): an
+    org-visibility connector is shared across the organisation, so the
+    predicate never reports one and neither the save-time gate nor any
+    invocation-time gate refuses it.
 
     Runs BEFORE any credential is decrypted (same ordering contract as
     :func:`enforce_polling_read_acl`), so a denied instance never exposes its

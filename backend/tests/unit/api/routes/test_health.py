@@ -261,6 +261,55 @@ class TestCheckDispatcherReconcile:
         assert "claimed_but_never_dispatched=5" in result.detail
 
     @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_per_org_bounded_failure_counters(self) -> None:
+        """FAR-1621: the readiness detail must surface ALL the per-org
+        bounded-failure counters (plus ``orgs_deferred``) so an alert email can
+        tell the FAR-1525 cut, the FAR-1601 skip, the pool-checkout cut, the
+        connect-bound skip, the FAR-1621 statement-bound skip and a deferral
+        apart — before this they were absent from the detail entirely, making
+        the cases indistinguishable."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                org_timeouts=1,
+                orgs_deferred=2,
+                org_lock_timeouts=3,
+                org_pool_timeouts=4,
+                org_connect_timeouts=5,
+                org_statement_timeouts=6,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "org_timeouts=1" in result.detail
+        assert "orgs_deferred=2" in result.detail
+        assert "org_lock_timeouts=3" in result.detail
+        assert "org_pool_timeouts=4" in result.detail
+        assert "org_connect_timeouts=5" in result.detail
+        assert "org_statement_timeouts=6" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_defaults_the_per_org_counters_to_zero(self) -> None:
+        """A pre-FAR-1621 payload (no org-failure keys at all) still renders —
+        every counter defaults to 0 rather than raising."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "org_timeouts=0" in result.detail
+        assert "org_pool_timeouts=0" in result.detail
+        assert "org_connect_timeouts=0" in result.detail
+        assert "org_statement_timeouts=0" in result.detail
+
+    @pytest.mark.asyncio
     async def test_fresh_timeout_status_degraded(self) -> None:
         """FAR-746: a fresh stats blob with status='timeout' (inner deadline
         fired) must return 'degraded' (non-gating) â€” a partially-working

@@ -27,7 +27,7 @@ import jwt as pyjwt
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.conftest import _active_client, _store_response
+from tests.bdd.conftest import _active_client, _shaped_execute, _store_response
 
 # ---------------------------------------------------------------------------
 # Register feature files
@@ -302,129 +302,115 @@ def step_create_api_key(
     request: Any,
     ctx: dict[str, Any],
 ) -> None:
-    """Create an API key via business logic."""
-    if getattr(request.node, "_viewer_auth", False):
-        request.node._resp = _make_key_response(403, detail="Only admin users can perform this action")
-        return
+    """Create the key through the REAL ``POST /api/v1/api-keys`` route.
 
-    from unittest.mock import AsyncMock, MagicMock
+    The route's own gates run unpatched: the ``require_permission``
+    authz-kill-switch read, the mint-cap ``resolve_role_from_membership``
+    read (the caller's LIVE role is the cap), the mint transaction, and the
+    isolated post-mint audit. The single business read that decides a
+    successful mint (the live role lookup) is shaped here; a viewer caller
+    never reaches it - ``require_permission`` denies at its own floor, which
+    is one of the route behaviours the response asserts.
+    """
+    auth_role = "viewer" if getattr(request.node, "_viewer_auth", False) else "admin"
 
-    from modulo.auth.api_key import create_api_key as create_key_fn
-
-    mock_session = AsyncMock()
-    mock_session.flush = AsyncMock()
-    mock_session.add = MagicMock()
-
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    try:
-        key, full_key = loop.run_until_complete(
-            create_key_fn(
-                mock_session,
-                org_id=ORG_ID,
-                name=name,
-                role=role,
-                account_id=USER_ID,
-            )
+    def shaper(session: MagicMock) -> None:
+        # ``resolve_role_from_membership`` selects the role COLUMN, so the
+        # shape is a scalar result carrying the role STRING, not a row.
+        _shaped_execute(
+            session,
+            [MagicMock(scalar_one_or_none=MagicMock(return_value="admin"))],
         )
-        ctx["api_key_name"] = name
-        ctx["api_key_role"] = role
-        ctx["api_key_id"] = key.id
-        ctx["api_key_full_key"] = full_key
-        request.node._resp = _make_key_response(201, name=name, full_key=full_key)
-    except Exception:
-        request.node._resp = _make_key_response(500)
-    finally:
-        loop.close()
+
+        # The mint commits the ORM row through session.add + flush; in
+        # production the flush populates id/created_at from server defaults.
+        # Stamp them at add() so the post-commit response serialisation sees
+        # the saved row shape.
+        def _stamp(obj: Any) -> None:
+            obj.id = uuid.uuid4()
+            obj.created_at = datetime.now(UTC)
+
+        session.add = MagicMock(side_effect=_stamp)
+        session.flush = AsyncMock(return_value=None)
+
+    from tests.bdd.conftest import session_client
+
+    with session_client(role=auth_role, shaper=shaper) as client:
+        resp = client.post("/api/v1/api-keys", json={"name": name, "role": role})
+    _store_response(request, ctx, resp)
 
 
 @when(
     parsers.parse("I DELETE /api/v1/api-keys/{key_id}"),
 )
 def step_revoke_api_key(request: Any, ctx: dict[str, Any]) -> None:
-    """Revoke an API key via business logic."""
-    from unittest.mock import AsyncMock, MagicMock
+    """Revoke the key through the REAL ``DELETE /api/v1/api-keys/{key_id}`` route.
 
-    from modulo.auth.api_key import revoke_api_key
-    from modulo.db.models.api_key import OrgApiKey
-
+    ``require_permission("api_key.revoke")`` runs unpatched (the caller's
+    authored role decides). Inside the revoke transaction the ONE business
+    read ``revoke_api_key`` performs is the key row lookup; it is shaped to
+    return the stored key row so the revoked_at mutation and the audit
+    payload (scope / lookup-prefix) execute for real.
+    """
     key_id = ctx.get("api_key_id", uuid.uuid4())
-    mock_session = AsyncMock()
-    mock_session.flush = AsyncMock()
 
-    # Mock OrgApiKey instance for the select result
-    mock_key = MagicMock(spec=OrgApiKey)
-    mock_key.id = key_id
-    mock_key.organisation_id = ORG_ID
-    mock_key.revoked_at = None
+    def shaper(session: MagicMock) -> None:
+        mock_key = MagicMock(id=key_id, organisation_id=ORG_ID, revoked_at=None, scope="org", lookup_prefix="abcd")
+        mock_key.name = ctx.get("api_key_name", "my-key")
+        _shaped_execute(
+            session,
+            [MagicMock(scalar_one_or_none=MagicMock(return_value=mock_key))],
+        )
 
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = mock_key
-    mock_session.execute.return_value = mock_result
+    from tests.bdd.conftest import session_client
 
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    try:
-        revoked = loop.run_until_complete(revoke_api_key(mock_session, key_id, ORG_ID))
-        revoked_flag = revoked is not None
-        ctx["api_key_revoked"] = revoked_flag
-        request.node._resp = _make_key_response(200, id=str(key_id), revoked=revoked_flag)
-    except Exception as exc:
-        ctx["_error"] = str(exc)
-        request.node._resp = _make_key_response(500)
-    finally:
-        loop.close()
+    with session_client(role="admin", shaper=shaper) as client:
+        resp = client.delete(f"/api/v1/api-keys/{key_id}")
+    _store_response(request, ctx, resp)
 
 
 @when("I GET /api/v1/api-keys")
 def step_list_api_keys(request: Any, ctx: dict[str, Any]) -> None:
-    """List API keys via business logic."""
-    from unittest.mock import AsyncMock, MagicMock
+    """List keys through the REAL ``GET /api/v1/api-keys`` route.
 
-    from modulo.auth.api_key import list_api_keys
+    ``require_permission("api_key.update")`` plus the route's operator floor
+    run unpatched (a viewer caller is denied at the floor). ``list_api_keys``
+    performs ONE business read - the key rows for the org - shaped to return
+    the stored key so the route serialises a REAL row (name, role, lookup
+    prefix, timestamps) into the bare JSON array response.
+    """
 
-    mock_session = AsyncMock()
+    def shaper(session: MagicMock) -> None:
+        mock_key = MagicMock(
+            id=ctx.get("api_key_id", uuid.uuid4()),
+            role=ctx.get("api_key_role", "operator"),
+            team_id=None,
+            lookup_prefix="abc",
+            last_used_at=None,
+            created_at=datetime.now(UTC),
+            expires_at=None,
+            revoked_at=None,
+        )
+        mock_key.name = ctx.get("api_key_name", "my-key")
+        mock_key.scope = "org"
+        _shaped_execute(
+            session,
+            [MagicMock(scalars=MagicMock(return_value=[mock_key]))],
+        )
 
-    # Mock OrgApiKey instances for the select result
-    from datetime import UTC, datetime
+    from tests.bdd.conftest import session_client
 
-    mock_key = MagicMock()
-    mock_key.id = ctx.get("api_key_id", uuid.uuid4())
-    mock_key.name = ctx.get("api_key_name", "my-key")
-    mock_key.role = "operator"
-    mock_key.team_id = None
-    mock_key.lookup_prefix = "abc"
-    mock_key.last_used_at = None
-    mock_key.created_at = datetime.now(UTC)
-    mock_key.expires_at = None
-    mock_key.revoked_at = None
-
-    mock_result = MagicMock()
-    mock_result.scalars.return_value = [mock_key]
-    mock_session.execute.return_value = mock_result
-
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    try:
-        keys = loop.run_until_complete(list_api_keys(mock_session, ORG_ID))
-        ctx["api_key_list"] = keys
-        request.node._resp = _make_key_response(200, items=keys)
-    except Exception as exc:
-        ctx["_error"] = str(exc)
-        request.node._resp = _make_key_response(500)
-    finally:
-        loop.close()
+    with session_client(role="admin", shaper=shaper) as client:
+        resp = client.get("/api/v1/api-keys")
+    _store_response(request, ctx, resp)
 
 
-@then('the response contains a full_key starting with "mk_"')
+@then('the response contains a key_value starting with "mk_"')
 def step_response_has_full_key(request: Any) -> None:
     body = request.node._resp.json()
-    full_key = body.get("full_key")
-    assert full_key is not None, f"No full_key in response: {body}"
-    assert full_key.startswith("mk_"), f"full_key does not start with 'mk_': {full_key}"
+    key_value = body.get("key_value")
+    assert key_value is not None, f"No key_value in response: {body}"
+    assert key_value.startswith("mk_"), f"key_value does not start with 'mk_': {key_value}"
 
 
 @then("the response indicates the key is revoked")
@@ -435,38 +421,68 @@ def step_response_key_revoked(request: Any) -> None:
 
 @then(parsers.parse('the response contains key "{name}"'))
 def step_response_contains_key(name: str, request: Any, ctx: dict[str, Any]) -> None:
+    """The list route returns a BARE JSON array of key summaries."""
     body = request.node._resp.json()
-    items = body.get("items", [])
-    names = [k.get("name") for k in items]
+    assert isinstance(body, list), f"Expected a JSON array response, got: {type(body)}"
+    names = [k.get("name") for k in body]
     assert name in names, f"Expected key {name!r} in response, got: {names}"
 
 
 @when("I make an authenticated request with the wrong API key")
 def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
-    """Validate an invalid API key — expect ApiKeyInvalidError."""
-    from unittest.mock import AsyncMock, MagicMock
+    """Present a junk ``mk_`` credential to a REAL protected route.
 
-    from modulo.auth.api_key import validate_api_key
+    ``client`` swaps the JWT dependency, which would hide the mk_ branch, so
+    the step opens a fresh ``session_client`` WITHOUT a JWT principal and
+    calls ``GET /api/v1/model-backends`` (a ``require_permission_any_credential``
+    route wired to ``get_current_tenant_user_or_api_key``) with
+    ``Authorization: Bearer mk_not_a_real_key``. The real mk_ validation chain
+    runs: the key row read returns no row, so the credential must be refused
+    (401) exactly as production would.
+    """
 
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
-    mock_session.execute.return_value = mock_result
+    def shaped_factory() -> MagicMock:
+        shaped = MagicMock()
+        shaped.in_transaction = AsyncMock(return_value=False)
+        shaped.get_bind = MagicMock(return_value=MagicMock(dialect=MagicMock(name="sqlite")))
+        # The key-row read must report NO row so the credential is refused.
+        _shaped_execute(shaped, [MagicMock(scalar_one_or_none=MagicMock(return_value=None))])
+        shaped.__aenter__ = AsyncMock(return_value=shaped)
+        shaped.__aexit__ = AsyncMock(return_value=False)
+        return shaped
 
-    import asyncio
+    import modulo.api.dependencies as api_deps
+    from modulo.api.main import app
+    from modulo.auth.dependencies import get_current_tenant_user_or_api_key
+    from tests.bdd.conftest import session_client
 
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(validate_api_key(mock_session, "mk_badkey_invalid"))
-        resp = _make_key_response(200)
-        request.node._resp = resp
-        request.node.response = resp
-    except Exception:
-        resp = _make_key_response(401)
-        request.node._resp = resp
-        request.node.response = resp
-    finally:
-        loop.close()
+    with (
+        patch.object(api_deps, "get_or_create_engine", create=True) as engine_patch,
+        patch.object(api_deps, "get_or_create_session_factory", create=True) as factory_patch,
+        session_client(role="viewer") as client,
+    ):
+        engine_patch.return_value = MagicMock()
+        factory_patch.return_value = shaped_factory
+        # session_client overrides the credential-wrapper dependency; pop that
+        # override so the REAL mk_ key-validation chain in
+        # get_current_tenant_user_or_api_key runs for this request.
+        #
+        # session_client's own finally-block owns the restore: it snapshotted
+        # this key's pre-entry value and re-installs it when the context
+        # exits, so the pop is undone whether or not this step restores it.
+        # The explicit restore below is a defensive complement (it re-installs
+        # the wrapper for the rest of the ``with`` body); it does not replace
+        # the context manager's restore, and would be redundant if removed.
+        saved_wrapper_override = app.dependency_overrides.pop(get_current_tenant_user_or_api_key, None)
+        try:
+            resp = client.get(
+                "/api/v1/model-backends",
+                headers={"Authorization": "Bearer mk_wrongkey000000notarealkey"},
+            )
+        finally:
+            if saved_wrapper_override is not None:
+                app.dependency_overrides[get_current_tenant_user_or_api_key] = saved_wrapper_override
+    _store_response(request, ctx, resp)
 
 
 # ===========================================================================

@@ -55,11 +55,11 @@ def set_node_back_to_manual(node_id: str, node_type: str, ctx, client, request):
 
 @then("the pipeline saves successfully")
 def pipeline_saves_successfully(request):
-    body = getattr(request.node, "_resp_body", getattr(request.node, "_resp", None))
-    if hasattr(body, "json"):
-        body = body.json()
-        request.node._resp_body = body
-    assert isinstance(body, dict), f"Pipeline save response missing, got: {body}"
+    resp = getattr(request.node, "_resp", None)
+    assert resp is not None, "No response from pipeline update step"
+    assert resp.status_code == 200, f"Pipeline save failed: HTTP {resp.status_code} {resp.text}"
+    body = resp.json()
+    assert isinstance(body, dict), f"Pipeline save response was not a dict: {body!r}"
 
 
 @then("I can revert to a previous pipeline snapshot")

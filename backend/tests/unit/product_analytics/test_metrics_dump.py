@@ -11,12 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
+from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
+    coerce_dump_count,
+)
 from modulo.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
     _DUMP_EXECUTION_WINDOW_MINUTES,
     _DUMP_WINDOW_MINUTES,
     _OFFSET_KEY,
-    _WATERMARK_KEY,
     SCHEMA_VERSION,
     _build_instance_metadata,
     _build_payload,
@@ -90,7 +94,7 @@ class TestSchemaVersion:
         assert SCHEMA_VERSION > 0
 
     def test_watermark_key_is_string(self) -> None:
-        assert isinstance(_WATERMARK_KEY, str)
+        assert isinstance(DUMP_WATERMARK_KEY, str)
 
     def test_backfill_cap_is_14_days(self) -> None:
         assert _BACKFILL_MAX_DAYS == 14
@@ -1190,7 +1194,7 @@ class TestMetricsDumpSuccess:
             patch(
                 "modulo.core.product_analytics.metrics_dump.write_system_config",
                 new_callable=AsyncMock,
-            ),
+            ) as write_cfg,
             patch(
                 "modulo.core.saq_worker._make_system_session_factory",
                 return_value=factory,
@@ -1206,6 +1210,10 @@ class TestMetricsDumpSuccess:
             result = await metrics_dump({})
         assert result["dumped_dates"] == ["2026-08-10"]
         assert result["org_count"] == 1
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        # A successful dump advances the watermark AND records a real count.
+        assert written[DUMP_WATERMARK_KEY] == "2026-08-10"
+        assert written[DUMP_COUNT_KEY] == 1
 
     @pytest.mark.asyncio
     async def test_jitter_skip(self) -> None:
@@ -1314,6 +1322,192 @@ class TestMetricsDumpSuccess:
             result = await metrics_dump({})
         assert not result["dumped_dates"]
         write_cfg.assert_not_awaited()
+
+
+# --- Dump counter ---
+
+
+class TestDumpCount:
+    """A successful (non-skipped) dump records a real ``DUMP_COUNT_KEY`` total.
+
+    The counter is the source the transparency endpoint reads for
+    ``dump_count_total``; without this the page can only ever render ``0``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_increments_from_absent(self) -> None:
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=orgs,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                new_callable=AsyncMock,
+                return_value=[date(2026, 8, 10)],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch(
+                "modulo.settings.get_settings",
+                return_value=MagicMock(
+                    product_analytics_endpoint_url="https://vendor.example.com",
+                    product_analytics_instance_secret="secret",
+                ),
+            ),
+        ):
+            await metrics_dump({})
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        assert written[DUMP_COUNT_KEY] == 1
+
+    @pytest.mark.asyncio
+    async def test_increments_from_existing_value(self) -> None:
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+
+        async def _read(session: object, key: str) -> str | None:
+            if key == DUMP_COUNT_KEY:
+                return "41"
+            return None
+
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=orgs,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.read_system_config",
+                new_callable=AsyncMock,
+                side_effect=_read,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._dump_date_range",
+                new_callable=AsyncMock,
+                return_value=[date(2026, 8, 10)],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.acquire_kv_lock",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch(
+                "modulo.settings.get_settings",
+                return_value=MagicMock(
+                    product_analytics_endpoint_url="https://vendor.example.com",
+                    product_analytics_instance_secret="secret",
+                ),
+            ),
+        ):
+            await metrics_dump({})
+        written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
+        assert written[DUMP_COUNT_KEY] == 42
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_increment(self) -> None:
+        factory = _FakeSessionFactory()
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._should_dump_now",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._check_instance_switch",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump._get_consenting_orgs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.write_system_config",
+                new_callable=AsyncMock,
+            ) as write_cfg,
+            patch(
+                "modulo.core.saq_worker._make_system_session_factory",
+                return_value=factory,
+            ),
+            patch("modulo.settings.get_settings", return_value=MagicMock()),
+        ):
+            result = await metrics_dump({})
+        assert result["skipped"] == "no_consenting_orgs"
+        write_cfg.assert_not_awaited()
+
+
+class TestCoerceDumpCount:
+    @pytest.mark.parametrize(
+        ("stored", "expected"),
+        [
+            (None, 0),
+            (0, 0),
+            ("0", 0),
+            (7, 7),
+            ("42", 42),
+            ("not-a-number", 0),
+            (-3, 0),
+            (True, 1),
+        ],
+        ids=[
+            "none",
+            "zero-int",
+            "zero-string",
+            "positive-int",
+            "positive-string",
+            "malformed",
+            "negative",
+            "bool",
+        ],
+    )
+    def test_coercion(self, stored: object, expected: int) -> None:
+        assert coerce_dump_count(stored) == expected
 
 
 # --- _get_or_create_system_config ---

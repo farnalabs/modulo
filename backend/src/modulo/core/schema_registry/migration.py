@@ -289,7 +289,7 @@ def _longest_path(start: str, migrations: dict[tuple[str, str], SchemaMigration]
     stack: list[tuple[str, list[str], int]] = [(start, [start], 0)]
     while stack:
         ver, path, idx = stack.pop()
-        items = [tgt for (src, tgt) in migrations if src == ver]
+        items = [tgt for (src, tgt), _migration in migrations.items() if src == ver]
         if idx < len(items):
             stack.append((ver, path, idx + 1))
             tgt = items[idx]
@@ -416,7 +416,9 @@ class MigrationRegistry:
             if cur in reachable:
                 continue
             reachable.add(cur)
-            for src, tgt in migrations_copy:
+            # Sonar python:S7517 requires .items() here even though only the
+            # (src, tgt) edge keys are read, not the migration values.
+            for (src, tgt), _migration in migrations_copy.items():  # noqa: PERF102
                 if src == cur:
                     q.append(tgt)
 

@@ -142,6 +142,10 @@ async def set_org_flag(session: Any, org_id: uuid.UUID, flag_name: str, value: b
 
     from modulo.db.models.organisation import Organisation
 
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
+    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
+    # upgrade cycle.
     result = await session.execute(select(Organisation).where(Organisation.id == org_id).limit(1).with_for_update())
     org = result.scalar_one_or_none()
     if org is None:

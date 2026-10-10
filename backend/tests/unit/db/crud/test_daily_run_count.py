@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,8 +14,10 @@ from modulo.db.crud.daily_run_count import (
     _UNSET,
     get_daily_run_counts,
     get_org_spend_total,
+    org_level_predicate,
     upsert_daily_run_count,
 )
+from modulo.db.models.daily_run_count import OrgDailyRunCount
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -215,3 +218,19 @@ class TestGetOrgSpendTotal:
         where = _where_sql(mock_session)
         assert "org_daily_run_counts.team_id IS NULL" in where
         assert "org_daily_run_counts.run_date >= '2026-01-01'" in where
+
+
+# ── org_level_predicate ─────────────────────────────────────────────
+
+
+class TestOrgLevelPredicate:
+    def test_compiles_to_team_id_is_null(self) -> None:
+        """The canonical org-level scope compiles to ``team_id IS NULL``.
+
+        Pins the helper itself (not just its callers) so a drift in the
+        predicate — or a removal of the helper — fails here.
+        """
+        stmt = select(OrgDailyRunCount).where(org_level_predicate())
+        compiled = str(stmt.whereclause.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+        assert "org_daily_run_counts.team_id IS NULL" in compiled

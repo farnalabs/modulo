@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     get_current_tenant_user_optional,
@@ -42,7 +43,11 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
-from modulo.core.exceptions import PipelineNotRunnableError, TriggersPausedError
+from modulo.core.exceptions import (
+    PipelineNotRunnableError,
+    SnapshotLockNotAvailableError,
+    TriggersPausedError,
+)
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.trigger_engine import (
     DuplicateWebhookError,
@@ -357,6 +362,30 @@ async def receive_slack_event(
             exc.state,
         )
         raise pipeline_not_runnable_http(exc) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-527 parity: the app-mention snapshot creation can lose the
+        # advisory-lock race under concurrent deliveries. Surface it as a
+        # retryable 503, never a generic 500 (matches the webhook + MCP paths).
+        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+        _log.warning(
+            "slack.receive_event.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
+            trigger_id,
+            trigger.pipeline_id if trigger is not None else None,
+            SNAPSHOT_LOCK_ATTEMPTS,
+        )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_SLACK_RECEIVE_EVENT,
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the Slack delivery"
+            ),
+        ) from exc
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
         # advisory lock. The loser is NOT executed and NOT auto-queued: the

@@ -1461,11 +1461,12 @@ async def _enforce_imported_connector_team_gate(
     ``materialize_import`` accepts an ``owner_team_id``, rewires each node's
     ``connector_binding`` to a real org connector, and writes the graph — with
     no team check of its own, so an import could persist a team pipeline
-    pinning an org-only (or another team's) connector, which every graph-save
-    path refuses. ``bindings`` are the REWIRED bindings materialize just
-    returned (after rewiring, in hand without a second read), and this runs
-    INSIDE the import transaction, so the named 409 rolls the whole import
-    back rather than leaving half-created entities.
+    pinning ANOTHER TEAM's team-private connector, which every graph-save path
+    refuses. (An org-visibility connector is shared across the organisation and
+    is never refused — FAR-1618.) ``bindings`` are the REWIRED bindings
+    materialize just returned (after rewiring, in hand without a second read),
+    and this runs INSIDE the import transaction, so the named 409 rolls the
+    whole import back rather than leaving half-created entities.
 
     An empty binding list is a no-op — the gate has nothing to judge.
     """

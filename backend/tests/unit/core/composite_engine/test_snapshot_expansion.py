@@ -130,6 +130,7 @@ async def test_snapshot_with_composite_node_is_expanded_and_compiles() -> None:
         _scalar_result(template),  # 3 composite template (expander)
         _scalars_result([_agent_mock(agent_id)]),  # 4 agents
         _scalars_result([]),  # 5 schemas (schema_ids contains None)
+        MagicMock(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(0),  # 6 snapshot version max
         _scalars_result([]),  # 7 guardrail rows (EvalDefinition)
         _scalars_result([]),  # 8 policy-gate rows (FAR-967 chunk 10 pin loader)
@@ -207,6 +208,7 @@ async def test_snapshot_sub_node_prompt_injection_survives_without_agent() -> No
         _scalar_result(pipeline),  # 1 pipeline
         _scalars_result([]),  # 2 edges
         _scalar_result(template),  # 3 composite template (expander)
+        MagicMock(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(0),  # 4 snapshot version max
         _scalars_result([]),  # 5 guardrail rows (EvalDefinition)
         _scalars_result([]),  # 6 policy-gate rows (FAR-967 chunk 10 pin loader)
