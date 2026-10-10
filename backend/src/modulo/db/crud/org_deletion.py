@@ -208,6 +208,11 @@ async def request_org_deletion(
 
     Returns a dict with ``token``, ``token_expires_at``, and ``export`` keys.
     """
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE`. This site acquires the org lock FIRST (no pre-held FK `KEY SHARE`
+    # on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE upgrade cycle; the
+    # strongest lock is kept so org deletion blocks concurrent child inserts
+    # before the hard delete.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
@@ -259,6 +264,11 @@ async def confirm_org_deletion(
     (never blocks on E2B), then terminal runs older than 30 days are
     batch-deleted. The remaining cascade is handled by Postgres FK constraints.
     """
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE`. This deletion path acquires the org lock FIRST (no pre-held FK
+    # `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
+    # upgrade cycle; the strongest lock is kept so the hard delete blocks
+    # concurrent child inserts.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
@@ -316,6 +326,10 @@ async def cancel_org_deletion(
     The org must be in 'deleted' status with a valid deletion_token set.
     Clears the soft-delete fields and restores the organisation to active state.
     """
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
+    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
+    # upgrade cycle.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
@@ -340,6 +354,10 @@ async def export_org_data(
     org_id: uuid.UUID,
 ) -> dict[str, Any]:
     """Return the export bundle for an org (captures live data if none exists)."""
+    # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
+    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
+    # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
+    # upgrade cycle.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
