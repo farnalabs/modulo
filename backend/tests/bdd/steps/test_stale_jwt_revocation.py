@@ -105,6 +105,12 @@ def user_requests_pipeline(username: str, pipeline_name: str, request) -> None:
     here models the RLS-hidden post-removal row: under RLS the removed
     member's own session simply no longer sees the row), the gate denies
     with 404 - precisely the revocation outcome the scenario asserts.
+
+    FAR-1600 follow-up: this shaper hard-codes the team-scope read to
+    no-row, so only the 404 revocation path is exercised through the route.
+    A future scenario wanting 200 (still-grace member) or 401 (stale token
+    principal) must wire a shaped row / stale-token principal here rather
+    than reuse this empty shape.
     """
     state = _shared_state(request)
     pipeline = state["pipelines"].get(pipeline_name)

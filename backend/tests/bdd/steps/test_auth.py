@@ -466,6 +466,13 @@ def step_wrong_api_key_request(request: Any, ctx: dict[str, Any]) -> None:
         # session_client overrides the credential-wrapper dependency; pop that
         # override so the REAL mk_ key-validation chain in
         # get_current_tenant_user_or_api_key runs for this request.
+        #
+        # session_client's own finally-block owns the restore: it snapshotted
+        # this key's pre-entry value and re-installs it when the context
+        # exits, so the pop is undone whether or not this step restores it.
+        # The explicit restore below is a defensive complement (it re-installs
+        # the wrapper for the rest of the ``with`` body); it does not replace
+        # the context manager's restore, and would be redundant if removed.
         saved_wrapper_override = app.dependency_overrides.pop(get_current_tenant_user_or_api_key, None)
         try:
             resp = client.get(
