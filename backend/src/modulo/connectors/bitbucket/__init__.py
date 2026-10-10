@@ -1,6 +1,7 @@
 """BitbucketConnector — async Bitbucket Cloud API connector."""
 
 import base64
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -58,6 +59,12 @@ class BitbucketConnector(ConnectorBase):
             self._auth_header = {"Authorization": f"Basic {encoded}"}
         else:
             raise ValueError("Provide either token (OAuth 2.0) or username+app_password")
+        # Captured for credential redaction of echoed upstream detail
+        # (``ConnectorBase._credential_values``); the username is NOT a secret.
+        self._credential: str | None = token or app_password
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._credential,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -79,7 +86,7 @@ class BitbucketConnector(ConnectorBase):
                 r = await client.get("/user")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             user_info = r.json()
             if not isinstance(user_info, dict):
@@ -89,7 +96,9 @@ class BitbucketConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Bitbucket API timeout")

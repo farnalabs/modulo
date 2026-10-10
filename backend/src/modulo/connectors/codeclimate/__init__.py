@@ -1,6 +1,7 @@
 """CodeClimateConnector — async Code Climate API v1 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -24,6 +25,9 @@ class CodeClimateConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.CODECLIMATE
@@ -46,7 +50,9 @@ class CodeClimateConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Code Climate API token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Code Climate auth token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

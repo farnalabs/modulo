@@ -1,6 +1,7 @@
 """Azure Pipelines CI/CD connector — triggers and observes pipeline runs via the Azure DevOps REST API v7.0."""
 
 import base64
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -52,6 +53,9 @@ class AzurePipelinesConnector(ConnectorBase):
         self._token = token
         self._organization = organization
         self._project = project
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -138,18 +142,20 @@ class AzurePipelinesConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired PAT token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(
+                    f"Azure Pipelines API HTTP {exc.response.status_code}: {exc.response.text}"
+                )[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Pipelines API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Azure Pipelines API connection error")
         except ValueError as exc:
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,

@@ -2,9 +2,12 @@
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from modulo.connectors.security import CredentialRedactor
 
 logger = logging.getLogger(__name__)
 
@@ -921,6 +924,33 @@ class ConnectorBase(ABC):
     @abstractmethod
     def connector_type(self) -> ConnectorType:
         """Type identifier for this connector."""
+
+    def _credential_values(self) -> Sequence[str]:
+        """The connector's live credential strings as they appear in requests.
+
+        Subclasses that hold credentials (tokens, API keys, app passwords)
+        MUST override this to return the exact secret strings they send to the
+        upstream API — the same values that upstream error bodies, redirect
+        targets or proxies can echo back verbatim. Connectors
+        holding no secrets keep the empty default.
+
+        Returns a sequence, never a bare ``tuple[str]`` of one value: a
+        connector may hold several distinct credentials (e.g. access key +
+        app key), and every one of them must be redactable.
+        """
+        return ()
+
+    def _redacted_detail(self, text: str) -> str:
+        """Return *text* with this connector's credential values masked.
+
+        Every ``health_check`` (and health-adjacent diagnostic) path that
+        embeds an upstream response body, exception message or request URL
+        into a ``HealthResult.detail`` MUST route the string through this
+        method so a credential echoed by the upstream service never reaches
+        the caller. Conformance is enforced by
+        ``tests/unit/connectors/test_health_detail_credential_redaction.py``.
+        """
+        return CredentialRedactor(self._credential_values()).redact(text)
 
     @abstractmethod
     async def health_check(self) -> HealthResult:

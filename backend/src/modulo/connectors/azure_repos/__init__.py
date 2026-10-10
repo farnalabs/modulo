@@ -1,6 +1,7 @@
 """AzureReposConnector — async Azure Repos (Azure DevOps) API connector."""
 
 import base64
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -51,6 +52,9 @@ class AzureReposConnector(ConnectorBase):
         self._organization = organization
         self._base_url = f"https://dev.azure.com/{organization}"
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.AZURE_REPOS
@@ -95,7 +99,7 @@ class AzureReposConnector(ConnectorBase):
                 )
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             profile = r.json()
             if not isinstance(profile, dict):
@@ -105,7 +109,9 @@ class AzureReposConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Azure Repos API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Azure Repos API timeout")

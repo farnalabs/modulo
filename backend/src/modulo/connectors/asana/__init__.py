@@ -1,5 +1,6 @@
 """AsanaConnector — async Asana REST API v1 connector."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -44,6 +45,9 @@ class AsanaConnector(ConnectorBase):
     def __init__(self, personal_access_token: str) -> None:
         self._token = personal_access_token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.ASANA
@@ -62,7 +66,7 @@ class AsanaConnector(ConnectorBase):
             r = await client.get("/users/me")
 
         if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
         body: dict[str, Any] = r.json()
         data = body.get("data", {})
