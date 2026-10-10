@@ -32,13 +32,22 @@ from __future__ import annotations
 from typing import Any
 
 __all__ = [
+    "DEADLOCK_DETECTED_SQLSTATE",
     "DUAL_WRITE_RETRYABLE_SQLSTATES",
     "LOCK_NOT_AVAILABLE_SQLSTATE",
     "MARKER_TXN_ABORTING_SQLSTATES",
     "SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES",
+    "is_lock_abort",
     "is_row_lock_timeout",
     "sqlstate_of",
 ]
+
+# SQLSTATE ``deadlock_detected``: Postgres aborted the transaction because a
+# lock cycle was detected. Shared so the run-finalisation ownership layer's
+# bounded whole-transaction retry and the ledger block's lock-abort re-raise
+# agree on the one spelling of ``40P01`` (previously a forked
+# ``_FINALIZE_DEADLOCK_SQLSTATE`` literal in the executor).
+DEADLOCK_DETECTED_SQLSTATE = "40P01"
 
 # SQLSTATE ``lock_not_available``: a statement's ``lock_timeout`` expired (the
 # bounded ``SET LOCAL lock_timeout`` + ``SELECT ... FOR UPDATE`` in
@@ -158,6 +167,21 @@ def sqlstate_of(exc: BaseException) -> str | None:
         context_or_cause = (getattr(node, "__context__", None), getattr(node, "__cause__", None))
         queue.extend(child for child in context_or_cause if child is not None)
     return fallback
+
+
+def is_lock_abort(exc: BaseException) -> bool:
+    """True for a GENUINE lock abort — deadlock (40P01) or lock_timeout (55P03).
+
+    Both abort the WHOLE Postgres transaction, so a caller at an ownership layer
+    that re-runs the transaction (the run-finalisation lock retry) must re-raise
+    rather than attempt savepoint surgery. A serialization failure (40001) is
+    deliberately NOT included: it is a retry-hint in some isolation levels but
+    is not a lock abort, and the finalisation ownership layer does not own a
+    retry for it. Deliberately distinct from
+    :func:`modulo.core.cost_controller.finalize._is_abort_error`, which is the
+    broader DBAPI-class-name classification the reduced escape uses.
+    """
+    return sqlstate_of(exc) in (DEADLOCK_DETECTED_SQLSTATE, LOCK_NOT_AVAILABLE_SQLSTATE)
 
 
 def is_row_lock_timeout(exc: BaseException) -> bool:
