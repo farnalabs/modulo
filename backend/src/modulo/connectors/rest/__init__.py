@@ -1343,6 +1343,10 @@ class RestConnector(ConnectorBase):
         else:
             secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
 
+    def _credential_values(self) -> Sequence[str]:
+        """Expose the same credential set :meth:`_redact` strips (FAR-1651)."""
+        return tuple(self._secret_values())
+
     def _redact(self, text: str) -> str:
         """Strip credential values from *text* so error detail never echoes secrets.
 
