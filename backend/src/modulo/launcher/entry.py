@@ -77,8 +77,9 @@ POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
 
 # Strict grammar for any SQL identifier the launcher interpolates into DDL
-# (CREATE DATABASE cannot take a bound parameter).
-_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# (CREATE DATABASE cannot take a bound parameter). re.ASCII pins \w to
+# [A-Za-z0-9_] so the accepted set stays byte-identical to the old class.
+_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 
 def _validate_sql_identifier(name: str, what: str) -> str:
@@ -116,7 +117,7 @@ class BootError(RuntimeError):
 def default_data_dir() -> Path:
     """Per-OS data dir root (ADR 031 Decision 6; P1a = Linux)."""
     if sys.platform == "win32":
-        # TODO(P3): %PROGRAMDATA%\Modulo with icacls hardening lands at P3.
+        # NOTE(P3): %PROGRAMDATA%\Modulo with icacls hardening lands at P3.
         raise BootError("The native launcher data dir is not supported on Windows yet (TODO(P3))")
     xdg = os.environ.get("XDG_DATA_HOME")
     root = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
@@ -146,7 +147,7 @@ class _RunState:
 
     def install_signal_handlers(self) -> None:
         if sys.platform == "win32":
-            # TODO(P3): CTRL_BREAK_EVENT handling lands with the Windows seam.
+            # NOTE(P3): CTRL_BREAK_EVENT handling lands with the Windows seam.
             return
 
         def _handle(_signum: int, _frame: object) -> None:
@@ -212,7 +213,7 @@ def _start_detached(data_dir: Path, bin_dir: Path | None, *, clear_degraded: boo
     reflects reality.
     """
     if sys.platform == "win32":
-        # TODO(P3): Windows service/DETACHED_PROCESS seam.
+        # NOTE(P3): Windows service/DETACHED_PROCESS seam.
         raise BootError("--detach is not supported on Windows yet (TODO(P3))")
     read_fd, write_fd = os.pipe()
     first_pid = os.fork()

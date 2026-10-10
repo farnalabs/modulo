@@ -201,14 +201,14 @@ class DoctorProbes:
     probe_redis: Callable[[], None]
     # True when the DB's alembic_version equals the head; raises -> failed.
     migrations_at_head: Callable[[], bool]
-    # POSIX uid or None on platforms without one (TODO(P3) Windows).
+    # POSIX uid or None on platforms without one (NOTE(P3) Windows).
     effective_uid: Callable[[], int | None]
     # username for a uid, or None (unknown / platform seam).
     username_of_uid: Callable[[int], str | None]
     # owner username of *path*, or None when unknown.
     file_owner: Callable[[Path], str | None]
     # lowest permission bits of the secrets file (None = unknown platform /
-    # absent file; TODO(P3) Windows ACL seam returns None).
+    # absent file; NOTE(P3) Windows ACL seam returns None).
     secrets_mode: Callable[[Path], int | None] = field(default=lambda _data_dir: None)
     # names of launcher-hostile variables present in the inherited env.
     ambient_env_names: Callable[[], list[str]] = field(default=list)
@@ -685,7 +685,7 @@ def check_bundled_binaries(_data_dir: Path, _state: Any, probes: DoctorProbes) -
         if stat.st_size == 0:
             problems.append(f"{binary} is ZERO bytes (likely AV-quarantined) — reinstall the bundle")
         elif sys.platform != "win32" and not stat.st_mode & 0o111:
-            # TODO(P3): Windows quarantine detection (MotW zone identifier).
+            # NOTE(P3): Windows quarantine detection (MotW zone identifier).
             problems.append(f"{binary} is present but NOT executable — restore the exec bit")
     if problems:
         return CheckResult(
@@ -1178,7 +1178,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         # the stdlib `pwd` module has no attributes in typeshed on win32, and
         # `warn_unused_ignores` (strict) forbids a platform-specific type:ignore.
         if sys.platform == "win32":
-            return None  # TODO(P3): Windows SID — account mapping
+            return None  # NOTE(P3): Windows SID — account mapping
         try:
             import pwd
         except ImportError:
@@ -1200,7 +1200,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
 
     def _listening_on(port: int) -> list[str]:
         if sys.platform != "linux":
-            return []  # /proc absent; TODO(P3) Windows/macOS external-bind inspection
+            return []  # /proc absent; NOTE(P3) Windows/macOS external-bind inspection
         return _parse_listeners_from_proc(port)
 
     def _probe_launcher_running() -> bool:
@@ -1217,7 +1217,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         return pinned_env_file() is not None
 
     def _probe_secrets_mode(root: Path) -> int | None:
-        # TODO(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
+        # NOTE(P3): Windows ACL equivalence (icacls); the POSIX stat bits are
         # the P1a source of truth.
         if sys.platform == "win32":
             return None

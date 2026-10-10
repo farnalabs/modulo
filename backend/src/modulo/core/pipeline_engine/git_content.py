@@ -160,7 +160,7 @@ class GitContentRef:
     """A parsed ``git+<repo-url>[@<ref>]#<path>`` content reference."""
 
     repo_url: str
-    ref: str | None  # None = HEAD (unpinned)
+    ref: str | None  # None means HEAD (unpinned)
     path: str
 
     @property

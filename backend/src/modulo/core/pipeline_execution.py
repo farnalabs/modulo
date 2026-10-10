@@ -1356,8 +1356,6 @@ async def zombie_watchdog(
         # Expected: first_progress did not fire within the grace window.
         # Stall handling follows below.
         pass
-    except asyncio.CancelledError:
-        raise
 
     if exec_task.done():
         return
@@ -1659,9 +1657,6 @@ async def node_deadline_watchdog(
     an already-finished run and never double-fails with the idle-watchdog or the
     35-min backstop.
     """
-    if default_timeout is None:
-        default_timeout = int(get_settings().saq_node_default_timeout_seconds)
-
     while True:
         # Stand down if the run is already over or the executor finished. We
         # also wait on exec_task.done() (below) so that when the wrapper cancels

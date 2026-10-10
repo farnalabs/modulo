@@ -2417,7 +2417,9 @@ class GraphValidator:
 
         definitions: dict[uuid.UUID, dict[str, Any]] = {}
 
-        for schema_id, version in schema_pins:
+        # Sonar python:S7517 requires .items() here even though only the tuple
+        # keys (schema_id, version) are read; the values are None placeholders.
+        for (schema_id, version), _pin in schema_pins.items():  # noqa: PERF102
             stmt = select(SchemaVersion).where(
                 SchemaVersion.schema_id == schema_id,
                 SchemaVersion.version == version,

@@ -149,10 +149,9 @@ async def get_observability_settings(
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
 ) -> OtelSettingsResponse:
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await _fetch_and_cache(session, principal.organisation_id)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await _fetch_and_cache(session, principal.organisation_id)
         return _config_to_response(merged)
     except ProgrammingError as exc:
         _log.exception("observability.get_observability_settings")
@@ -211,10 +210,9 @@ async def update_observability_settings(
             updates["langsmith_api_key_ciphertext"] = fernet.encrypt(req.langsmith_api_key.encode()).decode()
 
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await update_otel_config(session, principal.organisation_id, updates)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await update_otel_config(session, principal.organisation_id, updates)
         _invalidate_cache(str(principal.organisation_id))
         return _config_to_response(merged)
     except ProgrammingError as exc:
@@ -337,10 +335,9 @@ async def get_export_preview(
     principal: TenantPrincipal = require_permission(_CODE_OBSERVABILITY_VIEW),
 ) -> ExportPreviewResponse:
     try:
-        async with asyncio.timeout(_DB_TIMEOUT):
-            async with session.begin():
-                await set_rls_org(session, principal.organisation_id)
-                merged = await _fetch_and_cache(session, principal.organisation_id)
+        async with asyncio.timeout(_DB_TIMEOUT), session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            merged = await _fetch_and_cache(session, principal.organisation_id)
     except ProgrammingError as exc:
         _log.exception("observability.get_export_preview")
         raise HTTPException(

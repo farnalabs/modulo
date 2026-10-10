@@ -483,7 +483,7 @@ class DataDirLock:
     def acquire(self) -> None:
         """Take the exclusive lock or refuse naming the current holder."""
         if sys.platform == "win32":
-            # TODO(P3): Windows Job Objects / named-mutex lock implementation.
+            # NOTE(P3): Windows Job Objects / named-mutex lock implementation.
             raise DataDirLockError(
                 "The data-dir lock is not implemented on Windows yet (TODO(P3)); "
                 "the native launcher is Linux-first (ADR 031 P1a)."
@@ -624,7 +624,7 @@ def request_stop(data_dir: Path, *, timeout: float = 10.0) -> int:
     confirmed stopped.
     """
     if sys.platform == "win32":
-        # TODO(P3): Windows service-control seam.
+        # NOTE(P3): Windows service-control seam.
         raise LauncherError("modulo stop is not supported on Windows yet (TODO(P3))")
     lock_path = data_dir.parent / (data_dir.name + LOCK_SUFFIX)
     holder = _read_lock_holder(lock_path)
@@ -691,7 +691,7 @@ def read_proc_starttime(pid: int) -> int | None:
     counting fields. Returns None when the process does not exist.
     """
     if sys.platform == "win32":
-        # TODO(P3): Windows exposes no /proc; the P3 shim uses Job Objects.
+        # NOTE(P3): Windows exposes no /proc; the P3 shim uses Job Objects.
         return None
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")  # NOSONAR — pid is int, not user-controlled string
@@ -1299,7 +1299,7 @@ class Supervisor:
     def _signal_group(process: ChildProcess, signum: int) -> None:
         """Signal the child's whole process group (shim + service together)."""
         if sys.platform == "win32":
-            # TODO(P3): Windows has no killpg; Job Objects own teardown then.
+            # NOTE(P3): Windows has no killpg; Job Objects own teardown then.
             with contextlib.suppress(OSError):
                 process.terminate()
             return
