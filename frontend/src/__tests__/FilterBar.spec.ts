@@ -184,6 +184,15 @@ describe('FilterBar', () => {
     expect(attrs?.style?.borderBottom).toBeUndefined()
   })
 
+  it('defaults to no reset divider when PrimeVue passes no option list', () => {
+    const wrapper = mountFilterBar()
+    const optionPt = filterSelectPt(wrapper)
+    // props.options is absent -> the `?? 0` fallback applies (no divider, no throw).
+    const attrs = optionPt!({ context: { index: 0 }, props: {} })
+    expect(attrs?.style?.borderBottom).toBeUndefined()
+    expect(attrs?.style?.paddingTop).toBe('0.375rem')
+  })
+
   it('emits update:filter with empty string for the "All" option', async () => {
     const wrapper = mountFilterBar()
     const allOption = wrapper.findAll('.p-select-option').find((o) => o.attributes('data-value') === '__all__')!
