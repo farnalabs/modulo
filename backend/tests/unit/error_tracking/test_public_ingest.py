@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -75,6 +76,8 @@ def _clear_rate_limit_state():
 
     err_mod._public_rate_limit.clear()
     err_mod._public_daily_event_count.clear()
+    err_mod._public_rate_limit_capacity_warning_at = 0.0
+    err_mod._public_daily_capacity_warning_at = 0.0
 
 
 @pytest.fixture
@@ -196,6 +199,23 @@ class TestPublicIngestEndpoint:
             fake_time[0] = 1061.0
             resp2 = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
             assert resp2.status_code == 201
+
+    def test_daily_cap_exceeded_returns_429(self, client):
+        """A client already at the daily event cap is refused with 429."""
+        import modulo.api.routes.errors as err_mod
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        # The TestClient's requests arrive from the "testclient" host.
+        err_mod._public_daily_event_count["testclient"] = {today: 100}
+
+        with patch(
+            "modulo.api.routes.errors._service.ingest_batch",
+            AsyncMock(return_value=[{"group_id": str(uuid.uuid4()), "is_new": True}]),
+        ):
+            resp = client.post("/api/v1/errors/ingest/public", json=_valid_payload())
+
+        assert resp.status_code == 429
+        assert "Daily cap exceeded" in resp.json()["detail"]
 
     def test_ingest_pins_rls_org_context_to_orphan_org(self, client):
         """Regression (FAR-523): the pre-auth public ingest must pin the RLS
@@ -405,6 +425,235 @@ class TestPublicRateLimiterBoundedState:
             err_mod._check_public_rate_limit("client", now)
 
         assert exc.value.status_code == 429
+
+    def test_sweep_inspects_at_most_one_batch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The stale sweep must scan a bounded batch, never the whole map.
+
+        The sweep runs on the per-request admission path; a full-map scan is the
+        O(n) CPU amplification this bound removes. Only the first
+        ``_PUBLIC_SWEEP_BATCH`` (LRU-oldest) keys may be inspected.
+        """
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_PUBLIC_SWEEP_BATCH", 2)
+        now = 1000.0
+        for i in range(5):
+            err_mod._public_rate_limit[f"stale-{i}"] = [now - 9999]
+        err_mod._public_rate_limit["live"] = [now]
+
+        evicted = err_mod._sweep_stale_public_rate_limit_clients(now - 60)
+
+        assert evicted == 2
+        assert len(err_mod._public_rate_limit) == 4
+        assert "stale-0" not in err_mod._public_rate_limit
+        assert "stale-1" not in err_mod._public_rate_limit
+        assert "stale-2" in err_mod._public_rate_limit
+        assert "live" in err_mod._public_rate_limit
+
+    def test_front_sweep_is_best_effort_when_a_rejected_key_goes_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The bounded front scan is best-effort, not exhaustive.
+
+        Rejection re-touches a key (to spare it from LRU eviction) without
+        appending ``now``, so its LRU position can be newer than its newest
+        timestamp. A key that was rate-limited shortly before going quiet can
+        therefore sit BEHIND a still-in-window key, out of reach of a bounded
+        front scan. This pins that documented contract: the sweep reclaims what
+        it can and the LRU backstop — not the sweep — is the hard bound.
+        """
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_PUBLIC_SWEEP_BATCH", 1)
+        err_mod._check_public_rate_limit("A", 925.0)
+        err_mod._check_public_rate_limit("B", 960.0)
+        with pytest.raises(HTTPException):
+            # Re-touches "A" (no append), moving it to MRU while its stamp stays 925.
+            err_mod._check_public_rate_limit("A", 970.0)
+
+        window_start = 1000.0 - err_mod._PUBLIC_RATE_LIMIT_WINDOW_SECONDS  # 940.0
+        assert list(err_mod._public_rate_limit) == ["B", "A"]
+
+        evicted = err_mod._sweep_stale_public_rate_limit_clients(window_start)
+
+        assert evicted == 0
+        assert "A" in err_mod._public_rate_limit  # stale but behind in-window "B"
+        err_mod._evict_least_recently_used_public_clients(1)
+        assert list(err_mod._public_rate_limit) == ["A"]
+
+    def test_capacity_warning_is_interval_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The at-capacity WARNING must fire at most once per interval, not per request."""
+        import modulo.api.routes.errors as err_mod
+
+        warn_spy = MagicMock()
+        monkeypatch.setattr(err_mod, "_public_rate_limit_capacity_warning_at", 0.0)
+        monkeypatch.setattr(err_mod._log, "warning", warn_spy)
+
+        err_mod._warn_public_rate_limit_at_capacity(1000.0)
+        err_mod._warn_public_rate_limit_at_capacity(1000.0)
+        err_mod._warn_public_rate_limit_at_capacity(1299.0)
+        assert warn_spy.call_count == 1
+
+        err_mod._warn_public_rate_limit_at_capacity(1300.0)
+        assert warn_spy.call_count == 2
+
+    def test_detail_message_derives_from_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The 429 detail must be derived from the window constant, not hardcoded."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_rate_limit", self._fresh_limiter())
+        monkeypatch.setattr(err_mod, "_PUBLIC_RATE_LIMIT_WINDOW_SECONDS", 45.0)
+        now = 1000.0
+        err_mod._public_rate_limit["client"] = [now]
+
+        with pytest.raises(HTTPException) as exc:
+            err_mod._check_public_rate_limit("client", now)
+
+        assert exc.value.status_code == 429
+        assert "45 seconds" in exc.value.detail
+        assert "60 seconds" not in exc.value.detail
+
+
+class TestPublicDailyCapBoundedState:
+    """The public (unauthenticated) daily-cap map must stay hard-bounded.
+
+    Pre-fix the route used ``setdefault`` and pruned only on the SUCCESS path, so
+    one-off client IPs that failed later (invalid JSON, a DB error, or the daily
+    cap itself) accumulated ``{date: count}`` dicts forever on an unauthenticated
+    route. These tests pin the bounded sweep + LRU hard bound that replaces it.
+    """
+
+    @staticmethod
+    def _today() -> str:
+        return datetime.now(UTC).strftime("%Y-%m-%d")
+
+    def test_stale_daily_clients_are_swept_and_key_set_stays_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Many stale keys must be evicted so the tracked set does not grow forever."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 10)
+        for i in range(50):
+            err_mod._public_daily_event_count[f"stale-{i}"] = {"2000-01-01": 5}
+
+        days = err_mod._admit_public_daily_client("fresh", 1000.0)
+
+        assert isinstance(days, dict)
+        assert len(err_mod._public_daily_event_count) <= 10
+        assert "stale-0" not in err_mod._public_daily_event_count
+        assert "stale-49" not in err_mod._public_daily_event_count
+        assert "fresh" in err_mod._public_daily_event_count
+
+    def test_in_window_daily_clients_are_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The map must stay at/below the cap even when every tracked client is in-window."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 3)
+        today = self._today()
+        for i in range(3):
+            err_mod._public_daily_event_count[f"live-{i}"] = {today: 1}
+
+        err_mod._admit_public_daily_client("new-client", 1000.0)
+
+        assert len(err_mod._public_daily_event_count) == 3
+        assert "new-client" in err_mod._public_daily_event_count
+
+    def test_distinct_ip_daily_flood_stays_hard_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A flood of distinct new in-window IPs must not grow the map past the cap."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 4)
+        today = self._today()
+        for i in range(4):
+            err_mod._public_daily_event_count[f"k-{i}"] = {today: 1}
+
+        for i in range(20):
+            err_mod._admit_public_daily_client(f"flood-{i}", 1000.0)
+
+        assert len(err_mod._public_daily_event_count) == 4
+        assert "flood-19" in err_mod._public_daily_event_count
+
+    def test_daily_eviction_spares_most_recently_used_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Eviction must drop the least-recently-used key, not the client seen most recently."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 2)
+        today = self._today()
+        err_mod._public_daily_event_count["a"] = {today: 1}
+        err_mod._public_daily_event_count["b"] = {today: 1}
+        # Re-admit 'a' so it becomes most-recently-used.
+        err_mod._admit_public_daily_client("a", 1000.0)
+
+        err_mod._admit_public_daily_client("c", 1000.0)
+
+        assert "a" in err_mod._public_daily_event_count
+        assert "b" not in err_mod._public_daily_event_count
+        assert "c" in err_mod._public_daily_event_count
+
+    def test_daily_eviction_keeps_an_active_clients_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Admitting at cap must not drop or reset an actively-seen client's today count."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 2)
+        today = self._today()
+        err_mod._public_daily_event_count["active"] = {today: 42}
+        err_mod._public_daily_event_count["idle"] = {today: 1}
+
+        days = err_mod._admit_public_daily_client("active", 1000.0)
+        assert days[today] == 42
+
+        err_mod._admit_public_daily_client("new", 1000.0)
+
+        assert "active" in err_mod._public_daily_event_count
+        assert err_mod._public_daily_event_count["active"][today] == 42
+        assert "idle" not in err_mod._public_daily_event_count
+
+    def test_cap_of_one_daily_map_still_admits_a_new_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A cap of 1 must hard-evict the single live key to admit a new client."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        monkeypatch.setattr(err_mod, "_MAX_TRACKED_PUBLIC_DAILY_CLIENTS", 1)
+        today = self._today()
+        err_mod._public_daily_event_count["live"] = {today: 1}
+
+        err_mod._admit_public_daily_client("new", 1000.0)
+
+        assert len(err_mod._public_daily_event_count) == 1
+        assert "new" in err_mod._public_daily_event_count
+        assert "live" not in err_mod._public_daily_event_count
+
+    def test_admitted_client_drops_stale_dates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A long-lived client's entry must not retain dated counters outside the window."""
+        import modulo.api.routes.errors as err_mod
+
+        monkeypatch.setattr(err_mod, "_public_daily_event_count", {})
+        today = self._today()
+        err_mod._public_daily_event_count["client"] = {"2000-01-01": 7, today: 3}
+
+        days = err_mod._admit_public_daily_client("client", 1000.0)
+
+        assert "2000-01-01" not in days
+        assert days[today] == 3
+
+    def test_daily_capacity_warning_is_interval_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The daily-cap at-capacity WARNING must fire at most once per interval."""
+        import modulo.api.routes.errors as err_mod
+
+        warn_spy = MagicMock()
+        monkeypatch.setattr(err_mod, "_public_daily_capacity_warning_at", 0.0)
+        monkeypatch.setattr(err_mod._log, "warning", warn_spy)
+
+        err_mod._warn_public_daily_cap_at_capacity(1000.0)
+        err_mod._warn_public_daily_cap_at_capacity(1299.0)
+        assert warn_spy.call_count == 1
+
+        err_mod._warn_public_daily_cap_at_capacity(1300.0)
+        assert warn_spy.call_count == 2
 
 
 class TestSessionKeyResponse:

@@ -78,6 +78,7 @@ _SCOPE_SECRET_MANAGE = "secret.manage"  # nosec B105 — permission scope name, 
 _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_HITL_LIST = "hitl.list"  # nosec B105 — permission scope name, not a credential
+_SCOPE_PIPELINE_UPDATE = "pipeline.update"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -98,15 +99,15 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "bind_connector_to_node": "pipeline.bind_connector",
     # FAR-1182: pipeline monthly spend circuit breaker threshold - same
     # permission key as the REST PATCH /pipelines/{id} that also sets it.
-    "set_pipeline_circuit_breaker": "pipeline.update",
+    "set_pipeline_circuit_breaker": _SCOPE_PIPELINE_UPDATE,
     # FAR-1161: accountability owners - same permission key as the REST
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
-    "set_pipeline_owners": "pipeline.update",
+    "set_pipeline_owners": _SCOPE_PIPELINE_UPDATE,
     # FAR-1599: environment-profile binding - same permission key as the REST
     # PATCH /pipelines/{id} that also sets it (the shared FAR-1558 predicate
     # validates the binding on both surfaces).
-    "update_pipeline": "pipeline.update",
+    "update_pipeline": _SCOPE_PIPELINE_UPDATE,
     "create_model_backend": "model_backend.create",
     "list_runs": "run.list",
     "get_run_evals": "run.evals",

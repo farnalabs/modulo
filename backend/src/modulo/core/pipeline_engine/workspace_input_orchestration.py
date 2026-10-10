@@ -430,7 +430,7 @@ async def _resolve_credential_scripts_for_input(
                     f"workspace_input dest={dest!r}: connector instance "
                     f"{connector_instance_id} not found in current org "
                     "(tenancy check failed)",
-                    error_code="sandbox.input_credential_failed",
+                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 )
     except ProvisioningError:
@@ -439,12 +439,12 @@ async def _resolve_credential_scripts_for_input(
         if _is_transient_error(exc):
             raise ProvisioningError(
                 f"workspace_input dest={dest!r}: transient error during tenancy check: {exc}",
-                error_code="sandbox.input_credential_failed",
+                error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                 retryable=True,
             ) from exc
         raise ProvisioningError(
             f"workspace_input dest={dest!r}: unexpected error during tenancy check: {exc}",
-            error_code="sandbox.input_credential_failed",
+            error_code=_CODE_INPUT_CREDENTIAL_FAILED,
             retryable=False,
         ) from exc
 
@@ -510,7 +510,7 @@ async def _resolve_credential_scripts_for_input(
             except CredentialResolutionError as exc:
                 raise ProvisioningError(
                     f"workspace_input dest={dest!r}: credential is not read-only: {exc}",
-                    error_code="sandbox.input_credential_failed",
+                    error_code=_CODE_INPUT_CREDENTIAL_FAILED,
                     retryable=False,
                 ) from exc
 
