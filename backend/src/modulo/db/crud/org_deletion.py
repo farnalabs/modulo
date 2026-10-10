@@ -355,9 +355,11 @@ async def export_org_data(
 ) -> dict[str, Any]:
     """Return the export bundle for an org (captures live data if none exists)."""
     # FAR-1624 org-lock audit: intentionally `FOR UPDATE`, NOT `FOR NO KEY
-    # UPDATE` — this read-modify-write acquires the org lock FIRST (no pre-held
+    # UPDATE` — this audited read path acquires the org lock FIRST (no pre-held
     # FK `KEY SHARE` on the org), so it cannot hit the KEY-SHARE->FOR-UPDATE
-    # upgrade cycle.
+    # upgrade cycle. The bundle is returned as-read: the stored
+    # ``export_bundle_json`` when present, else a live capture via
+    # ``_collect_org_export`` that is not persisted here.
     result = await session.execute(
         include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
     )
