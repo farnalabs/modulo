@@ -26,7 +26,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
-from modulo.db.sqlstates import sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout, sqlstate_of
 from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import get_settings
 
@@ -48,11 +48,15 @@ def _pipeline_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
 # run-starts resolves in milliseconds — a short retry loop nearly always
 # succeeds where a single pg_try_advisory_lock attempt raised and the caller
 # silently dropped the trigger. Module-level so tests can patch them.
-SNAPSHOT_LOCK_ATTEMPTS = 5
-SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS = 0.25
+#
+# FAR-1625: the budget was widened from 5 to cover the reproduced burst (12
+# simultaneous triggers for one pipeline); the wall-clock bound below still caps
+# the worst case.
+SNAPSHOT_LOCK_ATTEMPTS = 40
+SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS = 0.1
 
 # FAR-1287: bound on the WHOLE acquisition (connect + poll). The poll budget
-# above is 5 x 0.25s of sleeps, so 5s is several times the normal case while
+# above is 40 x 0.1s of sleeps (4s), so 5s is several times the normal case while
 # staying far below the main pool's 30s ``pool_timeout`` — a saturated or dead
 # lock source fails fast as SnapshotLockNotAvailableError instead of stalling a
 # waiter (and a route) for half a minute. Module-level so tests can patch it.
@@ -68,17 +72,17 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# FAR-1287 Part 2: bounded OPTIMISTIC retry of the snapshot_version allocation
+# FAR-1287 Part 2: snapshot_version allocation backstop
 # ---------------------------------------------------------------------------
-# The advisory lock is released in ``create_snapshot_from_live_graph``'s
-# ``finally`` — BEFORE the caller's transaction commits — so a second creator can
-# grab the lock inside that window, read the same ``max(snapshot_version)+1`` and
-# collide on ``uq_pipeline_snapshot_version`` at insert time. The lock cannot be
-# held across the caller's commit (it lives on its own connection and the caller
-# owns the transaction), so the collision is resolved the optimistic way: a
-# SAVEPOINT contains the read+insert, and an ``IntegrityError`` on that unique
-# constraint is rolled back to the savepoint and retried with a freshly read
-# version. Module-level so tests can patch the bound.
+# FAR-1625 serialises the version read+insert with a transaction-scoped row lock
+# on the pipelines row — see :func:`_acquire_snapshot_allocation_lock`. The
+# OPTIMISTIC retry below is kept as a DEFENSIVE BACKSTOP: a SAVEPOINT contains
+# the read+insert and an ``IntegrityError`` on that unique constraint is rolled
+# back to the savepoint and retried with a freshly read version. With the
+# allocation lock in place a collision should essentially never occur, but if the
+# lock is ever bypassed (a caller outside a transaction, a backend without row
+# locks) the retry still contains a two-creator collision rather than surfacing
+# it. Module-level so tests can patch the bound.
 SNAPSHOT_VERSION_ATTEMPTS = 3
 
 # The unique constraint whose violation identifies an allocation collision.
@@ -388,6 +392,62 @@ async def _release_snapshot_lock(lock_conn: AsyncConnection, *, key1: int, key2:
         _log.warning("snapshot_lock_unlock_failed", exc_info=True)
     finally:
         await _dispose_snapshot_lock_connection(lock_conn, can_pool=unlocked)
+
+
+async def _acquire_snapshot_allocation_lock(session: AsyncSession, *, pipeline_id: uuid.UUID) -> None:
+    """Serialise ``snapshot_version`` allocation for one pipeline (FAR-1625).
+
+    Takes a transaction-scoped row lock on the ``pipelines`` row —
+    ``SELECT ... FOR NO KEY UPDATE`` — held until the caller COMMITS or ROLLS
+    BACK. The version read+insert must be serialised per pipeline: the graph-copy
+    advisory lock is released before the caller commits, so without this a second
+    creator reads the same ``max(snapshot_version)`` and collides on
+    ``uq_pipeline_snapshot_version``.
+
+    The lock RESOURCE is the load-bearing choice — it must be one the EDIT and
+    ROLLBACK paths already take BEFORE they call in, or the lock order inverts
+    into an ABBA cycle:
+
+    * EDIT (``routes.pipelines._reapply_team_gate_inside_mutation_txn``) and
+      ROLLBACK (``crud.pipeline_snapshot_versioning``) hold the ``pipelines``
+      row ``FOR UPDATE`` FIRST, then call ``create_snapshot_from_live_graph``;
+    * every RUN path reaches this helper first, before any snapshot/run insert
+      takes a foreign-key ``FOR KEY SHARE`` on that same row.
+
+    A ``FOR NO KEY UPDATE`` on the caller's session gives the consistent order:
+    it is self-reentrant when the caller already holds ``FOR UPDATE`` (no wait,
+    no cycle); it conflicts with itself, so concurrent creators still serialise;
+    and it is COMPATIBLE with the ``FOR KEY SHARE`` the snapshot/run FK inserts
+    take, so it neither blocks them nor forces a lock upgrade. An advisory
+    allocation lock instead took a resource the edit/rollback paths did NOT
+    already hold — RUN held advisory and wanted the row, EDIT held the row and
+    wanted advisory.
+
+    The wait is bounded by transaction-scoped ``SET LOCAL lock_timeout``
+    (``db.crud.row_lock.set_mutation_row_lock_timeout``, default 5s). A 55P03
+    expiry is re-raised as :class:`SnapshotLockNotAvailableError` — the same
+    retryable 503 the graph-copy bounded wait maps to — so a contended
+    allocation never parks a pooled connection unbounded and never surfaces as a
+    generic 500.
+    """
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
+    try:
+        await session.execute(
+            select(Pipeline)
+            .where(Pipeline.id == pipeline_id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        )
+    except SQLAlchemyError as exc:
+        if not is_row_lock_timeout(exc):
+            raise
+        _log.warning("snapshot_allocation_lock_timeout pipeline_id=%s", pipeline_id)
+        raise SnapshotLockNotAvailableError(
+            f"Cannot acquire snapshot allocation lock for pipeline {pipeline_id}: a concurrent creator "
+            "held it past the lock_timeout bound"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -926,20 +986,12 @@ async def create_snapshot_from_live_graph(
     lock source fails fast instead of stalling. Raises
     SnapshotLockNotAvailableError only after a bound is exhausted.
 
-    FAR-1287 Part 2 (version-allocation race): the lock is still released in
-    this function's ``finally``, i.e. BEFORE the caller's transaction commits —
-    that ordering is unchanged and unavoidable (the lock lives on its own
-    connection and the caller owns the commit). What Part 2 changed is the
-    consequence: ``max(snapshot_version)+1`` and the insert now run inside a
-    ``session.begin_nested()`` SAVEPOINT, and a collision on
-    ``uq_pipeline_snapshot_version`` is rolled back to that savepoint and
-    retried up to ``SNAPSHOT_VERSION_ATTEMPTS`` times with a freshly read max,
-    so a concurrent same-pipeline creator can no longer surface
-    ``IntegrityError`` at a caller. The window is still there; it is now
-    benign. Exhausting the bound raises
-    :class:`SnapshotVersionAllocationError` (an ``IntegrityError`` subclass, so
-    every existing route/trigger handler keeps its 409 mapping) — never a
-    silent ``None``.
+    FAR-1625 (version-allocation race): the graph-copy lock above is released
+    before the caller's commit, so a SEPARATE transaction-scoped lock serialises
+    the version read+insert — see :func:`_acquire_snapshot_allocation_lock`,
+    which is the authoritative description of the lock resource and ordering.
+    The graph-copy lock is released BEFORE that allocation phase so its wait
+    never holds the session-scoped graph lock.
 
     Retry scope (the documented choice): the GRAPH COPY — pipeline + edges,
     composite expansion, agent materialisation, parameter bindings, reference
@@ -955,6 +1007,7 @@ async def create_snapshot_from_live_graph(
     """
     key1, key2 = _pipeline_lock_keys(pipeline_id)
     lock_conn = await _acquire_snapshot_lock(session, pipeline_id=pipeline_id, key1=key1, key2=key2)
+    graph_lock_released = False
 
     try:
         pipeline, nodes, edge_dicts = await _load_pipeline_and_edges(session, pipeline_id)
@@ -976,8 +1029,24 @@ async def create_snapshot_from_live_graph(
         parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
         connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
 
-        # FAR-1287 Part 2: bounded OPTIMISTIC retry of the version allocation.
-        # The graph copy above ran once; each attempt below re-reads
+        # FAR-1625: release the graph-copy lock BEFORE the allocation phase, so
+        # its wait never holds the session-scoped graph lock (see the helper).
+        # The graph copy itself is done, so the lock has served its purpose.
+        #
+        # The flag is set BEFORE the call: ``_release_snapshot_lock``'s dispose
+        # runs under ``asyncio.shield`` on every path (including cancellation),
+        # so the lock is physically released even if the call itself raises —
+        # marking it first keeps the ``finally`` from attempting a second
+        # release on an already-disposed connection.
+        graph_lock_released = True
+        await _release_snapshot_lock(lock_conn, key1=key1, key2=key2)
+
+        # FAR-1625: serialise the version read+insert (see the helper).
+        await _acquire_snapshot_allocation_lock(session, pipeline_id=pipeline_id)
+
+        # FAR-1287 Part 2: bounded OPTIMISTIC retry of the version allocation —
+        # now a defensive backstop behind the FAR-1625 serialisation lock. The
+        # graph copy above ran once; each attempt below re-reads
         # ``max(snapshot_version)``, re-loads the two pin sets and inserts,
         # ALL inside a SAVEPOINT so a collision on
         # ``uq_pipeline_snapshot_version`` rolls back to the savepoint — the
@@ -1111,7 +1180,13 @@ async def create_snapshot_from_live_graph(
         # version read, an IntegrityError at flush, or a cancellation — and the
         # unlock + disposal happen on the dedicated connection, never the
         # caller's (possibly aborted) session.
-        await _release_snapshot_lock(lock_conn, key1=key1, key2=key2)
+        #
+        # FAR-1625: on the success path the graph-copy lock was already released
+        # early (before the allocation phase); only a failure BEFORE that point
+        # still reaches here holding it. Releasing twice would be a double
+        # unlock + double dispose, hence the guard.
+        if not graph_lock_released:
+            await _release_snapshot_lock(lock_conn, key1=key1, key2=key2)
 
 
 async def create_snapshot_edit(
