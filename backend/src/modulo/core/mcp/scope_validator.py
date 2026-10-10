@@ -104,6 +104,11 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     # PATCH /pipelines/{id} that also sets them (eligibility runs in the
     # shared CRUD layer, identical to the REST path).
     "set_pipeline_owners": _SCOPE_PIPELINE_UPDATE,
+    # FAR-1175 (ADR 043 S1): manual autonomy demote/promote - same permission
+    # key as the REST POST /pipelines/{id}/autonomy/{demote,promote}; the
+    # admin/owner gate is enforced in-handler on both surfaces.
+    "demote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
+    "promote_pipeline_autonomy": _SCOPE_PIPELINE_UPDATE,
     # FAR-1599: environment-profile binding - same permission key as the REST
     # PATCH /pipelines/{id} that also sets it (the shared FAR-1558 predicate
     # validates the binding on both surfaces).

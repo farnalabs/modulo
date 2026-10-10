@@ -6,7 +6,9 @@ from typing import Any
 import pytest
 
 from modulo.core.run_context.autonomy import (
+    AUTONOMY_GATING_FLAG,
     AUTONOMY_LEVEL_VALUES,
+    PIPELINE_EARNED_AT_START_KEY,
     PIPELINE_MAX_AUTONOMY_KEY,
     AutonomyLevel,
     AutonomyResolution,
@@ -359,3 +361,137 @@ class TestMaxAutonomyReservedKey:
 
         assert PIPELINE_MAX_AUTONOMY_KEY in _RESERVED_RUN_CONTEXT_KEYS
         assert PIPELINE_MAX_AUTONOMY_KEY == "_pipeline_max_autonomy"
+
+
+class TestEarnedAutonomyResolution:
+    """FAR-1175 (ADR 043 S1): earned-level resolution at a HITL gate."""
+
+    def test_gating_off_ignores_earned_live(self) -> None:
+        """With the flag off, resolution is byte-identical to S0 — the live
+        earned level has no effect."""
+        result = effective_autonomy_level(
+            pipeline_default="manual_approval",
+            run_context={PIPELINE_EARNED_AT_START_KEY: "manual_approval"},
+            earned_live="fully_autonomous",
+            gating_enabled=False,
+        )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+
+    def test_gating_on_earned_live_lowers_below_default(self) -> None:
+        """Gating on: the live earned level becomes the base (a demotion from a
+        fully_autonomous default)."""
+        result = effective_autonomy_level(
+            pipeline_default="fully_autonomous",
+            run_context={},
+            earned_live="manual_approval",
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+
+    def test_gating_on_earned_live_raises_above_default(self) -> None:
+        """Gating on: a promoted earned level raises the base above the default."""
+        result = effective_autonomy_level(
+            pipeline_default="manual_approval",
+            run_context={PIPELINE_MAX_AUTONOMY_KEY: "fully_autonomous"},
+            earned_live="fully_autonomous",
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.FULLY_AUTONOMOUS
+
+    def test_demotion_visible_at_next_gate_of_in_flight_run(self) -> None:
+        """D2: a demotion bites an in-flight run at its next gate — the live
+        level (lower) wins over the pinned-at-start level."""
+        result = effective_autonomy_level(
+            pipeline_default="fully_autonomous",
+            run_context={PIPELINE_EARNED_AT_START_KEY: "fully_autonomous"},
+            earned_live="manual_approval",
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+
+    def test_promotion_not_visible_to_in_flight_run(self) -> None:
+        """D2: a promotion must not loosen an in-flight run — the pinned-at-start
+        level (lower) still holds even though the live level is higher."""
+        result = effective_autonomy_level(
+            pipeline_default="manual_approval",
+            run_context={PIPELINE_EARNED_AT_START_KEY: "manual_approval"},
+            earned_live="fully_autonomous",
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.MANUAL_APPROVAL
+
+    def test_ceiling_always_holds_against_earned(self) -> None:
+        """The ceiling clamps the earned base even when both pin and live are
+        above it."""
+        resolution = resolve_autonomy(
+            pipeline_default="manual_approval",
+            run_context={
+                PIPELINE_EARNED_AT_START_KEY: "fully_autonomous",
+                PIPELINE_MAX_AUTONOMY_KEY: "notify_on_complete",
+            },
+            earned_live="fully_autonomous",
+            gating_enabled=True,
+        )
+        assert resolution.effective == AutonomyLevel.NOTIFY_ON_COMPLETE
+        assert resolution.ceiling == AutonomyLevel.NOTIFY_ON_COMPLETE
+
+    def test_earned_base_then_recommendation_clamped_to_ceiling(self) -> None:
+        """A recommendation above the earned base may raise only to the ceiling."""
+        resolution = resolve_autonomy(
+            pipeline_default="manual_approval",
+            run_context={
+                PIPELINE_EARNED_AT_START_KEY: "manual_approval",
+                PIPELINE_MAX_AUTONOMY_KEY: "notify_on_complete",
+                "autonomy_recommendation": "fully_autonomous",
+            },
+            earned_live="manual_approval",
+            gating_enabled=True,
+        )
+        assert resolution.effective == AutonomyLevel.NOTIFY_ON_COMPLETE
+        assert resolution.clamped is True
+
+    def test_only_pin_present_uses_pin(self) -> None:
+        # An explicit ceiling must accompany the earned level — otherwise the
+        # effective ceiling is the default and clamps the raise (S0 rule).
+        result = effective_autonomy_level(
+            pipeline_default="manual_approval",
+            run_context={
+                PIPELINE_EARNED_AT_START_KEY: "notify_on_complete",
+                PIPELINE_MAX_AUTONOMY_KEY: "notify_on_complete",
+            },
+            earned_live=None,
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.NOTIFY_ON_COMPLETE
+
+    def test_only_live_present_uses_live(self) -> None:
+        result = effective_autonomy_level(
+            pipeline_default="manual_approval",
+            run_context={PIPELINE_MAX_AUTONOMY_KEY: "notify_on_complete"},
+            earned_live="notify_on_complete",
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.NOTIFY_ON_COMPLETE
+
+    def test_gating_on_no_earned_falls_back_to_default(self) -> None:
+        """NULL earned (never set) means the pinned default is the base."""
+        result = effective_autonomy_level(
+            pipeline_default="notify_on_complete",
+            run_context={},
+            earned_live=None,
+            gating_enabled=True,
+        )
+        assert result == AutonomyLevel.NOTIFY_ON_COMPLETE
+
+
+class TestEarnedAutonomyReservedKey:
+    def test_earned_at_start_is_reserved(self) -> None:
+        """FAR-1175: a context-setter may never overwrite the pinned earned
+        level (it would let the agent erase its own in-flight ceiling)."""
+        from modulo.core.pipeline_engine.decorator import _RESERVED_RUN_CONTEXT_KEYS
+
+        assert PIPELINE_EARNED_AT_START_KEY in _RESERVED_RUN_CONTEXT_KEYS
+        assert PIPELINE_EARNED_AT_START_KEY == "_pipeline_earned_at_start"
+
+    def test_gating_flag_name(self) -> None:
+        assert AUTONOMY_GATING_FLAG == "autonomy_gating"
