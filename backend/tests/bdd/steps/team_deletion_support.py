@@ -6,8 +6,11 @@ DB/RLS seams patched. These helpers live here — one copy — so the dispatch
 wiring cannot drift between the two step files.
 """
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
+
+logger = logging.getLogger(__name__)
 
 
 def _stmt_from_tables(stmt: object) -> list[str]:
@@ -26,6 +29,7 @@ def _stmt_from_tables(stmt: object) -> list[str]:
     try:
         froms = get_froms()
     except Exception:
+        logger.debug("Could not read FROM tables from statement %r", stmt, exc_info=True)
         return []
     tables: list[str] = []
     for selectable in froms:

@@ -105,7 +105,7 @@ def delete_team(team_name: str, request, ctx, client=None) -> None:
 def reassign_all(team_name: str, ctx) -> None:
     team = ctx["teams"].get(team_name, {})
     team_id = team.get("id")
-    for key in ("pipelines", "connectors", "model_backends"):
+    for key in _BUCKET_TABLES:
         ctx[key] = {
             name: data for name, data in ctx.get(key, {}).items() if str(data.get("owner_team_id")) != str(team_id)
         }
