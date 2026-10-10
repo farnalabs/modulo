@@ -1021,6 +1021,15 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     counter (FAR-714) and the terminalizer and enqueue-failed recovery
     counters. Every counter defaults to 0 so a pre-D worker's payload renders
     without error.
+
+    FAR-1621: the four per-org bounded-failure counters are included so an
+    alert email can tell the four cases apart at a glance — ``org_timeouts``
+    (the FAR-1525 30s per-org cut), ``orgs_deferred`` (orgs never started
+    because only the reserved tick tail remained), ``org_lock_timeouts``
+    (FAR-1601 SQLSTATE 55P03 skip), ``org_pool_timeouts`` (system-engine pool
+    checkout) and ``org_statement_timeouts`` (FAR-1621 SQLSTATE 57014
+    statement bound). Before them the detail ended at ``rows_deferred``, so
+    the exact class of bounded failure was invisible to the alert.
     """
     return (
         f"scanned={stats.get('scanned', 0)}, repaired={stats.get('repaired', 0)}, "
@@ -1036,7 +1045,12 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
         f"capacity_deferred={stats.get('capacity_deferred', 0)}, "
         f"terminalize_capped={stats.get('terminalize_capped', 0)}, "
         f"facts_deferred={stats.get('facts_deferred', 0)}, "
-        f"rows_deferred={stats.get('rows_deferred', 0)}"
+        f"rows_deferred={stats.get('rows_deferred', 0)}, "
+        f"org_timeouts={stats.get('org_timeouts', 0)}, "
+        f"orgs_deferred={stats.get('orgs_deferred', 0)}, "
+        f"org_lock_timeouts={stats.get('org_lock_timeouts', 0)}, "
+        f"org_pool_timeouts={stats.get('org_pool_timeouts', 0)}, "
+        f"org_statement_timeouts={stats.get('org_statement_timeouts', 0)}"
     )
 
 

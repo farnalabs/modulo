@@ -78,6 +78,17 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       is advisory (never flips readiness), `unavailable` past 5 minutes – the system
       worker's cron is silently dead and the fleet can no longer terminalize
       stalled/never-dispatched runs – 503s readiness
+- [x] Dispatcher reconcile detail counters (FAR-1621) – `_format_reconcile_detail`
+      renders the outcome counters on every tier, including the per-org
+      bounded-failure family so an alert email can tell the cases apart without
+      reading logs: `org_timeouts` (the FAR-1525 30s per-org cut), `orgs_deferred`
+      (orgs never started because only the reserved tick tail remained),
+      `org_lock_timeouts` (FAR-1601 SQLSTATE 55P03 skip), `org_pool_timeouts`
+      (system-engine pool checkout) and `org_statement_timeouts` (FAR-1621
+      SQLSTATE 57014 statement bound). Each defaults to 0 so a payload written
+      before the counter existed still renders; the matching cut/skip also lands
+      in the tick's `last_error` carrying the exact `stage=` the org pass had
+      reached
 - [x] Fleet worker / fleet system-cron aggregation (worker process-group health, ADR 021)
 - [x] Break-glass watchdog exposure is advisory and never contributes to readiness
 - [x] Per-check timeout limits, configurable via `modulo_health_*_timeout_seconds` settings

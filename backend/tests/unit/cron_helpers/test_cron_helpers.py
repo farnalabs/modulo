@@ -12,16 +12,20 @@ import json
 import logging
 import uuid
 from collections.abc import Generator
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
+from asyncpg import exceptions as asyncpg_exceptions
+from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import TimeoutError as SATimeoutError
 
 from modulo.core import cron_helpers as ch
 from modulo.db.models.eval_suite_run import SuiteRun
+from modulo.db.sqlstates import sqlstate_of
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
@@ -3107,7 +3111,7 @@ class TestGetSystemEngine:
             assert result is create_engine.return_value
             create_engine.assert_called_once()
             _, kwargs = create_engine.call_args
-            assert kwargs["connect_args"] == {"ssl": False, "statement_cache_size": 0}
+            assert kwargs["connect_args"] == {"timeout": 10, "ssl": False, "statement_cache_size": 0}
         finally:
             ch._SYSTEM_ENGINE = None
 
@@ -3127,7 +3131,7 @@ class TestGetSystemEngine:
             # sslmode is stripped from the URL and passed as asyncpg's ssl arg;
             # leaving it in the URL raises TypeError at first connect (FAR-1440).
             assert args[0] == "postgresql+asyncpg://sys:pass@db:5432/modulo"
-            assert kwargs["connect_args"] == {"ssl": "require", "statement_cache_size": 0}
+            assert kwargs["connect_args"] == {"timeout": 10, "ssl": "require", "statement_cache_size": 0}
         finally:
             ch._SYSTEM_ENGINE = None
 
@@ -3663,3 +3667,576 @@ class TestFireSuiteRunTriggerSpendPool:
         assert result["status"] == "skipped"
         assert result["reason"] == "concurrency_limit"
         assert any("last_fired_at" in str(stmt) for stmt, _ in session.executed)
+
+
+# ---------------------------------------------------------------------------
+# FAR-1621 — attributable + bounded per-org reconcile failures
+# ---------------------------------------------------------------------------
+
+
+class _F1621Begin:
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        # Propagate: an exception raised inside the org transaction must roll
+        # it back and reach the caller's handler, exactly like the real
+        # ``AsyncSession.begin()``.
+        return False
+
+
+class _F1621Session:
+    """AsyncSession double recording every statement AND the stage hint at that moment.
+
+    Reports the ``postgresql`` dialect so the FAR-1601 ``lock_timeout`` bound,
+    the FAR-1621 ``statement_timeout`` bound and ``_set_rls_org`` all take
+    their live ``set_config`` path. ``stage_at[i]`` is the stage op current
+    when statement *i* executed, which is how the refinement contract is
+    pinned without a sleeping/blocked pass.
+
+    Scripting knobs:
+      * *rows* — returned by the reconcile row select (identified by the
+        selected ``retry_policy`` column) so the per-row loop runs;
+      * *raise_on_update* — raised on the first ``UPDATE runs`` (i.e. out of a
+        batch terminalizer).
+    """
+
+    def __init__(
+        self,
+        stage: dict[str, str],
+        *,
+        rows: list[Any] | None = None,
+        raise_on_update: BaseException | None = None,
+    ) -> None:
+        self.stage = stage
+        self.statements: list[str] = []
+        self.stage_at: list[str] = []
+        self.params: list[dict[str, Any] | None] = []
+        self.rows = rows or []
+        self.raise_on_update = raise_on_update
+        self.info: dict[str, Any] = {}
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+        self._bind = bind
+
+    def get_bind(self) -> MagicMock:
+        return self._bind
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    def begin(self) -> _F1621Begin:
+        return _F1621Begin()
+
+    async def flush(self) -> None:
+        return None
+
+    async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+        sql = str(stmt)
+        self.statements.append(sql)
+        self.stage_at.append(self.stage.get("op", ""))
+        self.params.append(params)
+        if self.raise_on_update is not None and "UPDATE runs" in sql:
+            raise self.raise_on_update
+        result = MagicMock()
+        if "retry_policy" in sql:
+            result.all.return_value = list(self.rows)
+        else:
+            result.all.return_value = []
+        if "count(*)" in sql and "FROM runs" in sql:
+            # _capacity_defer_pending_run's active-run count: at capacity.
+            result.scalar_one_or_none.return_value = 1
+        if "FROM pipelines" in sql:
+            result.scalar_one_or_none.return_value = SimpleNamespace(max_concurrent_runs=1)
+        return result
+
+    def index_of(self, marker: str) -> int:
+        """Index of the FIRST recorded statement containing *marker* (-1 if none)."""
+        for index, sql in enumerate(self.statements):
+            if marker in sql:
+                return index
+        return -1
+
+    def indices_of(self, marker: str) -> list[int]:
+        return [i for i, sql in enumerate(self.statements) if marker in sql]
+
+
+def _f1621_tuning() -> ch.ReconcileTuning:
+    return ch.ReconcileTuning(
+        nodeless_window=20,
+        max_age_minutes=60,
+        claim_cap=3,
+        stale_window=600,
+        capacity_redispatch_seconds=120,
+        hitl_review_cancel_grace_seconds=3600,
+    )
+
+
+def _f1621_lock_settings() -> MagicMock:
+    return MagicMock(mutation_row_lock_timeout_ms=4321)
+
+
+def _f1621_statement_timeout_error() -> OperationalError:
+    """The transaction-scoped ``statement_timeout`` expiry, surfaced the way
+    SQLAlchemy wraps asyncpg's real ``QueryCanceledError`` (SQLSTATE 57014)."""
+    driver_error = asyncpg_exceptions.QueryCanceledError("canceling statement due to statement timeout")
+    return OperationalError("UPDATE runs SET ...", {}, driver_error)
+
+
+async def _run_f1621_org(
+    session: _F1621Session,
+    *,
+    stage: dict[str, str] | None = None,
+    summary: dict[str, Any] | None = None,
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] | None = None,
+    factory: Any = None,
+) -> int:
+    """Drive the REAL ``_reconcile_org`` against *session* (FAR-1621 seam)."""
+    return await ch._reconcile_org(
+        factory=factory if factory is not None else MagicMock(return_value=session),
+        q=MagicMock(),
+        redis_client=AsyncMock(),
+        org_id=ORG,
+        re_dispatch_predicate=ch.text("1 = 1"),
+        tuning=_f1621_tuning(),
+        enqueue_failed_redispatched=0,
+        summary=summary if summary is not None else ch._dispatcher_summary(),
+        terminalized_run_ids=terminalized_run_ids if terminalized_run_ids is not None else [],
+        stage=stage,
+    )
+
+
+class TestOrgStatementBound:
+    """FAR-1621 proposal 2: a transaction-scoped ``statement_timeout`` sits
+    next to the FAR-1601 ``lock_timeout`` and turns a runaway statement into a
+    catchable, attributable SQLSTATE 57014 instead of an invisible burn of the
+    org's whole time slice."""
+
+    async def test_statement_bound_is_the_transactions_second_statement(self) -> None:
+        """THE pin: the lock bound stays FIRST, the statement bound is SECOND,
+        both are transaction-local (``set_config(..., true)`` == ``SET LOCAL``),
+        the statement bound's value comes from the module constant, that
+        constant is at or under the 30s per-org budget, and both precede every
+        ``UPDATE runs`` the transaction makes."""
+        stage: dict[str, str] = {}
+        session = _F1621Session(stage)
+        with patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()):
+            await _run_f1621_org(session, stage=stage)
+
+        sqls = session.statements
+        assert sqls, "the org transaction executed no statements"
+        lock_at = session.index_of("set_config('lock_timeout'")
+        assert lock_at >= 0, f"no transaction-local lock bound issued; statements={sqls}"
+        assert lock_at == 0, f"the lock bound must remain the FIRST statement; statements={sqls}"
+        stmt_at = session.index_of("set_config('statement_timeout'")
+        assert stmt_at >= 0, f"no transaction-local statement bound issued; statements={sqls}"
+        assert stmt_at == 1, f"the statement bound must be the SECOND statement; statements={sqls}"
+        assert ", true)" in sqls[stmt_at], "the statement bound must be transaction-local (SET LOCAL)"
+        assert session.params[stmt_at] == {"val": f"{ch._RECONCILE_STATEMENT_TIMEOUT_MS}ms"}
+        # Under the per-org budget is the whole point of the bound: it must
+        # fire BEFORE the asyncio cut, so the failure is catchable + attributed.
+        assert ch._RECONCILE_STATEMENT_TIMEOUT_MS <= 30000
+        updates = session.indices_of("UPDATE runs")
+        assert updates, "the batch terminalizers never ran an UPDATE runs"
+        assert stmt_at < updates[0], "the statement bound must precede every runs write"
+
+    async def test_statement_timeout_expiry_is_not_mislabelled_read_failed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A 57014 raised during the batch terminalizers propagates OUT of
+        ``_reconcile_org`` (rolling the org transaction back) so the reconcile
+        body can apply its dedicated skip — never swallowed as ``read
+        failed``, which would erase the stage attribution the bound exists to
+        produce."""
+        stage: dict[str, str] = {}
+        session = _F1621Session(stage, raise_on_update=_f1621_statement_timeout_error())
+        caplog.set_level(logging.ERROR, logger="modulo.core.cron_helpers")
+
+        with (
+            patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()),
+            pytest.raises(OperationalError) as excinfo,
+        ):
+            await _run_f1621_org(session, stage=stage)
+
+        assert sqlstate_of(excinfo.value) == "57014"
+        assert not any("read failed" in message for message in caplog.messages)
+
+    async def test_statement_timeout_is_still_a_lock_timeouts_own_skip_not_this_one(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Scope guard: a 55P03 keeps its existing path and is never counted
+        as a statement timeout (the two bounded waits are distinct classes)."""
+        stage: dict[str, str] = {}
+        driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+        session = _F1621Session(stage, raise_on_update=OperationalError("UPDATE runs SET ...", {}, driver_error))
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+
+        with (
+            patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()),
+            pytest.raises(OperationalError) as excinfo,
+        ):
+            await _run_f1621_org(session, stage=stage)
+
+        assert sqlstate_of(excinfo.value) == "55P03"
+        assert not any("org_statement_timeout" in record.getMessage() for record in caplog.records)
+
+
+class TestOrgStageHint:
+    """FAR-1621 proposal 1: ``_reconcile_org`` refines the shared ``stage``
+    hint at every site, so a cut names the exact blocking block."""
+
+    async def test_stage_is_refined_at_every_site_of_the_pass(self) -> None:
+        """Each stage is observed at the statement that runs under it: the
+        session-acquire mark (seen by the session factory), session-acquired at
+        the lock bound, lock-bound-set at the statement bound,
+        statement-bound-set at the RLS GUCs, rls-set at the first terminalizer,
+        terminalizer:<key> at each terminalizer, row_select at the row select
+        and row_loop:i/N in the per-row loop."""
+        stage: dict[str, str] = {"op": f"reconcile_org:{ORG}"}
+        row = SimpleNamespace(id=uuid.uuid4(), pipeline_id=uuid.uuid4(), status="pending")
+        _session = _F1621Session(stage, rows=[row])
+        observed_at_factory: list[str] = []
+
+        def factory() -> Any:
+            # The pre-session mark: what a block in the pool checkout reports.
+            observed_at_factory.append(stage.get("op", ""))
+            return _session
+
+        with (
+            patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()),
+            patch.object(ch, "_reconcile_one_row", new_callable=AsyncMock, return_value=0),
+        ):
+            await _run_f1621_org(_session, stage=stage, factory=factory)
+
+        prefix = f"reconcile_org:{ORG}"
+        # The pre-session mark is what a pool-checkout block reports.
+        assert observed_at_factory == [f"{prefix}/session-acquire"]
+        ops = _session.stage_at
+        assert all(op.startswith(prefix) for op in ops), f"stage lost the org prefix: {ops}"
+        lock_at = _session.index_of("set_config('lock_timeout'")
+        stmt_at = _session.index_of("set_config('statement_timeout'")
+        rls_at = _session.index_of("app.organisation_id")
+        # ``outputs_absent`` is the row select's own SELECT-list label — a
+        # marker no terminalizer statement carries.
+        row_select_at = _session.index_of("outputs_absent")
+        updates = _session.indices_of("UPDATE runs")
+        assert lock_at >= 0
+        assert stmt_at >= 0
+        assert rls_at >= 0
+        assert row_select_at >= 0
+        assert updates, "the batch terminalizers never ran an UPDATE runs"
+        assert ops[lock_at] == f"{prefix}/session-acquired"
+        assert ops[stmt_at] == f"{prefix}/lock-bound-set"
+        assert ops[rls_at] == f"{prefix}/statement-bound-set"
+        # Whichever terminalizer issued the first hot write ran under its own
+        # ``terminalizer:<key>`` mark.
+        assert ops[updates[0]].startswith(f"{prefix}/terminalizer:")
+        assert ops[row_select_at] == f"{prefix}/row_select"
+        assert stage["op"] == f"{prefix}/row_loop:0/1"
+
+    async def test_stage_is_a_noop_without_a_hint(self) -> None:
+        """Direct callers (tests, other sweeps) pass no hint: the pass must run
+        exactly as before and never touch a stage dict."""
+        stage: dict[str, str] = {}
+        session = _F1621Session(stage)
+        with patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()):
+            got = await _run_f1621_org(session, stage=None)
+        assert got == 0
+        # The pass really executed (otherwise the assertion above is vacuous).
+        assert session.statements
+        assert stage == {}
+
+
+async def _drive_f1621_body(
+    org_ids: list[uuid.UUID],
+    fake_reconcile_org: Any,
+    *,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+) -> tuple[dict[str, Any], AsyncMock, dict[str, str], AsyncMock]:
+    """Drive the REAL ``_dispatcher_reconcile_body`` over *org_ids* with a
+    controlled ``_reconcile_org`` double (the FAR-1525 harness shape).
+
+    Returns the tick summary, the ``_run_reconcile_sweeps`` mock (so a test can
+    assert the tick still reached its compensating sweeps), the live ``stage``
+    hint, and the ``_record_fact_for_terminalized_run`` mock (so a test can
+    assert a rolled-back org contributed no compensating fact).
+    """
+    settings = MagicMock(
+        dispatcher_reconcile_budget_seconds=95,
+        dispatcher_reconcile_org_budget_seconds=1,
+    )
+    stage: dict[str, str] = {}
+    record_facts = AsyncMock()
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=org_ids))
+        stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org))
+        stack.enter_context(patch.object(ch, "reconciler_recovery_predicate"))
+        stack.enter_context(patch.object(ch, "_open_system_factory"))
+        sweeps = stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
+        stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", record_facts))
+        stack.enter_context(patch.object(ch, "_record_terminalisation_audits", new_callable=AsyncMock))
+        stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+        summary_out = await ch._dispatcher_reconcile_body(
+            _settings=settings,
+            factory=MagicMock(),
+            queue_name="runs",
+            reenqueue_window=5,
+            tuning=_f1621_tuning(),
+            terminalize_max=25,
+            facts_max=25,
+            max_rows=500,
+            redis_client=MagicMock(),
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+            stage=stage,
+        )
+    return summary_out, sweeps, stage, record_facts
+
+
+class TestOrgBoundedFailureCounters:
+    """FAR-1621: each bounded per-org failure class has its OWN counter,
+    unwinds the rolled-back org's counts, and keeps the tick going."""
+
+    async def test_statement_timeout_skips_the_org_and_names_the_stage(self, caplog: pytest.LogCaptureFixture) -> None:
+        """SQLSTATE 57014 in an org pass: its transaction rolled back whole, so
+        its counts and compensating-fact ids are unwound, the org is skipped
+        with a WARNING carrying the SQLSTATE, the org AND the stage, the new
+        ``org_statement_timeouts`` counter records it, and the tick continues
+        (status stays ``ok`` — a bounded per-org skip is not a tick failure)."""
+        skip_org, good_org = uuid.uuid4(), uuid.uuid4()
+        rolled_back_run = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == skip_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/terminalizer:claim_cap_terminalized"
+                summary["scanned"] += 5
+                summary["repaired"] += 3
+                terminalized_run_ids.append((rolled_back_run, org_id))
+                raise _f1621_statement_timeout_error()
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, record_facts = await _drive_f1621_body(
+            [skip_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+        )
+
+        # The tick COMPLETED: org 2 ran and the compensating sweeps were reached.
+        assert summary_out["scanned"] == 1
+        assert summary_out["repaired"] == 0
+        assert sweeps.await_count == 1
+        # The rolled-back org's ids are gone — no phantom compensating fact.
+        fact_runs = [call.args[0] for call in record_facts.await_args_list]
+        assert rolled_back_run not in fact_runs
+        assert summary_out["status"] == "ok"
+        assert summary_out["last_error"] is None
+        assert summary_out["org_timeouts"] == 0
+        assert summary_out["org_statement_timeouts"] == 1
+        records = [record for record in caplog.records if "org_statement_timeout" in record.getMessage()]
+        assert records, f"no org_statement_timeout WARNING emitted; log={caplog.text}"
+        message = records[0].getMessage()
+        assert "57014" in message
+        assert str(skip_org) in message
+        assert "terminalizer:claim_cap_terminalized" in message
+        assert records[0].exc_info is not None
+
+    async def test_pool_checkout_timeout_counts_org_pool_timeouts(self, caplog: pytest.LogCaptureFixture) -> None:
+        """``sqlalchemy.exc.TimeoutError`` (a system-engine pool checkout that
+        exhausted ``pool_timeout``) is NOT a subclass of the builtin
+        ``TimeoutError``. Without its own arm it fell through to the generic
+        handler and failed the whole tick; it is now a bounded per-org skip
+        with its own counter, stage attribution and unwind."""
+        pool_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == pool_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/session-acquire"
+                summary["scanned"] += 4
+                raise SATimeoutError("QueuePool limit of size 5 overflow 10 reached, connection timed out")
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, _record_facts = await _drive_f1621_body(
+            [pool_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+        )
+
+        assert summary_out["scanned"] == 1
+        assert sweeps.await_count == 1
+        assert summary_out["status"] == "ok"
+        assert summary_out["org_pool_timeouts"] == 1
+        assert summary_out["org_timeouts"] == 0
+        records = [record for record in caplog.records if "org_pool_timeout" in record.getMessage()]
+        assert records, f"no org_pool_timeout WARNING emitted; log={caplog.text}"
+        message = records[0].getMessage()
+        assert str(pool_org) in message
+        assert "session-acquire" in message
+
+    async def test_org_timeout_last_error_and_warning_name_the_blocking_stage(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """THE proposal-1 pin: when the per-org bound fires, the persisted
+        ``last_error`` AND the WARNING both carry the finest-grained stage the
+        pass reached — not just the org — so the next prod occurrence names the
+        exact blocking site. The pre-existing substrings (``per-org bound``,
+        the org id, ``stage=reconcile_org``) are kept for compatibility with
+        the alert text already in the wild."""
+        hang_org = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+        blocking_stage = "row_loop:3/10"
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == hang_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/{blocking_stage}"
+                summary["scanned"] += 2
+                raise TimeoutError
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, _record_facts = await _drive_f1621_body(
+            [hang_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+        )
+
+        assert summary_out["org_timeouts"] == 1
+        assert summary_out["status"] == "timeout"
+        assert sweeps.await_count == 1
+        last_error = summary_out["last_error"]
+        assert last_error is not None
+        assert "per-org bound" in last_error
+        assert str(hang_org) in last_error
+        assert "stage=reconcile_org" in last_error
+        assert blocking_stage in last_error, f"the stage detail was lost from last_error: {last_error}"
+        records = [record for record in caplog.records if "per-org time bound fired" in record.getMessage()]
+        assert records, f"no per-org bound WARNING emitted; log={caplog.text}"
+        assert blocking_stage in records[0].getMessage()
+
+    async def test_an_unbounded_failure_still_fails_the_tick(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Scope guard: the new arms catch ONLY the bounded classes. Any other
+        failure keeps its contract — propagated to the tick's failure
+        heartbeat — and is never routed through a per-org skip."""
+        org = uuid.uuid4()
+        summary = ch._dispatcher_summary()
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            raise SQLAlchemyError("connection lost")
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        with pytest.raises(SQLAlchemyError):
+            await _drive_f1621_body(
+                [org],
+                fake_reconcile_org,
+                summary=summary,
+                terminalized_run_ids=[],
+            )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert not any("org_statement_timeout" in message for message in messages)
+        assert not any("org_pool_timeout" in message for message in messages)
+        assert not any("org_lock_timeout" in message for message in messages)
+
+
+class TestOrgFailureStatsContract:
+    """FAR-1621: the new counters are part of the health-stats contract in the
+    same shape as ``org_timeouts`` — summary defaults, the in-process copy
+    lines, and (in tests/unit/api/routes/test_health.py) the readiness detail."""
+
+    def test_dispatcher_summary_defaults_the_new_counters(self) -> None:
+        summary = ch._dispatcher_summary()
+        assert summary["org_timeouts"] == 0
+        assert summary["orgs_deferred"] == 0
+        assert summary["org_lock_timeouts"] == 0
+        assert summary["org_pool_timeouts"] == 0
+        assert summary["org_statement_timeouts"] == 0
+
+    def test_set_dispatcher_reconcile_stats_carries_the_new_counters(self) -> None:
+        """A missing copy line would silently zero a counter in the in-process
+        mirror — the exact failure this pins."""
+        ch.set_dispatcher_reconcile_stats(
+            {
+                "org_timeouts": 1,
+                "orgs_deferred": 2,
+                "org_lock_timeouts": 3,
+                "org_pool_timeouts": 4,
+                "org_statement_timeouts": 5,
+            }
+        )
+        assert ch._dispatcher_reconcile_stats["org_timeouts"] == 1
+        assert ch._dispatcher_reconcile_stats["orgs_deferred"] == 2
+        assert ch._dispatcher_reconcile_stats["org_lock_timeouts"] == 3
+        assert ch._dispatcher_reconcile_stats["org_pool_timeouts"] == 4
+        assert ch._dispatcher_reconcile_stats["org_statement_timeouts"] == 5
+
+
+class TestSystemEnginePoolKnobs:
+    """FAR-1621 proposal 3: ``_get_system_engine`` mirrors
+    ``db.session._build_engine``'s pool settings and connect timeout."""
+
+    def _build(self, url: str) -> Any:
+        ch._SYSTEM_ENGINE = None
+        try:
+            with (
+                patch.object(ch, "get_settings", return_value=_settings(modulo_system_database_url=url)),
+                patch("sqlalchemy.ext.asyncio.create_async_engine") as create_engine,
+            ):
+                ch._get_system_engine()
+            return create_engine.call_args.kwargs
+        finally:
+            ch._SYSTEM_ENGINE = None
+
+    def test_pool_knobs_mirror_the_shared_engine_factory(self) -> None:
+        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/modulo")
+        # Explicit, so a saturated checkout fails as a CATCHABLE
+        # sqlalchemy.exc.TimeoutError after pool_timeout (counted by
+        # org_pool_timeouts) instead of hanging on SQLAlchemy's implicit
+        # defaults — and asyncpg's own connect wait is bounded too.
+        assert kwargs["pool_size"] == 20
+        assert kwargs["max_overflow"] == 10
+        assert kwargs["pool_timeout"] == 30
+        assert kwargs["connect_args"]["timeout"] == 10
+
+    def test_sqlite_system_url_keeps_no_pool_knobs(self) -> None:
+        """The pool knobs are QueuePool-only — the same guard
+        ``db.session._build_engine`` applies for SQLite."""
+        kwargs = self._build("sqlite+aiosqlite:///tmp/system.db")
+        assert "pool_size" not in kwargs
+        assert "max_overflow" not in kwargs
+        assert "pool_timeout" not in kwargs
+        assert kwargs["connect_args"]["timeout"] == 10
