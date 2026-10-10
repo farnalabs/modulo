@@ -1,7 +1,7 @@
 """DropboxPaperConnector — async Dropbox Paper API v2 connector."""
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 import httpx
@@ -40,6 +40,9 @@ class DropboxPaperConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.DROPBOX_PAPER
@@ -64,7 +67,7 @@ class DropboxPaperConnector(ConnectorBase):
                 r = await client.post("/users/get_current_account", json=None)
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             body: dict[str, Any] = r.json()
             email = body.get("email", "unknown")
@@ -72,7 +75,7 @@ class DropboxPaperConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Dropbox API timeout")

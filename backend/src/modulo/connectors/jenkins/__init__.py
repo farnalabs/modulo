@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -138,6 +139,9 @@ class JenkinsConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.JENKINS
@@ -218,11 +222,11 @@ class JenkinsConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid username or token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Jenkins API timeout")
@@ -232,7 +236,7 @@ class JenkinsConnector(ConnectorBase):
             # The outbound SSRF guard in _client() rejects a private/internal
             # base_url. Report it as unhealthy with the remediation text rather
             # than letting it escape as a 502 from GET /connectors/{id}/health.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,
