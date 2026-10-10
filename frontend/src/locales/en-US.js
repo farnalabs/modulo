@@ -428,7 +428,7 @@ export default {
       "name_label": "Name",
       "name_placeholder": "e.g. Response quality check",
       "eval_type_label": "Eval Type",
-      "config_label": "Config (JSON)",
+      "config_label": "Config",
       "config_hint": "(JSON)",
       "config_invalid": "Config JSON is invalid",
       "config_must_be_object": "Config must be a JSON object",
