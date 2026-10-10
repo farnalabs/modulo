@@ -8,16 +8,27 @@ that on success the org's consumed total is incremented. DB is fully mocked.
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from modulo.core.cost_controller.finalize import _ledger_block, _record_ledger_with_retry
+from modulo.core.cost_controller.finalize import (
+    _fallback_finalize,
+    _ledger_block,
+    _record_ledger_with_retry,
+)
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
+
+
+@asynccontextmanager
+async def _acm(obj):
+    """A minimal async context manager yielding *obj* (for fresh-txn escapes)."""
+    yield obj
 
 
 def _make_run() -> MagicMock:
@@ -388,3 +399,163 @@ async def test_ledger_path_lock_abort_is_reraised_not_reduced_escaped() -> None:
         )
 
     escape_factory.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A NON-lock whole-tx abort reduced-escapes with a BOUNDED fresh transaction
+# ---------------------------------------------------------------------------
+
+
+async def test_non_lock_whole_tx_abort_reduced_escapes_with_bounded_fresh_txn() -> None:
+    """A whole-tx abort that is NOT a lock abort (here ``begin_nested`` itself
+    fails) is a non-retryable write failure: it must take the reduced escape,
+    and that escape's FRESH transaction must have its row-lock wait bounded so
+    its ``update_run_status`` cannot queue unbounded on the outer ``runs``
+    FOR UPDATE (FAR-1313 / FAR-1592)."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    session = _session_for(run, org)
+    # The savepoint acquisition fails before the ledger write: a non-lock
+    # whole-tx abort that reaches ``_ledger_block``'s except (NOT the
+    # savepoint-level handler, which would swallow it as retryable).
+    session.begin_nested = AsyncMock(side_effect=RuntimeError("begin_nested failed"))
+
+    fresh = AsyncMock()
+    fresh.begin = MagicMock(return_value=_acm(None))
+    escape_factory = MagicMock(return_value=_acm(fresh))
+    lock_bound = AsyncMock()
+
+    with (
+        patch("modulo.core.cost_controller.finalize.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize.set_mutation_row_lock_timeout", new=lock_bound),
+        patch("modulo.core.cost_controller.finalize.guard_dual_write", new=lambda _s: _acm(None)),
+        patch(
+            "modulo.core.cost_controller.finalize.update_run_status",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=escape_factory,
+            claim_token=None,
+        )
+
+    # The reduced escape ran on a fresh session AND bounded its lock waits.
+    escape_factory.assert_called_once()
+    lock_bound.assert_awaited_once_with(fresh)
+
+
+async def test_record_ledger_skips_accrual_when_no_org() -> None:
+    """When no accrual is due (``accrued_org`` is None), the ledger savepoint
+    must NOT attempt an org increment/flush — the accrual is strictly
+    conditional on the gate handing back a locked org row."""
+    savepoint = AsyncMock()
+    savepoint.commit = AsyncMock()
+    savepoint.rollback = AsyncMock()
+    session = AsyncMock()
+    session.begin_nested = AsyncMock(return_value=savepoint)
+
+    with patch(
+        "modulo.core.cost_controller.finalize.check_and_record_spend",
+        new=AsyncMock(return_value=(True, None)),
+    ):
+        ok, reason = await _record_ledger_with_retry(
+            session,
+            org_id=uuid.uuid4(),
+            cost_usd=Decimal("3.00"),
+            team_id=None,
+            run_id=uuid.uuid4(),
+            run_date=date(2026, 6, 24),
+            attempts=3,
+            accrued_org=None,
+            accrued_cents=0,
+        )
+
+    assert ok is True
+    assert reason is None
+    session.flush.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# The legacy fallback's ledger block re-raises a lock abort, swallows the rest
+# ---------------------------------------------------------------------------
+
+
+async def _run_fallback(session: AsyncMock, run: MagicMock) -> None:
+    await _fallback_finalize(
+        session,
+        run,
+        run.id,
+        uuid.uuid4(),
+        "complete",
+        None,
+        None,
+        {},
+        {},
+        {},
+        True,
+        None,
+        None,
+    )
+
+
+async def test_fallback_finalize_rereises_lock_abort_from_ledger_block() -> None:
+    """A lock abort (40P01/55P03) raised by the fallback's ledger block must
+    PROPAGATE to the ownership layer's bounded whole-tx retry — never be
+    swallowed by the never-fail fallback envelope, which would leave the run
+    un-ledgered on a contention path a retry could still cover."""
+    run = _make_run()
+    session = AsyncMock()
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize._apply_agent_budget_override",
+            new=AsyncMock(return_value=("complete", None, None)),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize._fallback_write",
+            new=AsyncMock(return_value=Decimal("1.00")),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize._ledger_run_date",
+            new=MagicMock(return_value=date(2026, 6, 24)),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize._ledger_block",
+            new=AsyncMock(side_effect=_SqlstateError("40P01")),
+        ),
+        pytest.raises(_SqlstateError),
+    ):
+        await _run_fallback(session, run)
+
+
+async def test_fallback_finalize_swallows_non_lock_ledger_error() -> None:
+    """A NON-lock ledger failure inside the never-fail fallback envelope is
+    logged and swallowed (the original exception must not be resurrected)."""
+    run = _make_run()
+    session = AsyncMock()
+    ledger = AsyncMock(side_effect=RuntimeError("ledger boom"))
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize._apply_agent_budget_override",
+            new=AsyncMock(return_value=("complete", None, None)),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize._fallback_write",
+            new=AsyncMock(return_value=Decimal("1.00")),
+        ),
+        patch(
+            "modulo.core.cost_controller.finalize._ledger_run_date",
+            new=MagicMock(return_value=date(2026, 6, 24)),
+        ),
+        patch("modulo.core.cost_controller.finalize._ledger_block", new=ledger),
+    ):
+        await _run_fallback(session, run)
+
+    ledger.assert_awaited_once()

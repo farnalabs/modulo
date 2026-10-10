@@ -10,6 +10,7 @@ keeps the stricter ``>`` comparison for the authoritative billing refusal).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -187,7 +188,7 @@ def _finalize_self(session: MagicMock) -> MagicMock:
     return fake_self
 
 
-async def _run_finalize(fake_self: MagicMock) -> None:
+async def _run_finalize(fake_self: MagicMock, *, work_intact: bool | None = None) -> None:
     await PipelineExecutor._run_finalize_cost_transaction(
         fake_self,
         run_id=uuid.uuid4(),
@@ -198,7 +199,7 @@ async def _run_finalize(fake_self: MagicMock) -> None:
         node_token_usage=None,
         completed_node_outputs={},
         node_type_map={},
-        work_intact=None,
+        work_intact=work_intact,
     )
 
 
@@ -291,3 +292,67 @@ async def test_finalize_txn_non_retryable_error_raises_immediately(monkeypatch: 
         await _run_finalize(fake_self)
 
     assert finalize_mock.await_count == 1, "a non-retryable failure must not be retried"
+
+
+async def test_finalize_txn_zero_attempts_runs_no_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boundary: a retry budget of zero attempts enters the loop zero times and
+    runs no finalisation at all (it must not call ``finalize_cost``)."""
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor.FINALIZE_LOCK_RETRY_ATTEMPTS", 0)
+    finalize_mock = AsyncMock()
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=finalize_mock),
+    ):
+        await _run_finalize(fake_self)
+
+    finalize_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# work_intact write failures inside the owned finalisation transaction
+# ---------------------------------------------------------------------------
+
+
+async def test_finalize_work_intact_cancelled_propagates() -> None:
+    """A ``CancelledError`` from the work_intact write must PROPAGATE, never be
+    swallowed as a best-effort failure — it re-raises through BOTH the inner
+    work_intact guard and the outer transaction guard."""
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch(
+            "modulo.core.pipeline_engine.executor._apply_work_intact",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _run_finalize(fake_self, work_intact=True)
+
+
+async def test_finalize_work_intact_write_error_is_swallowed() -> None:
+    """A non-cancelled work_intact write failure is best-effort: it is logged
+    and swallowed so the finalisation still completes, and the reclassify step
+    that depends on a successful write is NOT run."""
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    reclassify = AsyncMock()
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
+        patch(
+            "modulo.core.pipeline_engine.executor._apply_work_intact",
+            new=AsyncMock(side_effect=RuntimeError("work_intact write failed")),
+        ),
+        patch("modulo.core.pipeline_engine.executor._reclassify_after_work_intact", new=reclassify),
+    ):
+        await _run_finalize(fake_self, work_intact=True)
+
+    reclassify.assert_not_awaited()
