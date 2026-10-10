@@ -70,7 +70,16 @@ org profile, and is the product-map home for user roles.
 - [x] Cross-team isolation: a team cannot see or enumerate another team's team-scoped
       pipelines (404 / omitted from list counts), cross-team connector binding is refused
       as `connector_team_mismatch`, org-wide resources stay shared, and there is no
-      "N hidden" enumeration leak (`cross_team_isolation.feature`)
+      "N hidden" enumeration leak (`cross_team_isolation.feature`). The sharing rule is
+      explicit (FAR-1618): teams are a VISIBILITY GROUPING, not a credential trust
+      boundary. `visibility: org` means shared across the organisation — it binds to
+      ANY pipeline, including one owned by a team (an org-wide connector, model backend
+      or environment profile never produces a mismatch). `visibility: team` means
+      owner-team-only — it binds only to a pipeline owned by the same team, and a
+      different team's pipeline (or an org pipeline) is refused as
+      `connector_team_mismatch` at every write path that can create the binding.
+      Both directions are the same rule for connectors, model backends and environment
+      profiles (`core/team_visibility.py`)
 - [x] Team-scoped pipeline visibility and the view-as-team admin flows are enforced
       (`team_pipeline_visibility.feature`, `view_as_team.feature`)
 - [x] RBAC roles (`admin | operator | runner | viewer`) gate team surfaces

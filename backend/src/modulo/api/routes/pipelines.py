@@ -2389,13 +2389,17 @@ async def _enforce_connector_team_bindings(
 ) -> None:
     """Block graph saves whose connector binding crosses a team boundary.
 
-    PRD §9.3 + FAR-1515: a team-private connector may only bind to a pipeline
-    owned by the same team, and a team pipeline may not pin an org-only
-    connector (every run of that graph would be team-scoped and rejected at
-    the connector gate). Violations raise 409 ``connector_team_mismatch`` at
-    the pipeline-save command layer. A binding the team-blind org-scoped read
-    cannot resolve (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is
-    the same named 409: a binding the gate cannot validate never saves.
+    PRD §9.3 + FAR-1515, model restated by FAR-1618: only the team-PRIVATE
+    direction is refused — a ``visibility: team`` connector may only bind to a
+    pipeline owned by the same team, so another team's pipeline (or an org
+    pipeline with no owner team) is a mismatch. An org-visibility connector is
+    shared across the organisation and binds to ANY pipeline, team-owned or
+    not; FAR-1618 removed the reverse direction FAR-1515 had added and the
+    FAR-516 run-gate it mirrored. Violations raise 409
+    ``connector_team_mismatch`` at the pipeline-save command layer. A binding
+    the team-blind org-scoped read cannot resolve
+    (``ConnectorBindingMissingError``, FAR-1515 CRITICAL 1) is the same named
+    409: a binding the gate cannot validate never saves.
     """
     try:
         mismatches = await find_connector_team_mismatches(
@@ -2632,13 +2636,13 @@ async def _resolve_graph_references(
     the pipeline's team: a team-private model backend pinned by a pipeline owned
     by a different team (or by no team at all) raises 409
     ``model_backend_team_mismatch`` (PRD §9.3), alongside the connector rule
-    enforced just before this. The two predicates are NOT identical: the
-    connector rule also refuses an org-only connector on a team pipeline
-    (FAR-1515), while this one stays team-private-only because ModelBackendHub
-    has no invocation-time visibility gate to mirror — see the parity note on
-    ``model_backend_team_mismatch``. The mismatch rule itself decides whether
-    an org-owned pipeline (``owner_team_id=None``) may pin a team-private
-    backend.
+    enforced just before this. Since FAR-1618 the two predicates say the SAME
+    thing: an org-visibility row — connector or model backend — never
+    mismatches because org-wide resources stay shared across the organisation,
+    and a team-private row mismatches every pipeline outside its owner team
+    (the parity note on ``model_backend_team_mismatch`` records why the two
+    used to differ). The mismatch rule itself decides whether an org-owned
+    pipeline (``owner_team_id=None``) may pin a team-private backend.
     """
     agent_ids = {node.agent_id for node in nodes if node.agent_id is not None}
     agents_by_id = await _load_agents_by_ids(session, org_id, agent_ids)
@@ -4773,16 +4777,18 @@ async def rollback_snapshot_endpoint(
             # FAR-1515 MAJOR 3: a rollback replays the target snapshot's graph
             # verbatim, so it must run the same connector-team gate every other
             # graph write path runs — otherwise rolling back to a snapshot that
-            # pins a cross-team (or org-only-on-a-team-pipeline) connector
-            # re-creates state the save paths refuse. The gate runs INSIDE
+            # pins ANOTHER TEAM's team-private connector re-creates state the
+            # save paths refuse (an org-visibility connector is shared across
+            # the organisation and never mismatches, so since FAR-1618 it
+            # never trips this gate). The gate runs INSIDE
             # ``rollback_to_snapshot`` as a post-lock callback (the pipeline row
             # lock is already held there), against the pipeline's CURRENT owner
             # team — the team boundary may have moved since the snapshot was
             # taken — and raises the same named 409 ``connector_team_mismatch``
             # as ``PATCH /graph``. The model-backend gate is deliberately NOT
-            # mirrored here: the FAR-1515 parity note on
-            # ``model_backend_team_mismatch`` (ModelBackendHub has no
-            # invocation-time visibility gate) applies to rollbacks too.
+            # mirrored here: it remains a save-time-only rule (ModelBackendHub
+            # has no invocation-time visibility gate), so rollbacks are judged
+            # on connector bindings only.
 
             async def _connector_team_gate_after_lock(target: PipelineSnapshot, pipeline: Pipeline) -> None:
                 snapshot_nodes = target.graph_json.get("nodes", []) if isinstance(target.graph_json, dict) else []
@@ -5092,8 +5098,9 @@ async def _save_locked_graph(
     ``_apply_graph_update``), in the same order, around the same write:
 
     1. ``_enforce_connector_team_bindings`` - 409 ``connector_team_mismatch``
-       for a team-private connector bound from outside its team, or an
-       org-only connector pinned by a team pipeline (FAR-1515),
+       for a team-private connector bound from outside its owner team (an
+       org-visibility connector is shared across the organisation and is never
+       refused — FAR-1618),
     2. ``_resolve_graph_references`` - the FAR-418 capability-scope widening
        guard (422), unknown agent/schema ids (422) and the model-backend team
        check (409),

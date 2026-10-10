@@ -411,9 +411,10 @@ async def _validate_connector_instance_team_scope(
 
     Only the TEAM-PRIVATE direction is refused here: an ORG-visible connector
     is usable by any team's pipeline (polling carries no caller visibility
-    scope — see ``polling.enforce_polling_team_scope``), while the reverse
-    direction (a team pipeline pinning an org-only connector) is a RUN-time
-    rule enforced at graph save and is not a polling concern.
+    scope — see ``polling.enforce_polling_team_scope``), and since FAR-1618
+    there is no reverse direction to enforce either — an org-visibility
+    connector is shared across the organisation, so the shared predicate never
+    reports one and this gate has nothing to add for it.
 
     *previous_connector_instance_id* makes this a NEW-binding check: an
     unchanged reference is not re-judged, so an unrelated edit to a trigger
@@ -443,11 +444,13 @@ async def _validate_connector_instance_team_scope(
         )
     except ConnectorBindingMissingError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
-    blocking = [m for m in mismatches if (m.connector_visibility or "org") == "team"]
-    if blocking:
+    # ``find_connector_team_mismatches`` only ever reports the team-PRIVATE
+    # direction (FAR-1618: an org-visibility row never mismatches), so every
+    # reported mismatch blocks this reference.
+    if mismatches:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=connector_team_mismatch_detail(blocking),
+            detail=connector_team_mismatch_detail(mismatches),
         )
 
 

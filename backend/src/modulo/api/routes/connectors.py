@@ -734,14 +734,21 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
     """FAR-1515 MAJOR 5: a visibility/owner re-scope may not strand a binding.
 
     ``validate_team_transition_for_update`` (called first) checks TEAM
-    MEMBERSHIP only. Flipping a connector that pipelines already bind to
-    ``org`` (or handing it to another team) recreates exactly the state the
-    graph-save gate refuses: a team pipeline pinning an org-only connector, or
-    another team's pipeline pinning this team's private connector. The bound
-    pipelines are prefiltered by a text-contains query, then confirmed against
-    the REAL stored bindings, and each confirmed binding is judged with the
-    same predicate the save path uses — so the rejection names the offending
-    pipeline's team via the same 409 ``connector_team_mismatch`` detail.
+    MEMBERSHIP only. NARROWING a connector that pipelines already bind to —
+    flipping it to ``team``, or handing it to a team — strands every bound
+    pipeline outside that team, which is the state the graph-save gate refuses
+    (another team's pipeline, or an org pipeline, pinning a team-private
+    connector). The bound pipelines are prefiltered by a text-contains query,
+    then confirmed against the REAL stored bindings, and each confirmed binding
+    is judged with the same predicate the save path uses — so the rejection
+    names the offending pipeline's team via the same 409
+    ``connector_team_mismatch`` detail.
+
+    WIDENING never blocks: since FAR-1618 an org-visibility connector is
+    shared across the organisation, so flipping a bound connector to ``org``
+    cannot strand anyone (teams are a visibility grouping, not a credential
+    trust boundary; the FAR-1515 reverse direction and the FAR-516 run-gate it
+    mirrored are removed).
 
     A PATCH that does not actually change ``visibility``/``owner_team_id``
     never reaches the query.
@@ -766,7 +773,6 @@ async def _reject_re_scope_that_breaks_a_bound_pipeline(
                 connector_name=connector.name,
                 connector_owner_team_id=new_owner_team_id,
                 pipeline_owner_team_id=pipeline.owner_team_id,
-                connector_visibility=new_visibility,
                 node_id=node_id,
             )
             for node_id in node_ids

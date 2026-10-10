@@ -531,9 +531,9 @@ class TestBindConnectorToNodeTeamScope(_OperatorAuthContext):
         connector.organisation_id = _PLACEHOLDER_ORG_ID
         # The connector belongs to the PIPELINE's team: this test is about the
         # team-SCOPE key passing its own boundary and then reaching the node
-        # lookup. Since FAR-1515 an org-only connector on this team pipeline
-        # would be its own ``connector_team_mismatch``, which fires first and
-        # would mask the assertion under test.
+        # lookup, so the connector team gate must pass cleanly first (an
+        # org-visibility connector would clear it too since FAR-1618, but the
+        # same-team row is the strictest passing case).
         connector.visibility = "team"
         connector.owner_team_id = _TEAM_A
         connector.name = "github-conn"
