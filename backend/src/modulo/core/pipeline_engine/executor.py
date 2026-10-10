@@ -1325,6 +1325,35 @@ async def _reclassify_after_work_intact(session: AsyncSession, run_id: uuid.UUID
         _log.exception("work_intact.classify_refresh_failed", extra={"run_id": str(run_id)})
 
 
+async def _apply_work_intact_best_effort(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    work_intact: bool | None,
+    *,
+    claim_token: str | None,
+) -> None:
+    """Best-effort persist of ``work_intact`` inside the finalisation transaction.
+
+    ``None`` means "not computed" — nothing to persist. A non-cancelled write
+    failure is logged and swallowed so the finalisation still completes (the
+    reclassify step, which depends on a successful write, is then skipped);
+    ``CancelledError`` propagates so the ownership layer's retry owns it.
+    """
+    if work_intact is None:
+        return
+    try:
+        await _apply_work_intact(session, run_id, work_intact, claim_token=claim_token)
+        # FAR-189 round-2 FIX 3: finalize_cost's inline classify ran BEFORE this
+        # write (work_intact still NULL at classify time). Re-persist the
+        # classification with the real value — the sweep skips already-classified
+        # rows, so this is the only correction for executor-terminalized runs.
+        await _reclassify_after_work_intact(session, run_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+
+
 async def org_sandbox_capacity_free(
     session: AsyncSession,
     org_id: uuid.UUID,
@@ -4209,20 +4238,7 @@ class PipelineExecutor:
                         session_factory=self._session_factory,
                         claim_token=self._claim_token,
                     )
-                    if work_intact is not None:
-                        try:
-                            await _apply_work_intact(session, run_id, work_intact, claim_token=self._claim_token)
-                            # FAR-189 round-2 FIX 3: finalize_cost's inline
-                            # classify ran BEFORE this write (work_intact still
-                            # NULL at classify time). Re-persist the
-                            # classification with the real value — the sweep
-                            # skips already-classified rows, so this is the only
-                            # correction for executor-terminalized runs.
-                            await _reclassify_after_work_intact(session, run_id)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:
-                            _log.exception("work_intact.write_failed", extra={"run_id": str(run_id)})
+                    await _apply_work_intact_best_effort(session, run_id, work_intact, claim_token=self._claim_token)
                 return
             except asyncio.CancelledError:
                 raise

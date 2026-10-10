@@ -1279,6 +1279,83 @@ def _is_abort_error(exc: Exception) -> bool:
     }
 
 
+class _LedgerWriteRetryError(Exception):
+    """A contained ledger-write failure worth retrying inside the savepoint loop.
+
+    Raised only for failures that did NOT abort the whole transaction. A whole-tx
+    abort (deadlock / serialization failure / bounded lock timeout) is re-raised
+    untranslated so the caller can run the reduced escape instead.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _read_accrued_base(accrued_org: Organisation | None) -> int:
+    """The locked org's lifetime consumed total, read ONCE before the retry loop.
+
+    Reading it once (rather than per attempt) is deliberate: a savepoint rollback
+    EXPIRES the Organisation, so a per-attempt attribute read would trigger a lazy
+    refresh outside a greenlet and raise ``MissingGreenlet``.
+    """
+    if accrued_org is None:
+        return 0
+    return accrued_org.org_cumulative_spend_cents or 0
+
+
+async def _attempt_ledger_write(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    cost_usd: Decimal,
+    team_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    run_date: date,
+    accrued_org: Organisation | None,
+    accrued_base: int,
+    accrued_cents: int,
+) -> tuple[bool, str | None]:
+    """One savepoint-guarded ledger write (a single retry-loop attempt).
+
+    The org accrual is applied INSIDE this savepoint — the SAME atomic unit as
+    the ledger row — so a contained failure rolls the accrual back WITH the
+    ledger. Re-raises a whole-tx abort and ``CancelledError`` untouched; wraps any
+    other contained failure as ``_LedgerWriteRetryError`` for the caller's bounded
+    retry loop.
+    """
+    savepoint = await session.begin_nested()
+    try:
+        ok, reason = await check_and_record_spend(
+            session,
+            org_id=org_id,
+            cost_usd=cost_usd,
+            team_id=team_id,
+            run_id=run_id,
+            run_date=run_date,
+        )
+        if accrued_org is not None and accrued_cents:
+            # Absolute assignment from the pre-loop base — NEVER re-read the
+            # (possibly savepoint-expired) attribute inside the loop.
+            accrued_org.org_cumulative_spend_cents = accrued_base + accrued_cents
+            await session.flush()
+    except asyncio.CancelledError:
+        await savepoint.rollback()
+        raise
+    except Exception as exc:
+        await savepoint.rollback()
+        # Re-raise a whole-tx abort: retrying a savepoint inside an aborted
+        # transaction is pointless. ``_is_abort_error`` is the DBAPI-class
+        # classification; ``is_lock_abort`` adds the SQLSTATE-based 40P01 /
+        # 55P03 detection so a lock abort is never mistaken for a retryable
+        # contained failure when class-name detection misses it.
+        if _is_abort_error(exc) or is_lock_abort(exc):
+            raise
+        raise _LedgerWriteRetryError(type(exc).__name__) from exc
+    await savepoint.commit()
+    return ok, reason
+
+
 async def _record_ledger_with_retry(
     session: AsyncSession,
     *,
@@ -1320,44 +1397,28 @@ async def _record_ledger_with_retry(
     assignment is idempotent under savepoint rollback.
     """
     # Read the locked org's base ONCE, before any savepoint can expire it.
-    accrued_base = (accrued_org.org_cumulative_spend_cents or 0) if accrued_org is not None else 0
+    accrued_base = _read_accrued_base(accrued_org)
     last_reason: str | None = None
     for attempt in range(attempts):
-        savepoint = await session.begin_nested()
         try:
-            ok, reason = await check_and_record_spend(
+            return await _attempt_ledger_write(
                 session,
                 org_id=org_id,
                 cost_usd=cost_usd,
                 team_id=team_id,
                 run_id=run_id,
                 run_date=run_date,
+                accrued_org=accrued_org,
+                accrued_base=accrued_base,
+                accrued_cents=accrued_cents,
             )
-            if accrued_org is not None and accrued_cents:
-                # Absolute assignment from the pre-loop base — NEVER re-read the
-                # (possibly savepoint-expired) attribute inside the loop.
-                accrued_org.org_cumulative_spend_cents = accrued_base + accrued_cents
-                await session.flush()
-        except asyncio.CancelledError:
-            await savepoint.rollback()
-            raise
-        except Exception as exc:
-            await savepoint.rollback()
-            # Re-raise a whole-tx abort: retrying a savepoint inside an aborted
-            # transaction is pointless. ``_is_abort_error`` is the DBAPI-class
-            # classification; ``is_lock_abort`` adds the SQLSTATE-based 40P01 /
-            # 55P03 detection so a lock abort is never mistaken for a
-            # retryable contained failure when class-name detection misses it.
-            if _is_abort_error(exc) or is_lock_abort(exc):
-                raise
-            last_reason = type(exc).__name__
+        except _LedgerWriteRetryError as exc:
+            last_reason = exc.reason
             _log.warning(
                 "cost_ledger.write_retry",
-                extra={"run_id": str(run_id), "attempt": attempt + 1, "exc_type": type(exc).__name__},
+                extra={"run_id": str(run_id), "attempt": attempt + 1, "exc_type": exc.reason},
             )
             continue
-        await savepoint.commit()
-        return ok, reason
     _log.error(
         "cost_ledger.write_failed",
         extra={"run_id": str(run_id), "reason": last_reason or "write_failure"},
