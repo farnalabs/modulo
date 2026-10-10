@@ -128,6 +128,7 @@ from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_c
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
 from modulo.db.crud.pipeline import get_pipeline
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
@@ -151,7 +152,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
-from modulo.db.sqlstates import is_lock_abort, sqlstate_of
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, is_lock_abort, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -2030,9 +2031,51 @@ class PipelineExecutor:
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
+        try:
+            return await self._claim_under_capacity(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                max_concurrent=max_concurrent,
+                org_sandbox_cap=org_sandbox_cap,
+                org_sandbox_host_only=org_sandbox_host_only,
+                org_sandbox_population=org_sandbox_population,
+                org_run_limit=org_run_limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            recovered = await self._recover_capacity_lock_timeout(exc, run_id=run_id, org_id=org_id)
+            if recovered is None:
+                raise
+            return recovered
+
+    async def _claim_under_capacity(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        org_sandbox_cap: int | None,
+        org_sandbox_host_only: bool,
+        org_sandbox_population: str,
+        org_run_limit: int | None,
+    ) -> Run:
+        """Claim the run or demote it to pending, in one bounded transaction.
+
+        FAR-1610: ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
+        row-lock wait BEFORE this transaction's first lock (``get_run`` below
+        is a plain read; the first lock is the cancel/claim/demote write). This
+        claim-time write is a RECOVERY path — the run was already claimed
+        ``running`` by ``claim_run_async``, so a contended row must NOT
+        terminal-fail it. Issued in the caller's transaction; the shared
+        ``update_run_status`` stays unbounded (FAR-1601).
+        """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -2117,6 +2160,41 @@ class PipelineExecutor:
                 raise RunNotFoundError(run_id)
             return pending_run
 
+    async def _recover_capacity_lock_timeout(
+        self,
+        exc: Exception,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> Run | None:
+        """Recover from a 55P03 on ``_claim_under_capacity``'s write, else ``None``.
+
+        FAR-1610: the bounded row-lock wait expired (55P03) on a claim-time
+        write. The transaction rolled back whole, so NO status change was
+        applied — the run is left exactly as it was (the SAQ claim already set
+        it ``running``). This is the same fail-open-admit posture the capacity
+        READ failures already take (see ``_check_capacity``'s docstring): WARN,
+        re-read the row, and let the caller proceed; a concurrent cancel-request
+        is still caught by the stream path's DB cancellation check. Never
+        silent.
+
+        Returns the re-read run on a 55P03; returns ``None`` for any other
+        exception so ``_check_capacity`` re-raises it unchanged.
+        """
+        if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+            return None
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — bounded "
+            "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
+            "status change applied, proceeding with the run's current state",
+            run_id,
+            exc_info=True,
+        )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            return await get_run(session, run_id)
+
     async def _check_spend_ceiling_gate(
         self,
         *,
@@ -2145,6 +2223,14 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
+                # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+                # transaction's first lock (the terminalizing
+                # ``update_run_status`` below). Issued in the caller's
+                # transaction; the shared ``update_run_status`` stays unbounded
+                # (FAR-1601). A 55P03 lands in this method's existing fail-open
+                # ``except Exception`` (WARNING + return None) — the ledger block
+                # remains the authoritative hard ceiling.
+                await set_mutation_row_lock_timeout(session)
                 # FAR-1025: opt out of the global soft-delete filter — a
                 # pending-deletion org (deleted_at stamped at initiate) is still
                 # operationally live.  Skipping here means the pre-dispatch
@@ -3637,6 +3723,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
+            # transaction's first lock (the ``update_run_status`` claim below).
+            # Issued in the caller's transaction; the shared
+            # ``update_run_status`` stays unbounded (FAR-1601). A 55P03
+            # propagates to the resume caller's error handling — a request
+            # (HITL approve) path fails visibly, never silently.
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -4464,6 +4557,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+            # transaction's first lock (``_check_policy_gate_pin``'s
+            # terminalizing ``update_run_status``). Issued in the caller's
+            # transaction; the shared ``update_run_status`` stays unbounded
+            # (FAR-1601). A 55P03 propagates to ``execute()``'s caller and
+            # terminal-fails the run visibly (executor_failed) — never silent.
+            await set_mutation_row_lock_timeout(session)
             pin_run = await self._check_policy_gate_pin(
                 session,
                 run_id=run_id,

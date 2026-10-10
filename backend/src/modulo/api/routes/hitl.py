@@ -95,6 +95,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot as SnapModel
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.settings import get_settings
 
 _CODE_HITL_APPROVE = "hitl.approve"
@@ -619,6 +620,48 @@ def _raise_pending_rollback_error(exc: PendingRollbackError, log_key: str) -> No
 
 
 # ---------------------------------------------------------------------------
+# FAR-1610: bounded-lock timeout (SQLSTATE 55P03) on the HITL write routes.
+#
+# ``claim_review`` and ``_run_hitl_manager`` are REQUEST paths on the hot
+# ``runs`` / ``hitl_claims`` rows. FAR-1610 bounds the row-lock wait inside
+# ``HITLManager.claim`` / ``_decide`` with a transaction-scoped
+# ``lock_timeout``, so a contended row now surfaces as SQLSTATE 55P03 instead
+# of waiting unbounded. That is a busy-row CONFLICT, not a database outage: the
+# engine is healthy and re-issuing the request once the other change completes
+# may succeed. Mapping it to the generic 503 (``MSG_DB_ERROR_PLEASE_TRY``) would
+# read as "retry now" and invite a retry storm against the very lock that is
+# busy, so it is answered as an attributable 409 naming the contention -
+# mirroring ``api.routes.runs.cancel_run`` and ``api.db_error_handling``.
+# ---------------------------------------------------------------------------
+
+_MSG_HITL_LOCK_TIMEOUT = (
+    "Timed out waiting for a lock on this review; another change is in progress. "
+    "Re-issue the request once it completes."
+)
+
+
+def _raise_lock_timeout_if(exc: SQLAlchemyError, log_key: str) -> None:
+    """Re-raise *exc* as an attributable 409 when it is a bounded lock timeout.
+
+    The bounded ``lock_timeout`` (``set_mutation_row_lock_timeout``) expiring on
+    a contended hot row surfaces as SQLSTATE 55P03 (``lock_not_available``).
+    This is NOT a database outage, so it must not fall through to the generic
+    503 the surrounding ``except SQLAlchemyError`` arm returns.
+
+    For every other ``SQLAlchemyError`` this returns (a no-op) so the caller's
+    existing 503 handling continues unchanged. ``log_key`` is the BASE route key
+    (e.g. ``"hitl.claim_review"``); the record is ``<log_key>.lock_timeout``.
+    """
+    if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+        return
+    logger.warning("%s.lock_timeout", log_key, exc_info=exc)
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=_MSG_HITL_LOCK_TIMEOUT,
+    ) from None
+
+
+# ---------------------------------------------------------------------------
 # Claim
 # ---------------------------------------------------------------------------
 
@@ -726,6 +769,7 @@ async def claim_review(
         _raise_pending_rollback_error(exc, _CODE_HITL_CLAIM_REVIEW)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_HITL_CLAIM_REVIEW)
+        _raise_lock_timeout_if(exc, _CODE_HITL_CLAIM_REVIEW)
         logger.exception(_CODE_HITL_CLAIM_REVIEW)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -876,6 +920,7 @@ async def _run_hitl_manager(
         _raise_pending_rollback_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_HITL_RUN_HITL_MANAGER)
+        _raise_lock_timeout_if(exc, _CODE_HITL_RUN_HITL_MANAGER)
         logger.exception(_CODE_HITL_RUN_HITL_MANAGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

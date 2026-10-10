@@ -5176,6 +5176,7 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
     if not await validate_current_auth():
         return _tool_auth_error(_MSG_TOKEN_REVOKED)
     _check_agent_tool_scope("cancel_run")
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.crud.run import get_run, request_cancellation
 
     org_id = _ctx_org_id_val()
@@ -5184,6 +5185,15 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         return rid_err
     assert rid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
     async with _session(org_id) as s:
+        # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the first lock.
+        # ``get_run`` is a plain read; ``request_cancellation`` takes the
+        # ``SELECT ... FOR UPDATE``. Issued in the caller's transaction (the
+        # shared CRUD function stays unbounded — FAR-1601), so a contended row
+        # yields a bounded 55P03 mapped to a branchable ``lock_timeout`` result
+        # below (mirroring ``_update_pipeline_graph_impl``) instead of the
+        # ``_RETRY_DB`` retry multiplying the wait and then collapsing into a
+        # generic ``database_unavailable``.
+        await set_mutation_row_lock_timeout(s)
         run = await get_run(s, rid)
         if run is None:
             return {"error": "run_not_found", "run_id": run_id}
@@ -5205,14 +5215,32 @@ async def _cancel_run_impl(run_id: str) -> dict[str, Any]:
         # UI. The acting account is read fail-open (absent -> the caller
         # degrades to the ``system`` sentinel instead of failing the tool).
         _actor = _ctx_user_id.get(None)
-        run = await request_cancellation(
-            s,
-            rid,
-            reason=CANCEL_REASON_AGENT_REQUESTED,
-            actor=str(_actor) if _actor is not None else None,
-        )
-        if not was_paused:
-            await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
+        try:
+            run = await request_cancellation(
+                s,
+                rid,
+                reason=CANCEL_REASON_AGENT_REQUESTED,
+                actor=str(_actor) if _actor is not None else None,
+            )
+            if not was_paused:
+                await finalize_cancelled_run(s, run_id=rid, org_id=org_id)
+        except SQLAlchemyError as exc:
+            # FAR-1610: 55P03 from the bounded row-lock wait is a busy-row
+            # conflict, not a DB outage — surface the same branchable
+            # ``lock_timeout`` code the graph-update tool returns (FAR-1361)
+            # and stop ``_RETRY_DB`` from retrying the bounded wait 3x. Any
+            # other SQLAlchemy error re-raises to the tool wrapper's ladder.
+            if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+                _log.warning("mcp.cancel_run.lock_timeout", extra={"run_id": str(run_id), "org_id": str(org_id)})
+                return {
+                    "error": "lock_timeout",
+                    "run_id": run_id,
+                    "detail": (
+                        "Timed out waiting for a lock on this run; another change is in progress. "
+                        "Re-issue the cancel once the other change completes."
+                    ),
+                }
+            raise
     if run is None:
         return {"error": "run_not_found", "run_id": run_id}
     return {"run_id": run_id, "cancellation_requested": True}
