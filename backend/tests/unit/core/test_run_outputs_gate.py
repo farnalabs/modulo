@@ -451,7 +451,10 @@ _GUARDED_SITES: set[tuple[str, str]] = {
 }
 _UNGUARDED_SITES: set[tuple[str, str]] = {
     ("core/cost_controller/finalize.py", "_write_empty_terminal"),
-    ("core/pipeline_engine/executor.py", "_check_capacity"),
+    # FAR-1610: the capacity claim/demote ``update_run_status`` calls moved with
+    # the method body into ``_claim_under_capacity`` (``_check_capacity`` now
+    # delegates to it); the source-scan pin is keyed by the enclosing function.
+    ("core/pipeline_engine/executor.py", "_claim_under_capacity"),
     ("core/pipeline_engine/executor.py", "_check_policy_gate_pin"),
     ("core/pipeline_engine/executor.py", "_check_spend_ceiling_gate"),
     ("core/pipeline_engine/executor.py", "_claim_run_and_audit"),

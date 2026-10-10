@@ -23,6 +23,7 @@ produces.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -33,7 +34,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from modulo.core.hitl_manager import GateNotFoundError, HITLManager
-from modulo.core.pipeline_engine.executor import PipelineExecutor
+from modulo.core.pipeline_engine.executor import PipelineExecutor, RunNotFoundError
 
 
 def _lock_timeout_error(statement: str = "UPDATE runs") -> OperationalError:
@@ -260,6 +261,94 @@ async def test_check_capacity_non_lock_failure_still_propagates() -> None:
     ):
         await executor._check_capacity(
             run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
+async def test_check_capacity_missing_run_raises_not_found() -> None:
+    """A missing run row is a genuine not-found, not a capacity decline."""
+    executor = _capacity_executor(_begin_session())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=None)),
+        pytest.raises(RunNotFoundError),
+    ):
+        await executor._check_capacity(
+            run_id=uuid.uuid4(),
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
+async def test_check_capacity_cancelled_run_disappears_raises_not_found() -> None:
+    """A cancellation-requested run whose re-read vanished is a not-found."""
+    run = _capacity_run()
+    run.cancellation_requested = True
+    executor = _capacity_executor(_begin_session())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
+        pytest.raises(RunNotFoundError),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
+async def test_check_capacity_declined_run_disappears_raises_not_found() -> None:
+    """A demoted run whose pending re-read vanished is a not-found."""
+    run = _capacity_run()
+    executor = _capacity_executor(_begin_session())
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.count_active_runs_for_pipeline", new=AsyncMock(return_value=1)),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(side_effect=[run, None])),
+        pytest.raises(RunNotFoundError),
+    ):
+        await executor._check_capacity(
+            run_id=run.id,
+            org_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            max_concurrent=1,
+            graph_json=None,
+        )
+
+
+async def test_check_capacity_cancellation_propagates() -> None:
+    """``CancelledError`` must never be swallowed by the 55P03 recovery arm."""
+    executor = _capacity_executor(_begin_session())
+
+    with (
+        patch(
+            "modulo.core.pipeline_engine.executor.set_mutation_row_lock_timeout",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org", new=AsyncMock()),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context", new=AsyncMock()),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await executor._check_capacity(
+            run_id=uuid.uuid4(),
             org_id=uuid.uuid4(),
             pipeline_id=uuid.uuid4(),
             max_concurrent=1,

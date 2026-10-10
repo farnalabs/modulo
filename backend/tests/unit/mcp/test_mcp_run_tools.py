@@ -632,6 +632,55 @@ class TestCancelRunLockBound(_AuthContext):
         assert result["error"] == "lock_timeout"
         assert "lock" in result["detail"].lower()
 
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server._session")
+    async def test_non_lock_db_error_is_not_lock_timeout(
+        self,
+        mock_session: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Only 55P03 is a busy-row conflict: any other SQLAlchemy error keeps
+        its existing (generic) handling, never the branchable ``lock_timeout``."""
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = _make_mock_run(status="running")
+        mock_request_cancellation.side_effect = OperationalError("UPDATE runs", {}, RuntimeError("deadlock detected"))
+
+        result = await cancel_run(run_id=str(uuid.uuid4()))
+
+        assert result["error"] != "lock_timeout"
+        assert result["error"] == "database_unavailable"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_paused_run_skips_finalize(
+        self,
+        mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A PAUSED-then-cancelled run runs no finalize (its cost is already
+        terminalised); only a never-paused in-flight run is finalised here."""
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        run = _make_mock_run(status="hitl_parked")
+        mock_get_run.return_value = run
+        mock_request_cancellation.return_value = run
+
+        result = await cancel_run(run_id=str(run.id))
+
+        assert result == {"run_id": str(run.id), "cancellation_requested": True}
+        mock_finalize_cancelled.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # get_run_evals

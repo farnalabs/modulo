@@ -2031,128 +2031,169 @@ class PipelineExecutor:
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
-        run: Run | None = None
         try:
-            async with self._session_factory() as session, session.begin():
-                await set_rls_org(session, org_id)
-                await set_rls_execution_context(session)
-                # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
-                # transaction's first lock (``get_run`` below is a plain read;
-                # the first lock is the cancel/claim/demote write). This
-                # claim-time write is a RECOVERY path — the run was already
-                # claimed ``running`` by ``claim_run_async``, so a contended row
-                # must NOT terminal-fail it. Issued in the caller's transaction;
-                # the shared ``update_run_status`` stays unbounded (FAR-1601).
-                await set_mutation_row_lock_timeout(session)
-                run = await get_run(session, run_id)
-                if run is None:
-                    raise RunNotFoundError(run_id)
-                if run.cancellation_requested:
-                    await update_run_status(session, run_id, "cancelled")
-                    cancelled_run = await get_run(session, run_id)
-                    if cancelled_run is None:
-                        raise RunNotFoundError(run_id)
-                    return cancelled_run
-
-                pipeline_capacity_ok = True
-                active_count = 0
-                if max_concurrent > 0:
-                    active_count = await count_active_runs_for_pipeline(
-                        session, pipeline_id, include_pending=False, exclude_run_id=run_id
-                    )
-                    pipeline_capacity_ok = active_count < max_concurrent
-
-                org_sandbox_count = 0
-                if org_sandbox_cap is not None:
-                    org_sandbox_count = await self._org_sandbox_active_count(
-                        session,
-                        org_id,
-                        run_id,
-                        population=org_sandbox_population,
-                        host_resource_only=org_sandbox_host_only,
-                    )
-                org_sandbox_cap_ok = org_sandbox_cap is None or org_sandbox_count < org_sandbox_cap
-
-                org_run_count = 0
-                if org_run_limit is not None:
-                    org_run_count = await self._org_run_active_count(session, org_id, run_id)
-                org_run_cap_ok = org_run_limit is None or org_run_count < org_run_limit
-
-                if _all_capacities_ok(pipeline_capacity_ok, org_sandbox_cap_ok, org_run_cap_ok):
-                    if run.status not in _ADMISSIBLE_STATUSES:
-                        # The run went terminal (or hold) while a retry was backing
-                        # off — never resurrect it. Return it untouched so the
-                        # caller does not resume execution.
-                        return run
-                    return await self._claim_run_and_audit(
-                        session=session,
-                        run_id=run_id,
-                        org_id=org_id,
-                        pipeline_id=pipeline_id,
-                    )
-
-                decline_code, decline_detail = self._capacity_decline(
-                    max_concurrent=max_concurrent,
-                    active_count=active_count,
-                    _pipeline_capacity_ok=pipeline_capacity_ok,
-                    org_sandbox_cap=org_sandbox_cap,
-                    org_count=org_sandbox_count,
-                    org_capacity_ok=org_sandbox_cap_ok,
-                    org_run_limit=org_run_limit,
-                    org_run_count=org_run_count,
-                    org_run_capacity_ok=org_run_cap_ok,
-                )
-                # Demote to pending + reason marker so the recovery sweeps
-                # (dispatcher_reconcile / stale-run) pick it up. FENCED to this
-                # executor's claim token and only from ``running`` (A1): a
-                # superseded original (token rotated by a successor) cannot demote
-                # the successor's running row back to pending.
-                #
-                # D8 (FAR-594): this claim-time demotion is explicitly ADVISORY —
-                # a best-effort, lock-free, population-only read (its own-row
-                # lock exists only at this fenced demote write) that must NEVER
-                # take the per-org advisory lock (a count-then-row shape would
-                # invert the uniform row→advisory ordering). The runner-marker
-                # reconciliation sweep is its named backstop.
-                await update_run_status(
-                    session,
-                    run_id,
-                    "pending",
-                    error_code=decline_code,
-                    error_detail=decline_detail,
-                    claim_token=self._claim_token,
-                    from_status="running",
-                )
-                pending_run = await get_run(session, run_id)
-                if pending_run is None:
-                    raise RunNotFoundError(run_id)
-                return pending_run
+            return await self._claim_under_capacity(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                max_concurrent=max_concurrent,
+                org_sandbox_cap=org_sandbox_cap,
+                org_sandbox_host_only=org_sandbox_host_only,
+                org_sandbox_population=org_sandbox_population,
+                org_run_limit=org_run_limit,
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
-                # FAR-1610: the bounded row-lock wait expired (55P03) on a
-                # claim-time write. The transaction rolled back whole, so NO
-                # status change was applied — the run is left exactly as it was
-                # (the SAQ claim already set it ``running``). This is the same
-                # fail-open-admit posture the capacity READ failures already
-                # take (see the docstring): WARN, re-read the row, and let the
-                # caller proceed; a concurrent cancel-request is still caught by
-                # the stream path's DB cancellation check. Never silent.
-                _log.warning(
-                    "pipeline.capacity_check_lock_timeout run=%s — bounded "
-                    "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
-                    "status change applied, proceeding with the run's current state",
-                    run_id,
-                    exc_info=True,
+            recovered = await self._recover_capacity_lock_timeout(exc, run_id=run_id, org_id=org_id)
+            if recovered is None:
+                raise
+            return recovered
+
+    async def _claim_under_capacity(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        org_sandbox_cap: int | None,
+        org_sandbox_host_only: bool,
+        org_sandbox_population: str,
+        org_run_limit: int | None,
+    ) -> Run:
+        """Claim the run or demote it to pending, in one bounded transaction.
+
+        FAR-1610: ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
+        row-lock wait BEFORE this transaction's first lock (``get_run`` below
+        is a plain read; the first lock is the cancel/claim/demote write). This
+        claim-time write is a RECOVERY path — the run was already claimed
+        ``running`` by ``claim_run_async``, so a contended row must NOT
+        terminal-fail it. Issued in the caller's transaction; the shared
+        ``update_run_status`` stays unbounded (FAR-1601).
+        """
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            await set_mutation_row_lock_timeout(session)
+            run = await get_run(session, run_id)
+            if run is None:
+                raise RunNotFoundError(run_id)
+            if run.cancellation_requested:
+                await update_run_status(session, run_id, "cancelled")
+                cancelled_run = await get_run(session, run_id)
+                if cancelled_run is None:
+                    raise RunNotFoundError(run_id)
+                return cancelled_run
+
+            pipeline_capacity_ok = True
+            active_count = 0
+            if max_concurrent > 0:
+                active_count = await count_active_runs_for_pipeline(
+                    session, pipeline_id, include_pending=False, exclude_run_id=run_id
                 )
-                async with self._session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    current = await get_run(session, run_id)
-                if current is not None:
-                    return current
-            raise
+                pipeline_capacity_ok = active_count < max_concurrent
+
+            org_sandbox_count = 0
+            if org_sandbox_cap is not None:
+                org_sandbox_count = await self._org_sandbox_active_count(
+                    session,
+                    org_id,
+                    run_id,
+                    population=org_sandbox_population,
+                    host_resource_only=org_sandbox_host_only,
+                )
+            org_sandbox_cap_ok = org_sandbox_cap is None or org_sandbox_count < org_sandbox_cap
+
+            org_run_count = 0
+            if org_run_limit is not None:
+                org_run_count = await self._org_run_active_count(session, org_id, run_id)
+            org_run_cap_ok = org_run_limit is None or org_run_count < org_run_limit
+
+            if _all_capacities_ok(pipeline_capacity_ok, org_sandbox_cap_ok, org_run_cap_ok):
+                if run.status not in _ADMISSIBLE_STATUSES:
+                    # The run went terminal (or hold) while a retry was backing
+                    # off — never resurrect it. Return it untouched so the
+                    # caller does not resume execution.
+                    return run
+                return await self._claim_run_and_audit(
+                    session=session,
+                    run_id=run_id,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                )
+
+            decline_code, decline_detail = self._capacity_decline(
+                max_concurrent=max_concurrent,
+                active_count=active_count,
+                _pipeline_capacity_ok=pipeline_capacity_ok,
+                org_sandbox_cap=org_sandbox_cap,
+                org_count=org_sandbox_count,
+                org_capacity_ok=org_sandbox_cap_ok,
+                org_run_limit=org_run_limit,
+                org_run_count=org_run_count,
+                org_run_capacity_ok=org_run_cap_ok,
+            )
+            # Demote to pending + reason marker so the recovery sweeps
+            # (dispatcher_reconcile / stale-run) pick it up. FENCED to this
+            # executor's claim token and only from ``running`` (A1): a
+            # superseded original (token rotated by a successor) cannot demote
+            # the successor's running row back to pending.
+            #
+            # D8 (FAR-594): this claim-time demotion is explicitly ADVISORY —
+            # a best-effort, lock-free, population-only read (its own-row
+            # lock exists only at this fenced demote write) that must NEVER
+            # take the per-org advisory lock (a count-then-row shape would
+            # invert the uniform row→advisory ordering). The runner-marker
+            # reconciliation sweep is its named backstop.
+            await update_run_status(
+                session,
+                run_id,
+                "pending",
+                error_code=decline_code,
+                error_detail=decline_detail,
+                claim_token=self._claim_token,
+                from_status="running",
+            )
+            pending_run = await get_run(session, run_id)
+            if pending_run is None:
+                raise RunNotFoundError(run_id)
+            return pending_run
+
+    async def _recover_capacity_lock_timeout(
+        self,
+        exc: Exception,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> Run | None:
+        """Recover from a 55P03 on ``_claim_under_capacity``'s write, else ``None``.
+
+        FAR-1610: the bounded row-lock wait expired (55P03) on a claim-time
+        write. The transaction rolled back whole, so NO status change was
+        applied — the run is left exactly as it was (the SAQ claim already set
+        it ``running``). This is the same fail-open-admit posture the capacity
+        READ failures already take (see ``_check_capacity``'s docstring): WARN,
+        re-read the row, and let the caller proceed; a concurrent cancel-request
+        is still caught by the stream path's DB cancellation check. Never
+        silent.
+
+        Returns the re-read run on a 55P03; returns ``None`` for any other
+        exception so ``_check_capacity`` re-raises it unchanged.
+        """
+        if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+            return None
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — bounded "
+            "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
+            "status change applied, proceeding with the run's current state",
+            run_id,
+            exc_info=True,
+        )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            return await get_run(session, run_id)
 
     async def _check_spend_ceiling_gate(
         self,
