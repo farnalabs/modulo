@@ -1673,8 +1673,12 @@ def test_reported_detail_preserves_the_type_binding() -> None:
 
 
 def test_type_qualified_claims_classifies_legacy_spellings() -> None:
-    """The FAR-1617 detection helper: qualified claims only, normalised."""
-    assert type_qualified_claims(["read", "github.read", "github:write", "sandbox.egress", "docker"]) == [
+    """The FAR-1617 detection helper: qualified claims only, normalised and
+    de-duplicated — the same binding spelled ``github.read`` and ``github:read``
+    collapses to one claim."""
+    assert type_qualified_claims(
+        ["read", "github.read", "github:read", "github:write", "sandbox.egress", "docker"]
+    ) == [
         "github.read",
         "github.write",
     ]

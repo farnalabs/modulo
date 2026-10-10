@@ -598,3 +598,36 @@ def test_non_conformant_bare_claim_matches_a_bare_profile_declaration():
     """A bare profile capability satisfies a bare claim (unchanged)."""
     guardrail = _guardrail(name="g_bare", required_capabilities=["read"])
     assert not non_conformant_blocking_guardrails([guardrail], {"read": True})
+
+
+# ---------------------------------------------------------------------------
+# Collision folding: the SAME bare capability declared under multiple
+# spellings folds to one state (present wins, else absent, else unknown)
+# (FAR-1615)
+# ---------------------------------------------------------------------------
+
+
+def test_non_conformant_collision_present_wins_over_absent():
+    """A profile declaring the same bare capability twice — once present and
+    once absent — folds to present: a confirmed-present surface dominates, so
+    the bare claim is satisfied and no guardrail is non-conformant."""
+    guardrail = _guardrail(name="g_collide_present", required_capabilities=["read"])
+    assert not non_conformant_blocking_guardrails([guardrail], {"read": True, "github.read": False})
+
+
+def test_non_conformant_collision_absent_wins_over_unknown():
+    """A confirmed-absent spelling dominates an unreadable one, so the folded
+    bare capability is absent and the bare claim is non-conformant."""
+    guardrail = _guardrail(name="g_collide_absent", required_capabilities=["read"])
+    non_conformant = non_conformant_blocking_guardrails([guardrail], {"github.read": False, "read": None})
+    assert [g.name for g, _derivation in non_conformant] == ["g_collide_absent"]
+    assert non_conformant[0][1].state == "absent"
+
+
+def test_non_conformant_collision_all_unknown_folds_to_unknown():
+    """When every spelling of the same bare capability is unreadable the fold
+    is unknown (fail closed), so the bare claim is non-conformant."""
+    guardrail = _guardrail(name="g_collide_unknown", required_capabilities=["read"])
+    non_conformant = non_conformant_blocking_guardrails([guardrail], {"github.read": None, "read": None})
+    assert [g.name for g, _derivation in non_conformant] == ["g_collide_unknown"]
+    assert non_conformant[0][1].state == "unknown"
