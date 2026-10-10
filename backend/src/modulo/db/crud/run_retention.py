@@ -135,6 +135,7 @@ _CHECKPOINT_TABLES: tuple[tuple[str, str], ...] = (
 # size probe errored, the error aborted the enclosing transaction, and the next
 # statement in the same session died with InFailedSQLTransactionError. The org
 # filter must be a WHERE predicate, never a GROUP BY expression.
+_GROUP_BY_THREAD_ID = " GROUP BY thread_id"
 _CHECKPOINT_SIZE_SQL: dict[str, tuple[str, str]] = {
     "checkpoints": (
         (
@@ -142,21 +143,21 @@ _CHECKPOINT_SIZE_SQL: dict[str, tuple[str, str]] = {
             "octet_length(metadata::text)), 0) AS bytes, COUNT(*) AS cnt "
             "FROM checkpoints WHERE thread_id IN :tids"
         ),
-        " GROUP BY thread_id",
+        _GROUP_BY_THREAD_ID,
     ),
     "checkpoint_blobs": (
         (
             "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
             "COUNT(*) AS cnt FROM checkpoint_blobs WHERE thread_id IN :tids"
         ),
-        " GROUP BY thread_id",
+        _GROUP_BY_THREAD_ID,
     ),
     "checkpoint_writes": (
         (
             "SELECT thread_id, COALESCE(SUM(octet_length(blob)), 0) AS bytes, "
             "COUNT(*) AS cnt FROM checkpoint_writes WHERE thread_id IN :tids"
         ),
-        " GROUP BY thread_id",
+        _GROUP_BY_THREAD_ID,
     ),
 }
 _CHECKPOINT_DELETE_SQL: dict[str, str] = {
