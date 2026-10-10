@@ -20,6 +20,7 @@ interface TransparencyData {
   consent_level: string
   instance_enabled: boolean
   enforcement_enabled: boolean
+  egress_allowed: boolean
   warning: string | null
 }
 

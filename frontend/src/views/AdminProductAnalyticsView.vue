@@ -32,12 +32,20 @@
         </SectionCard>
 
         <SectionCard :title="$t('views.AdminProductAnalyticsView.consent_and_enforcement')">
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.consent_level') }}</span>
               <p class="mt-0.5">
                 <span :class="store.transparency.consent_level === 'all' ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="consent-level">
                   {{ consentLevelLabel }}
+                </span>
+              </p>
+            </div>
+            <div>
+              <span class="text-xs font-medium text-muted-foreground">{{ $t('views.AdminProductAnalyticsView.egress') }}</span>
+              <p class="mt-0.5">
+                <span :class="egressAllowed ? 'badge badge-status-success' : 'badge badge-status-muted'" data-testid="egress-allowed">
+                  {{ egressAllowed ? $t('views.AdminProductAnalyticsView.egress_allowed') : $t('views.AdminProductAnalyticsView.egress_blocked') }}
                 </span>
               </p>
             </div>
@@ -66,12 +74,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { parseISO } from 'date-fns'
 import PageHeader from '../components/shared/PageHeader.vue'
 import SectionCard from '../components/shared/SectionCard.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { useProductAnalyticsStore } from '../stores/productAnalyticsStore'
-import { formatDateShortWithTime } from '../lib/formatDate'
+import { formatDateShort } from '../lib/formatDate'
 import { useI18n } from 'vue-i18n'
 
 const store = useProductAnalyticsStore()
@@ -85,13 +94,19 @@ const consentLevelLabel = computed(() => {
   return map[store.transparency?.consent_level ?? ''] || store.transparency?.consent_level || t('views.AdminProductAnalyticsView.level_unknown')
 })
 
+// The transparency endpoint returns ``egress_allowed`` on ``TransparencyData``.
+const egressAllowed = computed(() => store.transparency?.egress_allowed === true)
+
 onMounted(() => {
   store.fetchTransparency()
 })
 
+// The dump watermark is a DATE-only value. Parse it as a calendar date so it is
+// not shifted a day backwards in timezones behind UTC — a bare ``new Date()``
+// reads ``YYYY-MM-DD`` as UTC midnight.
 function formatDate(dateStr: string): string {
-  const d = new Date(dateStr)
+  const d = parseISO(dateStr)
   if (Number.isNaN(d.getTime())) return '—'
-  return formatDateShortWithTime(d)
+  return formatDateShort(d)
 }
 </script>
