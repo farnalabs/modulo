@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -106,6 +107,11 @@ def _make_session(snapshot: MagicMock, statements: list[str] | None = None, retr
     session.begin = MagicMock(return_value=begin_cm)
     session.add = MagicMock()
     session.execute = _execute
+    # FAR-1610: ``execute``/``resume`` now issue the transaction-scoped lock
+    # bound at the top of their first transaction; it resolves the dialect via
+    # ``session.get_bind()``. A real AsyncSession always has ``get_bind`` — the
+    # double reports a non-Postgres dialect so the bound no-ops.
+    session.get_bind = MagicMock(return_value=SimpleNamespace(dialect=SimpleNamespace(name="sqlite")))
     return session
 
 

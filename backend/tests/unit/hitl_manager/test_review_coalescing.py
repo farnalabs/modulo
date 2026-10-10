@@ -89,11 +89,25 @@ class _CoalesceSession:
         self._dialect = dialect
         self.statements: list[Any] = []
         self.params_seen: list[dict[str, Any]] = []
+        # FAR-1610: the caller-side transaction-scoped lock bound
+        # (``set_mutation_row_lock_timeout``) is issued BEFORE the first lock.
+        # It is not one of the coalescing DECISION statements this double
+        # models, so it is recorded separately and kept out of the index-based
+        # dispatch (which would otherwise shift by one on Postgres).
+        self.bound_statements: list[Any] = []
+        self.bound_params: list[dict[str, Any] | None] = []
+        self.issue_order: list[str] = []
 
     def get_bind(self) -> Any:
         return SimpleNamespace(dialect=SimpleNamespace(name=self._dialect))
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
+        if "set_config('lock_timeout'" in str(stmt):
+            self.bound_statements.append(stmt)
+            self.bound_params.append(params)
+            self.issue_order.append("bound")
+            return MagicMock()
+        self.issue_order.append("stmt")
         self.statements.append(stmt)
         self.params_seen.append(dict(params or {}))
         index = len(self.statements)
@@ -386,3 +400,35 @@ class TestServerSideKeyFilter:
         sql = str(session.statements[1])
         assert "jsonb_extract_path_text" not in sql
         assert "input_payload" in sql
+
+
+class TestCallerLockBound:
+    """FAR-1610: the supersede path locks the hot ``runs`` row (via the shared
+    ``unpark_parked_run``), and the per-work-item advisory lock is taken in the
+    caller's transaction. The caller-side transaction-scoped bound must be
+    issued BEFORE the first lock — the shared CRUD function stays unbounded
+    (FAR-1601)."""
+
+    async def test_postgres_issues_the_bound_before_any_lock(self) -> None:
+        session = _CoalesceSession(
+            run_row=_run_row(_payload(), HASH_A),
+            candidates=[],
+            dialect="postgresql",
+        )
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        assert session.bound_statements, "the caller-side lock bound must be issued"
+        bound_sql = str(session.bound_statements[0])
+        assert "set_config('lock_timeout'" in bound_sql
+        # Transaction-scoped: set_config(..., is_local => true) — reverts at
+        # COMMIT/ROLLBACK, never leaks onto a pooled connection.
+        assert ", true)" in bound_sql
+        assert session.bound_params[0] == {"val": "5000ms"}
+        # FIRST statement of the call — before the run read and the advisory lock.
+        assert session.issue_order[0] == "bound"
+
+    async def test_non_postgres_takes_the_no_op_gate(self) -> None:
+        """SQLite/MariaDB have no ``lock_timeout`` — the bound no-ops (the
+        dialect gate), so no bound statement is issued."""
+        session = _CoalesceSession(run_row=_run_row(_payload(), HASH_A), candidates=[])
+        await evaluate_gate_coalescing(session, run_id=RUN_ID, review_id=GATE, pipeline_id=PIPELINE_ID, org_id=ORG_ID)
+        assert not session.bound_statements
