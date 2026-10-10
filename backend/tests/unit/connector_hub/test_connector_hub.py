@@ -5,7 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Self
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.fernet import Fernet
@@ -212,11 +212,16 @@ async def test_missing_base_path_in_config_skips():
         hub.get(ci.id)
 
 
-async def test_unknown_connector_type_skips():
-    """Unknown connector types are skipped with a warning."""
+@pytest.mark.parametrize("connector_type_id", ["nonexistent", "some_unknown_type"])
+async def test_unknown_connector_type_skips(connector_type_id):
+    """Unknown connector types are skipped with a warning.
+
+    Both a built-in miss (``nonexistent``) and a plugin-registry fallback miss
+    (``some_unknown_type``) reach the same ``_build_connector`` fallback branch.
+    """
     ci = _FakeCI(
         id=uuid.uuid4(),
-        connector_type_id="nonexistent",
+        connector_type_id=connector_type_id,
         credentials_ciphertext=_encrypt({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
@@ -273,23 +278,6 @@ async def test_initialise_plugin_fallback_connector():
 
     connector = hub.get(ci.id)
     assert connector.connector_type == ConnectorType.CUSTOM
-
-
-async def test_initialise_plugin_fallback_not_registered_skips():
-    """When a connector type is not built-in and not in the plugin registry, skip with warning."""
-    ci = _FakeCI(
-        id=uuid.uuid4(),
-        connector_type_id="some_unknown_type",
-        credentials_ciphertext=_encrypt({}),
-    )
-    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-    with (
-        patch.object(backend, "get_secret", return_value="{}"),
-    ):
-        hub = ConnectorHub(secrets_backend=backend)
-        await hub.initialise([ci])
-    with pytest.raises(ConnectorNotFoundError):
-        hub.get(ci.id)
 
 
 async def test_multiple_hubs_coexist(tmp_path):
@@ -818,8 +806,11 @@ async def test_sample_propagates_query_results(tmp_path):
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
+    (tmp_path / "sample.txt").write_text("x")
     records = await hub.sample(ci.id, "directory", filters={"path": str(tmp_path)}, limit=5)
-    assert isinstance(records, list)
+    assert records
+    names = [(record["name"], record["type"]) for record in records]
+    assert ("sample.txt", "file") in names
 
 
 async def test_sample_enforces_read_acl(tmp_path):
@@ -845,32 +836,8 @@ async def test_sample_enforces_read_acl(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class _HubFakeRuntimeProvider:
-    """Minimal RuntimeProvider test double for hub integration tests."""
-
-    async def create_workspace(self, spec: Any) -> str:
-        return "ws-fake"
-
-    async def exec_command(
-        self,
-        provider_ref: str,
-        command: list[str],
-        *,
-        timeout: int | None = None,  # noqa: ASYNC109
-    ) -> Any:
-        from modulo.core.runtime_provider import ExecResult
-
-        return ExecResult(exit_code=0, stdout="", stderr="")
-
-    async def destroy_workspace(self, provider_ref: str) -> None:
-        pass
-
-    async def get_workspace_status(self, provider_ref: str) -> str:
-        return "running"
-
-
 async def test_initialise_creates_shell_connector():
-    """Shell connector can be created via the hub when a RuntimeProvider is provided."""
+    """Shell connector can be created via the hub."""
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="shell",
@@ -935,8 +902,11 @@ async def test_acl_allows_read(tmp_path):
         hub = ConnectorHub(secrets_backend=backend)
         await hub.initialise([ci])
 
+    (tmp_path / "acl.txt").write_text("x")
     records = await hub.sample(ci_id, "directory", filters={"path": str(tmp_path)})
-    assert isinstance(records, list)
+    assert records
+    names = [(record["name"], record["type"]) for record in records]
+    assert ("acl.txt", "file") in names
 
 
 async def test_hub_rejects_mis_typed_legacy_allowlist_entry(tmp_path):
@@ -1149,3 +1119,72 @@ async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
     connector = hub.get(ci.id)
     assert connector.connector_type == connector_type_id
     assert captured == [(connector_type_id, {expected_key: bare_token})]
+
+
+# ---------------------------------------------------------------------------
+# FAR-439: shared-Redis client caching + teardown
+# ---------------------------------------------------------------------------
+
+
+def test_shared_redis_client_fails_closed_and_is_sticky():
+    """FAR-439: once a tenant-path shared Redis construction fails, EVERY later
+    call re-raises instead of degrading to the per-process local bucket."""
+    from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
+
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend, org_id="org-1")
+    with patch(
+        "modulo.core.connector_hub.resolve_shared_rate_limit_redis",
+        side_effect=SharedBudgetUnavailableError("boom"),
+    ):
+        with pytest.raises(SharedBudgetUnavailableError):
+            hub._shared_redis_client()
+        # The recorded error is sticky: a resolver that would now succeed is never consulted.
+        with (
+            patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=None),
+            pytest.raises(SharedBudgetUnavailableError),
+        ):
+            hub._shared_redis_client()
+
+
+def test_shared_redis_client_resolved_once():
+    """The shared Redis client is resolved once and cached (not re-read per call)."""
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend, org_id="org-1")
+    sentinel = object()
+    with patch("modulo.core.connector_hub.resolve_shared_rate_limit_redis", return_value=sentinel) as resolver:
+        assert hub._shared_redis_client() is sentinel
+        assert hub._shared_redis_client() is sentinel
+        resolver.assert_called_once_with("org-1")
+
+
+async def test_aexit_awaits_async_connector_close_and_isolates_failures():
+    """_close_connectors awaits every awaitable close(), isolates a failure, and
+    closes the hub-owned shared Redis client."""
+
+    class _Closable:
+        def __init__(self, *, fail: bool = False) -> None:
+            self.closed = 0
+            self._fail = fail
+
+        async def close(self) -> None:
+            self.closed += 1
+            if self._fail:
+                raise RuntimeError("close boom")
+
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    hub = ConnectorHub(secrets_backend=backend)
+    ok_first, bad, ok_last = _Closable(), _Closable(fail=True), _Closable()
+    hub._connectors[uuid.uuid4()] = ok_first
+    hub._connectors[uuid.uuid4()] = bad
+    hub._connectors[uuid.uuid4()] = ok_last
+    shared_redis = AsyncMock()
+    hub._shared_redis = shared_redis
+
+    async with hub:
+        pass
+
+    assert ok_first.closed == 1
+    assert bad.closed == 1
+    assert ok_last.closed == 1  # a failing close must not abort the rest
+    shared_redis.aclose.assert_awaited_once()
