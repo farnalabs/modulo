@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, LargeBinary, String, Text
+from sqlalchemy import JSON, Boolean, CheckConstraint, Index, LargeBinary, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -8,6 +8,26 @@ from modulo.db.models.base import OrgScoped
 
 class SsoProvider(OrgScoped):
     __tablename__ = "sso_providers"
+    __table_args__ = (
+        # Pre-auth global lookup: get_enabled_saml_provider /
+        # list_enabled_oidc|saml_providers filter WHERE provider_type = ?
+        # AND enabled with no org scope on every login. The partial
+        # predicate keeps the index to live rows only.
+        Index(
+            "ix_sso_providers_type_enabled",
+            "provider_type",
+            postgresql_where=text("enabled"),
+            sqlite_where=text("enabled"),
+        ),
+        # provider_type is otherwise enforced only at the API boundary
+        # (admin_sso pattern ^(oidc|saml)$); crud.create_provider and the
+        # startup env-import path do not validate. Auth branches on exact
+        # equality, so a bad value would silently disable SSO.
+        CheckConstraint(
+            "provider_type IN ('oidc', 'saml')",
+            name="ck_sso_providers_provider_type",
+        ),
+    )
 
     provider_type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
