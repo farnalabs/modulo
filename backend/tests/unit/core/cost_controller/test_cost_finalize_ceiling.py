@@ -7,6 +7,7 @@ that on success the org's consumed total is incremented. DB is fully mocked.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date
@@ -403,6 +404,46 @@ async def test_accrual_retry_after_flush_failure_never_rereads_expired_org() -> 
     assert org.reads == 1, "the base must be read exactly once, before the retry loop"
     assert org.stored_value() == 800  # exactly one accrual of 300, no re-read
     assert org.expired is True  # the rollback really did expire the object
+
+
+async def test_record_ledger_rolls_back_savepoint_and_propagates_cancellation() -> None:
+    """A ``CancelledError`` raised inside the ledger savepoint must roll the
+    savepoint back and propagate untouched.
+
+    Cancellation (task teardown / shutdown) is not a transactional write
+    failure: it must never be swallowed into a retry or wrapped as a
+    ``_LedgerWriteRetryError``. The savepoint is rolled back first so the
+    aborted unit leaves no partial ledger row or org accrual, then the
+    cancellation is re-raised for the caller to unwind.
+    """
+    savepoint = AsyncMock()
+    savepoint.rollback = AsyncMock()
+    savepoint.commit = AsyncMock()
+
+    session = AsyncMock()
+    session.begin_nested = AsyncMock(return_value=savepoint)
+
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _record_ledger_with_retry(
+            session,
+            org_id=uuid.uuid4(),
+            cost_usd=Decimal("3.00"),
+            team_id=None,
+            run_id=uuid.uuid4(),
+            run_date=date(2026, 6, 24),
+            attempts=3,
+            accrued_org=None,
+            accrued_cents=0,
+        )
+
+    savepoint.rollback.assert_awaited_once()
+    savepoint.commit.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
