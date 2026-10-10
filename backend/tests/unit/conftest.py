@@ -1,7 +1,7 @@
 """Global fixtures for all unit tests."""
 
 from collections.abc import Generator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -28,16 +28,24 @@ def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, 
 
 
 @pytest.fixture(autouse=True)
-def _patch_verify_identity() -> None:
+def _patch_verify_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent _verify_identity from connecting to a real database.
 
     The _verify_identity function in auth/dependencies creates its own
     database engine and queries the real DB to check account/org existence.
     This bypasses all FastAPI dependency overrides, causing 401 errors when
     the local Postgres is running but the test UUIDs don't match real data.
+
+    ``monkeypatch.setattr`` (not ``unittest.mock.patch``) is deliberate: several
+    per-module fixtures (e.g. ``tests/unit/test_schema_folders.py``'s
+    ``_prevent_db_auth_check``) patch this same symbol with ``monkeypatch``, and
+    ``monkeypatch`` is a shared function-scoped fixture torn down LAST — after
+    any ``unittest.mock.patch`` context exits. Sharing one undo stack keeps the
+    two restores LIFO-correct, so the real function is restored rather than a
+    stale AsyncMock leaking into the next test (the FAR-1631 leak class, now
+    guarded by ``_guard_real_verify_identity`` in ``tests/conftest.py``).
     """
-    with patch("modulo.auth.dependencies._verify_identity", new=AsyncMock(return_value=None)):
-        yield
+    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
 
 
 @pytest.fixture(autouse=True)
