@@ -182,10 +182,14 @@ def test_compute_initial_send_rejects_unsupported_period() -> None:
         compute_initial_send("fortnightly")
 
 
-def test_compute_initial_send_coerces_naive_after_to_utc() -> None:
-    """A naive ``after`` is treated as UTC — 12:30 UTC on 2026-07-13 means the
-    daily boundary is midnight on the 14th, not a wall-clock local guess."""
-    after = datetime(2026, 7, 13, 12, 30)
+def test_compute_initial_send_treats_naive_after_as_utc() -> None:
+    """A naive ``after`` is accepted and read as UTC, not as local wall time.
+    A half-past-midnight input pins the distinction: read as UTC, 2026-07-13
+    00:30 is still inside the day, so the daily boundary is midnight on the
+    14th — while a local-zone reinterpretation in any zone ahead of UTC falls
+    back into July 12 and answers midnight on the 13th. (``next_run_at``,
+    by contrast, is rejected outright when naive — see the create tests.)"""
+    after = datetime(2026, 7, 13, 0, 30)
     assert compute_initial_send("daily", after=after) == datetime(2026, 7, 14, tzinfo=UTC)
 
 
