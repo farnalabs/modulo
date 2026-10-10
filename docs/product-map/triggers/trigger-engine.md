@@ -4,6 +4,7 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/triggers.py
+  - backend/src/modulo/api/mcp_server.py
   - backend/src/modulo/api/routes/webhooks.py
   - backend/src/modulo/api/routes/slack.py
   - backend/src/modulo/core/trigger_engine/__init__.py
@@ -22,6 +23,7 @@ code:
 unit-tests:
   - backend/tests/unit/trigger_engine/test_trigger_engine.py
   - backend/tests/unit/trigger_engine/test_polling.py
+  - backend/tests/unit/trigger_engine/test_polling_acl.py
   - backend/tests/unit/trigger_engine/test_polling_connector_drift.py
   - backend/tests/unit/trigger_engine/test_polling_shared_redis.py
   - backend/tests/unit/trigger_engine/test_agent_signal.py
@@ -35,6 +37,8 @@ unit-tests:
   - backend/tests/unit/api/test_trigger_config_secrets.py
   - backend/tests/unit/api/test_team_scope_dependencies.py
   - backend/tests/unit/api/test_triggers_routes_coverage.py
+  - backend/tests/unit/mcp/test_trigger_crud_tools.py
+  - backend/tests/unit/mcp/test_trigger_mgmt_tools.py
   - backend/tests/integration/test_trigger_run_team_gate.py
   - frontend/src/__tests__/SettingsTriggersView.spec.ts
 bdd:
@@ -163,6 +167,38 @@ rate-limited by the `TriggerEngine`.
       test_triggers_routes_coverage.py`,
       `integration: test_trigger_run_team_gate.py`,
       `bdd: features/teams/team_pipeline_visibility.feature`)
+- [x] A polling trigger's connector reference is team-scoped at BOTH save and
+      read (FAR-1595): a trigger's `config_json.connector_instance_id` was never
+      team-validated — the fire job reads the connector row team-blind
+      (`cron_helpers` sets the execution context) with only the allowlist gate,
+      so a team-A trigger could name and poll a team-B connector and read its
+      team-private credentials. SAVE-time: the shared
+      `_validate_connector_instance_team_scope` gate is called from the REST
+      `create_trigger` / `update_trigger` / `update_polling_config` paths AND the
+      MCP `create_trigger` / `update_trigger` tools, judging the reference with
+      `find_connector_team_mismatches`'s team-blind org-scoped read (FAR-1515
+      CRITICAL 1) against the trigger's owning-pipeline `owner_team_id` (the
+      value the FAR-1513 team gate already resolved, so no second
+      caller-facing read), returning the named 409 `connector_team_mismatch`
+      detail; only the TEAM-PRIVATE direction is refused (an org-visible
+      connector is usable by any team's pipeline), an unresolvable reference
+      fails CLOSED as `ConnectorBindingMissingError`, a non-UUID value is a loud
+      no-op warning, and the check is a NEW-binding check (an unchanged
+      `connector_instance_id` is not re-judged). READ-time defence-in-depth:
+      `trigger_engine.polling.enforce_polling_team_scope` runs BEFORE any
+      credential is decrypted (alongside `enforce_polling_read_acl`) and
+      re-validates the connector's team scope against the owning trigger's
+      pipeline through the SAME shared `connector_team_mismatch` predicate,
+      DENYING fail-closed when there is no pipeline context to verify (every
+      production caller forwards it: the SAQ cron fire job and
+      `TriggerEngine.evaluate_condition`)
+      (`backend/src/modulo/api/routes/triggers.py`,
+      `backend/src/modulo/api/mcp_server.py`,
+      `backend/src/modulo/core/trigger_engine/polling.py`,
+      `backend/src/modulo/core/trigger_engine/__init__.py`,
+      `backend/src/modulo/core/cron_helpers.py`;
+      `unit-tests: test_polling_acl.py, test_triggers_routes_coverage.py,
+      test_trigger_crud_tools.py, test_trigger_mgmt_tools.py`)
 
 ## Known Gaps
 
@@ -171,6 +207,20 @@ rate-limited by the `TriggerEngine`.
   operation (audited), not per-trigger.
 
 ## QA History
+- 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1595 sub-surface (polling connector team-scope gate, merged in PR #1451):
+  the middle of the connector team-scope rule — a polling trigger naming a
+  team-private connector from another team — shipped with NO coverage in either
+  product-map layer. The manifest `feat-triggers` registry and this tracker
+  carried the FAR-1513 team-gate-but-not-connector half but not the FAR-1595
+  save-time (`_validate_connector_instance_team_scope` over REST create/update/
+  polling-config and the MCP trigger tools, 409 `connector_team_mismatch`,
+  NEW-binding-only) or read-time (`enforce_polling_team_scope`, fail-closed on a
+  missing pipeline context) halves. Added the checked behaviour line plus the
+  `polling.py` / `mcp_server.py` / `cron_helpers.py` code and
+  `test_polling_acl.py` / `test_triggers_routes_coverage.py` /
+  `test_trigger_crud_tools.py` / `test_trigger_mgmt_tools.py` unit-test
+  citations.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1513 sub-surface (team-gate trigger create/update/delete/toggle/restore
   against a team-private pipeline, merged in PR #1376): the trigger team-gate
