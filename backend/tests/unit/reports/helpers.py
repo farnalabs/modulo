@@ -10,10 +10,21 @@ different shapes. Changes to how the scheduler / CRUD layer interacts with
 from __future__ import annotations
 
 import uuid
-from typing import Self
+from collections.abc import Iterator
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
 
+from sqlalchemy.sql.elements import BinaryExpression
+
 from modulo.db.models.scheduled_report import ScheduledReport
+
+# Shared Slack webhook URLs for the reports tests — a single definition so the
+# quality and scheduler suites cannot drift apart.
+SLACK_URL = "https://hooks.slack.com/services/T1/B1/xxx"
+SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
+
+# Sentinel distinguishing "no value expected" from an expected ``None``.
+_UNSET = object()
 
 
 class _MockBegin:
@@ -78,3 +89,76 @@ def make_report_mock(
     report.config_json = config_json or {}
     report.recipient_config = recipient_config or {}
     return report
+
+
+def make_cost_report_mock(*, schedule_type: str) -> MagicMock:
+    """Build the cost-report ScheduledReport double shared by the cost tests."""
+    return make_report_mock(
+        report_type="cost",
+        cron_expression="0 0 * * *",
+        config_json={
+            "period": "daily",
+            "group_by": "team",
+            "format": "csv",
+            "schedule_type": schedule_type,
+        },
+        recipient_config={"type": "email", "emails": ["admin@example.com"]},
+    )
+
+
+def make_http_client(side_effect: list[object] | None = None) -> MagicMock:
+    """Build an async HTTP client double whose ``post`` replays *side_effect*."""
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=side_effect or [])
+    return client
+
+
+def make_http_response(
+    *,
+    is_success: bool | None = None,
+    status_code: int = 200,
+    text: str = "ok",
+    headers: dict[str, str] | None = None,
+) -> MagicMock:
+    """Build a minimal ``httpx.Response``-shaped double.
+
+    ``is_success`` defaults to being derived from ``status_code`` so a
+    non-2xx response is consistent with its status unless a caller explicitly
+    overrides it.
+    """
+    resp = MagicMock()
+    resp.is_success = status_code < 400 if is_success is None else is_success
+    resp.status_code = status_code
+    resp.text = text
+    resp.headers = {} if headers is None else headers
+    return resp
+
+
+def binary_expressions(clause: Any) -> Iterator[Any]:
+    """Yield every ``BinaryExpression`` nested inside a SQL clause.
+
+    Lets tests assert on SQL predicate structure (operator + column) without
+    matching on rendered SQL text. A single-predicate ``.where()`` collapses to
+    the ``BinaryExpression`` itself, so that case is yielded directly rather
+    than being lost when iterating children.
+    """
+    if clause is None:
+        return
+    if isinstance(clause, BinaryExpression):
+        yield clause
+    for child in clause.get_children():
+        yield from binary_expressions(child)
+
+
+def has_predicate(clause: Any, operator: Any, column_name: str, value: Any = _UNSET) -> bool:
+    """True when *clause* contains a BinaryExpression with the given operator and
+    left column name (and, when *value* is provided, that right-side value)."""
+    for pred in binary_expressions(clause):
+        if pred.operator is not operator:
+            continue
+        if getattr(pred.left, "name", None) != column_name:
+            continue
+        if value is not _UNSET and getattr(pred.right, "value", _UNSET) != value:
+            continue
+        return True
+    return False
