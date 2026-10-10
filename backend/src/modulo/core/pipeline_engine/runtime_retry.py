@@ -328,7 +328,6 @@ def make_retrying_node_fn(
     async def _execute_edge_retry_source(
         edge: dict[str, Any],
         state: dict[str, Any],
-        failed_event: str,
     ) -> dict[str, Any] | None:
         """Re-execute a single eligible edge's SOURCE node; return the re-run result.
 
@@ -402,7 +401,7 @@ def make_retrying_node_fn(
                 continue
             if raw_fn_resolver is None:
                 continue
-            result = await _execute_edge_retry_source(edge, state, failed_event)
+            result = await _execute_edge_retry_source(edge, state)
             if result is not None:
                 return result
         return None

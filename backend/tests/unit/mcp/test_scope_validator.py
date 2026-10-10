@@ -240,7 +240,6 @@ class TestCheckToolScope:
             key_scope=None,
             auth_type="api_key",
             allowed_set=None,
-            kill_switch=True,
             grants=None,
         )
         assert message == "Tool 'create_pipeline' access denied"

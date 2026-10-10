@@ -25,6 +25,9 @@ import sys
 
 _PREFIX = "prepush-merge-conflict-check:"
 
+#: The ref the first push is checked against for merge conflicts.
+_BASELINE_REF = "origin/main"
+
 
 def _run_git(*args: str) -> tuple[int, str, str]:
     # text=False on stderr would mangle messages; keep stdout text (ASCII
@@ -74,7 +77,7 @@ def main() -> int:
     # to its own remote branch).
     rc_u, out_u, _ = _run_git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     upstream = out_u.strip()
-    first_push = rc_u != 0 or not upstream or upstream == "origin/main"
+    first_push = rc_u != 0 or not upstream or upstream == _BASELINE_REF
     if not first_push:
         _warn(f"'{branch}' already has upstream '{upstream}' - pass (first-push rule only).")
         return 0
@@ -92,19 +95,19 @@ def main() -> int:
         )
         return 0
 
-    rc_v, _, _ = _run_git("rev-parse", "--verify", "--quiet", "origin/main")
+    rc_v, _, _ = _run_git("rev-parse", "--verify", "--quiet", _BASELINE_REF)
     if rc_v != 0:
         _warn("origin/main does not resolve locally - skipping merge-conflict check (pass).")
         return 0
 
     # If origin/main is already an ancestor of HEAD, nothing can conflict.
-    rc_a, _, _ = _run_git("merge-base", "--is-ancestor", "origin/main", "HEAD")
+    rc_a, _, _ = _run_git("merge-base", "--is-ancestor", _BASELINE_REF, "HEAD")
     if rc_a == 0:
         _warn(f"'{branch}' is based on latest origin/main - pass.")
         return 0
 
     # Test whether the branch merges cleanly with origin/main.
-    rc_m, out_m, _err_m = _run_git("merge-tree", "--write-tree", "--name-only", "origin/main", "HEAD")
+    rc_m, out_m, _err_m = _run_git("merge-tree", "--write-tree", "--name-only", _BASELINE_REF, "HEAD")
     if rc_m == 0:
         _warn(f"'{branch}' merges cleanly with origin/main - pass.")
         return 0

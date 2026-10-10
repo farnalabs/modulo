@@ -4754,8 +4754,6 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
-            broker=broker,
-            gate_suppressed=gate_suppressed,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -5829,8 +5827,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
     ) -> tuple[str, str | None, str | None]:
         """Post-stream tail: agent_signal firing, gated publish.
 
@@ -5856,9 +5852,9 @@ class PipelineExecutor:
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
                     )
-            # FAR-228 / FAR-1534: a gated run (``gate_suppressed``) completes
-            # without re-executing the node; its ``run_completed`` is published
-            # post-finalize like every other complete run.
+            # FAR-228 / FAR-1534: a gated run completes without re-executing
+            # the node; its ``run_completed`` is published post-finalize like
+            # every other complete run.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -5875,8 +5871,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
     ) -> tuple[str, str | None, str | None]:
@@ -5898,8 +5892,6 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 completed_node_outputs=completed_node_outputs,
-                broker=broker,
-                gate_suppressed=gate_suppressed,
             )
             tail_ok = True
         finally:

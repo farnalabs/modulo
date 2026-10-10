@@ -2100,7 +2100,7 @@ class WorkItemEnrichmentResponse(BaseModel):
     items: list[WorkItemEnrichmentItem] = Field(default_factory=list)
 
 
-@router.get("/{run_id}/work-items/enrichment", response_model=WorkItemEnrichmentResponse)
+@router.get("/{run_id}/work-items/enrichment")
 @handle_db_errors(_CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT)
 async def get_run_work_item_enrichment(
     run_id: uuid.UUID,

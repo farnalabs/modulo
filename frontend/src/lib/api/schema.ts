@@ -7333,8 +7333,7 @@ export interface paths {
          * @description Get a single eval definition by ID.
          *
          *     Reads from the ``evals`` table (chunk 3b cutover).  Includes
-         *     soft-deleted rows for historical lookups.  The associated
-         *     ``PolicyGate`` (if any) is loaded for the response mapping.
+         *     soft-deleted rows for historical lookups.
          */
         get: operations["get_eval_definition_api_v1_evals__eval_id__get"];
         /**

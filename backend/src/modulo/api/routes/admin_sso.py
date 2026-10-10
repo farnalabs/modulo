@@ -217,7 +217,7 @@ async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID, sessi
     """
     if not _sso_provider_is_unrestricted(provider):
         return
-    flag_on = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+    flag_on = await resolve_sso_unrestricted_provisioning(org_id=org_id)
     if not flag_on:
         _log.warning(
             "admin.sso.unrestricted_mode_rejected",

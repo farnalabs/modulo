@@ -1520,7 +1520,7 @@ class TestBundledBootArgv:
         version_dir.mkdir(parents=True)
         (install_root / "current").symlink_to("versions/1.0.0") if os.name == "posix" else None
         with pytest.raises(UpgradeError, match="no launcher hook"):
-            upgrade_module._bundled_boot_argv(install_root, "1.0.0", tmp_path / "data")
+            upgrade_module._bundled_boot_argv(install_root, tmp_path / "data")
 
 
 class TestQuantifiedDiskPreflight:
@@ -2171,7 +2171,7 @@ class TestStopRunningStack:
 class TestRestartUnitBestEffort:
     def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
-        assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+        assert upgrade_module._restart_unit_best_effort(why="test") is None
 
     def test_unit_restart_success(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2181,7 +2181,7 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=0)
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
     def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2191,11 +2191,11 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=1, stderr=b"failed")
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
-    def test_import_error_caught(self, tmp_path):
+    def test_import_error_caught(self):
         with patch("builtins.__import__", side_effect=ImportError("no service module")):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
 
 class TestApiPortOf:

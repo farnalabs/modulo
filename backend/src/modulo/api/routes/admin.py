@@ -4747,7 +4747,7 @@ class TelemetryStatusResponse(BaseModel):
     enabled: bool
 
 
-@router.get("/telemetry", response_model=TelemetryStatusResponse)
+@router.get("/telemetry")
 @handle_db_errors("admin.get_telemetry_status")
 async def get_telemetry_status(
     _current_user: Annotated[AuthenticatedPrincipal, require_system_permission("system.config.manage")],
@@ -4761,7 +4761,6 @@ async def get_telemetry_status(
 @router.put(
     "/telemetry",
     dependencies=[Depends(audited("telemetry_status_updated", "organisation", principal_dep=get_current_tenant_user))],
-    response_model=TelemetryStatusResponse,
 )
 @handle_db_errors("admin.set_telemetry_status")
 async def set_telemetry_status(
@@ -4839,7 +4838,7 @@ class SnapshotLockReleaseResponse(BaseModel):
     pids: list[int]
 
 
-@router.get("/pipelines/{pipeline_id}/snapshot-lock", response_model=SnapshotLockStatusResponse)
+@router.get("/pipelines/{pipeline_id}/snapshot-lock")
 @handle_db_errors("admin.snapshot_lock.status")
 async def get_pipeline_snapshot_lock(
     pipeline_id: uuid.UUID,
@@ -4857,7 +4856,7 @@ async def get_pipeline_snapshot_lock(
     return SnapshotLockStatusResponse.model_validate(payload)
 
 
-@router.post("/pipelines/{pipeline_id}/snapshot-lock/release", response_model=SnapshotLockReleaseResponse)
+@router.post("/pipelines/{pipeline_id}/snapshot-lock/release")
 @handle_db_errors("admin.snapshot_lock.release")
 async def release_pipeline_snapshot_lock(
     pipeline_id: uuid.UUID,

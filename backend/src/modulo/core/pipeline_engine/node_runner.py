@@ -11363,8 +11363,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _sandbox_repair_info: dict[str, int] = {}
             try:
                 # FAR-899: use real JSON Schema validation with mode support
-                # FAR-901: pass schema_dir + node_id so the validator reads
-                # the on-disk contract version.
                 # FAR-902: collect repair stats for the enforcement record.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
@@ -11373,8 +11371,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
-                    schema_dir=_contract_local_tmp,
-                    node_id=node_id,
                     _repair_info=_sandbox_repair_info,
                 )
                 # FIX H: log the validation outcome for observability
@@ -12551,8 +12547,6 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
-    schema_dir: "Path | None" = None,
-    node_id: str | None = None,
     _repair_info: dict[str, int] | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.
