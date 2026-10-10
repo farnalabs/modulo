@@ -250,9 +250,12 @@ def _llm_judge_eval_def(
     *,
     with_backend_id: bool = True,
     failure_behaviour: str = "block",
+    backend_id: str | None = None,
 ) -> EvalDefinition:
     config: dict[str, Any] = {"field": "content"}
-    if with_backend_id:
+    if backend_id is not None:
+        config["model_backend_id"] = backend_id
+    elif with_backend_id:
         config["model_backend_id"] = str(uuid.uuid4())
     return EvalDefinition(
         id=uuid4(),
@@ -332,6 +335,66 @@ class TestPostNodeLlmJudgeCallable:
                 None,
                 node_type_map={"reviewer": "agent"},
             )
+
+    async def test_malformed_backend_id_fails_closed_without_aborting_siblings(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A malformed (non-UUID) model_backend_id fails THAT eval closed with a
+        clear configuration message — sibling evals still run.
+
+        ``eval_def.config["model_backend_id"]`` is unvalidated free-form JSON;
+        before the defensive parse in ``_build_llm_judge_callable``, a typo or
+        stale manual edit (e.g. ``"not-a-uuid"``) raised a raw ``ValueError``
+        inside ``resolve_llm_judge()`` in ``run_evals_persist_before_decide``'s
+        per-eval loop — aborting every sibling eval and terminalising the run
+        via the generic error path.
+
+        Discriminating: without the fix this test fails with ``ValueError``
+        instead of completing; with the fix the malformed eval fails closed
+        with a clear detail (not a silent 0.0, not the MISSING-id message)
+        and the sibling regex eval still scores.
+        """
+        judge_def = _llm_judge_eval_def(failure_behaviour="warn", backend_id="not-a-uuid")
+        sibling = EvalDefinition(
+            id=uuid4(),
+            org_id=uuid4(),
+            pipeline_id=uuid4(),
+            node_id="reviewer",
+            name="sibling-regex",
+            eval_type=EvalType.REGEX,
+            config={"field": "content", "pattern": "agent"},
+            failure_behaviour="warn",
+        )
+        hub = _FakeHub(json.dumps({"passed": True, "score": 0.9, "detail": "judged"}))
+        executor = _executor()
+        with (
+            caplog.at_level(logging.INFO, logger="modulo.core.pipeline_engine.executor"),
+            patch(
+                "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+                return_value=hub,
+            ),
+        ):
+            await executor._run_post_node_evals(
+                "reviewer",
+                _agent_envelope("some agent output"),
+                {"reviewer": [judge_def, sibling]},
+                uuid.uuid4(),
+                None,
+                node_type_map={"reviewer": "agent"},
+            )
+
+        records = {r.eval_name: r for r in caplog.records if r.getMessage() == "post_node_eval.result"}
+        judge_record = records["llm-judge"]
+        assert judge_record.passed is False
+        assert judge_record.score == 0.0
+        # A clear, fail-closed configuration error — not the MISSING-id
+        # message and not a silent 0.0 with no explanation.
+        assert "malformed" in judge_record.detail
+        assert "not-a-uuid" in judge_record.detail
+        assert judge_record.detail != "LLM judge callable not provided"
+        # The sibling eval still ran (pre-fix the ValueError aborted the loop).
+        assert records["sibling-regex"].passed is True
 
     async def test_regex_post_node_eval_still_works(self, caplog: pytest.LogCaptureFixture) -> None:
         """Non-judge eval types keep working through the same loop (FAR-315 scope)."""
