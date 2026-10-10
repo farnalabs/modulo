@@ -3100,13 +3100,34 @@ elements:
       - testid: oauth-consent-login
         type: button
         dynamic_testid: false
+      - testid: oauth-consent-error
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-context-error
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-success
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-declined
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-loading
+        type: element
+        dynamic_testid: false
       - testid: oauth-consent-client-name
         type: element
         dynamic_testid: false
-      - testid: oauth-consent-scope
+      - testid: oauth-consent-team-line
+        type: element
+        dynamic_testid: false
+      - testid: oauth-consent-no-scopes-hint
         type: element
         dynamic_testid: false
       - testid: oauth-consent-approve
+        type: button
+        dynamic_testid: false
+      - testid: oauth-consent-decline
         type: button
         dynamic_testid: false
     /onboarding:
@@ -5798,6 +5819,7 @@ features:
             - "[x] The MCP API-keys card distinguishes a REVOKED key from an EXPIRED one by the observed facts instead of the derived is_active flag (FAR-1296/FAR-1299): the key serializer emits revoked_at (ISO-8601 when set, else null — the revocation FACT, not an inference from is_active) alongside lookup_prefix/role/scope/last_used_at/expires_at, revocation is a DELETE /api/v1/api-keys/{key_id} (the earlier PUT was silently dropped — FAR-1291), and the /settings/mcp table renders a per-key status badge (settings-mcp-key-status) computed as revoked (revoked_at set, checked first) / expired (revoked_at null and the expiry elapsed) / active (revoked_at null, expiry not elapsed), with the revoke button shown only for active keys (api/routes/api_keys.py + auth/api_key._serialize_key; SettingsMcpView.vue, SettingsMcpView.spec.ts, test_api_keys_endpoint.py)"
             - "[x] API key grant-sets can be set at creation from REST and MCP (FAR-1477): POST /api/v1/api-keys and the MCP create_api_key tool both accept an optional grants list (omitted = legacy role bundle, [] = explicit deny-all, otherwise exactly those permissions) behind the per-org api_key_grants flag (OFF => 422, never a silent widen) and both run the same mint cap (unknown key 422, non-delegable 403, above the caller's live capability 403); the Settings > MCP create-key dialog shows a grant picker only when GET /api/v1/api-keys/grantable-permissions reports the flag ON, lists only backend-supplied delegable permissions (grouped by prefix, filtered to the caller's role level), defaults to off (role bundle), omits grants rather than sending [] and blocks Create while restriction is on with nothing ticked (ApiKeyGrantsSelector.vue, SettingsMcpView.vue, ApiKeyGrantsSelector.spec.ts, test_api_key_grants.py, test_api_key_mgmt_tools.py)"
             - "[x] MCP tool errors carry specific, branchable codes (FAR-1502): `_tool_error(msg, *, code)` demands a keyword-only code with no default so a call site can never fall back to a generic code, and the shared `_tool_exception_error` classifier maps an escaped exception type to the code the consuming agent can branch on — `insufficient_scope` (MCPAuthorizationError), `validation_failed` for a 4xx StarletteHTTPException / `server_error` for a 5xx, `session_contract_error` for a session-contract violation (InvalidRequestError / MissingGreenlet) via the shared db_error_handling classifier, `conflict` for IntegrityError, `migration_required` for ProgrammingError, `database_unavailable` for any other SQLAlchemyError, and `server_error` as the ONLY reserved catch-all; the run WebSocket control-frame surface aligns to the same vocabulary (db_unavailable -> database_unavailable, internal_error -> server_error, and its SQLAlchemyError arm shares the session-contract payload), enforced structurally by test_mcp_error_codes.py (backend/src/modulo/api/mcp_server.py, backend/src/modulo/api/db_error_handling.py, backend/src/modulo/api/routes/run_ws.py; test_mcp_tool_exception_error.py, test_run_ws.py)"
+            - "[x] Browser OAuth consent screen (FAR-1476, 2026-10-10): /oauth/authorize renders the real grant set from the anonymous GET /api/v1/mcp/oauth/consent/context?state=... (client name + canonical scopes + team boundary; no redirect_uri/secrets; unknown/expired/consumed state = undifferentiated 404; the mcp_server kill switch is enforced against the pending row's org without an authenticated dependency chain), each scope has a per-scope deny checkbox (all granted by default, labelled with the registration picker's existing scope_*_desc i18n keys) and a team-limited line; Approve sends {state, granted_scopes} and the approve POST fails closed on any key outside the stored set (canonicalised subset only, live-role re-check, 403 on denial), omitted granted_scopes keeps the all-stored behaviour; Decline renders a clear declined state (the context endpoint deliberately withholds redirect_uri, so no error redirect); migration 0295 gives oauth_consent_states the NULL-context RLS arm oauth_clients already had so the pre-auth read is visible to modulo_app (OAuthConsentView.vue, OAuthConsentView.spec.ts, test_mcp_oauth_bdd.py, 0295_oauth_consent_state_preauth_rls.py)"
     feat-model-backends:
         description: Model backend management and setup
         status: covered

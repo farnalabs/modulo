@@ -49,6 +49,7 @@ from tests.unit.api.mock_session import configure_mock_session
 _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _CODE_VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 _CODE_CHALLENGE = compute_pkce_challenge(_CODE_VERIFIER)
 
@@ -226,6 +227,27 @@ def viewer_client() -> Generator[TestClient, None, None]:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def anon_consent_client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
+    """A TestClient wired ONLY for the anonymous pre-auth consent surfaces.
+
+    Deliberately overrides NO auth principal / plan context — the consent
+    context endpoint must answer a not-yet-signed-in browser, so an
+    ``Authorization``-less request must never become a 401 (the 2026-09-16
+    pre-auth lesson: a dependency composing ``get_current_user`` would 401
+    before the handler ran).
+    """
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncMock:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    yield TestClient(app), mock_session
     app.dependency_overrides.clear()
 
 
@@ -583,6 +605,261 @@ class TestApproveConsent:
             resp = admin_client.post(self.ENDPOINT, json={"state": "other-org-state"})
 
         assert resp.status_code == 400
+
+    # --- FAR-1476 slice 3: per-scope deny via granted_scopes ---
+
+    def test_approve_with_granted_subset_mints_narrower_code(self, admin_client: TestClient) -> None:
+        """A strict subset of the stored scopes narrows the minted code."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(return_value="admin"),
+            ) as mock_verify,
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["trigger:run"]},
+            )
+
+        assert resp.status_code == 200
+        assert mock_code.call_args.kwargs["scopes"] == "trigger:run"
+        # The live role is re-verified against the GRANTED subset.
+        mock_verify.assert_awaited_once()
+        assert mock_verify.call_args.kwargs["scopes"] == ["trigger:run"]
+
+    def test_approve_scope_outside_stored_set_rejected(self, admin_client: TestClient) -> None:
+        """Fail closed: a granted scope the authorize leg never stored is a 400."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["trigger:run", "library:browse"]},
+            )
+
+        assert resp.status_code == 400
+        assert "library:browse" in resp.json()["detail"]
+        mock_code.assert_not_called()
+
+    def test_approve_unknown_scope_key_rejected(self, admin_client: TestClient) -> None:
+        """An unrecognised scope key fails closed before the subset check."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["not-a-real-scope"]},
+            )
+
+        assert resp.status_code == 400
+        assert "not-a-real-scope" in resp.json()["detail"]
+        mock_code.assert_not_called()
+
+    def test_approve_empty_granted_scopes_rejected(self, admin_client: TestClient) -> None:
+        """Granting nothing is a decline, not a zero-scope code — 400, no mint."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz", "granted_scopes": []})
+
+        assert resp.status_code == 400
+        mock_code.assert_not_called()
+
+    def test_approve_omitted_granted_scopes_mints_all_stored(self, admin_client: TestClient) -> None:
+        """Omitted granted_scopes keeps the pre-slice behaviour: all stored scopes."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(return_value="admin"),
+            ) as mock_verify,
+        ):
+            resp = admin_client.post(self.ENDPOINT, json={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        assert mock_code.call_args.kwargs["scopes"] == "trigger:run hitl:review"
+        # The live-role re-check is the subset path only — the omitted path
+        # behaves exactly as before (the token endpoint still re-checks at
+        # exchange).
+        mock_verify.assert_not_called()
+
+    def test_approve_subset_live_role_denial_is_403(self, admin_client: TestClient) -> None:
+        """A demoted approver is denied before any code is minted (fail closed)."""
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
+        with (
+            patch("modulo.auth.oauth.consume_consent_state", new=AsyncMock(return_value=state_row)),
+            patch(
+                "modulo.api.routes.mcp_oauth.create_authorization_code",
+                new=AsyncMock(return_value="code-abc"),
+            ) as mock_code,
+            patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            patch(
+                "modulo.api.routes.mcp_oauth.verify_live_role_covers_scopes",
+                new=AsyncMock(side_effect=InvalidGrantError("Account role does not cover the granted scopes")),
+            ),
+        ):
+            resp = admin_client.post(
+                self.ENDPOINT,
+                json={"state": "state-xyz", "granted_scopes": ["hitl:review"]},
+            )
+
+        assert resp.status_code == 403
+        mock_code.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scenario: Anonymous consent context (FAR-1476 slice 3)
+# ---------------------------------------------------------------------------
+
+
+class TestConsentContext:
+    ENDPOINT = "/api/v1/mcp/oauth/consent/context"
+
+    @staticmethod
+    def _result_for(row: object) -> MagicMock:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = row
+        return result
+
+    def test_context_unknown_state_is_404_never_401(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Pre-auth contract: no Authorization header, and the answer for an
+        unknown state is the undifferentiated 404 — NOT a 401 (an auth
+        dependency leaked into the route would produce one)."""
+        client, session = anon_consent_client
+        session.execute = AsyncMock(return_value=self._result_for(None))
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "unknown-state"})
+
+        assert resp.status_code == 404
+        assert resp.status_code != 401
+        assert resp.json()["detail"] == "Consent request not found"
+
+    def test_context_expired_or_consumed_state_is_404(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Expired and already-consumed states are excluded by the query
+        predicate (consumed=false AND expires_at > now), so they surface as the
+        same 404 as an unknown state."""
+        client, session = anon_consent_client
+        session.execute = AsyncMock(return_value=self._result_for(None))
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "expired-state"})
+
+        assert resp.status_code == 404
+
+    def test_context_requires_state_param(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        client, _session = anon_consent_client
+        resp = client.get(self.ENDPOINT)
+
+        assert resp.status_code == 422
+
+    def test_context_returns_client_name_scopes_team_anonymously(
+        self, anon_consent_client: tuple[TestClient, AsyncMock]
+    ) -> None:
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run", "hitl:review"])
+        client_row = _make_mock_client(name="My MCP App")
+        client_row.team_id = _TEAM_ID
+        team_row = MagicMock()
+        team_row.id = _TEAM_ID
+        team_row.name = "Platform"
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+                self._result_for(team_row),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()) as mock_rls:
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        # Exact-body assert: nothing beyond the display context leaks (no
+        # redirect_uri, no secrets, no org internals).
+        assert resp.json() == {
+            "client_name": "My MCP App",
+            "scopes": ["trigger:run", "hitl:review"],
+            "team": {"id": str(_TEAM_ID), "name": "Platform"},
+        }
+        # The session org is bound from the pending row BEFORE the client/team reads.
+        mock_rls.assert_awaited_once()
+
+    def test_context_org_wide_client_has_null_team(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        client_row = _make_mock_client(name="Org-wide App")
+        client_row.team_id = None
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["client_name"] == "Org-wide App"
+        assert body["team"] is None
+
+    def test_context_deleted_client_is_404(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """Client deleted between authorize and consent — same undifferentiated 404."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz")
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(None),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 404
+
+    def test_context_mcp_server_flag_off_returns_402(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """The pre-auth kill-switch leg: org resolved from the pending row."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz")
+        session.execute = AsyncMock(side_effect=[self._result_for(state_row)])
+        with (
+            patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()),
+            patch("modulo.api.mcp_server._mcp_server_flag_enabled", new=AsyncMock(return_value=False)),
+        ):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 402
+        assert resp.json()["error"] == "feature_required"
 
 
 # ---------------------------------------------------------------------------
