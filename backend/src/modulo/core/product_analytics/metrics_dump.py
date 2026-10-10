@@ -25,6 +25,7 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
+from modulo.core.product_analytics.consent import is_instance_analytics_enabled
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
@@ -45,6 +46,21 @@ _BACKFILL_MAX_DAYS = 14
 _DUMP_WINDOW_MINUTES = 360  # 6 hours
 _DUMP_EXECUTION_WINDOW_MINUTES = 10  # each instance gets 10 min to complete
 _OFFSET_KEY = "product_analytics_dump_offset_minutes"
+
+
+def _parse_iso_date(value: str) -> date:
+    """Parse an ISO date *or* datetime string to a ``date``.
+
+    ``settings_json`` stores ``level_changed_at`` as a full ISO datetime
+    (``consent.apply_consent_action`` / ``set_level`` write ``now.isoformat()``),
+    whereas the dump watermark stores a date-only string.  ``date.fromisoformat``
+    rejects any string carrying a time component, so a datetime string is parsed
+    with ``datetime.fromisoformat`` and narrowed to its date.
+    """
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return datetime.fromisoformat(value).date()
 
 
 async def _get_or_create_system_config(factory: Any, key: str, create: Any) -> str:
@@ -185,15 +201,13 @@ async def _resolve_start_date(
 
     if last_dumped is not None:
         if isinstance(last_dumped, str):
-            last_dumped = date.fromisoformat(last_dumped)
+            last_dumped = _parse_iso_date(last_dumped)
         return last_dumped + timedelta(days=1), last_dumped
 
     earliest_consent = min(
         (o["level_changed_at"] for o in orgs if o["level_changed_at"] is not None),
         default=dump_date,
     )
-    if isinstance(earliest_consent, str):
-        earliest_consent = date.fromisoformat(earliest_consent)
     backfill_start = max(earliest_consent, dump_date - timedelta(days=_BACKFILL_MAX_DAYS))
     return backfill_start, None
 
@@ -248,9 +262,20 @@ async def _dump_date_range(
 
 
 async def _check_instance_switch(factory: Any) -> bool:
+    """Return True when the instance-level analytics master switch is ON.
+
+    Delegates to :func:`consent.is_instance_analytics_enabled` so the dump gate
+    applies the SAME semantics as the consent surface: a bool/string-aware
+    coercion (``"false"`` / ``"0"`` / ``"no"`` are OFF) and the
+    ``MODULO_PRODUCT_ANALYTICS_ENABLED`` env-var fallback. A bare ``bool()``
+    on the raw stored value previously treated the stored string ``"false"`` as
+    truthy and ran the dump while the consent surface reported the switch OFF
+    (fail-open), and ignored the env fallback the surface honours. The
+    transparency endpoint still reads the raw key; its alignment to this helper
+    is tracked in the product map's Known Gaps.
+    """
     async with factory() as session, session.begin():
-        enabled = await read_system_config(session, "product_analytics_enabled")
-    return bool(enabled)
+        return await is_instance_analytics_enabled(session)
 
 
 async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
@@ -266,7 +291,7 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
         if pa.get("level") == "all":
             level_changed_at = pa.get("level_changed_at")
             if isinstance(level_changed_at, str):
-                level_changed_at = date.fromisoformat(level_changed_at)
+                level_changed_at = _parse_iso_date(level_changed_at)
             orgs.append({"id": row.id, "level_changed_at": level_changed_at})
     return orgs
 

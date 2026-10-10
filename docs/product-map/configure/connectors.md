@@ -10,10 +10,14 @@ code:
   - backend/src/modulo/core/connector_hub
   - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/db/crud/team_scope.py
+  - backend/src/modulo/connectors/base.py
   - backend/src/modulo/connectors/rest
+  - backend/src/modulo/core/guardrails/conformance.py
   - frontend/src/views/AdminConnectorsView.vue
 unit-tests:
   - backend/tests/unit/api/test_connectors_endpoint.py
+  - backend/tests/unit/connectors/test_acl.py
+  - backend/tests/unit/core/test_guardrail_conformance_midrun.py
   - backend/tests/unit/connectors/test_connector_base_seam.py
   - backend/tests/unit/connectors/test_connector_credential_redaction.py
   - backend/tests/unit/connectors/test_connector_egress_gate.py
@@ -223,6 +227,28 @@ and per-destination rate limiting.
       ACL-denial semantics in comments only and does not read the predicate;
       `unit-tests: test_acl.py, test_connectors_endpoint.py,
       test_guardrail_conformance_midrun.py`)
+- [x] Capability spellings reduce through ONE canonical vocabulary shared by
+      enforcement and certification (FAR-1582 / FAR-1594): `qualified_capability`
+      / `canonical_capability` / `canonical_capability_set` live in the
+      stdlib-only `connectors/base.py` leaf, so `ConnectorACL` (enforcement) and
+      `core.guardrails.conformance` (certification) import the SAME code and can
+      never give opposite answers for one stored value — before FAR-1594
+      conformance certified a stored `["github.read"]` as `read` while the ACL
+      denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so its
+      redundant type qualifier is reduced to the bare `Capability`
+      (`github.read` / `github:write` -> `read`); a conformance CLAIM is a
+      binding REQUEST, so it keeps its qualifier (`github.read` binds to the
+      github surface specifically). `ConnectorACL` builds its restricted set
+      through `canonical_capability_set` and canonicalises the requested
+      operation through `canonical_capability`, so `check("read")` grants a
+      stored `["github.read"]` exactly as the conformance reader certifies
+      `read`; entries that are not capabilities in any accepted spelling
+      (`sandbox.egress`, `egress:github.com`) are never rewritten and malformed
+      list entries are dropped with a log (they grant nothing), while a non-list
+      value yields the empty set matching the fail-closed FAR-1564 treatment
+      (`backend/src/modulo/connectors/base.py`,
+      `backend/src/modulo/core/guardrails/conformance.py`;
+      `unit-tests: test_acl.py, test_guardrail_conformance_midrun.py`)
 - [x] A connector binding that crosses a team boundary is refused at graph
       save with 409 `connector_team_mismatch` (FAR-1515, PRD §9.3, model
       restated by FAR-1618). Teams are a VISIBILITY GROUPING, not a
@@ -267,6 +293,18 @@ and per-destination rate limiting.
   OTel spans shipped in v1).
 
 ## QA History
+- 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
+  FAR-1582 / FAR-1594 sub-surface (one canonical connector capability vocabulary
+  shared by the ACL and the guardrail conformance reader, merged in PR #1451):
+  the vocabulary helpers (`qualified_capability` / `canonical_capability` /
+  `canonical_capability_set`) shipped with NO coverage in either product-map
+  layer — the manifest `feat-connectors` registry had the FAR-1564
+  `unrestricted_allowed_operations` semantics but not the canonicalisation that
+  keeps enforcement and certification in step, and this tracker named neither.
+  Added the checked behaviour line (ONE shared stdlib-only vocabulary in
+  `connectors/base.py`, the grant-vs-claim asymmetry, `None`/malformed handling)
+  plus the `connectors/base.py` / `core/guardrails/conformance.py` code and
+  `test_acl.py` / `test_guardrail_conformance_midrun.py` unit-test citations.
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked
   FAR-1515 sub-surface (cross-team connector binding enforcement at graph save,
   merged in PR #1377): the team-scope rule for connector bindings shipped while
