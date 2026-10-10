@@ -172,6 +172,10 @@ REAL_FAILURE_ADVISORY_CHECKS: frozenset[str] = frozenset(
         "runner_workspace_reconcile",
         "runner_marker_sweep",
         "runner_health_probe",
+        # FAR-1108 chunk 8b: a dead decision-record reconciliation sweep means
+        # the corruption-detection surface over policy_gate_decisions has
+        # silently stopped — real breakage worth an in-app alert.
+        "decision_record_reconcile",
     }
 )
 

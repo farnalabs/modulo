@@ -98,6 +98,10 @@ EXEMPT_REASONS: dict[str, str] = {
     "derived_analytics": "internal analytics facts maintenance; no user-visible entity change",
     "probe_bookkeeping": "probe watermark / cooldown state; the consequential action audits separately",
     "liveness": "per-tick liveness heartbeat or memory forensics — never audit internal bookkeeping",
+    "read_only_detection": (
+        "read-only corruption/anomaly scan: reports through structured logs, a counter and a "
+        "liveness key, and mutates no org-owned state (there is no entity change to audit)"
+    ),
     "telemetry_watermark": "opt-in outbound telemetry watermark advance",
     "internal_bookkeeping": "instance-internal scheduler/registration state, not org-owned data",
     "boot_default_config": (
@@ -227,6 +231,9 @@ INVENTORY: dict[str, PathRecord] = {
     "cost_probe": _exempt("probe_bookkeeping"),
     "analytics_facts_maintenance": _exempt("derived_analytics"),
     "journey_reconcile": _exempt("derived_state"),
+    # FAR-1108 chunk 8b: read-only decision-record reconciliation — never
+    # mutates a decision record.
+    "decision_record_reconcile": _exempt("read_only_detection"),
     "check_missed_fire_alerts_cron": _exempt("notification_only"),
     "library_sync": _exempt("derived_state"),
     "metrics_dump": _exempt("telemetry_watermark"),
@@ -238,6 +245,7 @@ INVENTORY: dict[str, PathRecord] = {
     "reconcile_runner_workspaces": _exempt("infra_container_gc"),
     "run_classification_reconcile": _exempt("derived_state"),
     "reconcile_journeys": _exempt("derived_state"),
+    "reconcile_decision_records": _exempt("read_only_detection"),
     "reconcile_missing_classifications": _exempt("derived_state"),
     "reconcile_noop_evidence": _exempt("derived_state"),
     "reconcile_pipeline_slots": _audited(

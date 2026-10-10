@@ -77,9 +77,15 @@ class TestChain:
     def test_down_revision_is_0293_oauth_clients_team_id(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
-    def test_single_head_is_this_migration(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_MIGRATION_NAME], f"expected a single head, got {heads}"
+    def test_single_head_and_this_migration_is_an_ancestor(self) -> None:
+        # 0294 is no longer the tip once a later migration lands on top (0295,
+        # FAR-1108 chunk 8b). The invariant this test owns is that the chain
+        # still has exactly ONE head and that this migration is on it.
+        script = ScriptDirectory(str(_VERSIONS.parent))
+        heads = script.get_heads()
+        assert len(heads) == 1, f"expected a single head, got {heads}"
+        revisions = {rev.revision for rev in script.walk_revisions()}
+        assert _MIGRATION_NAME in revisions
 
     def test_no_branch_labels_or_depends_on(self) -> None:
         module = _load_migration()
