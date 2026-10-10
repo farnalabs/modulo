@@ -89,12 +89,12 @@ an eligible tier.
 
 - Metrics telemetry is vendor-bound; a fully self-hosted, in-product analytics
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
-- License/plan eligibility gating is not wired in production: every function
-  in `core/product_analytics/license_enforcement.py` plus
-  `consent.partner_license_requires_analytics` / `is_partner_carve_out_active`
-  has no production call site (unit tests only), so neither a route nor the dump
-  applies the partner `product_analytics_required` carve-out. Feature completion,
-  not a QA fix — tracked for a follow-up ticket.
+- The transparency endpoint's `consent_level` / `egress_allowed` report the
+  **caller's organisation** consent, not an instance-wide aggregate of consenting
+  orgs. On a single-org (self-hosted) instance these coincide; on a multi-org
+  instance the page can show the admin's own org as `off` while a different org's
+  telemetry is actively egressing. Reporting an instance-aggregate posture is a
+  future enhancement.
 - The `/admin/product-analytics` page still cannot show in-product usage/adoption
   metrics — it renders only the transparency endpoint's delivery/consent/enforcement
   fields, which now reflect real state. An in-product analytics export/administration

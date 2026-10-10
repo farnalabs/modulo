@@ -26,21 +26,19 @@ from modulo.core.cost_controller.system_config import (
     write_system_config,
 )
 from modulo.core.product_analytics.consent import is_instance_analytics_enabled
+from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
+    coerce_dump_count,
+)
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["DUMP_COUNT_KEY", "coerce_dump_count", "metrics_dump"]
+__all__ = ["DUMP_COUNT_KEY", "DUMP_WATERMARK_KEY", "coerce_dump_count", "metrics_dump"]
 
 # Schema version -- bumped when the payload shape changes.
 SCHEMA_VERSION: int = 1
-
-# Watermark key in system_config.
-_WATERMARK_KEY = "product_analytics_last_dumped_date"
-
-# Successful-dump counter key in system_config. Incremented once per successful
-# (non-skipped) dump so the transparency endpoint can report a real total.
-DUMP_COUNT_KEY = "product_analytics_dump_count"
 
 # Backfill cap (design doc section 8).
 _BACKFILL_MAX_DAYS = 14
@@ -65,22 +63,6 @@ def _parse_iso_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError:
         return datetime.fromisoformat(value).date()
-
-
-def coerce_dump_count(value: Any) -> int:
-    """Coerce a stored dump-count value to a non-negative int.
-
-    Missing, malformed, or negative stored values degrade to ``0`` so a corrupt
-    row can never mask the count as a failure or produce a negative total. This
-    is the single source of truth for the key's storage format, shared by the
-    increment path and the transparency reader.
-    """
-    if value is None:
-        return 0
-    try:
-        return max(0, int(value))
-    except (ValueError, TypeError):
-        return 0
 
 
 async def _increment_dump_count(session: AsyncSession) -> None:
@@ -207,8 +189,8 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     if succeeded_dates:
         new_watermark = max(succeeded_dates)
         async with factory() as session, session.begin():
-            await acquire_kv_lock(session, _WATERMARK_KEY)
-            await write_system_config(session, _WATERMARK_KEY, new_watermark.isoformat())
+            await acquire_kv_lock(session, DUMP_WATERMARK_KEY)
+            await write_system_config(session, DUMP_WATERMARK_KEY, new_watermark.isoformat())
             await _increment_dump_count(session)
 
     return {
@@ -230,7 +212,7 @@ async def _resolve_start_date(
     day after the last successfully dumped date.
     """
     async with factory() as session, session.begin():
-        last_dumped = await read_system_config(session, _WATERMARK_KEY)
+        last_dumped = await read_system_config(session, DUMP_WATERMARK_KEY)
 
     if last_dumped is not None:
         if isinstance(last_dumped, str):

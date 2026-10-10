@@ -10,8 +10,8 @@ pin that every field is sourced from the state a feature actually writes:
   inherits are exercised here too (a stored ``"false"`` must be OFF, not
   fail-open).
 * ``last_successful_dump_at`` / ``dump_count_total`` read the exact keys the
-  metrics dump writes (``metrics_dump._WATERMARK_KEY`` /
-  ``metrics_dump.DUMP_COUNT_KEY``).
+  metrics dump writes (``DUMP_WATERMARK_KEY`` /
+  ``DUMP_COUNT_KEY``).
 * ``consent_level`` is the caller's organisation real consent level
   (``org.settings_json["product_analytics"]["level"]``), defaulting to ``off``.
 """
@@ -35,8 +35,9 @@ from modulo.api.routes.product_analytics_transparency import (
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
 from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
-from modulo.core.product_analytics import metrics_dump
 from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
     INSTANCE_SWITCH_KEY,
     LEVEL_ALL,
     LEVEL_OFF,
@@ -345,7 +346,7 @@ class TestRealDumpSources:
         stamp = _stale_timestamp_ago(1)
         client = _client(session=_make_session(_ORG_ALL))
         sources = _patch_sources(
-            transparency_values={metrics_dump._WATERMARK_KEY: stamp},
+            transparency_values={DUMP_WATERMARK_KEY: stamp},
             monkeypatch=monkeypatch,
         )
         with sources[0], sources[1]:
@@ -357,16 +358,16 @@ class TestRealDumpSources:
         client = _client(session=_make_session(_ORG_ALL))
         sources = _patch_sources(
             transparency_values={
-                metrics_dump._WATERMARK_KEY: "2026-08-15",
-                metrics_dump.DUMP_COUNT_KEY: 7,
+                DUMP_WATERMARK_KEY: "2026-08-15",
+                DUMP_COUNT_KEY: 7,
             },
             monkeypatch=monkeypatch,
         )
         with sources[0] as get_config, sources[1]:
             body = _request(client)
         keys = [call.args[1] for call in get_config.await_args_list]
-        assert metrics_dump._WATERMARK_KEY in keys
-        assert metrics_dump.DUMP_COUNT_KEY in keys
+        assert DUMP_WATERMARK_KEY in keys
+        assert DUMP_COUNT_KEY in keys
         assert body["dump_count_total"] == 7
         _restore_overrides()
 
@@ -388,7 +389,7 @@ class TestRealDumpSources:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         client = _client(session=_make_session(_ORG_ALL))
-        transparency_values = {} if dump_count is None else {metrics_dump.DUMP_COUNT_KEY: dump_count}
+        transparency_values = {} if dump_count is None else {DUMP_COUNT_KEY: dump_count}
         sources = _patch_sources(transparency_values=transparency_values, monkeypatch=monkeypatch)
         with sources[0], sources[1]:
             body = _request(client)
@@ -424,7 +425,7 @@ class TestStaleWarning:
     ) -> None:
         client = _client(session=_make_session({"product_analytics": {"level": consent_level}}))
         sources = _patch_sources(
-            transparency_values={metrics_dump._WATERMARK_KEY: _stale_timestamp_ago(days_ago)},
+            transparency_values={DUMP_WATERMARK_KEY: _stale_timestamp_ago(days_ago)},
             monkeypatch=monkeypatch,
         )
         with sources[0], sources[1]:
@@ -446,7 +447,7 @@ class TestStaleWarning:
         naive = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=4)).isoformat()
         client = _client(session=_make_session(_ORG_ALL))
         sources = _patch_sources(
-            transparency_values={metrics_dump._WATERMARK_KEY: naive},
+            transparency_values={DUMP_WATERMARK_KEY: naive},
             monkeypatch=monkeypatch,
         )
         with sources[0], sources[1]:
@@ -457,7 +458,7 @@ class TestStaleWarning:
     def test_malformed_timestamp_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
         client = _client(session=_make_session(_ORG_ALL))
         sources = _patch_sources(
-            transparency_values={metrics_dump._WATERMARK_KEY: "not-a-timestamp"},
+            transparency_values={DUMP_WATERMARK_KEY: "not-a-timestamp"},
             monkeypatch=monkeypatch,
         )
         with sources[0], sources[1]:

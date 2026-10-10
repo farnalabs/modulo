@@ -11,13 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.product_analytics.consent import apply_consent_action, default_consent_state
+from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
+    coerce_dump_count,
+)
 from modulo.core.product_analytics.metrics_dump import (
     _BACKFILL_MAX_DAYS,
     _DUMP_EXECUTION_WINDOW_MINUTES,
     _DUMP_WINDOW_MINUTES,
     _OFFSET_KEY,
-    _WATERMARK_KEY,
-    DUMP_COUNT_KEY,
     SCHEMA_VERSION,
     _build_instance_metadata,
     _build_payload,
@@ -29,7 +32,6 @@ from modulo.core.product_analytics.metrics_dump import (
     _parse_iso_date,
     _resolve_start_date,
     _should_dump_now,
-    coerce_dump_count,
     metrics_dump,
 )
 from modulo.core.product_analytics.vendor_client import (
@@ -92,7 +94,7 @@ class TestSchemaVersion:
         assert SCHEMA_VERSION > 0
 
     def test_watermark_key_is_string(self) -> None:
-        assert isinstance(_WATERMARK_KEY, str)
+        assert isinstance(DUMP_WATERMARK_KEY, str)
 
     def test_backfill_cap_is_14_days(self) -> None:
         assert _BACKFILL_MAX_DAYS == 14
@@ -1210,7 +1212,7 @@ class TestMetricsDumpSuccess:
         assert result["org_count"] == 1
         written = {call.args[1]: call.args[2] for call in write_cfg.await_args_list}
         # A successful dump advances the watermark AND records a real count.
-        assert written[_WATERMARK_KEY] == "2026-08-10"
+        assert written[DUMP_WATERMARK_KEY] == "2026-08-10"
         assert written[DUMP_COUNT_KEY] == 1
 
     @pytest.mark.asyncio

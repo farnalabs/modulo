@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -21,6 +20,13 @@ from modulo.core.product_analytics.consent import (
     is_instance_analytics_enabled,
     is_license_enforcement_enabled,
 )
+from modulo.core.product_analytics.constants import (
+    DUMP_COUNT_KEY,
+    DUMP_WATERMARK_KEY,
+    LEVEL_ALL,
+    LEVEL_OFF,
+    coerce_dump_count,
+)
 from modulo.db.crud.system_config import get_config
 from modulo.db.models.organisation import Organisation
 from modulo.db.soft_delete import include_soft_deleted
@@ -38,7 +44,7 @@ router = APIRouter(
 class TransparencyResponse(BaseModel):
     last_successful_dump_at: str | None = None
     dump_count_total: int = 0
-    consent_level: str = "off"
+    consent_level: str = LEVEL_OFF
     instance_enabled: bool = False
     enforcement_enabled: bool = False
     egress_allowed: bool = False
@@ -57,19 +63,6 @@ def _coerce_last_dump(value: Any) -> str | None:
     if value is not None:
         return str(value)
     return None
-
-
-def _metrics_dump_module() -> Any:
-    """Load the metrics-dump module lazily via importlib.
-
-    A static import would pull the dump's transitive chain into the API layer
-    (``metrics_dump`` -> ``saq_worker`` -> ``pipeline_execution`` ->
-    ``langgraph``), which the ``api-does-not-import-langgraph-directly``
-    import-linter contract forbids. The watermark / count key constants and the
-    count coercion live in that module, so reading them here keeps a single
-    source of truth instead of duplicating the literals.
-    """
-    return importlib.import_module("modulo.core.product_analytics.metrics_dump")
 
 
 async def _resolve_org_settings(
@@ -106,7 +99,7 @@ def _stale_dump_warning(last_dump_at: str | None, consent_level: str) -> str | N
         if last_dt.tzinfo is None:
             last_dt = last_dt.replace(tzinfo=UTC)
         days_since = (now - last_dt).total_seconds() / 86400
-        if days_since > _STALE_WARNING_DAYS and consent_level == "all":
+        if days_since > _STALE_WARNING_DAYS and consent_level == LEVEL_ALL:
             return "not_reaching_farnalabs"
     except (ValueError, TypeError):
         pass
@@ -130,7 +123,9 @@ async def get_transparency(
     #   * enforcement_enabled - consent.is_license_enforcement_enabled (the real
     #     license-enforcement kill switch; absent = enforced).
     #   * last_successful_dump_at / dump_count_total - the keys the metrics dump
-    #     actually writes (metrics_dump._WATERMARK_KEY / DUMP_COUNT_KEY).
+    #     actually writes (constants.DUMP_WATERMARK_KEY / DUMP_COUNT_KEY, which
+    #     live in the langgraph-free constants module so the API can import them
+    #     statically without violating the import-linter contract).
     #   * consent_level - the caller's organisation real consent level
     #     (org.settings_json["product_analytics"]["level"]), defaulting to "off"
     #     when the org cannot be resolved.
@@ -141,15 +136,14 @@ async def get_transparency(
     async with session.begin():
         instance_enabled = await is_instance_analytics_enabled(session)
         enforcement_enabled = await is_license_enforcement_enabled(session)
-        dump_module = _metrics_dump_module()
-        last_dump_entry = await get_config(session, dump_module._WATERMARK_KEY)
-        dump_count_entry = await get_config(session, dump_module.DUMP_COUNT_KEY)
+        last_dump_entry = await get_config(session, DUMP_WATERMARK_KEY)
+        dump_count_entry = await get_config(session, DUMP_COUNT_KEY)
         org_settings = await _resolve_org_settings(session, principal.organisation_id)
 
     last_dump_at = _coerce_last_dump(last_dump_entry.value if last_dump_entry else None)
-    dump_count_total = dump_module.coerce_dump_count(dump_count_entry.value if dump_count_entry else None)
+    dump_count_total = coerce_dump_count(dump_count_entry.value if dump_count_entry else None)
     raw_level = get_product_analytics_block(org_settings).get("level")
-    consent_level = str(raw_level) if raw_level else "off"
+    consent_level = str(raw_level) if raw_level else LEVEL_OFF
     warning = _stale_dump_warning(last_dump_at, consent_level)
 
     return TransparencyResponse(
