@@ -22,7 +22,6 @@ eval_scorer.feature and feedback_system.feature keep their own steps below.
 
 import contextlib
 import uuid
-from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -607,27 +606,17 @@ def _eval_row(
 
 
 def _eval_shaped_execute(session: MagicMock, shapes: list[MagicMock]) -> None:
-    """Shape-aware ``session.execute`` for the guarded eval routes.
+    """Deprecated alias for :func:`tests.bdd.conftest._shaped_execute`.
 
-    ``require_permission``'s kill-switch read selects
-    ``organisations.authz_enforce`` before every route body (ADR 047) and
-    must not consume a business-query shape: an absent row means
-    enforcement defaults ON, which this module's admin principals satisfy.
-    Unexpected extra executes resolve as an empty row lookup so a wrong
-    shape count fails on the route's own 404/500 assertion, not on mock
-    internals.
+    Kept as a thin delegation so this module's shaper and the canonical
+    ``bdd/conftest.py`` one cannot drift; they differ only in the fallback
+    shape, and the conftest version is the strictly more capable one
+    (it models a real empty ``scalars`` list rather than an auto-mocked
+    truthy object). New steps should call ``_shaped_execute`` directly.
     """
-    pending: deque[MagicMock] = deque(shapes)
+    from tests.bdd.conftest import _shaped_execute
 
-    async def _dispatch_execute(*args: object, **_kwargs: object) -> MagicMock:
-        stmt_text = str(args[0]) if args else ""
-        if "authz_enforce" in stmt_text:
-            return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        if pending:
-            return pending.popleft()
-        return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-
-    session.execute = AsyncMock(side_effect=_dispatch_execute)
+    _shaped_execute(session, shapes)
 
 
 def _eval_role(request) -> str:
