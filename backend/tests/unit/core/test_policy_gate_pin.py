@@ -774,6 +774,7 @@ def _creation_session(
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
+        MagicMock(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),
         _scalars_result([]),  # guardrail rows
         _scalars_result(gate_rows),  # policy gate rows
