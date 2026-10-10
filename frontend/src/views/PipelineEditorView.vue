@@ -2331,15 +2331,18 @@ const canConvert = computed(() => pickerAgentId.value !== '__all__' && pickerCon
 // Backend node types that map 1:1 onto their canvas type. Everything else
 // (including 'agent') collapses into the generic agent node — except dispatch,
 // which is a first-class canvas type (FAR-1141) and must never be collapsed.
-const CANVAS_TYPE_BY_BACKEND_TYPE: Record<string, string> = {
-  manual: 'manual',
-  router: 'router',
-  hitl: 'hitl',
-  dispatch: 'dispatch',
-}
+// A Map (not an object literal) so an unknown node_type such as 'constructor'
+// or 'toString' cannot resolve to an inherited Object.prototype member — it
+// must fall through to 'agent', matching the original ternary chain.
+const CANVAS_TYPE_BY_BACKEND_TYPE = new Map<string, string>([
+  ['manual', 'manual'],
+  ['router', 'router'],
+  ['hitl', 'hitl'],
+  ['dispatch', 'dispatch'],
+])
 
 function convertBackendNode(n: any): any {
-  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE[n.node_type] ?? 'agent'
+  const nodeType = CANVAS_TYPE_BY_BACKEND_TYPE.get(n.node_type) ?? 'agent'
   return {
     id: n.id,
     type: nodeType,
