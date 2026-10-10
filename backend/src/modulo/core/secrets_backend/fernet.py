@@ -45,6 +45,11 @@ class FernetSecretsBackend(SecretsBackend):
 
     """
 
+    #: This backend scopes every read/write by ``secrets.organisation_id`` (the
+    #: RLS org), so a key belonging to another organisation is indistinguishable
+    #: from a missing one. FAR-1640.
+    organisation_scoped: bool = True
+
     def __init__(
         self,
         fernet_key: str,

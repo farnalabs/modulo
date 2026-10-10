@@ -67,6 +67,16 @@ class SecretsBackend(ABC):
     values in exception messages, tracebacks, or span attributes.
     """
 
+    #: Whether this backend partitions secrets by organisation. The default
+    #: ``FernetSecretsBackend`` overrides this to ``True`` — every read/write is
+    #: scoped by ``secrets.organisation_id``. Externally-hosted backends (Vault,
+    #: AWS Secrets Manager) resolve a GLOBAL key namespace (the same key name is
+    #: the same secret for every organisation) and cannot be re-keyed per-org
+    #: without breaking already-stored secrets, so they keep the ``False``
+    #: default. FAR-1640 uses this flag to fail closed on the credential-
+    #: reference path in a multi-org deployment (see ``references``).
+    organisation_scoped: bool = False
+
     @abstractmethod
     async def get_secret(self, key: str) -> str:
         """Retrieve a secret by key. Raises KeyError if not found."""

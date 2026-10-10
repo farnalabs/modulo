@@ -136,3 +136,66 @@ class TestResolveCredential:
         backend = _FakeBackend({"k": "resolved"})
         assert await resolve_credential(backend, "secretref://k") == "resolved"
         assert backend.calls == ["k"]
+
+
+class TestBackendOrgScopeFlags:
+    """FAR-1640: only the Fernet backend partitions secrets by organisation."""
+
+    def test_base_and_external_backends_are_not_org_scoped(self) -> None:
+        from modulo.core.secrets_backend import SecretsBackend
+        from modulo.core.secrets_backend.aws import AWSSecretsManagerBackend
+        from modulo.core.secrets_backend.vault import VaultSecretsBackend
+
+        assert SecretsBackend.organisation_scoped is False
+        assert AWSSecretsManagerBackend.organisation_scoped is False
+        assert VaultSecretsBackend.organisation_scoped is False
+
+    def test_fernet_backend_is_org_scoped(self) -> None:
+        from modulo.core.secrets_backend.fernet import FernetSecretsBackend
+
+        assert FernetSecretsBackend.organisation_scoped is True
+
+
+class TestMultiOrgExternalBackendGuard:
+    """FAR-1640: an external (non-org-scoped) backend is refused in multi-org.
+
+    The external backends resolve a global key namespace, so on a licensed
+    multi-org deployment the same key name could source another organisation's
+    secret. The reference path must fail closed BEFORE any backend read.
+    """
+
+    @pytest.fixture
+    def multi_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("modulo.core.secrets_backend.references._multi_org_enabled", lambda: True)
+
+    @pytest.fixture
+    def single_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("modulo.core.secrets_backend.references._multi_org_enabled", lambda: False)
+
+    async def test_unscoped_backend_refused_in_multi_org_without_reading(self, multi_org: None) -> None:
+        backend = _FakeBackend({"kv/x": "sk-secret"})
+        with pytest.raises(CredentialReferenceError) as exc_info:
+            await resolve_credential_reference(backend, "secretref://kv/x")
+        error = exc_info.value
+        assert error.key == "kv/x"
+        assert "not organisation-scoped" in error.reason
+        # Fail closed: the backend is never read, so no cross-org value is fetched.
+        assert not backend.calls
+
+    async def test_unscoped_backend_allowed_in_single_org(self, single_org: None) -> None:
+        backend = _FakeBackend({"kv/x": "sk-secret"})
+        value = await resolve_credential_reference(backend, "secretref://kv/x")
+        assert value == "sk-secret"
+        assert backend.calls == ["kv/x"]
+
+    async def test_org_scoped_backend_allowed_in_multi_org(self, multi_org: None) -> None:
+        backend = _FakeBackend({"kv/x": "sk-secret"})
+        backend.organisation_scoped = True
+        value = await resolve_credential_reference(backend, "secretref://kv/x")
+        assert value == "sk-secret"
+        assert backend.calls == ["kv/x"]
+
+    async def test_literal_unaffected_by_multi_org_guard(self, multi_org: None) -> None:
+        backend = _FakeBackend({})
+        assert await resolve_credential(backend, "sk-literal") == "sk-literal"
+        assert not backend.calls

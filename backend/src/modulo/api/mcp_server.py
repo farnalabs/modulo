@@ -169,6 +169,12 @@ from modulo.core.pipeline_engine.error_codes import map_legacy_code, present_err
 from modulo.core.rate_limiter import TokenBucketRegistry
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    create_secrets_backend,
+    is_secret_ref,
+    resolve_credential,
+)
 from modulo.core.trigger_streak import (
     anchor_trigger_streak_epoch,
     clear_trigger_streak_after_reenable,
@@ -6744,7 +6750,9 @@ async def get_model_backend(model_backend_id: str) -> dict[str, Any]:
 
 @mcp.tool(
     description="Create a new connector instance (provider configuration). "
-    "Credentials are encrypted at rest. Returns the created connector details."
+    "Credentials are encrypted at rest. Returns the created connector details. "
+    "Pass a literal credential, or a 'secretref://<key>' token to resolve the "
+    "value from the organisation vault server-side at write time."
 )
 @mcp_audited("connector_created", "connector", fail_closed=True)
 @_RETRY_DB
@@ -6768,9 +6776,34 @@ async def create_connector(
         org_id = _ctx_org_id_val()
         account_id = _ctx_user_id_val()
         settings = get_settings()
-        credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(credentials.encode())
 
         async with _session(org_id) as s:
+            # FAR-1640: a ``secretref://<key>`` credential is resolved
+            # SERVER-SIDE under the caller's org RLS context (``_session`` has
+            # already set app.organisation_id) before it is encrypted — the
+            # REST create path resolves identically. A literal passes through
+            # untouched and never constructs a secrets backend (so the
+            # historical path does not depend on the vault being configured). A
+            # missing/foreign/empty key — or an external backend in a multi-org
+            # deployment — fails closed as a typed validation error naming only
+            # the offending key; the reference is never persisted as a literal
+            # credential.
+            if is_secret_ref(credentials):
+                try:
+                    resolved_credentials = await resolve_credential(
+                        create_secrets_backend(fernet_key=settings.fernet_key, session=s),
+                        credentials,
+                    )
+                except CredentialReferenceError as exc:
+                    return {
+                        "error": "validation_error",
+                        "field": "credentials",
+                        "detail": f"vault key {exc.key!r}: {exc.reason}",
+                    }
+            else:
+                resolved_credentials = credentials
+
+            credentials_ciphertext = Fernet(settings.fernet_key.encode()).encrypt(resolved_credentials.encode())
             ci = await create_connector_instance(
                 s,
                 org_id=org_id,

@@ -25,6 +25,18 @@ offending key: a missing key, a key belonging to another organisation, an
 unreadable/empty vault entry, or a malformed reference. There is no silent
 fallback to storing the reference string as a literal credential, and a
 resolution failure never becomes a 500.
+
+Cross-org guard (FAR-1640)
+--------------------------
+The default Fernet backend partitions secrets by organisation
+(``secrets.organisation_id``), so a reference can only ever resolve within the
+caller's org. The externally-hosted backends (Vault, AWS Secrets Manager)
+resolve a GLOBAL key namespace, so on a licensed multi-org deployment the same
+key name could source another organisation's secret. Per-org namespacing cannot
+be retrofitted to those backends without re-keying already-stored secrets (which
+would silently break existing reads), so in a multi-org deployment the
+reference path REFUSES such a backend fail-closed — a typed error, never a
+cross-org read. Self-hosted single-org deployments are unaffected.
 """
 
 from __future__ import annotations
@@ -73,6 +85,29 @@ def is_secret_ref(value: object) -> bool:
     return isinstance(value, str) and value.strip().startswith(SECRET_REF_SCHEME)
 
 
+def _backend_is_org_scoped(secrets_backend: SecretsBackend) -> bool:
+    """True when *secrets_backend* partitions secrets by organisation.
+
+    The default Fernet backend stores ``secrets.organisation_id`` and scopes
+    every read/write, so a foreign-org key is indistinguishable from a missing
+    one. Externally-hosted backends (Vault, AWS) resolve a GLOBAL key namespace
+    and keep the ``False`` default (see :class:`SecretsBackend`).
+    """
+    return bool(getattr(secrets_backend, "organisation_scoped", False))
+
+
+def _multi_org_enabled() -> bool:
+    """Whether this deployment is a licensed multi-org install.
+
+    Read lazily so this low-level seam has no import-time dependency on the
+    settings module, and so tests can patch this function directly. Defaults to
+    ``False`` (self-hosted single-org), matching ``Settings``.
+    """
+    from modulo.settings import get_settings
+
+    return bool(get_settings().modulo_multi_org_enabled)
+
+
 def parse_secret_ref(value: str) -> str:
     """Parse ``secretref://<key>`` and return the bare vault key.
 
@@ -106,6 +141,21 @@ async def resolve_credential_reference(
     cannot be read, or resolves to an empty value.
     """
     key = parse_secret_ref(reference)
+    if _multi_org_enabled() and not _backend_is_org_scoped(secrets_backend):
+        # FAR-1640 (cross-org read guard): externally-hosted backends (Vault,
+        # AWS Secrets Manager) resolve a GLOBAL key namespace — the same key
+        # name is the same secret for every organisation. Per-org namespacing
+        # cannot be added without re-keying already-stored secrets (which would
+        # silently break existing reads), so in a multi-org deployment we refuse
+        # the reference path outright rather than risk reading another
+        # organisation's secret. Self-hosted single-org installs
+        # (``modulo_multi_org_enabled=False``, the default) are unaffected.
+        # Raised BEFORE any backend read — never a cross-org read.
+        raise CredentialReferenceError(
+            key,
+            "external secrets backends are not organisation-scoped, so credential "
+            "references are refused in a multi-org deployment",
+        )
     try:
         value = await secrets_backend.get_secret(key)
     except asyncio.CancelledError:
