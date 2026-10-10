@@ -148,11 +148,13 @@ def test_acl_malformed_int_allowlist_fails_closed():
 
 
 def test_acl_legacy_type_qualified_allowlist_grants_bare_capability():
-    # FAR-1594 defect (a): a stored ["github.read"] must GRANT "read" — the
-    # exact answer the guardrail conformance reader certifies for the same
-    # value. Before the shared canonicalisation the ACL matched raw membership,
-    # so certification and enforcement gave OPPOSITE answers.
-    acl = ConnectorACL(visibility="org", allowed_operations=["github.read"])
+    # FAR-1594 defect (a): a stored ["github.read"] on a GITHUB surface must
+    # GRANT "read" — the exact answer the guardrail conformance reader
+    # certifies for the same stored value. Before the shared canonicalisation
+    # the ACL matched raw membership, so certification and enforcement gave
+    # OPPOSITE answers. The surface type is supplied (FAR-1616) so the
+    # same-type qualifier can be verified.
+    acl = ConnectorACL(visibility="org", allowed_operations=["github.read"], connector_type_id="github")
     assert acl.allowed_operations == frozenset({"read"})
     assert acl.check("read") is None
 
@@ -172,3 +174,62 @@ def test_acl_non_capability_entry_grants_nothing():
     assert not acl.allowed_operations
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
         acl.check("read")
+
+
+# ---------------------------------------------------------------------------
+# Type-qualified allowlist entries bind to the surface's OWN type (FAR-1616)
+# ---------------------------------------------------------------------------
+
+
+def test_acl_mis_typed_legacy_allowlist_entry_grants_nothing():
+    # FAR-1616: ["github.write"] on a FILESYSTEM connector must NOT grant bare
+    # "write". FAR-1594's canonicalisation dropped the qualifier unconditionally,
+    # so the mis-typed entry silently granted on the wrong surface; the entry is
+    # now REJECTED (fail closed) and every operation is denied.
+    acl = ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="filesystem")
+    assert acl.allowed_operations is not None
+    assert not acl.allowed_operations
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("write")
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("read")
+
+
+def test_acl_unverifiable_legacy_qualifier_grants_nothing():
+    # Without the surface's type the qualifier cannot be verified, so a
+    # qualified entry fails CLOSED — never a grant. Construction sites that
+    # know the type must supply it (the connector hub does).
+    acl = ConnectorACL(visibility="org", allowed_operations=["github.write"])
+    assert acl.allowed_operations is not None
+    assert not acl.allowed_operations
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("write")
+
+
+def test_acl_same_type_colon_spelling_still_grants():
+    # Both accepted separators keep granting on a same-type surface.
+    acl = ConnectorACL(visibility="org", allowed_operations=["github:write"], connector_type_id="github")
+    assert acl.allowed_operations == frozenset({"write"})
+    assert acl.check("write") is None
+
+
+def test_acl_restricted_allowlist_rejects_only_the_mis_typed_entry():
+    # A mixed allowlist keeps its bare + same-type grants; only the mis-typed
+    # qualified entry is dropped.
+    acl = ConnectorACL(
+        visibility="org",
+        allowed_operations=["read", "github.write", "filesystem.write"],
+        connector_type_id="github",
+    )
+    assert acl.allowed_operations == frozenset({"read", "write"})
+    assert acl.check("read") is None
+    assert acl.check("write") is None
+
+
+def test_acl_unrestricted_semantics_survive_the_type_check():
+    # FAR-1564: None/[] mean UNRESTRICTED regardless of the supplied type —
+    # the type check only applies to a NON-EMPTY allowlist's entries.
+    for ops in (None, []):
+        acl = ConnectorACL(visibility="org", allowed_operations=ops, connector_type_id="filesystem")
+        assert acl.check("write") is None
+        assert acl.check("read") is None

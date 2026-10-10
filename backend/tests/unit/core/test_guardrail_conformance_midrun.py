@@ -24,13 +24,17 @@ from modulo.connectors.base import (
 from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.core.guardrails.conformance import (
     ConformanceRecheckResult,
+    _capabilities_for_agent,
     _capabilities_for_connector,
+    _capabilities_for_profile,
     _register_connector_surface,
     build_live_manifest,
     canonical_capability,
     check_node_start,
     decide_conformance,
     evaluate_conformance,
+    find_type_qualified_claim_guardrails,
+    type_qualified_claims,
     worst_state,
 )
 
@@ -64,15 +68,24 @@ def test_decide_present_when_all_confirmed():
 
 
 def test_decide_absent_when_any_missing():
-    # FAR-1582: the decision layer reports the CANONICAL (bare Capability)
-    # spelling regardless of how the claim/manifest entry was written.
+    # FAR-1615: the decision layer PRESERVES a type-qualified claim's name in
+    # ``missing`` (``github.write``, not bare ``write``) so the operator can
+    # tell which type binding failed.
     d = decide_conformance(["github.read", "github.write"], {"github.read": True, "github.write": False})
     assert d.state == "absent"
-    assert d.missing == ("write",)
+    assert d.missing == ("github.write",)
 
 
 def test_decide_unknown_when_unreadable():
+    # FAR-1615: same preservation on the unreadable side.
     d = decide_conformance(["github.read"], {"github.read": None})
+    assert d.state == "unknown"
+    assert d.unreadable == ("github.read",)
+
+
+def test_decide_bare_claim_reports_bare_name():
+    # A BARE claim still reports its bare canonical name.
+    d = decide_conformance(["read"], {"read": None})
     assert d.state == "unknown"
     assert d.unreadable == ("read",)
 
@@ -146,11 +159,15 @@ def test_evaluate_mixed_block_and_warn_block_wins():
 # ---------------------------------------------------------------------------
 
 
-def _row_connector(cid: uuid.UUID, ops: list[str]) -> MagicMock:
+def _row_connector(cid: uuid.UUID, ops: list[str], *, connector_type_id: str | None = "github") -> MagicMock:
     row = MagicMock()
     row.id = cid
     row.status = "active"
     row.allowed_operations = ops
+    # Default to a github-typed surface so a same-type legacy qualified
+    # allowlist entry (["github.read"]) stays verifiable (FAR-1616); tests
+    # that need another type (or an unidentifiable one) override it.
+    row.connector_type_id = connector_type_id
     return row
 
 
@@ -528,11 +545,28 @@ def test_canonical_capability_list_non_list_is_empty() -> None:
 
 def test_canonical_capability_list_drops_non_string_and_non_capability(caplog) -> None:
     """Non-string entries are skipped; a string that is not a capability in any
-    accepted spelling is DROPPED (and logged) — it grants nothing."""
+    accepted spelling is DROPPED (and logged) — it grants nothing. A same-type
+    qualified entry grants its bare capability (FAR-1594), so the surface type
+    is supplied (FAR-1616) to verify the qualifier."""
     with caplog.at_level(logging.WARNING):
-        result = canonical_capability_set(["read", 123, "junk", "github.write"])
+        result = canonical_capability_set(["read", 123, "junk", "github.write"], connector_type_id="github")
     assert result == {"read", "write"}
     assert "connectors.capability.operation_not_a_capability" in caplog.text
+
+
+def test_canonical_capability_list_rejects_mis_typed_and_unverifiable_qualifier(caplog) -> None:
+    """FAR-1616: a type-qualified entry grants ONLY on a same-type surface.
+
+    A qualifier naming a DIFFERENT type than the surface — or one that cannot
+    be verified because no surface type was supplied — is REJECTED (fail
+    closed, logged), never reduced to a bare grant.
+    """
+    with caplog.at_level(logging.WARNING):
+        mis_typed = canonical_capability_set(["github.write"], connector_type_id="filesystem")
+        unverifiable = canonical_capability_set(["github.write"])
+    assert not mis_typed
+    assert not unverifiable
+    assert "connectors.capability.operation_type_mismatch" in caplog.text
 
 
 def test_decide_conformance_dedupes_canonical_claims() -> None:
@@ -1478,7 +1512,10 @@ async def test_acl_and_conformance_agree_for_legacy_qualified_allowlist(
     granted_manifest = await _manifest_for(monkeypatch, granted)
 
     assert decide_conformance(["read"], granted_manifest).state == "present"
-    assert ConnectorACL(visibility="org", allowed_operations=["github.read"]).check("read") is None
+    assert (
+        ConnectorACL(visibility="org", allowed_operations=["github.read"], connector_type_id="github").check("read")
+        is None
+    )
 
     # The DENY side agrees too: a write-only allowlist certifies no read and
     # the ACL denies the read — no half of the system can disagree.
@@ -1488,7 +1525,35 @@ async def test_acl_and_conformance_agree_for_legacy_qualified_allowlist(
 
     assert decide_conformance(["read"], denied_manifest).state == "unknown"
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
-        ConnectorACL(visibility="org", allowed_operations=["github.write"]).check("read")
+        ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="github").check("read")
+
+
+async def test_acl_and_conformance_agree_for_mis_typed_legacy_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1616: the SAME mis-typed stored value is DENIED by both sides.
+
+    ``["github.write"]`` on a FILESYSTEM connector grants nothing at
+    enforcement time and certifies nothing at conformance time — before
+    FAR-1616 both sides silently reduced it to bare ``write``.
+    """
+    mis_typed = _row_connector(uuid.uuid4(), ["github.write"], connector_type_id="filesystem")
+    mis_typed_manifest = await _manifest_for(monkeypatch, mis_typed)
+
+    assert not mis_typed_manifest
+    assert decide_conformance(["write"], mis_typed_manifest).state == "unknown"
+    acl = ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="filesystem")
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        acl.check("write")
+
+    # The same-type surface still grants, on both sides.
+    same_type = _row_connector(uuid.uuid4(), ["github.write"], connector_type_id="github")
+    same_type_manifest = await _manifest_for(monkeypatch, same_type)
+    assert decide_conformance(["write"], same_type_manifest).state == "present"
+    assert (
+        ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="github").check("write")
+        is None
+    )
 
 
 async def test_type_qualified_claim_binds_to_its_surface_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1519,3 +1584,134 @@ async def test_type_qualified_claim_binds_to_its_surface_type(monkeypatch: pytes
     # ... and is NOT satisfied by a non-github surface declaring bare ``read``.
     assert decide_conformance(["github.read"], rest_manifest).state == "unknown"
     assert decide_conformance(["github.read"], linear_manifest).state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# The type-binding invariant across NON-CONNECTOR surfaces (FAR-1615)
+# ---------------------------------------------------------------------------
+#
+# FAR-1594 stamped the ``<type>.<cap>`` alias only for CONNECTOR surfaces. A
+# profile/agent declaring the literal string ``github.read`` used to register
+# that key VERBATIM, so it satisfied a type-qualified connector claim with no
+# github-typed connector bound. Profile/agent capabilities are now reduced to
+# the BARE vocabulary — a type-qualified claim requires a connector surface.
+
+
+async def test_profile_declaring_qualified_capability_cannot_satisfy_qualified_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A profile declaring ``github.read`` registers bare ``read`` only."""
+    pid = uuid.uuid4()
+    session = _manifest_session(profile=_row_profile(pid, ["github.read"]))
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=pid,
+        agent_id=None,
+    )
+    # The bare capability is declared ...
+    assert decide_conformance(["read"], registered).state == "present"
+    # ... but the type-qualified claim is NOT satisfied: a profile is not a
+    # connector surface and stamps no ``github.read`` alias.
+    assert "github.read" not in registered
+    assert decide_conformance(["github.read"], registered).state == "unknown"
+
+
+async def test_agent_declaring_qualified_capability_cannot_satisfy_qualified_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An agent declaring ``github.read`` registers bare ``read`` only."""
+    aid = uuid.uuid4()
+    session = _manifest_session(agent=_row_agent(aid, ["github.read"]))
+    _patch_select(monkeypatch, session)
+    registered = await build_live_manifest(
+        session,
+        org_id=_ORG_ID,
+        connector_instance_ids=[],
+        environment_profile_id=None,
+        agent_id=aid,
+    )
+    assert decide_conformance(["read"], registered).state == "present"
+    assert "github.read" not in registered
+    assert decide_conformance(["github.read"], registered).state == "unknown"
+
+
+def test_capabilities_for_profile_reduces_qualified_spelling_to_bare() -> None:
+    """Direct unit: profile ``capabilities_json`` is a BARE vocabulary."""
+    row = _row_profile(uuid.uuid4(), ["github.read", "sandbox.egress", "git"])
+    assert _capabilities_for_profile(row) == {"read", "sandbox.egress", "git"}
+
+
+def test_capabilities_for_agent_reduces_qualified_spelling_to_bare() -> None:
+    """Direct unit: agent ``required_environment_capabilities`` is a BARE vocabulary."""
+    row = _row_agent(uuid.uuid4(), ["linear:ticket_read", "shell"])
+    assert _capabilities_for_agent(row) == {"ticket_read", "shell"}
+
+
+def test_reported_detail_preserves_the_type_binding() -> None:
+    """FAR-1615: a blocked qualified claim reports its QUALIFIED name.
+
+    Before FAR-1615 ``missing``/``unreadable`` rewrote ``github.read`` to
+    ``read``, so the operator could not tell which binding failed when a bare
+    ``read`` was also present.
+    """
+    absent = decide_conformance(["github.write"], {"github.write": False})
+    assert absent.missing == ("github.write",)
+    unknown = decide_conformance(["github.read"], {})
+    assert unknown.unreadable == ("github.read",)
+    # A blocked EVALUATION surfaces the qualified name too.
+    result = evaluate_conformance([_gr("g_block", "block", ["github.read"])], {})
+    assert result.blocked is True
+    assert result.state == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Legacy type-qualified claim detection (FAR-1617)
+# ---------------------------------------------------------------------------
+
+
+def test_type_qualified_claims_classifies_legacy_spellings() -> None:
+    """The FAR-1617 detection helper: qualified claims only, normalised and
+    de-duplicated — the same binding spelled ``github.read`` and ``github:read``
+    collapses to one claim."""
+    assert type_qualified_claims(
+        ["read", "github.read", "github:read", "github:write", "sandbox.egress", "docker"]
+    ) == [
+        "github.read",
+        "github.write",
+    ]
+    assert not type_qualified_claims(["read", "ticket_read"])
+
+
+def test_find_type_qualified_claim_guardrails_maps_names_to_claims() -> None:
+    """Guardrail-level audit view: only guardrails carrying a qualified claim."""
+    guardrails = [
+        _gr("g_legacy", "block", ["github.read", "read"]),
+        _gr("g_bare", "block", ["read"]),
+        _gr("g_none", "warn", None),
+    ]
+    assert find_type_qualified_claim_guardrails(guardrails) == {"g_legacy": ["github.read"]}
+
+
+def test_evaluate_conformance_logs_unsatisfied_qualified_claim(caplog) -> None:
+    """A qualified claim no bound surface of that type satisfies is logged, so
+    a rollout surfaces legacy claims without a stored-data audit."""
+    gr = _gr("g_legacy", "block", ["github.read"])
+    with caplog.at_level(logging.WARNING):
+        result = evaluate_conformance([gr], {"read": True})
+    assert result.blocked is True
+    assert "guardrail.conformance.type_qualified_claim_unsatisfied" in caplog.text
+    detection_records = [r for r in caplog.records if r.name == "modulo.core.guardrails.conformance"]
+    assert any(getattr(r, "claims", None) == ["github.read"] for r in detection_records)
+
+
+def test_evaluate_conformance_no_qualified_log_when_satisfied(caplog) -> None:
+    """A SATISFIED qualified claim logs nothing extra."""
+    gr = _gr("g_bound", "block", ["github.read"])
+    with caplog.at_level(logging.WARNING):
+        result = evaluate_conformance([gr], {"github.read": True})
+    assert result.blocked is False
+    assert result.state == "present"
+    assert "guardrail.conformance.type_qualified_claim_unsatisfied" not in caplog.text
