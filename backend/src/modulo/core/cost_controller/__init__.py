@@ -428,8 +428,11 @@ async def _sum_created_at_day(
     stmt = select(func.coalesce(func.sum(OrgDailyRunCount.total_spend_usd), 0)).where(
         OrgDailyRunCount.organisation_id == org_id,
         OrgDailyRunCount.run_date == day_start.date(),
-        OrgDailyRunCount.team_id == team_id if team_id is not None else org_level_predicate(),
     )
+    if team_id is not None:  # noqa: SIM108 — if/else reads clearer than a ternary over two where() calls
+        stmt = stmt.where(OrgDailyRunCount.team_id == team_id)
+    else:
+        stmt = stmt.where(org_level_predicate())
     result = await session.execute(stmt)
     value = result.scalar_one()
     return Decimal(value or 0)
