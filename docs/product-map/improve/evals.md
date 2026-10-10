@@ -95,7 +95,9 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       (`db/models/policy_gate_decision.py`, `test_policy_gate_decision_row.py`,
       `test_eval_persist_order_failopen.py`,
       `test_policy_gate_decision_purge.py` for the purge-first ordering,
-      `test_admin_housekeeping_decision_block.py` for the RESTRICT→409 block)
+      `test_policy_gate_acceptance.py` for the FK RESTRICT guard, and
+      `test_admin_housekeeping_decision_block.py` for the housekeeping
+      `blocked_by` surfacing)
 - [x] Eval definitions are org-scoped CRUD — create/update/delete are
       admin-gated while reads are runner-readable (`POST/GET/PUT/DELETE
       /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) — with pagination and
