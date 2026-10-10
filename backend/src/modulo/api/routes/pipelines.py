@@ -93,6 +93,7 @@ from modulo.core.reports.quality_report import (
 from modulo.core.run_context.autonomy import (
     AutonomyLevel,
     autonomy_change_payload,
+    autonomy_level_rank,
     validate_autonomy_ceiling,
 )
 from modulo.core.schema_registry.rendering import SchemaProfile
@@ -132,11 +133,13 @@ from modulo.db.crud.pipeline import (
     replace_pipeline_graph,
     restore_pipeline,
     resume_pipeline,
+    set_earned_autonomy_level,
     soft_delete_pipeline,
     unarchive_pipeline,
     update_pipeline,
 )
 from modulo.db.crud.pipeline_folder import move_pipeline_to_folder
+from modulo.db.crud.pipeline_owner import is_account_in_team
 from modulo.db.crud.pipeline_snapshot import create_snapshot_edit
 from modulo.db.crud.pipeline_snapshot_versioning import (
     delete_snapshot,
@@ -968,6 +971,11 @@ class PipelineResponse(BaseModel):
     default_autonomy_level: str | None = None
     # FAR-1163: nullable ceiling (NULL = effective ceiling is the default).
     max_autonomy_level: str | None = None
+    # FAR-1175 (ADR 043 S1): the runtime earned autonomy level (NULL until a
+    # manual promote/demote sets it) and when it last moved. Read LIVE at every
+    # HITL gate when the ``autonomy_gating`` flag is on.
+    earned_autonomy_level: str | None = None
+    earned_autonomy_updated_at: datetime | None = None
     # Intentionally nullable: legacy rows and rollbacks of pre-migration data
     # can still expose a NULL value until the max_duration pipeline migration
     # has run on all production DBs.
@@ -1020,6 +1028,20 @@ class PipelineResponse(BaseModel):
         # The column is non-nullable with a {} default, but legacy rows and
         # partial ORM objects may expose None — the no-policy default is {}.
         return value if isinstance(value, dict) else {}
+
+    @field_validator("earned_autonomy_level", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_level(cls, value: Any) -> str | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins may expose a
+        # non-string — coerce to None (mirrors _coerce_max_autonomy_level).
+        return value if isinstance(value, str) or value is None else None
+
+    @field_validator("earned_autonomy_updated_at", mode="before")
+    @classmethod
+    def _coerce_earned_autonomy_updated_at(cls, value: Any) -> datetime | None:
+        # FAR-1175: legacy rows are NULL; partial ORM stand-ins (MagicMock
+        # test doubles) may expose a non-datetime — coerce to None.
+        return value if isinstance(value, datetime) or value is None else None
 
     @field_validator("max_autonomy_level", mode="before")
     @classmethod
@@ -3669,6 +3691,231 @@ async def update_pipeline_endpoint(
     response = _pipeline_response(pipeline)
     response.connector_rebind_required = ownership_changed
     return response
+
+
+# ── FAR-1175 (ADR 043 S1): manual autonomy demote / promote ──────────────────
+AUTONOMY_DEMOTED_EVENT = "pipeline.autonomy_demoted"
+AUTONOMY_PROMOTION_DECIDED_EVENT = "pipeline.autonomy_promotion_decided"
+
+
+class AutonomyChangeRequest(BaseModel):
+    """Body for a manual autonomy demote/promote."""
+
+    level: str = Field(..., description="Target autonomy level (canonical value).")
+    reason: str | None = Field(
+        None,
+        max_length=2000,
+        description="Why the level is being changed — recorded on the audit event.",
+    )
+
+
+class AutonomyChangeResponse(BaseModel):
+    """Result of a manual autonomy demote/promote."""
+
+    pipeline_id: uuid.UUID
+    previous_level: str
+    earned_autonomy_level: str
+    max_autonomy_level: str | None = None
+    event_type: str
+    updated_at: datetime | None = None
+
+
+def _effective_ceiling(pipeline: Pipeline) -> AutonomyLevel:
+    """Resolve the pipeline's effective autonomy ceiling (NULL = default)."""
+    default = pipeline.default_autonomy_level or AutonomyLevel.default().value
+    ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
+    if isinstance(ceiling_raw, str) and ceiling_raw:
+        try:
+            return AutonomyLevel(ceiling_raw)
+        except ValueError:
+            pass
+    return AutonomyLevel(default)
+
+
+def _current_effective_level(pipeline: Pipeline) -> AutonomyLevel:
+    """The level a demote/promote moves FROM: the earned level, else the default."""
+    earned = getattr(pipeline, "earned_autonomy_level", None)
+    if isinstance(earned, str) and earned:
+        try:
+            return AutonomyLevel(earned)
+        except ValueError:
+            pass
+    return AutonomyLevel(pipeline.default_autonomy_level or AutonomyLevel.default().value)
+
+
+async def _assert_autonomy_admin_or_owner(
+    session: AsyncSession, principal: TenantPrincipal, pipeline: Pipeline
+) -> None:
+    """Admin/owner gate for a manual autonomy change (ADR 043 §1).
+
+    Promotion/demotion is a governance decision: org admins, and members of the
+    pipeline's owner team (the owner), may make it. Everyone else is refused
+    with a 403. Uses the flag-independent numeric hierarchy so enforcement is
+    live even when ``authz.enforce`` is disabled.
+    """
+    if org_role_level(principal.org_role) >= _ADMIN_LEVEL:
+        return
+    owner_team_id = getattr(pipeline, "owner_team_id", None)
+    if owner_team_id is not None and await is_account_in_team(
+        session, account_id=principal.account_id, team_id=owner_team_id
+    ):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Only an organisation admin or the pipeline's owner team may change its autonomy level",
+    )
+
+
+async def _apply_manual_autonomy_change(
+    *,
+    pipeline_id: uuid.UUID,
+    principal: TenantPrincipal,
+    session: AsyncSession,
+    req: AutonomyChangeRequest,
+    promote: bool,
+) -> AutonomyChangeResponse:
+    """Shared body of the manual demote/promote endpoints.
+
+    Validates the target against the direction (demote must strictly lower,
+    promote must strictly raise and never exceed the ceiling), writes
+    ``earned_autonomy_level``, and appends the direction's audit event
+    (``pipeline.autonomy_demoted`` / ``pipeline.autonomy_promotion_decided``)
+    in the SAME transaction — a level change without its evidence event is not
+    possible.
+    """
+    try:
+        target = AutonomyLevel(req.level).value
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Invalid autonomy level: {req.level!r}",
+        ) from None
+    target_level = AutonomyLevel(target)
+
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        pipeline = await get_pipeline(session, pipeline_id, organisation_id=principal.organisation_id)
+        if pipeline is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        await _assert_autonomy_admin_or_owner(session, principal, pipeline)
+
+        current_level = _current_effective_level(pipeline)
+        ceiling = _effective_ceiling(pipeline)
+        if promote:
+            if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion must raise autonomy above the current level "
+                        f"({current_level.value}): {target_level.value}"
+                    ),
+                )
+            if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        f"Promotion to {target_level.value} exceeds the pipeline's "
+                        f"max_autonomy_level ceiling ({ceiling.value})"
+                    ),
+                )
+        elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Demotion must lower autonomy below the current level "
+                    f"({current_level.value}): {target_level.value}"
+                ),
+            )
+
+        updated = await set_earned_autonomy_level(
+            session,
+            org_id=principal.organisation_id,
+            pipeline_id=pipeline_id,
+            level=target,
+        )
+        if updated is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+        event_type = AUTONOMY_PROMOTION_DECIDED_EVENT if promote else AUTONOMY_DEMOTED_EVENT
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="pipeline",
+            resource_id=pipeline_id,
+            payload_json={
+                "pipeline_id": str(pipeline_id),
+                "previous_level": current_level.value,
+                "new_level": target,
+                "reason": req.reason,
+                "actor": str(principal.account_id),
+                "ceiling": ceiling.value,
+                "direction": "promote" if promote else "demote",
+            },
+            request_id=getattr(principal, "request_id", None),
+        )
+        return AutonomyChangeResponse(
+            pipeline_id=pipeline_id,
+            previous_level=current_level.value,
+            earned_autonomy_level=target,
+            max_autonomy_level=getattr(updated, "max_autonomy_level", None),
+            event_type=event_type,
+            updated_at=getattr(updated, "earned_autonomy_updated_at", None),
+        )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/demote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.demote")
+async def demote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+
+    Demotion adds human review, so it is always safe: an admin or the pipeline's
+    owner may lower the earned level at any time. Takes effect at the run's next
+    HITL gate (in-flight runs included) when ``autonomy_gating`` is on. Records
+    a ``pipeline.autonomy_demoted`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=False,
+    )
+
+
+@router.post(
+    "/{pipeline_id}/autonomy/promote",
+    responses={403: {"description": "Not an admin or the pipeline owner"}},
+)
+@handle_db_errors("pipelines.autonomy.promote")
+async def promote_pipeline_autonomy(
+    pipeline_id: uuid.UUID,
+    req: AutonomyChangeRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: TenantPrincipal = require_permission(_CODE_PIPELINE_UPDATE),
+) -> AutonomyChangeResponse:
+    """Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+
+    Promotion is never automatic: an admin or the pipeline's owner approves it,
+    capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
+    runs created after the approval — in-flight runs keep the lower level (ADR
+    043 §3). Records a ``pipeline.autonomy_promotion_decided`` audit event.
+    """
+    return await _apply_manual_autonomy_change(
+        pipeline_id=pipeline_id,
+        principal=principal,
+        session=session,
+        req=req,
+        promote=True,
+    )
 
 
 @router.delete(

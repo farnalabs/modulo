@@ -237,6 +237,42 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
         return None
 
 
+async def _fact_autonomy_level(session: AsyncSession, run: Run) -> str | None:
+    """The autonomy level the run's HITL gates resolved under (FAR-1175).
+
+    Sourced from the run's most recent ``run.autonomy_level_applied`` audit
+    event (autonomy-study.md §3.3) so the analytics surface can bucket by
+    autonomy without re-joining the audit chain. Best-effort: any read failure
+    (or no event) degrades to ``None`` — never raises.
+    """
+    from modulo.db.models.audit_event import AuditEvent
+
+    try:
+        payload = (
+            await session.execute(
+                select(AuditEvent.payload_json)
+                .where(
+                    AuditEvent.resource_type == "run",
+                    AuditEvent.resource_id == run.id,
+                    AuditEvent.event_type == "run.autonomy_level_applied",
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not isinstance(payload, dict):
+            return None
+        level = payload.get("autonomy_level")
+        return level if isinstance(level, str) and level else None
+    except Exception:
+        _log.warning(
+            "analytics.autonomy_level_read_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
 async def _fact_enforcement_aggregates(
     session: AsyncSession,
     run: Run,
@@ -387,6 +423,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
         blobs = await _fact_run_blobs(session, run)
         workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
         enforcement, enforcement_records = await _fact_enforcement_aggregates(session, run)
+        autonomy_level = await _fact_autonomy_level(session, run)
 
         # FAR-902: derive mode and outcome from the raw enforcement records
         # and write them onto the Run row so the API route can read them
@@ -465,6 +502,9 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "enforcement_verbatim_count": enforcement.verbatim_count if enforcement else None,
             "enforcement_repair_count": enforcement.repair_count if enforcement else None,
             "enforcement_wasted_count": enforcement.wasted_count if enforcement else None,
+            # FAR-1175: the effective autonomy the run resolved under (from the
+            # run.autonomy_level_applied audit event; NULL when none).
+            "autonomy_level": autonomy_level,
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)

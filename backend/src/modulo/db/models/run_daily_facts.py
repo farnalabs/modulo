@@ -240,6 +240,16 @@ class RunDailyFact(OrgScoped):
             "node-deadline watchdog firings — from Run.node_deadline_watchdog_fired_count (NULL for pre-FAR-1463 facts)"
         ),
     )
+    # FAR-1175 (ADR 043 S1): the autonomy level the run's HITL gates resolved
+    # under, sourced at fact-write time from the run's most recent
+    # ``run.autonomy_level_applied`` audit event (autonomy-study.md §3.3) so the
+    # analytics surface can bucket by autonomy WITHOUT re-joining the audit
+    # chain. NULL when no autonomy event was recorded (pre-FAR-1175 facts,
+    # runs with no HITL gate, or analytics-only runs). Migration 0295.
+    autonomy_level: Mapped[str | None] = mapped_column(
+        String(30),
+        comment="effective autonomy level applied to the run (from run.autonomy_level_applied; NULL if none)",
+    )
 
     team: Mapped["Team | None"] = relationship(foreign_keys=[team_id])
     pipeline: Mapped["Pipeline | None"] = relationship(foreign_keys=[pipeline_id])

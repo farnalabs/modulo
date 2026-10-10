@@ -243,6 +243,16 @@ _KNOWN_FLAGS: list[FeatureFlag] = [
         description="Library collections — pin multiple primitives into a browsable bundle",
         tier="community",
     ),
+    # ── Community tier — evidence-driven autonomy gating (FAR-1175, default OFF) ──
+    FeatureFlag(
+        name="autonomy_gating",
+        description=(
+            "Evidence-driven autonomy gating — a pipeline's HITL gates resolve "
+            "against its runtime earned autonomy level (demotion bites in-flight "
+            "runs at the next gate; promotion applies only to new runs)"
+        ),
+        tier="community",
+    ),
 ]
 
 
@@ -266,6 +276,7 @@ DEFAULT_OFF_FLAGS: frozenset[str] = frozenset(
         "library_collection",
         "sso_unrestricted_provisioning",
         "api_key_grants",
+        "autonomy_gating",
     }
 )
 

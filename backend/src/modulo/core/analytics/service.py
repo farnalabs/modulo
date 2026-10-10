@@ -742,6 +742,10 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     # must be able to separate runs whose work happened on the customer's
     # substrate from ones Modulo executed, exactly like the bucketed series.
     RunDailyFact.execution_origin,
+    # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
+    # under — an export consumer must be able to bucket autonomous vs
+    # human-reviewed runs without re-joining the audit chain.
+    RunDailyFact.autonomy_level,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)

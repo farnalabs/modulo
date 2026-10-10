@@ -1588,3 +1588,30 @@ async def replace_pipeline_graph(
         ),
     )
     return list(pipeline.graph_nodes_json), persisted_edges
+
+
+async def set_earned_autonomy_level(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    level: str | None,
+) -> Pipeline | None:
+    """Set (or clear) a pipeline's runtime ``earned_autonomy_level`` (FAR-1175).
+
+    Called by the manual promote/demote API + MCP surfaces. ``level`` must be a
+    canonical :class:`~modulo.core.run_context.autonomy.AutonomyLevel` value (or
+    ``None`` to clear) — the caller validates/clamps against the pipeline's
+    ``max_autonomy_level``; this function only writes. Returns the refreshed
+    pipeline, or ``None`` when it does not exist in the org.
+
+    ``earned_autonomy_updated_at`` is stamped to the write instant so the
+    pipeline-detail surface can show when the earned level last moved.
+    """
+    pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+    if pipeline is None:
+        return None
+    pipeline.earned_autonomy_level = level
+    pipeline.earned_autonomy_updated_at = datetime.now(UTC)
+    await session.flush()
+    return pipeline
