@@ -7,7 +7,7 @@ Feature: API Key Management
     Given I am authenticated as an admin in org "acme"
     When I POST /api/v1/api-keys with name "ci-token" and role "operator"
     Then the response status is 201
-    And the response contains a full_key starting with "mk_"
+    And the response contains a key_value starting with "mk_"
     And the response has name "ci-token"
 
   Scenario: Non-admin cannot create an API key
