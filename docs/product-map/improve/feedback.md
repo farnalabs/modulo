@@ -22,7 +22,8 @@ status: covered
 
 Human feedback on pipeline output — the Feedback System (§8.20). Feedback records are
 created per run, transition through a validated state machine
-(`pending → routing → correcting → resolved`), feed a review inbox and an eval
+(`pending → routing → correcting → resolved`, with `escalated` and `dismissed`
+also reachable), feed a review inbox and an eval
 **proposals queue**, and drive correction runs / eval-gap detection. Surfaces:
 `/feedback/inbox` and the `/api/v1/feedback*` API; orchestration lives in
 `core/feedback_manager/*` (state-machine guards, org RLS, correction dispatch).
@@ -35,30 +36,46 @@ created per run, transition through a validated state machine
       creation (`test_feedback_endpoint.py`)
 - [x] `GET /feedback` returns a paginated (page/page_size) list filterable by status;
       `GET /feedback/{record_id}` returns a single record (404 when missing)
-- [x] Status updates enforce the transition machine: `pending → routing → correcting →
-      resolved`, invalid transitions rejected 4xx, dismissed accepted, and a change
-      emits a `feedback_status_changed` audit event (audit failure does not block the
-      update)
+- [x] Status updates enforce the transition machine (`VALID_STATUS_TRANSITIONS`:
+      `pending`/`routing`/`correcting` → `resolved` or `dismissed`, plus
+      `routing`/`correcting` → `escalated`), an unknown status value is 422 and an
+      out-of-order transition is rejected by the manager guard
+      (`InvalidTransitionError`), and a change records a `feedback.status_changed`
+      audit event (the PATCH route also carries the coarse
+      `feedback_status_updated` audited dependency); audit failure does not block
+      the update
 - [x] `GET /feedback/inbox` returns the paginated review queue filterable by type and
       status, with date-range filtering; `GET /feedback/inbox/{record_id}` and
       `POST /feedback/inbox/{record_id}/review` expose and advance the review workflow
 - [x] `POST /feedback/{record_id}/detect-gap` runs eval-gap detection over the feedback
-      record, producing an eval proposal (`DetectEvalGap`), and round-trips ORM eval
-      definitions through the endpoint
+      record, producing an eval proposal (`FeedbackManager.detect_eval_gap`), and
+      round-trips ORM eval definitions through the endpoint
 - [x] Proposals: `GET /feedback/proposals` lists the eval proposals queue and
       `POST /feedback/proposals/{record_id}/publish` promotes a proposal to a live eval
       definition (PRD §8.20 "Eval suite growth #3")
-- [x] The manager is RLS-gated per org, validators reject malformed inputs, and the
-      state machine rejects out-of-order transitions (`feedback_system.feature`,
-      `test_feedback_flow.py`)
+- [x] Feedback records are org-scoped (every route sets the RLS context and the
+      manager's queries carry an explicit `organisation_id` predicate), validators
+      reject malformed inputs, and the state machine rejects out-of-order
+      transitions (`feedback_system.feature`, `test_feedback_flow.py`)
 
 ## Known Gaps
 
-- **Detection is model-assisted** — eval-gap detection depends on a configured model
-  backend; there is no deterministic fallback classifier for gap detection.
+- **Gap detection is deterministic; correction runs are model-assisted** — eval-gap
+  detection replays the pipeline's existing eval suite (a record whose output no
+  existing eval catches is flagged `eval_gap`, and a record whose pipeline has an
+  empty suite is flagged unconditionally), so it needs no model backend; it is the
+  correction-run path that resolves a configured model backend.
 
 ## QA History
 
+- 2026-10-10: **product-map review pass** — reconciled the tracker with the
+  shipped code: corrected the status-machine description (added `escalated`),
+  fixed the audit-event name (`feedback.status_changed`, not the nonexistent
+  `feedback_status_changed`), replaced the phantom `DetectEvalGap` identifier with
+  `FeedbackManager.detect_eval_gap`, corrected the "model-assisted detection" Known
+  Gap (detection replays the existing eval suite deterministically — the model
+  backend belongs to the correction path), and softened the manager-RLS claim to
+  the route+query org-scoping that actually holds.
 - 2026-09-25: **Improve Architecture product-map walk** — reconciled the
   manifest `feat-feedback` registry entry with this tracker (both now
   `status: covered`): the unchecked "gap detection partially wired" item from #972

@@ -5648,7 +5648,7 @@ features:
         status: covered
         behaviours:
             - "[x] The eval editor creates, configures, and deletes evaluation definitions per pipeline node"
-            - "[x] The proposal queue surfaces eval proposals for review and allows publishing to pipelines"
+            - "[x] The proposal queue surfaces eval proposals for review and supports publish / dismiss (the API publish endpoint creates a live eval definition; the /evals/proposals view's publish currently marks the proposal resolved)"
             - "[x] Eval results are queryable per run (GET /api/v1/runs/{run_id}/evals) and comparable side-by-side between two runs (POST /api/v1/evals/compare, backend/tests/unit/api/test_evals_compare.py); variant comparison surfaces eval scores per node, prompt diffs and eval coverage gaps under feat-variants (docs/product-map/improve/evals.md, docs/product-map/improve/variants.md)"
             - "[x] Eval policy-gate binding (POST/PUT /api/v1/evals/{eval_id}/policy-gate) runs the FAR-957 advisory author-warning checks for the eval's evidence_key and the PolicyGateResponse carries non-blocking warnings (no_producer / temporal_ordering / recent_undefined) — warning on the safe direction so a racy or indeterminate evidence key is surfaced without ever preventing binding (backend/src/modulo/core/eval_engine/author_warnings.py, backend/tests/unit/core/evidence/test_author_warnings.py, docs/product-map/core/evidence-store.md)"
             # FAR-967 chunk 10: pin integrity + operator enable/disable control
@@ -5663,7 +5663,7 @@ features:
             - "[x] Feedback items can be reviewed, dismissed, and corrected with correction runs spawned"
             - "[x] Feedback-to-eval gap detection and proposal generation ship end to end: POST /api/v1/feedback/{record_id}/detect-gap runs eval-gap detection over a feedback record producing an eval proposal, GET /api/v1/feedback/proposals lists the queue, and POST /api/v1/feedback/proposals/{record_id}/publish promotes a proposal into a live eval definition — a non-eval-gap record is refused (docs/product-map/improve/feedback.md, backend/tests/unit/api/test_feedback_endpoint.py)"
         deferrals:
-            - "Eval-gap detection is model-assisted — it depends on a configured model backend; there is no deterministic fallback classifier for gap detection"
+            - "Correction runs depend on a configured model backend; eval-gap detection itself is deterministic — it replays the pipeline's existing eval suite and needs no model backend"
     feat-guardrails:
         description: Guardrail policies
         status: covered
