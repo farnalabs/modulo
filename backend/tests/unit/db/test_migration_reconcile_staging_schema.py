@@ -125,8 +125,9 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0291_invitations_lookup_constraints chains off 0290_scheduled_reports_due_scan, and
 # 0292_audit_events_resource_lookup chains off 0291_invitations_lookup_constraints, and
 # 0293_oauth_clients_team_id chains off 0292_audit_events_resource_lookup, and
-# 0294_eval_results_org_fk chains off 0293_oauth_clients_team_id as the chain head.
-_CHAIN_HEAD_MIGRATION = "0294_eval_results_org_fk"
+# 0294_eval_results_org_fk chains off 0293_oauth_clients_team_id, and
+# 0295_oauth_consent_state_preauth_rls chains off 0294_eval_results_org_fk as the chain head.
+_CHAIN_HEAD_MIGRATION = "0295_oauth_consent_state_preauth_rls"
 
 
 def _source(name: str) -> str:
