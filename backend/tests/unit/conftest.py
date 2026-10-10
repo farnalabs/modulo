@@ -106,3 +106,65 @@ def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     from modulo.api import dependencies as _deps
 
     monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
+
+
+@pytest.fixture(autouse=True)
+def _far681_any_credential_default() -> None:
+    """Default any-credential principal for the apply-moved routes (FAR-681).
+
+    The FAR-681 slice-1/slice-2 endpoints resolve via
+    ``get_current_tenant_user_or_api_key``; most endpoint fixtures here only
+    override ``get_current_user`` (JWT). Without a default, every call to an
+    apply-moved pipeline/trigger route 401s in those fixtures. This autouse
+    default DERIVES the mk_ API-key principal from whatever the test's
+    ``get_current_user`` override returns (same org/account/role), so the
+    any-credential path behaves identically to the JWT path in each test.
+    ``setdefault`` semantics: an explicit per-test
+    ``get_current_tenant_user_or_api_key`` override always wins. When no JWT
+    fixture exists, the wrapper FALLS THROUGH to the real any-credential
+    dependency (the request's actual bearer — the real-dependency-stack auth
+    tests keep exercising the live mk_ resolution).
+
+    Registered in the UNIT conftest, not ``tests/unit/api/conftest.py``
+    (FAR-1229). pytest keys a conftest's autouse-fixture names to the exact
+    ``Package`` node object that was current when that conftest was parsed
+    (``FixtureManager._node_autousenames`` is keyed by node identity). An
+    explicit multi-file argv that detours OUT of ``tests/unit/api/`` and back
+    in — e.g.
+    ``pytest tests/unit/api/a.py tests/unit/test_x.py tests/unit/api/b.py`` —
+    collects the later file under a FRESH ``tests/unit/api`` ``Package`` node
+    that never had the conftest's autouse names registered, so the api-level
+    autouse fixtures silently drop from that item's closure and its routes
+    401. The unit-level conftest's fixtures ride a node shared by every argv
+    item under ``tests/unit/``, so they are stable under any interleaving.
+    (FAR-1597 moved ``_provisioned_system_engine`` here for the same reason.)
+    """
+    from fastapi import Depends
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from modulo.api.main import app
+    from modulo.auth.dependencies import (
+        _bearer_optional,
+        get_current_tenant_user_or_api_key,
+        get_current_user,
+    )
+    from modulo.auth.jwt import TenantPrincipal
+    from modulo.settings import Settings, get_settings
+
+    async def _default_any_credential(
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
+        settings: Settings = Depends(get_settings),
+    ):
+        override = app.dependency_overrides.get(get_current_user)
+        if override is None:
+            return await get_current_tenant_user_or_api_key(credentials, settings)
+        auth = override()
+        return TenantPrincipal(
+            username=auth.username,
+            organisation_id=auth.organisation_id,
+            account_id=auth.account_id,
+            org_role=auth.org_role,
+            is_system_admin=auth.is_system_admin,
+        )
+
+    app.dependency_overrides.setdefault(get_current_tenant_user_or_api_key, _default_any_credential)
