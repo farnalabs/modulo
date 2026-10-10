@@ -7,7 +7,8 @@ database, plus ORM parity for both new columns:
    0289_pipelines_environment_profile chains onto 0288, and
    0290_scheduled_reports_due_scan chains onto 0289, and
    0291_invitations_lookup_constraints chains onto 0290, and
-   0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints as the single
+   0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints, and
+   0293_oauth_clients_team_id chains onto 0292_audit_events_resource_lookup as the single
    linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -39,7 +40,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0292_audit_events_resource_lookup"
+_CHAIN_HEAD_MIGRATION = "0293_oauth_clients_team_id"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

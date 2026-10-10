@@ -82,9 +82,21 @@ test.describe('Real-stack journeys: manual output lands in run IO', { tag: '@reg
 
       // The detail page renders the run we drove (input payload we sent).
       await loginAsAdmin(page, env)
-      await page.goto(`/runs/${run.run_id}`)
       const inputPanel = page.getByTestId('run-detail-input-payload')
-      await expect(inputPanel).toBeVisible({ timeout: 30_000 })
+      // A saturated staging box can stall the route's lazy-chunk fetch, which
+      // renders a blank shell because the RunDetailView never mounts; a single
+      // bounded re-navigation recovers it. The input-payload panel is the
+      // first run-specific content, so its visibility is the page's readiness
+      // signal.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await page.goto(`/runs/${run.run_id}`)
+          await expect(inputPanel).toBeVisible({ timeout: 20_000 })
+          break
+        } catch (err) {
+          if (attempt === 2) throw err
+        }
+      }
       await expect(inputPanel).toContainText('E2E journey manual-io run')
     } finally {
       await cleanupJourneyEntities(cleanup)

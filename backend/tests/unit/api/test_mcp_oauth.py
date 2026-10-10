@@ -1,7 +1,7 @@
 """Unit tests for /api/v1/mcp/oauth/* endpoints."""
 
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -138,6 +138,58 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+def _team_query_result(found: bool) -> MagicMock:
+    """A DB result whose ``first()`` reports a row (found) or none."""
+    result = MagicMock()
+    result.first.return_value = (uuid.uuid4(),) if found else None
+    return result
+
+
+def _make_team_mock_session(*, team_exists: bool, is_member: bool) -> AsyncMock:
+    """A mock session whose ``execute`` answers the two team-binding queries.
+
+    ``_validate_oauth_team_binding`` runs inside the transaction and issues two
+    SELECTs: the ``Team.id`` existence probe and (for runners) the
+    ``TeamMembership`` membership probe via ``team_membership_exists``. Both go
+    through ``session.execute``, so branch on the FROM clause.
+    """
+    session = _make_mock_session()
+
+    async def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        sql = str(stmt)
+        if "FROM team_memberships" in sql:
+            return _team_query_result(is_member)
+        return _team_query_result(team_exists)
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _client_with_session(
+    mock_session: AsyncMock,
+    principal_factory: Callable[[], AuthenticatedPrincipal],
+) -> TestClient:
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = principal_factory
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    return TestClient(app)
+
+
+_TEAM_ID = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+_REG_PAYLOAD = {
+    "name": "App",
+    "redirect_uris": ["http://localhost/cb"],
+    "scopes": ["trigger:run"],
+}
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/mcp/oauth/clients
 # ---------------------------------------------------------------------------
@@ -198,7 +250,8 @@ class TestRegisterOAuthClient:
         )
         assert resp.status_code == 422
 
-    def test_create_runner_gets_403(self, runner_client: TestClient) -> None:
+    def test_create_runner_without_team_gets_400(self, runner_client: TestClient) -> None:
+        """FAR-1476: a runner may register, but MUST bind a team (never org-wide)."""
         resp = runner_client.post(
             self.ENDPOINT,
             json={
@@ -207,7 +260,8 @@ class TestRegisterOAuthClient:
                 "scopes": ["trigger:run"],
             },
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 400
+        assert "must be bound to a team" in resp.json()["detail"]
 
     def test_create_disallows_invalid_scopes(self, admin_client: TestClient) -> None:
         with patch("modulo.api.routes.mcp_oauth.set_rls_org"):
@@ -392,6 +446,151 @@ class TestRegisterOAuthClient:
 
         assert resp.status_code == 409
         assert resp.json()["detail"] == "duplicate"
+
+
+# ---------------------------------------------------------------------------
+# Team-bound registration (FAR-1476 slice 1)
+# ---------------------------------------------------------------------------
+
+
+class TestRegisterOAuthClientTeamBinding:
+    """The explicit membership rule for OAuth client ``team_id`` (FAR-1476).
+
+    - admin/operator may bind any team in their org, or none (org-wide).
+    - runner may bind ONLY a team they are a member of, and MUST bind one.
+    - the team must exist in the caller's org (404 otherwise).
+    """
+
+    ENDPOINT = "/api/v1/mcp/oauth/clients"
+
+    def test_admin_binds_valid_team_and_persists_team_id(self) -> None:
+        """An admin binding a team in their org succeeds and persists team_id."""
+        mock_session = _make_team_mock_session(team_exists=True, is_member=False)
+        client = _client_with_session(mock_session, _make_admin_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                mock_client = MagicMock()
+                mock_client.id = uuid.uuid4()
+                mock_client.client_id = "abc123def4567890"
+                mock_client.name = "App"
+                mock_create.return_value = (mock_client, "raw_secret")
+
+                resp = client.post(
+                    self.ENDPOINT,
+                    json={**_REG_PAYLOAD, "team_id": str(_TEAM_ID)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 201
+        assert mock_create.call_args.kwargs["team_id"] == _TEAM_ID
+
+    def test_admin_binds_team_from_other_org_gets_404(self) -> None:
+        """A team outside the caller's org is never persisted (404, fail-closed)."""
+        mock_session = _make_team_mock_session(team_exists=False, is_member=False)
+        client = _client_with_session(mock_session, _make_admin_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                resp = client.post(
+                    self.ENDPOINT,
+                    json={**_REG_PAYLOAD, "team_id": str(_TEAM_ID)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 404
+        assert "not found in this organisation" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_runner_binds_member_team_succeeds(self) -> None:
+        """A runner CAN register when they bind a team they are a member of."""
+        mock_session = _make_team_mock_session(team_exists=True, is_member=True)
+        client = _client_with_session(mock_session, _make_runner_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                mock_client = MagicMock()
+                mock_client.id = uuid.uuid4()
+                mock_client.client_id = "abc123def4567890"
+                mock_client.name = "App"
+                mock_create.return_value = (mock_client, "raw_secret")
+
+                resp = client.post(
+                    self.ENDPOINT,
+                    json={**_REG_PAYLOAD, "team_id": str(_TEAM_ID)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 201
+        assert mock_create.call_args.kwargs["team_id"] == _TEAM_ID
+
+    def test_runner_binding_non_member_team_gets_403(self) -> None:
+        """A runner may NOT bind a team they are not a member of."""
+        mock_session = _make_team_mock_session(team_exists=True, is_member=False)
+        client = _client_with_session(mock_session, _make_runner_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                resp = client.post(
+                    self.ENDPOINT,
+                    json={**_REG_PAYLOAD, "team_id": str(_TEAM_ID)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 403
+        assert "member" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_runner_without_team_gets_400(self) -> None:
+        """A runner-registered client is NEVER org-wide (no NULL boundary)."""
+        mock_session = _make_team_mock_session(team_exists=True, is_member=True)
+        client = _client_with_session(mock_session, _make_runner_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                resp = client.post(self.ENDPOINT, json=dict(_REG_PAYLOAD))
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 400
+        assert "must be bound to a team" in resp.json()["detail"]
+        mock_create.assert_not_called()
+
+    def test_admin_without_team_stays_org_wide(self) -> None:
+        """An admin with no team_id still registers an org-wide client (None)."""
+        mock_session = _make_team_mock_session(team_exists=False, is_member=False)
+        client = _client_with_session(mock_session, _make_admin_principal)
+        try:
+            with (
+                patch("modulo.api.routes.mcp_oauth.create_oauth_client") as mock_create,
+                patch("modulo.api.routes.mcp_oauth.set_rls_org"),
+            ):
+                mock_client = MagicMock()
+                mock_client.id = uuid.uuid4()
+                mock_client.client_id = "abc123def4567890"
+                mock_client.name = "App"
+                mock_create.return_value = (mock_client, "raw_secret")
+
+                resp = client.post(self.ENDPOINT, json=dict(_REG_PAYLOAD))
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 201
+        assert mock_create.call_args.kwargs["team_id"] is None
 
 
 # ---------------------------------------------------------------------------

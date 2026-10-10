@@ -30,6 +30,7 @@ from modulo.api.constants import (
     MSG_TRIGGER_NOT_FOUND,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     deny_break_glass_mint,
     deny_break_glass_mint_any_credential,
@@ -59,7 +60,11 @@ from modulo.core.cron_helpers import (
     compute_next_fire,
     validate_cron_expression,
 )
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError
+from modulo.core.exceptions import (
+    OrgDeletedError,
+    PipelineNotRunnableError,
+    SnapshotLockNotAvailableError,
+)
 from modulo.core.team_visibility import (
     ConnectorBindingMissingError,
     connector_team_mismatch_detail,
@@ -1816,6 +1821,27 @@ async def test_trigger(
             exc.state,
         )
         raise pipeline_not_runnable_http(exc) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-527 parity: the manual test run's snapshot creation can lose the
+        # advisory-lock race under concurrent triggers. Surface it as a
+        # retryable 503, never a generic 500 (matches webhook + MCP paths).
+        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
+
+        _log.warning(
+            "triggers.test_trigger.snapshot_lock_busy pipeline=%s attempts=%s (FAR-527)",
+            trigger.pipeline_id if trigger is not None else None,
+            SNAPSHOT_LOCK_ATTEMPTS,
+        )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_TRIGGERS_TEST_TRIGGER,
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the test"),
+        ) from exc
     except StorageExhaustedError:
         raise
     except HTTPException:

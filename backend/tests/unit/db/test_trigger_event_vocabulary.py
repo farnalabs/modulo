@@ -155,10 +155,11 @@ _MIGRATION_PATH = (
 # 0289_pipelines_environment_profile chained onto 0288_runs_execution_origin, and
 # 0290_scheduled_reports_due_scan chained onto 0289_pipelines_environment_profile, and
 # 0291_invitations_lookup_constraints chained onto 0290_scheduled_reports_due_scan, and
-# 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints as the chain head.
+# 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints, and
+# 0293_oauth_clients_team_id chained onto 0292_audit_events_resource_lookup as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0292_audit_events_resource_lookup"
+_CHAIN_HEAD_MIGRATION_NAME = "0293_oauth_clients_team_id"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

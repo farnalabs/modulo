@@ -133,6 +133,10 @@ def _make_trigger_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync - a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
     # FAR-1287: create_snapshot_from_live_graph allocates the snapshot version
     # inside a ``session.begin_nested()`` SAVEPOINT. A bare AsyncMock's
     # begin_nested() returns a plain coroutine, which is not an async context
@@ -565,6 +569,37 @@ def test_app_mention_archived_pipeline_returns_409(client: TestClient) -> None:
 
     assert resp.status_code == 409
     assert "archived" in resp.json()["detail"]
+
+
+def test_app_mention_snapshot_lock_busy_returns_503(client: TestClient) -> None:
+    """FAR-527 parity: a busy per-pipeline snapshot advisory lock on the Slack
+    app-mention path must surface an honest, retryable 503 — never a generic
+    500 (matches the webhook + MCP trigger paths)."""
+    from modulo.core.exceptions import SnapshotLockNotAvailableError
+
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch(
+            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            side_effect=SnapshotLockNotAvailableError("busy"),
+        ),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "snapshot lock unavailable" in detail
+    assert "retry" in detail.lower()
+    # The engine is never reached once the snapshot cannot be created.
+    m.assert_not_called()
 
 
 def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None:
