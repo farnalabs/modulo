@@ -2,14 +2,24 @@
 
 Sets minimal env vars so ``get_settings()`` (called by middleware at
 request time) can construct a ``Settings`` instance.
+
+Autouse fixtures deliberately do NOT live here. pytest keys a conftest's
+autouse-fixture names to the exact ``Package`` node object current when the
+conftest was parsed, so an explicit multi-file argv that detours out of
+``tests/unit/api/`` and back in collects the later file under a fresh
+``tests/unit/api`` Package node that never had this conftest's autouse names
+registered — the fixtures silently drop and its routes 401 (FAR-1229). The
+unit-level autouse fixtures (``_patch_verify_identity``,
+``_far681_any_credential_default``, ``_provisioned_system_engine``) ride a
+node shared by every argv item under ``tests/unit/`` and are stable under any
+interleaving. Put autouse fixtures in ``tests/unit/conftest.py``; keep only
+importable helpers here.
 """
 
 import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-from fastapi import Depends
 from sqlalchemy.sql import Select
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://localhost/test")
@@ -114,63 +124,3 @@ def make_system_session_mock(
     session.scalar = AsyncMock(return_value=0)
     session.scalar_one = AsyncMock(return_value=0)
     return session
-
-
-@pytest.fixture(autouse=True)
-def _prevent_db_auth_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Prevent ``_verify_identity`` from connecting to a real database.
-
-    All API unit tests mock the auth layer via ``dependency_overrides``
-    on ``get_current_user``, but ``get_current_tenant_user`` also calls
-    ``_verify_identity()`` which connects to Postgres to confirm the
-    JWT's account/org still exist.  Monkey-patching ``_verify_identity``
-    here avoids the DB call for every test in this package.
-    """
-    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
-
-
-@pytest.fixture(autouse=True)
-def _far681_any_credential_default() -> None:
-    """Default any-credential principal for the apply-moved routes (FAR-681).
-
-    The FAR-681 slice-1/slice-2 endpoints resolve via
-    ``get_current_tenant_user_or_api_key``; most endpoint fixtures here only
-    override ``get_current_user`` (JWT). Without a default, every call to an
-    apply-moved pipeline/trigger route 401s in those fixtures. This autouse
-    default DERIVES the mk_ API-key principal from whatever the test's
-    ``get_current_user`` override returns (same org/account/role), so the
-    any-credential path behaves identically to the JWT path in each test.
-    ``setdefault`` semantics: an explicit per-test
-    ``get_current_tenant_user_or_api_key`` override always wins. When no JWT
-    fixture exists, the wrapper FALLS THROUGH to the real any-credential
-    dependency (the request's actual bearer — the real-dependency-stack auth
-    tests keep exercising the live mk_ resolution).
-    """
-    from fastapi.security import HTTPAuthorizationCredentials
-
-    from modulo.api.main import app
-    from modulo.auth.dependencies import (
-        _bearer_optional,
-        get_current_tenant_user_or_api_key,
-        get_current_user,
-    )
-    from modulo.auth.jwt import TenantPrincipal
-    from modulo.settings import Settings, get_settings
-
-    async def _default_any_credential(
-        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_optional),
-        settings: Settings = Depends(get_settings),
-    ):
-        override = app.dependency_overrides.get(get_current_user)
-        if override is None:
-            return await get_current_tenant_user_or_api_key(credentials, settings)
-        auth = override()
-        return TenantPrincipal(
-            username=auth.username,
-            organisation_id=auth.organisation_id,
-            account_id=auth.account_id,
-            org_role=auth.org_role,
-            is_system_admin=auth.is_system_admin,
-        )
-
-    app.dependency_overrides.setdefault(get_current_tenant_user_or_api_key, _default_any_credential)
