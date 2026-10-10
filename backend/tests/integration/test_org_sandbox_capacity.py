@@ -1093,6 +1093,7 @@ async def _seed_saq_running_run(
     heartbeat_at: datetime | None = None,
     started_at: datetime | None = None,
     node_attempt_count: int = 0,
+    dispatch_phase: str | None = None,
 ) -> uuid.UUID:
     from sqlalchemy import insert
 
@@ -1116,6 +1117,9 @@ async def _seed_saq_running_run(
         # (they belong to the nodeless chokepoint), so a mid-graph wedge test
         # must seed real node attempts.
         "node_attempt_count": node_attempt_count,
+        # FAR-1649: optional durable first-node-start phase; NULL by default
+        # (a run that never dispatched a node carries no phase until claimed).
+        "dispatch_phase": dispatch_phase,
     }
     values.update(
         {col: value for col, value in (("heartbeat_at", heartbeat_at), ("started_at", started_at)) if value is not None}
@@ -1308,6 +1312,66 @@ async def test_zero_progress_aged_run_routes_to_nodeless_not_mid_graph(
     status, code = await _run_state(db_engine, org_id, run)
     assert status == "failed"
     assert code == "executor_stalled"
+
+
+async def test_node_started_aged_run_routes_to_age_gate_not_nodeless(
+    app_engine: AsyncEngine,
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1649: a run whose durable phase proves a node STARTED is NOT
+    zero-progress, so at the age bound it must take the mid-graph age gate
+    (truthful ``run.no_progress``), never the nodeless chokepoint.
+
+    Production shape (2026-10-10 outage): the nodeless router re-dispatched
+    node-STARTED runs (``dispatch_phase=first_node_dispatched``, no completed
+    super-step) every early-detect window — claim_count 1->5 — then terminal-
+    failed them with the FALSE "Claimed by SAQ but dispatched no node" label
+    while the phase sat on the same row. With the FAR-1649 selection leg the
+    same row is excluded from the nodeless router and collected by the age
+    gate instead."""
+    from modulo.core import cron_helpers as ch
+    from modulo.core.cron_helpers import (
+        _terminalize_aged_nodeless_zombies,
+        _terminalize_mid_graph_wedges,
+    )
+    from modulo.core.pipeline_execution import PHASE_FIRST_NODE_DISPATCHED
+
+    org_id, user_id = await _seed_org_account(db_engine, "NodeStartedOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeNodeStarted", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    run = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        started_at=datetime.now(UTC) - timedelta(hours=3),
+        # node_attempt_count stays 0 and no outputs/checkpoints exist — the
+        # ONLY thing distinguishing this from the zero-progress fixture is
+        # the durable first-node-start phase.
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+
+    # The nodeless router must NOT claim it (no "dispatched no node" fail).
+    factory = async_sessionmaker(app_engine, expire_on_commit=False)
+    summary = ch._dispatcher_summary()
+    async with factory() as session, session.begin():
+        await set_rls_org(session, org_id)
+        routed = await _terminalize_aged_nodeless_zombies(
+            session, org_id, max_age_minutes=135, summary=summary, max_rows=None
+        )
+    assert routed == []
+    assert summary["claimed_but_never_dispatched"] == 0
+    status, _code = await _run_state(db_engine, org_id, run)
+    assert status == "running"
+
+    # The age gate collects it with the truthful no_progress code.
+    count = await _terminalize_count(app_engine, org_id, _terminalize_mid_graph_wedges, max_age_minutes=135)
+    assert count == 1
+
+    status, code = await _run_state(db_engine, org_id, run)
+    assert status == "failed"
+    assert code == "no_progress"
 
 
 async def test_mid_graph_wedge_spares_recently_started_run(
