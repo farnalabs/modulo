@@ -2,7 +2,7 @@
 
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -875,13 +875,24 @@ class HealthResult:
     detail: str = ""
 
 
-def health_check_failure(exc: Exception) -> HealthResult:
+def health_check_failure(exc: Exception, redact: Callable[[str], str]) -> HealthResult:
     """Degrade a failed connector health check into a not-ok result.
 
     Centralises the truncation policy applied to the error detail so every
     connector reports a consistent, bounded failure message.
+
+    ``redact`` — REQUIRED (FAR-1651). The detail string is built from the raw
+    exception message, which is itself a live credential-echo surface (an
+    upstream 4xx body, a transport error's request URL, a connector's own
+    ``ValueError`` rendering of a response payload). Every caller passes its
+    credential redaction (typically ``self._redacted_detail``) so the FULL
+    message is scrubbed before truncation — truncating first can split a
+    credential across the 200-char boundary and leave the surviving fragment
+    unrecoverable. Redaction is mandatory rather than optional so a new caller
+    cannot silently persist an unredacted exception: the signature is the
+    enforcement, not a convention.
     """
-    return HealthResult(ok=False, detail=str(exc)[:200])
+    return HealthResult(ok=False, detail=redact(str(exc))[:200])
 
 
 class CIRunStatus(StrEnum):

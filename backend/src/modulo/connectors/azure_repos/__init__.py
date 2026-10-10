@@ -17,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import basic_auth_wire_secrets
 from modulo.core.ssrf import pinned_async_client_sync
 
 
@@ -53,7 +54,14 @@ class AzureReposConnector(ConnectorBase):
         self._base_url = f"https://dev.azure.com/{organization}"
 
     def _credential_values(self) -> Sequence[str]:
-        return (self._token,)
+        # FAR-1651Fix1: include the basic-auth wire forms (raw ``:<token>``
+        # pair, base64 blob, full ``Basic <b64>`` header value) — the reflected
+        # ``Authorization: Basic <b64>`` header does NOT contain the raw token,
+        # so value-based redaction of ``self._token`` alone misses it.
+        # Mirrors the rest-connector precedent
+        # (``RestConnector._collect_basic_secrets``). This connector
+        # authenticates with an EMPTY username (``":<token>"`` raw pair).
+        return (self._token, *basic_auth_wire_secrets("", self._token))
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -118,7 +126,7 @@ class AzureReposConnector(ConnectorBase):
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Azure Repos API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

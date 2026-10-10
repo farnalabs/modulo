@@ -59,7 +59,7 @@ class DiscordConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     def _require_filter(self, q: ConnectorQuery, key: str, message: str) -> str:
         value = q.filters.get(key, "")

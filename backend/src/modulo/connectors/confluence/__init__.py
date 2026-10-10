@@ -15,6 +15,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import basic_auth_wire_secrets
 from modulo.core.ssrf import pinned_async_client_sync
 
 
@@ -51,6 +52,12 @@ class ConfluenceConnector(ConnectorBase):
         self._auth: httpx.Auth | None = None
         self._token: str | None = None
         self._api_token: str | None = None
+        # FAR-1651Fix1: basic-auth wire forms, populated in basic mode only —
+        # the reflected ``Authorization: Basic <b64>`` header does NOT contain
+        # the raw api_token, so value-based redaction of the token alone misses
+        # it. Mirrors the rest-connector precedent
+        # (``RestConnector._collect_basic_secrets``).
+        self._basic_secrets: tuple[str, ...] = ()
 
         if "token" in creds:
             self._token = creds["token"]
@@ -59,13 +66,14 @@ class ConfluenceConnector(ConnectorBase):
             # Captured for credential redaction of echoed upstream detail
             # (``ConnectorBase._credential_values``); the email is NOT a secret.
             self._api_token = creds["api_token"]
+            self._basic_secrets = basic_auth_wire_secrets(creds["email"], creds["api_token"])
         else:
             raise ValueError(
                 "Confluence credentials must contain either 'token' (PAT/Bearer) or 'email' + 'api_token' (Basic auth)",
             )
 
     def _credential_values(self) -> Sequence[str]:
-        return tuple(v for v in (self._token, self._api_token) if isinstance(v, str))
+        return tuple(v for v in (self._token, self._api_token) if isinstance(v, str)) + self._basic_secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -118,7 +126,7 @@ class ConfluenceConnector(ConnectorBase):
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Confluence API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

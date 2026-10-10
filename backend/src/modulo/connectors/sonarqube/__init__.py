@@ -17,7 +17,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
-from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.connectors.security import CredentialRedactor, basic_auth_wire_secrets, redacting
 from modulo.core.ssrf import pinned_async_client_sync
 
 _RATE_LIMITED_STATUS = 429
@@ -50,7 +50,13 @@ class SonarQubeConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._api_base = f"{self._base_url}/api"
-        self._redactor = CredentialRedactor([token])
+        # FAR-1651Fix1: include the basic-auth wire forms — the SonarQube REST
+        # API authenticates user tokens as the Basic-auth username with an
+        # EMPTY password (``<token>:`` raw pair), so the reflected
+        # ``Authorization: Basic <b64>`` header does NOT contain the raw token
+        # and value-based redaction of the token alone misses it. Mirrors the
+        # rest-connector precedent (``RestConnector._collect_basic_secrets``).
+        self._redactor = CredentialRedactor((token, *basic_auth_wire_secrets(token, "")))
 
     def _credential_values(self) -> Sequence[str]:
         return self._redactor.secrets

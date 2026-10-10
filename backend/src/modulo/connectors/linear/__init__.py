@@ -371,11 +371,11 @@ class LinearConnector(TicketTrackerBase):
             viewer = data.get("viewer") or {}
             return HealthResult(ok=True, detail=viewer.get("name") or "ok")
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
         """Resolve an issue into the shared :class:`Ticket` shape (T1 surface)."""

@@ -848,12 +848,12 @@ class GitHubConnector(ConnectorBase):
         except GitHubNetworkError as exc:
             return HealthResult(ok=False, detail=self._redactor.redact(f"GitHub network error: {exc}"))
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
         try:
             user_login = (self._parse_json(r)).get("login", "")
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
         token_scopes = self._parse_scopes_from_headers(r)
         if is_fine_grained_pat(self._token):

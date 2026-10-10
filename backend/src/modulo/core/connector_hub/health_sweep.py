@@ -18,6 +18,12 @@ Contract:
 
 * NO data mutation — the only writes are the health columns on the aired
   row (a plain UPDATE, plain columns, no config mutation).
+* Credential redaction (FAR-1651Fix3) — every detail persisted into
+  ``last_health_check_error`` is credential-scrubbed through the connector's
+  own redactor (hub ``_record_skip`` summaries, connector ``HealthResult``
+  details, escalated exceptions); with no redactor bound the persisted detail
+  degrades to ``_FALLBACK_DETAIL`` (fail-closed), the full message stays in
+  the log only.
 * Per-instance isolation — one poisoned instance (undecryptable credentials,
   unknown type, exploding connector) is recorded as that instance's error and
   never aborts the rest of the sweep.
@@ -71,7 +77,7 @@ async def _check_instance(
     session: AsyncSession,
     fernet_key: str | None,
 ) -> str:
-    """Health-check one instance. Returns "" for ok, else the failure detail.
+    """Health-check one instance. Returns "" for ok, else a redacted failure detail.
 
     FAR-1526: the sweep runs on the cross-org ``modulo_system`` session factory,
     which deliberately carries NO ``app.organisation_id`` (system crons are
@@ -87,20 +93,61 @@ async def _check_instance(
     backends via ``session.info`` — so tenancy is tightened, never weakened.
 
     When the hub skips an instance (bad credentials, unknown type, exploding
-    connector) the recorded detail is the hub's own skip reason rather than the
-    bare ``ConnectorNotFoundError`` from the subsequent ``get()``, so the
-    health column stays actionable.
+    connector) the recorded detail is the hub's own skip reason (already
+    redacted by ``ConnectorHub._record_skip``) rather than the bare
+    ``ConnectorNotFoundError`` from the subsequent ``get()``, so the health
+    column stays actionable.
+
+    FAR-1651Fix3 redaction boundary: everything this function returns is
+    persisted into ``last_health_check_error``. Three layers:
+
+    1. `hub.skipped` summaries are redacted inside the hub.
+    2. ``result.detail`` — the connector's own HealthResult detail — is
+       additionally scrubbed through the hub's per-instance redactor before
+       persistence (connectors redact at source; this is the
+       persistence-boundary backstop).
+    3. Any exception escaping the hub block (a connector that raises from
+       ``health_check()`` despite the contract, a hub ``__aenter__`` failure)
+       is redacted through the hub's redactor; with NO redactor bound (the
+       failure predated the creds parse — structurally credential-free) the
+       detail FALLS CLOSED to ``_FALLBACK_DETAIL`` rather than echoing
+       unredacted ``str(exc)``. ``ConnectorPermissionError`` re-raises (the
+       FAR-1564 skip class) and ``asyncio.CancelledError`` re-raises as-is, so
+       the run-loop semantics for those are unchanged.
     """
     await set_rls_org(session, ci.organisation_id)
     secrets_backend = create_secrets_backend(fernet_key=fernet_key, session=session)
     async with ConnectorHub(secrets_backend=secrets_backend, org_id=str(ci.organisation_id)) as hub:
         await hub.initialise([ci])
-        skip_reason = hub.skipped.get(ci.id)
-        if skip_reason is not None:
-            return _bound_detail(skip_reason)
-        connector = hub.get(ci.id)
-        result = await connector.health_check()
-    return "" if result.ok else _bound_detail(result.detail or _FALLBACK_DETAIL)
+        redactor = hub.credential_redactor_for(ci.id)
+        try:
+            skip_reason = hub.skipped.get(ci.id)
+            if skip_reason is not None:
+                return _bound_detail(skip_reason)
+            connector = hub.get(ci.id)
+            result = await connector.health_check()
+        except asyncio.CancelledError:
+            raise
+        except ConnectorPermissionError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "connector_health_sweep.escalated_failure connector_id=%s type=%s",
+                ci.id,
+                ci.connector_type_id,
+            )
+            if redactor is not None:
+                return _bound_detail(f"{type(exc).__name__}: {redactor.redact(str(exc))}")
+            # No redactor is bound only when the failure crossed the
+            # fail-closed propagations before the creds dict was parsed — those
+            # exception types carry no credential content, but we cannot prove
+            # it from the value, so the persisted detail degrades to the
+            # placeholder (fail-closed) and the full message stays in the log.
+            return _bound_detail(_FALLBACK_DETAIL)
+    if result.ok:
+        return ""
+    detail = redactor.redact(result.detail) if redactor is not None else result.detail
+    return _bound_detail(detail or _FALLBACK_DETAIL)
 
 
 async def run_connector_health_checks(
@@ -155,7 +202,19 @@ async def run_connector_health_checks(
                 )
                 continue
             except Exception as exc:
-                detail = _bound_detail(f"{type(exc).__name__}: {exc}")
+                # Residual backstop (FAR-1651Fix3): after _check_instance's own
+                # redaction boundary, only DB-layer failures can reach here
+                # (set_rls_org / session factory / secrets-backend
+                # construction — no connector credential is ever bound at this
+                # layer). Fail closed anyway: the full message goes to the log,
+                # the PERSISTED detail degrades to the placeholder, because this
+                # column is an operator-visible persistence boundary.
+                logger.exception(
+                    "connector_health_sweep.residual_failure connector_id=%s type=%s",
+                    ci.id,
+                    ci.connector_type_id,
+                )
+                detail = _bound_detail(f"{type(exc).__name__}: {_FALLBACK_DETAIL}")
             await write_session.execute(
                 update(ConnectorInstance)
                 .where(ConnectorInstance.id == ci.id)

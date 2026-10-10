@@ -790,7 +790,13 @@ class RestConnector(ConnectorBase):
             request = await self._build_health_request()
             client = self._client()
             resp, _body_text = await self._send(client, request)
-            return HealthResult(ok=True, detail=f"HTTP {resp.status_code}: {self._redact(str(request.url))}")
+            # FAR-1651Fix5: the URL is echoed into the detail, and credentials
+            # may be carried as query params (apply_auth) — redact the URL and
+            # status-prefixed detail through the credential redactor before it
+            # leaves the connector.
+            return HealthResult(
+                ok=resp.status_code < 400, detail=self._redact(f"HTTP {resp.status_code}: {request.url}")
+            )
         except asyncio.CancelledError:
             raise
         except (ValueError, httpx.HTTPError) as exc:

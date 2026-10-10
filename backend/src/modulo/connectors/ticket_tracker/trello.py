@@ -104,7 +104,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)))
+            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)), self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}

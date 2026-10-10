@@ -106,12 +106,12 @@ class GitLabCIRunner(CIRunnerBase):
                     return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
                 return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPError as exc:
-            return HealthResult(ok=False, detail=f"HTTP error: {exc}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP error: {exc}")[:200])
         except ValueError as exc:
             # The outbound SSRF guard in _client() rejects a private/internal
             # base_url. Report unhealthy with the remediation text instead of
             # raising, matching the base_url-bearing connectors.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,

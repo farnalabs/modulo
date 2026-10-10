@@ -146,7 +146,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
                 return HealthResult(ok=True)
         except httpx.HTTPError as exc:
-            return HealthResult(ok=False, detail=f"HTTP error: {exc}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP error: {exc}")[:200])
 
     @staticmethod
     def _split_pipeline_id(pipeline_id: str) -> tuple[str, str]:

@@ -118,7 +118,7 @@ class GiteaConnector(ConnectorBase):
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Gitea API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
         missing = await self._get_missing_scopes()
         if missing:

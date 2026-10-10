@@ -82,7 +82,7 @@ class DropboxPaperConnector(ConnectorBase):
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Dropbox API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

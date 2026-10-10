@@ -62,7 +62,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(self._redactor.redact_exc(e))
+            return health_check_failure(self._redactor.redact_exc(e), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

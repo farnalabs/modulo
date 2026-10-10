@@ -171,16 +171,17 @@ def _request_id(response: httpx.Response) -> str | None:
     return value or None
 
 
-def _error_detail(response: httpx.Response, redact: Callable[[str], str] | None = None) -> str:
+def _error_detail(response: httpx.Response, redact: Callable[[str], str]) -> str:
     """Build an error detail string, appending the request id when present.
 
     ``redact`` scrubs the FULL response body before truncation (FAR-1651):
     truncating first can split a secret in half and leave the surviving
-    fragment unrecoverable by the redactor. The request id suffix is header
-    data (never a credential) and is appended after truncation.
+    fragment unrecoverable by the redactor. It is REQUIRED (fail-closed) —
+    every caller passes the connector's credential redactor, and a response
+    body never reaches a user-visible detail unredacted. The request id suffix
+    is header data (never a credential) and is appended after truncation.
     """
-    scrub = redact if redact is not None else _identity
-    detail = scrub(response.text)[:200]
+    detail = redact(response.text)[:200]
     request_id = _request_id(response)
     if request_id:
         detail = f"{detail} (request_id: {request_id})"
@@ -252,18 +253,18 @@ def _should_retry_status(status_code: int, attempt: int) -> bool:
     return should_retry_status(status_code, attempt)
 
 
-def _identity(text: str) -> str:
-    """No-op scrubber for :func:`_error_detail` callers without a redactor."""
-    return text
-
-
 def _should_retry_attempt(attempt: int) -> bool:
     """Whether a transport-level failure may be retried on this attempt."""
     return should_retry_network(attempt)
 
 
-def _http_error_message(exc: httpx.HTTPStatusError, redact: Callable[[str], str] | None = None) -> str:
-    """Build the ValueError detail for an HTTPStatusError, adding quota info on 429."""
+def _http_error_message(exc: httpx.HTTPStatusError, redact: Callable[[str], str]) -> str:
+    """Build the ValueError detail for an HTTPStatusError, adding quota info on 429.
+
+    ``redact`` is REQUIRED (fail-closed, FAR-1651) — the ``redact=None`` escape
+    hatch and the ``_identity`` no-op are removed so no GitLab error detail can
+    ever reach a user-visible field with the raw response body intact.
+    """
     detail = _error_detail(exc.response, redact)
     if exc.response.status_code == 429:
         quota = _rate_limit_detail(exc.response)

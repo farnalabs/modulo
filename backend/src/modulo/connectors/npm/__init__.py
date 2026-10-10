@@ -64,7 +64,7 @@ class NpmConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

@@ -32,7 +32,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.connectors.security import CredentialRedactor, redacting
+from modulo.connectors.security import CredentialRedactor, basic_auth_wire_secrets, credential_values, redacting
 from modulo.core.ssrf import pinned_async_client_sync
 
 # Retry/backoff configuration (canonical values live in _retry_headers)
@@ -217,16 +217,24 @@ class JiraConnector(ConnectorBase):
             raise ValueError("JiraConnector requires 'instance' or 'base_url'")
         self._auth: httpx.Auth | None = None
         self._token: str | None = None
+        # FAR-1651Fix1: basic-auth wire forms (raw pair, base64 blob, full
+        # ``Basic <b64>`` header value), populated in basic mode only — the
+        # reflected ``Authorization: Basic <b64>`` header does NOT contain the
+        # raw api_token, so value-based redaction of the token alone misses
+        # it. Mirrors the rest-connector precedent
+        # (``RestConnector._collect_basic_secrets``).
+        self._basic_secrets: tuple[str, ...] = ()
 
         if "token" in creds:
             self._token = creds["token"]
         elif "email" in creds and "api_token" in creds:
             self._auth = httpx.BasicAuth(username=creds["email"], password=creds["api_token"])
+            self._basic_secrets = basic_auth_wire_secrets(creds["email"], creds["api_token"])
         else:
             raise ValueError(
                 "Jira credentials must contain either 'token' (PAT/OAuth) or 'email' + 'api_token' (Basic auth)",
             )
-        self._redactor = CredentialRedactor.from_creds(creds)
+        self._redactor = CredentialRedactor((*credential_values(creds), *self._basic_secrets))
 
     def _credential_values(self) -> Sequence[str]:
         return self._redactor.secrets
@@ -364,11 +372,11 @@ class JiraConnector(ConnectorBase):
             display_name = user_info.get("displayName", "")
             return HealthResult(ok=True, detail=display_name)
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

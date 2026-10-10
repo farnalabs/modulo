@@ -20,6 +20,7 @@ from modulo.connectors.base import (
     ConnectorType,
     HealthResult,
 )
+from modulo.connectors.security import basic_auth_wire_secrets
 from modulo.core.ssrf import pinned_async_client_sync
 
 _AZURE_DEVOPS_API = "https://dev.azure.com"
@@ -55,7 +56,13 @@ class AzurePipelinesConnector(ConnectorBase):
         self._project = project
 
     def _credential_values(self) -> Sequence[str]:
-        return (self._token,)
+        # FAR-1651Fix1: the wire forms must be redactable too — the reflected
+        # ``Authorization: Basic <b64>`` header (and its decoded ``:<token>``
+        # form) do NOT contain the raw token, so value-based redaction of
+        # ``self._token`` alone never strips them. Mirrors the rest-connector
+        # precedent (``RestConnector._collect_basic_secrets``). This connector
+        # authenticates with an EMPTY username (``":<token>"`` raw pair).
+        return (self._token, *basic_auth_wire_secrets("", self._token))
 
     @property
     def connector_type(self) -> ConnectorType:

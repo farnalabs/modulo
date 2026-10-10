@@ -92,7 +92,7 @@ class PagerDutyConnector(ConnectorBase):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

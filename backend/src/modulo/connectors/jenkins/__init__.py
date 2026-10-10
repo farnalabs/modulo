@@ -138,9 +138,16 @@ class JenkinsConnector(ConnectorBase):
         self._username = username
         self._token = token
         self._base_url = base_url.rstrip("/")
+        # FAR-1651Fix1: precomputed basic-auth wire forms, redactable in
+        # ``_credential_values`` — a reflected ``Authorization: Basic <b64>``
+        # header does NOT contain the raw token, so value-based redaction of
+        # the token alone misses it. Mirrors the rest-connector precedent
+        # (``RestConnector._collect_basic_secrets``).
+        self._basic_raw = f"{self._username}:{self._token}"
+        self._encoded = base64.b64encode(self._basic_raw.encode()).decode()
 
     def _credential_values(self) -> Sequence[str]:
-        return (self._token,)
+        return (self._token, self._basic_raw, self._encoded, f"Basic {self._encoded}")
 
     @property
     def connector_type(self) -> ConnectorType:
