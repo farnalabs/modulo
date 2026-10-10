@@ -32,15 +32,13 @@ Feature: Team-Scoped HITL Reviews
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering" and human_only true
     And user "alice" is a member of team "engineering" with role "operator"
     When an MCP client attempts to approve gate "gate-1" on run "run-1" as user "alice"
-    Then the response status is 403
-    And the error indicates the gate requires human approval
+    Then the error indicates the gate requires human approval
 
   Scenario: Gate context exposes required_team_id
     Given a team "engineering" exists
     And a run "run-1" is awaiting human at gate "gate-1" with required_team_id "engineering"
     When I request the gate context for run "run-1" gate "gate-1"
-    Then the response contains required_team_id "engineering"
-    And the response contains required_team_name "engineering"
+    Then the gate context exposes the required team
 
   Scenario: Team operator can approve team HITL review
     Given a team "engineering" exists

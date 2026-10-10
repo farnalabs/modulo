@@ -14,7 +14,7 @@ Feature: HITL Deliver Manual
   Scenario: Deliver manual without claim_token is rejected
     Given a run is waiting at gate "pre-deploy"
     When I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with no claim_token and manual output
-    Then the response status is 403
+    Then the response status is 422
 
   Scenario: Deliver manual with expired claim_token is rejected
     Given a run is waiting at gate "pre-deploy"

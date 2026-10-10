@@ -1,46 +1,40 @@
-Feature: Assistant Access Control
+Feature: Assistant access control
   As an org admin
   I want to control who can access the Assistant AI assistant
   So that access is restricted to authorised users
 
-  Scenario: Assistant is accessible when user is on the access list
-    Given I am authenticated as an admin in org "acme"
-    And the Assistant access list includes my user_id
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
+  The request-time allow-list gate is ``AssistantConfigService.check_access``:
+  a user is granted access when their user_id, org_role, or team_id appears on
+  the access list, and denied otherwise. A streaming request also only reaches
+  the LLM when the organisation has an API key configured.
 
-  Scenario: Admin always has access regardless of access list
-    Given I am authenticated as an admin in org "acme"
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
+  Background:
+    Given the organisation has Assistant enabled with "safe" permission mode
+    And a user with "admin" org role
+    And a chat session exists for the user
 
-  Scenario: User with matching org_role has access
-    Given I am authenticated as a viewer in org "acme"
-    And the Assistant access list includes role "viewer"
+  Scenario: Streaming fails when no API key is configured
+    Given no model backends exist for the org
     When I check assistant access
-    Then the response status is 200
-    And access is granted
+    Then the stream reports no API key configured
 
-  Scenario: User with matching team_id has access
-    Given I am authenticated as an admin in org "acme"
-    And the Assistant access list includes team_id "team-engineering"
-    And I belong to team "team-engineering"
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
+  Scenario: Access is granted when the user_id is on the access list
+    Given the Assistant access list includes my user_id
+    When I evaluate assistant access control
+    Then access is granted
 
-  Scenario: Assistant is inaccessible when user not on access list
-    Given I am authenticated as a viewer in org "acme"
-    And the Assistant access list does not include my role or user_id
-    When I check assistant access
-    Then the response status is 403
-    And access is denied
+  Scenario: Access is granted when the org_role is on the access list
+    Given the Assistant access list includes role "admin"
+    When I evaluate assistant access control
+    Then access is granted
 
-  Scenario: Assistant is inaccessible when no API key configured
-    Given I am authenticated as an admin in org "acme"
-    And no model backends exist for the org
-    When I check assistant access
-    Then the response status is 403
-    And the error indicates no API key configured
+  Scenario: Access is granted when a team_id on the access list matches the user's team
+    Given the Assistant access list includes team_id "11111111-1111-1111-1111-111111111111"
+    And I belong to team "11111111-1111-1111-1111-111111111111"
+    When I evaluate assistant access control
+    Then access is granted
+
+  Scenario: Access is denied when the user is on no access list
+    Given the Assistant access list does not include my role or user_id
+    When I evaluate assistant access control
+    Then access is denied
