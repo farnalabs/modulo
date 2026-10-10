@@ -30,6 +30,7 @@ from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.assistant.config_service import AssistantConfigService
 from modulo.core.run_provenance import run_provenance_fields
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.eval_result import EvalResult
@@ -219,7 +220,7 @@ async def _ledger_spend_window(
         await session.execute(
             select(func.sum(OrgDailyRunCount.total_spend_usd)).where(
                 OrgDailyRunCount.organisation_id == org_id,
-                OrgDailyRunCount.org_level_scope(),
+                org_level_predicate(),
                 OrgDailyRunCount.run_date >= start_date,
                 OrgDailyRunCount.run_date < end_date,
             )
@@ -527,7 +528,7 @@ async def _load_daily_trend(session: AsyncSession, org_id: uuid.UUID) -> list[di
         )
         .where(
             OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.org_level_scope(),
+            org_level_predicate(),
             OrgDailyRunCount.run_date >= seven_days_ago,
         )
         .group_by(OrgDailyRunCount.run_date)
@@ -799,7 +800,7 @@ async def _load_trend_run_and_spend(
         )
         .where(
             OrgDailyRunCount.organisation_id == org_id,
-            OrgDailyRunCount.org_level_scope(),
+            org_level_predicate(),
             OrgDailyRunCount.run_date >= start_date,
         )
         .group_by(OrgDailyRunCount.run_date)

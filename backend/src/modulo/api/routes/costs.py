@@ -39,6 +39,7 @@ from modulo.core.cost_settings import (
     SUPPORTED_CURRENCIES,
 )
 from modulo.core.spend_ceiling import cents_from_usd
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.organisation import get_organisation
 from modulo.db.crud.scheduled_report import (
     create_scheduled_report,
@@ -1222,7 +1223,7 @@ async def get_anomalies(
                 .where(
                     OrgDailyRunCount.organisation_id == current_user.organisation_id,
                     OrgDailyRunCount.run_date >= lookback,
-                    OrgDailyRunCount.org_level_scope(),
+                    org_level_predicate(),
                 )
                 .group_by(OrgDailyRunCount.run_date)
                 .order_by(OrgDailyRunCount.run_date)
