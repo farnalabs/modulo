@@ -22,7 +22,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.connectors.security import CredentialRedactor
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 from modulo.core.ssrf import pinned_async_client_sync
 
@@ -55,8 +55,10 @@ class TrelloTicketTracker(TicketTrackerBase):
             raise ValueError("Trello connector requires api_key and token credentials")
         # Credential redaction now lives in the shared ``CredentialRedactor``
         # (FAR-507) instead of a per-connector fork — Trello's ``key``/``token``
-        # are the secret values, and the same scrubbing covers every entry point.
-        self._redactor = CredentialRedactor([self._api_key, self._token])
+        # go into the URL query string on every request, so ``scrub_url`` is
+        # required to scrub a transport error's ``request.url`` too. The
+        # ``@redacting`` wrapper covers the error paths that escape a method.
+        self._redactor = CredentialRedactor([self._api_key, self._token], scrub_url=True, chain_cause=False)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -83,6 +85,8 @@ class TrelloTicketTracker(TicketTrackerBase):
         # and error redaction is preserved by the existing _redact wrappers.
         return pinned_async_client_sync(self._base_url)
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:
