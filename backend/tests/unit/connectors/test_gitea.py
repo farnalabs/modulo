@@ -17,9 +17,6 @@ def connector():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_repos(connector):
     repos = [{"id": 1, "name": "repo-a"}, {"id": 2, "name": "repo-b"}]
     respx.get(f"{_API}/user/repos").mock(return_value=httpx.Response(200, json=repos))

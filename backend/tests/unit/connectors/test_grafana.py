@@ -31,11 +31,6 @@ def test_constructor_custom_base_url() -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_dashboards(connector: GrafanaConnector) -> None:
     dashboards = [
         {"uid": "d1", "title": "System Dashboard", "type": "dash-db"},

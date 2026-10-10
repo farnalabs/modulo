@@ -32,11 +32,6 @@ def test_connector_type_capabilities():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 # --- query: package ---
 
 

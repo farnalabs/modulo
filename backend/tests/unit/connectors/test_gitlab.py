@@ -22,9 +22,6 @@ def connector():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_projects(connector):
     projects = [{"id": 1, "name": "proj-a"}, {"id": 2, "name": "proj-b"}]
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=projects))
@@ -297,7 +294,6 @@ async def test_unsupported_write_resource(connector):
         await connector.write(payload)
 
 
-@respx.mock
 @respx.mock
 async def test_health_check_timeout(connector):
     respx.get(f"{_API}/user").mock(side_effect=httpx.TimeoutException("Request timed out"))

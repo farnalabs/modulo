@@ -21,10 +21,6 @@ def test_connector_type(connector: MicrosoftTeamsConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_teams(connector: MicrosoftTeamsConnector) -> None:
     teams = [
         {"id": "T1", "displayName": "Engineering", "description": "Engineering team"},

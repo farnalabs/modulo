@@ -21,9 +21,6 @@ def test_connector_type(connector):
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_sites(connector):
     sites = {
         "value": [

@@ -18,8 +18,6 @@ def connector():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
 async def test_query_repos(connector):
     body = {"values": [{"uuid": "{1}", "name": "repo-a"}, {"uuid": "{2}", "name": "repo-b"}], "size": 2}
     respx.get(f"{_API}/repositories/myteam").mock(return_value=httpx.Response(200, json=body))
@@ -181,7 +179,6 @@ async def test_query_repos_non_list_values_no_crash(connector):
     assert result.total == 2
 
 
-@respx.mock
 @respx.mock
 async def test_query_issues_corrupt_body_no_crash(connector):
     respx.get(f"{_API}/repositories/myteam/myrepo/issues").mock(return_value=httpx.Response(200, json=["garbage"]))

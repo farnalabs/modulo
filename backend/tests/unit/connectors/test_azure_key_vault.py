@@ -22,10 +22,6 @@ def test_connector_type(connector: AzureKeyVaultConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_secrets(connector: AzureKeyVaultConnector) -> None:
     secrets = {"value": [{"id": "https://myvault.vault.azure.net/secrets/secret1", "attributes": {"enabled": True}}]}
     respx.get(f"{_BASE}/secrets", params={"api-version": "7.4"}).mock(return_value=httpx.Response(200, json=secrets))

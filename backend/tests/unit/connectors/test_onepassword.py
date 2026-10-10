@@ -21,10 +21,6 @@ def test_connector_type(connector: OnePasswordConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_vaults(connector: OnePasswordConnector) -> None:
     vaults = [{"id": "v1", "name": "Personal"}, {"id": "v2", "name": "Shared"}]
     respx.get(f"{BASE_URL}/v1/vaults").mock(return_value=httpx.Response(200, json=vaults))

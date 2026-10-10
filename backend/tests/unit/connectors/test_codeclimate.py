@@ -21,10 +21,6 @@ def test_connector_type(connector: CodeClimateConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_repos(connector: CodeClimateConnector) -> None:
     repos = {
         "data": [

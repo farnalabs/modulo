@@ -26,12 +26,6 @@ def test_connector_type_capabilities():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_package(connector):
     respx.get(f"{API_BASE}/requests/json").mock(
         return_value=httpx.Response(

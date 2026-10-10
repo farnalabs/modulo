@@ -22,9 +22,6 @@ def test_connector_type(connector: SentryConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_issues(connector: SentryConnector) -> None:
     issues = [
         {"id": "1", "title": "Crash in login", "status": "unresolved"},

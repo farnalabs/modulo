@@ -21,10 +21,6 @@ def test_connector_type(connector: DiscordConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_guilds(connector: DiscordConnector) -> None:
     guilds = [
         {"id": "111", "name": "Modulo Dev"},

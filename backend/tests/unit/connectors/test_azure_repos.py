@@ -22,8 +22,6 @@ def connector():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
 async def test_query_repos(connector):
     repos = [{"id": "repo-1", "name": "frontend"}, {"id": "repo-2", "name": "backend"}]
     respx.get(f"{_BASE}/myproject/_apis/git/repositories", params={"api-version": "7.0"}).mock(
@@ -252,7 +250,6 @@ async def test_query_repos_non_list_value_no_crash(connector):
     assert result.total == 2
 
 
-@respx.mock
 @respx.mock
 async def test_query_commits_corrupt_body_no_crash(connector):
     respx.get(

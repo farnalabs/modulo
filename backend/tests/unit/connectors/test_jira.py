@@ -30,8 +30,6 @@ def connector_token():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
 async def test_query_issue(connector):
     issue_data = {"id": "10001", "key": "PROJ-123", "fields": {"summary": "Fix bug"}}
     respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json=issue_data))

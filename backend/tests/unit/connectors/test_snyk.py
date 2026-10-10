@@ -21,11 +21,6 @@ def connector():
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 # --- connector_type ---
 
 

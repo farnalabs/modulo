@@ -23,9 +23,6 @@ def test_connector_type(connector: DatadogConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_monitors(connector: DatadogConnector) -> None:
     monitors = [
         {"id": 1, "name": "CPU Load", "status": "Alert"},

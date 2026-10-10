@@ -22,10 +22,6 @@ def test_connector_type(connector: PagerDutyConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 async def test_query_incidents(connector: PagerDutyConnector) -> None:
     incidents = [
         {"id": "I1", "title": "Production outage", "status": "triggered"},

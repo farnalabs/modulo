@@ -25,10 +25,6 @@ def test_connector_type(connector: OpsgenieConnector) -> None:
 
 
 @respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
-@respx.mock
 # ── Query: alerts ─────────────────────────────────────────────────────
 
 
