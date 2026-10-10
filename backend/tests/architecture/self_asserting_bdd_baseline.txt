@@ -14,12 +14,3 @@
 #     listed step is fixed but not removed from the baseline.
 #
 # Entry format: <path relative to backend/tests>:<step-function-name>
-bdd/steps/test_auth.py:step_create_api_key
-bdd/steps/test_auth.py:step_list_api_keys
-bdd/steps/test_auth.py:step_revoke_api_key
-bdd/steps/test_auth.py:step_wrong_api_key_request
-bdd/steps/test_stale_jwt_revocation.py:user_attempts_claim
-bdd/steps/test_stale_jwt_revocation.py:user_requests_pipeline
-bdd/steps/test_stale_jwt_revocation.py:user_uses_old_jwt
-bdd/steps/test_view_as_team_non_admin_rejected.py:get_pipelines_with_view_as_team
-bdd/steps/test_view_as_team_non_admin_rejected.py:get_viewmodel_with_view_as_team
