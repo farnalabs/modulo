@@ -122,26 +122,6 @@ def i_am_approver(ctx):
     ctx["user_id"] = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
 
-def run_status_running(request, ctx):
-    """Assert the run actually resumed: the real approve route returns
-    ``{"status": "approved"}`` and drives ``PipelineExecutor.resume``.
-
-    Also used by the manual-node scenarios (which model the transition in
-    ``ctx["run_status"]`` without a real response), so keep that assertion too.
-    """
-    resp = getattr(request.node, "_resp", None)
-    if resp is not None and getattr(resp, "status_code", 0) == 200:
-        body = resp.json()
-        status = body.get("status")
-        if status == "approved":
-            assert ctx.get("_resume_called") is not None, "Pipeline execution was not resumed"
-        else:
-            # The manual-delivery route returns ``delivered_manual`` (it drives
-            # its own executor resume, not the approve path checked above).
-            assert status == "delivered_manual", f"Unexpected status, got {body}"
-    assert ctx.get("run_status") == "running", f"Run is not in running state, got {ctx.get('run_status')}"
-
-
 @then(parsers.parse('execution resumes from "{node_id}"'))
 def execution_resumes_from(node_id: str, request, ctx):
     """Confirm the gate was approved through the real route and the router

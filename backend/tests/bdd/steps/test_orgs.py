@@ -221,7 +221,7 @@ def user_deactivated(username: str, ctx):
 # ===========================================================================
 
 
-def _onboarding_seams(ctx):
+def _onboarding_seams():
     """Patch the onboarding route's DB seams with an in-memory progress state.
 
     The real route bodies execute; only the two module-level DB helpers they
@@ -230,9 +230,9 @@ def _onboarding_seams(ctx):
     real one's unconditional ``login`` auto-credit.
     """
     state = SimpleNamespace(
-        completed_actions=list(ctx.get("_seed_completed", [])),
-        skipped_actions=list(ctx.get("_seed_skipped", [])),
-        dismissed=ctx.get("_seed_dismissed", False),
+        completed_actions=[],
+        skipped_actions=[],
+        dismissed=False,
     )
 
     async def fake_get_or_create(session, org_id):
@@ -249,23 +249,19 @@ def _onboarding_seams(ctx):
 
 
 @given("a new organisation signs up")
-def new_org_signup(ctx):
-    ctx.pop("_seed_completed", None)
-    ctx.pop("_seed_skipped", None)
-    ctx.pop("_seed_dismissed", None)
+def new_org_signup():
+    """A fresh per-scenario ``ctx`` already represents a brand-new org."""
 
 
 @given("the welcome flow is completed")
-def welcome_flow_completed(ctx):
-    ctx.pop("_seed_completed", None)
-    ctx.pop("_seed_skipped", None)
-    ctx.pop("_seed_dismissed", None)
+def welcome_flow_completed():
+    """Completion is driven through the real API by the scenario's When step."""
 
 
 @when("I GET /api/v1/onboarding/status")
 def get_onboarding_status(client, request, ctx):
     with contextlib.ExitStack() as stack:
-        for seam in _onboarding_seams(ctx):
+        for seam in _onboarding_seams():
             stack.enter_context(seam)
         resp = client.get("/api/v1/onboarding/status")
     request.node._resp = resp
@@ -275,7 +271,7 @@ def get_onboarding_status(client, request, ctx):
 def post_onboarding_action(request, action_id: str, path_action: str, client, ctx):
     _ = path_action
     with contextlib.ExitStack() as stack:
-        for seam in _onboarding_seams(ctx):
+        for seam in _onboarding_seams():
             stack.enter_context(seam)
         resp = client.post(f"/api/v1/onboarding/actions/{action_id}/complete")
     request.node._resp = resp
@@ -292,7 +288,7 @@ def mark_all_steps_complete(client, request, ctx):
         "run_first_pipeline",
     ]
     with contextlib.ExitStack() as stack:
-        for seam in _onboarding_seams(ctx):
+        for seam in _onboarding_seams():
             stack.enter_context(seam)
         for action_id in manual_action_ids:
             client.post(f"/api/v1/onboarding/actions/{action_id}/complete")
