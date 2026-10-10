@@ -174,3 +174,4 @@ minimumReleaseAgeExclude:
   - 'playwright@1.64.0'
   - 'vue-router@5.4.0'
   - '@lucide/vue@1.53.0'
+  - '@lucide/vue@1.54.0'
