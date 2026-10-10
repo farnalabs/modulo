@@ -2783,6 +2783,27 @@ elements:
       - testid: proposal-dismiss
         type: button
         dynamic_testid: false
+      - testid: publish-proposal-dialog
+        type: element
+        dynamic_testid: false
+      - testid: publish-name
+        type: input
+        dynamic_testid: false
+      - testid: publish-eval-type
+        type: select
+        dynamic_testid: false
+      - testid: publish-config
+        type: textarea
+        dynamic_testid: false
+      - testid: publish-dialog-error
+        type: element
+        dynamic_testid: false
+      - testid: publish-cancel
+        type: button
+        dynamic_testid: false
+      - testid: publish-confirm
+        type: button
+        dynamic_testid: false
     /feedback/inbox:
       - testid: feedback-inbox-title
         type: element
