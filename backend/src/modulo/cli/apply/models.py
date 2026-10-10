@@ -134,11 +134,12 @@ class SchemaEntity(BaseModel):
 class ModelBackendEntity(BaseModel):
     """A declarative model backend (mirrors ModelBackendCreate).
 
-    ``api_key`` is write-only and MUST be a reference:
-    ``${env:VAR}`` (resolved client-side at apply time). ``secretref://<key>``
-    values parse here but are BLOCKED at plan time by this slice — server-side
-    resolution does not exist yet, so passing one through would store a
-    non-functional literal. Inline secret values are forbidden.
+    ``api_key`` is write-only and MUST be a reference: ``${env:VAR}`` (resolved
+    client-side at apply time) or ``secretref://<key>``. A ``secretref://``
+    reference is forwarded to the server UNCHANGED and resolved against the org
+    vault at write time (FAR-1640); a missing/foreign key fails the affected
+    entity with a typed error naming the key. Inline secret values are
+    forbidden.
     """
 
     model_config = ConfigDict(extra="forbid")

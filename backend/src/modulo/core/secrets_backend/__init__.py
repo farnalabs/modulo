@@ -16,6 +16,29 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from modulo.core.secrets_backend.references import (
+    SECRET_REF_SCHEME,
+    CredentialReferenceError,
+    is_secret_ref,
+    parse_secret_ref,
+    resolve_credential,
+    resolve_credential_reference,
+)
+
+__all__ = [
+    "DEFAULT_TIMEOUT",
+    "SECRET_REF_SCHEME",
+    "CredentialReferenceError",
+    "SecretsBackend",
+    "create_secrets_backend",
+    "is_secret_ref",
+    "parse_secret_ref",
+    "resolve_credential",
+    "resolve_credential_reference",
+    "run_sync",
+    "validate_key",
+]
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
