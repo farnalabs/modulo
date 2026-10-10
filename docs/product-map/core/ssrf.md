@@ -42,10 +42,13 @@ route, so it is tracked here rather than in the manifest registry.
       usable ``ips[0]`` IndexError crash
 - [x] DNS resolution is bounded (``SSRF_DNS_TIMEOUT``, default 10s); a
       hung or failed resolver fails closed rather than stalling the caller
-- [x] Hard NON-NEGOTIABLE blocked floor: loopback, link-local, multicast,
-      IPv6 site-local, AWS/GCP/Azure link-local metadata, CGNAT,
-      benchmarking, current-network and Aliyun metadata ranges are blocked
-      **before** any allowlist is consulted
+- [x] Hard NON-NEGOTIABLE blocked floor: link-local, multicast, IPv6
+      site-local, AWS/GCP/Azure link-local metadata, CGNAT, benchmarking,
+      current-network and Aliyun metadata ranges are blocked **before** any
+      allowlist is consulted. Loopback is deliberately **not** in the floor:
+      it is blocked by default but remains allowlistable so a self-hosted
+      deployment can reach a localhost model backend via
+      ``SSRF_ALLOW_PRIVATE_RANGES`` (`ssrf.py` `_is_blocked_ip`)
 - [x] A configurable private-range allowlist (global
       ``SSRF_ALLOW_PRIVATE_RANGES`` + tenant-scoped ``allow_networks``
       overlay) may permit other private CIDRs, but can never weaken the
@@ -78,10 +81,19 @@ route, so it is tracked here rather than in the manifest registry.
 - **Pinning rides a private httpcore seam.** ``_PinnedAsyncNetworkBackend``
   is installed by overriding httpcore's private ``_pool._network_backend``
   attribute; if a future httpcore version stops routing that attribute into
-  connection creation, pinning would silently drop — the module makes that
-  un-pin loud via a runtime guard, but it is not a public API contract.
+  connection creation, pinning would silently drop — the module offers an
+  **opt-in** runtime guard (``loudness_guard=True`` → ``PinDroppedError``)
+  that makes that un-pin loud where enabled; it defaults to off and is not a
+  public API contract.
 
 ## QA History
+
+- 2026-10-10: **qa-iterate product-map pass** — corrected the hard-floor
+  behaviour line: loopback is blocked by default but is deliberately
+  **allowlistable** (`_is_blocked_ip` consults `SSRF_ALLOW_PRIVATE_RANGES` before
+  the private fall-through), so it does not belong in the non-negotiable floor.
+  Also noted the `loudness_guard` un-pin guard is opt-in (default off). Status:
+  covered.
 
 - 2026-09-18: **product-map review pass** — closed the
   tracked "No BDD feature files" gap. Registered ``security/ssrf_guard.feature``
