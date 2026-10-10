@@ -353,6 +353,7 @@ class JiraConnector(ConnectorBase):
             raise ValueError(self._redactor.redact(f"Jira API invalid response: {response.text[:200]}")) from exc
 
     @redacting
+    @redacting
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the current user's profile."""
         try:

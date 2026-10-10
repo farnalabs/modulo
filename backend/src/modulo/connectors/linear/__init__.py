@@ -358,6 +358,7 @@ class LinearConnector(TicketTrackerBase):
             "body": comment.get("body"),
         }
 
+    @redacting
     async def health_check(self) -> HealthResult:
         """Verify the API key by querying the authenticated viewer."""
         try:

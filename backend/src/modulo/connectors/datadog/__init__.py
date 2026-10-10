@@ -53,6 +53,7 @@ class DatadogConnector(ConnectorBase):
             timeout=30,
         )
 
+    @redacting
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:

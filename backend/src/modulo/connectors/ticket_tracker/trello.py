@@ -22,7 +22,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
-from modulo.connectors.security import CredentialRedactor
+from modulo.connectors.security import CredentialRedactor, redacting
 from modulo.connectors.ticket_tracker.base import Ticket, TicketFilter, TicketTrackerBase
 from modulo.core.ssrf import pinned_async_client_sync
 
@@ -83,6 +83,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         # and error redaction is preserved by the existing _redact wrappers.
         return pinned_async_client_sync(self._base_url)
 
+    @redacting
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as client:

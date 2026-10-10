@@ -45,6 +45,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         # The token is in the Authorization header, so no creds reach the URL.
         return pinned_async_client_sync(self._base_url)
 
+    @redacting
     async def health_check(self) -> HealthResult:
         headers = self._headers()
         try:
