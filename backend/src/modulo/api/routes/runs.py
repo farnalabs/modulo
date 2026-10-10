@@ -29,6 +29,7 @@ from modulo.api.constants import (
     MSG_UNEXPECTED_ERROR,
 )
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
+from modulo.api.db_error_reporting import log_service_unavailable
 from modulo.api.dependencies import (
     _get_engine,
     _get_session_factory,
@@ -48,7 +49,12 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.cost_controller.breakdown.params import compute_run_warnings, compute_run_warnings_count
 from modulo.core.dispatch import dispatch_run
-from modulo.core.exceptions import OrgDeletedError, PipelineNotRunnableError, RateLimitConflictError
+from modulo.core.exceptions import (
+    OrgDeletedError,
+    PipelineNotRunnableError,
+    RateLimitConflictError,
+    SnapshotLockNotAvailableError,
+)
 from modulo.core.guardrails import GuardrailSummary
 from modulo.core.line_diff import iter_line_diffs
 from modulo.core.node_output_split import node_return, node_stderr_artifact, node_stdout_artifact, node_telemetry
@@ -1292,6 +1298,27 @@ async def trigger_run(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="This pipeline requires work_item_refs but none were supplied",
+        ) from None
+
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-1625: the per-pipeline snapshot graph-copy lock's bounded wait was
+        # exhausted under a concurrent-trigger burst. That is CONTENTION, not an
+        # unexpected fault — a truthful, retryable 503 (matching the webhook and
+        # MCP trigger paths), never the generic 500 this path used to produce
+        # (the reproduced prod burst lost 3 of 12 runs that way). The
+        # snapshot_version allocation itself no longer surfaces this: FAR-1625
+        # serialises it with a transaction-scoped lock that waits rather than
+        # fails.
+        _log.warning("runs.trigger_run snapshot_lock_busy: %s", exc)
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_RUNS_TRIGGER_RUN,
+            detail="snapshot lock unavailable; retry the trigger",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Pipeline snapshot lock unavailable - retry the trigger",
         ) from None
 
     except StorageExhaustedError:
