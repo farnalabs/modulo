@@ -668,6 +668,78 @@ class TestCoalescePendingRun:
         assert pending.input_payload == {"_coalesce_key": "github:o/r:pr:1", "user": "a"}
         session.flush.assert_not_awaited()
 
+    async def test_postgres_coalesce_requires_never_claimed_never_started(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-1623: the Postgres fold target predicate carries the
+        never-claimed / never-started guards, so a claimed-then-reset run
+        (pending, claim_count >= 1) is never folded. The mocked session returns
+        a row regardless, so this pins the WHERE clause the real query carries.
+        """
+        pending = SimpleNamespace(
+            id=RUN_ID,
+            status="pending",
+            input_payload={"_coalesce_key": "github:o/r:pr:1"},
+            input_hash="h",
+            created_at=datetime.now(UTC),
+            work_item_refs=None,
+        )
+        session = self._session("postgresql", run=pending)
+        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="postgresql"))
+        from modulo.db.crud.run import coalesce_pending_run
+
+        await coalesce_pending_run(
+            session,
+            org_id=ORG_ID,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="github:o/r:pr:1",
+            input_payload={"a": 1},
+        )
+
+        # The first execute is the coalesce-target SELECT (a later one is the
+        # work_item_refs_required pipeline read).
+        stmt = str(session.execute.call_args_list[0].args[0])
+        assert "runs.claim_count = :claim_count" in stmt
+        assert "runs.started_at IS NULL" in stmt
+
+    async def test_non_postgres_skips_claimed_and_started_candidates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1623: the non-Postgres Python candidate filter skips a pending
+        run that has been claimed or has already started — the fold returns
+        None and neither candidate is mutated."""
+        claimed = SimpleNamespace(
+            id=uuid.uuid4(),
+            organisation_id=ORG_ID,
+            status="pending",
+            claim_count=1,
+            started_at=None,
+            input_payload={"_coalesce_key": "github:o/r:pr:1", "user": "a"},
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+        started = SimpleNamespace(
+            id=uuid.uuid4(),
+            organisation_id=ORG_ID,
+            status="pending",
+            claim_count=0,
+            started_at=datetime.now(UTC) - timedelta(minutes=5),
+            input_payload={"_coalesce_key": "github:o/r:pr:1", "user": "a"},
+            created_at=datetime.now(UTC) - timedelta(minutes=4),
+        )
+        session = self._session("sqlite", candidates=[claimed, started])
+        monkeypatch.setattr("modulo.db.crud.run._get_dialect_name", AsyncMock(return_value="sqlite"))
+        from modulo.db.crud.run import coalesce_pending_run
+
+        updated = await coalesce_pending_run(
+            session,
+            org_id=ORG_ID,
+            pipeline_id=PIPELINE_ID,
+            coalesce_key="github:o/r:pr:1",
+            input_payload={"refreshed": True},
+        )
+        assert updated is None
+        assert claimed.input_payload == {"_coalesce_key": "github:o/r:pr:1", "user": "a"}
+        assert started.input_payload == {"_coalesce_key": "github:o/r:pr:1", "user": "a"}
+        session.flush.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # D3 — dispatcher backpressure

@@ -7,12 +7,24 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 
 _UNSET = object()
+
+
+def org_level_predicate() -> ColumnElement[bool]:
+    """SQL predicate selecting the ORG-LEVEL ledger row (``team_id IS NULL``).
+
+    Ledger-level predicate ONLY: the caller still supplies its own
+    ``organisation_id`` filter (or runs under RLS). The org-level row already
+    includes team-owned runs (``check_and_record_spend`` writes it for every
+    terminal run *in addition to* a team row), so an ORG-LEVEL total must use
+    this predicate and never also sum the team rows.
+    """
+    return OrgDailyRunCount.team_id.is_(None)
 
 
 async def upsert_daily_run_count(
@@ -79,7 +91,7 @@ async def get_daily_run_counts(
     if team_id is _UNSET:
         pass  # No team filter — return all rows
     elif team_id is None:
-        q = q.where(OrgDailyRunCount.team_id.is_(None))  # Org-level rows only
+        q = q.where(org_level_predicate())  # Org-level rows only
     else:
         q = q.where(OrgDailyRunCount.team_id == team_id)
     if since is not None:
@@ -100,7 +112,7 @@ async def get_org_spend_total(
     """Get the total spend for an org (excluding team-scoped rows) in a period."""
     q = select(func.sum(OrgDailyRunCount.total_spend_usd)).where(
         OrgDailyRunCount.organisation_id == org_id,
-        OrgDailyRunCount.team_id.is_(None),
+        org_level_predicate(),
     )
     if since is not None:
         q = q.where(OrgDailyRunCount.run_date >= since)

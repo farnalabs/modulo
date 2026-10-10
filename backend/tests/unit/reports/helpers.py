@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Self
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.sql.elements import BinaryExpression
 
@@ -27,7 +28,9 @@ SLACK_URL_2 = "https://hooks.slack.com/services/T1/B2/yyy"
 _UNSET = object()
 
 
-class _MockBegin:
+class MockBegin:
+    """Minimal async context manager standing in for ``Session.begin()``."""
+
     async def __aenter__(self) -> None:
         return None
 
@@ -56,8 +59,8 @@ class MockSession:
     async def __aexit__(self, *args: object) -> bool:
         return False
 
-    def begin(self) -> _MockBegin:
-        return _MockBegin()
+    def begin(self) -> MockBegin:
+        return MockBegin()
 
     def add(self, obj: object) -> None:
         self.added.append(obj)
@@ -162,3 +165,51 @@ def has_predicate(clause: Any, operator: Any, column_name: str, value: Any = _UN
             continue
         return True
     return False
+
+
+@contextmanager
+def report_firing_env(session: MockSession) -> Iterator[None]:
+    """Patch the scheduler's engine/session/RLS plumbing to run *session*.
+
+    Collapses the three-patch prologue every ``_fire_scheduled_report`` test
+    repeats: the engine singleton is stubbed out, the async session factory
+    hands out *session*, and RLS-org setup is a no-op. Tests that also stub the
+    registry or ``compute_next_send`` stack those patches on top in the same
+    ``with`` block.
+    """
+    with (
+        patch("modulo.core.reports.scheduler._get_engine"),
+        patch(
+            "modulo.core.reports.scheduler.async_sessionmaker",
+            return_value=MockSessionFactory(session),
+        ),
+        patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
+    ):
+        yield
+
+
+@contextmanager
+def patched_http_client(client: AsyncMock) -> Iterator[MagicMock]:
+    """Make the scheduler's ``httpx.AsyncClient(...)`` hand out *client*.
+
+    Yields the mocked client class so tests that must inspect the constructor
+    call (e.g. the timeout pass-through contract) can assert on its kwargs.
+    Both ``scheduler`` and ``quality_report`` call the same ``httpx`` module
+    attribute, so one patch covers delivery through either.
+    """
+    with patch("modulo.core.reports.scheduler.httpx.AsyncClient") as client_cls:
+        client_cls.return_value.__aenter__.return_value = client
+        yield client_cls
+
+
+@contextmanager
+def patched_quality_delivery(client: AsyncMock) -> Iterator[MagicMock]:
+    """Delivery env for ``deliver_quality_report`` tests: retry budget 1 (no
+    retry delays), retry sleeps stubbed, and ``httpx.AsyncClient`` hands out
+    *client*. Yields the mocked client class for constructor assertions."""
+    with (
+        patch("modulo.core.reports.scheduler._REPORT_MAX_RETRIES", 1),
+        patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+        patched_http_client(client) as client_cls,
+    ):
+        yield client_cls

@@ -43,6 +43,7 @@ from modulo.core.analytics.metrics import (
 )
 from modulo.core.cost_controller.breakdown.constants import COST_COLUMN_CAP
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.models.daily_run_count import OrgDailyRunCount
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -570,7 +571,7 @@ async def reconcile_facts(session: Any, *, today: date | None = None) -> dict[st
                 OrgDailyRunCount.run_date,
                 OrgDailyRunCount.total_spend_usd,
             ).where(
-                OrgDailyRunCount.team_id.is_(None),
+                org_level_predicate(),
                 OrgDailyRunCount.run_date >= start,
                 OrgDailyRunCount.run_date < today,
             )

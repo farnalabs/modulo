@@ -108,6 +108,7 @@ from modulo.core.spend_ceiling import (
     cents_from_usd,
     evaluate_spend_ceilings,
 )
+from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import update_run_status
 from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs
@@ -1477,12 +1478,23 @@ async def _apply_spend_ceiling_gate(
     operationally live.  Skipping the ceiling check here means runs bill past
     the org's ceiling and the lifetime spend under-counts (the accrual rides
     the ledger savepoint, which this gate gates).
+
+    FAR-1624: the org row is locked with ``FOR NO KEY UPDATE`` (SQLAlchemy
+    ``with_for_update(key_share=True)``), NOT ``FOR UPDATE``.  The
+    finalisation transaction has already inserted/updated rows that
+    FK-reference the organisation (taking ``FOR KEY SHARE`` on the org tuple),
+    so requesting the stronger ``FOR UPDATE`` here deadlocked up to 8
+    concurrent finalisations (SQLSTATE 40P01): each held ``FOR KEY SHARE`` and
+    each waited for the others' ``FOR UPDATE`` upgrade.  ``FOR NO KEY UPDATE``
+    is compatible with ``FOR KEY SHARE`` and still conflicts with itself, so
+    concurrent spend accrual remains serialised — while the gate only ever
+    writes the non-key column ``org_cumulative_spend_cents``.
     """
     from modulo.db.soft_delete import include_soft_deleted
 
     org_row = (
         await session.execute(
-            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update())
+            include_soft_deleted(select(Organisation).where(Organisation.id == org_id).with_for_update(key_share=True))
         )
     ).scalar_one_or_none()
     if org_row is None:
@@ -1661,7 +1673,7 @@ async def _handle_limit_refused(
             await session.execute(
                 select(OrgDailyRunCount.total_spend_usd).where(
                     OrgDailyRunCount.organisation_id == org_id,
-                    OrgDailyRunCount.team_id.is_(None),
+                    org_level_predicate(),
                     OrgDailyRunCount.run_date == locked.created_at.date(),
                 )
             )
