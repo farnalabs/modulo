@@ -800,20 +800,32 @@ def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            _ledger_block(
-                session,
-                run_id=run.id,
-                org_id=org.id,
-                status="complete",
-                total=Decimal(str(cost).replace(",", "")),
-                owner_team_id=None,
-                run_date=date(2026, 6, 24),
-                finalize_fields={},
-                session_factory=None,
-                claim_token=None,
+        # Mirror the unit-test patch: the ledger write must SUCCEED against the
+        # mocked session so the org accrual actually rides (and commits with)
+        # the ledger savepoint — an unpatched ``check_and_record_spend`` raises
+        # against a mock and the accrual rolls back with it. The best-effort
+        # circuit-breaker check is likewise stubbed (it is out of scope here).
+        with (
+            patch(
+                "modulo.core.cost_controller.finalize.check_and_record_spend",
+                new=AsyncMock(return_value=(True, None)),
+            ),
+            patch("modulo.core.cost_controller.finalize._check_circuit_breaker", new=AsyncMock()),
+        ):
+            loop.run_until_complete(
+                _ledger_block(
+                    session,
+                    run_id=run.id,
+                    org_id=org.id,
+                    status="complete",
+                    total=Decimal(str(cost).replace(",", "")),
+                    owner_team_id=None,
+                    run_date=date(2026, 6, 24),
+                    finalize_fields={},
+                    session_factory=None,
+                    claim_token=None,
+                )
             )
-        )
     finally:
         loop.close()
 

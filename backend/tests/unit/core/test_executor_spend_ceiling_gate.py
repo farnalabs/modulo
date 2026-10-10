@@ -22,6 +22,7 @@ from modulo.core.pipeline_engine.executor import (
     _is_finalize_lock_retryable,
 )
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED
+from modulo.db.crud.run_node_outputs import DualWriteError
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
 
@@ -206,6 +207,20 @@ def test_finalize_lock_retryable_classifier() -> None:
     assert _is_finalize_lock_retryable(_SqlstateError("55P03")) is True  # lock_timeout
     assert _is_finalize_lock_retryable(_SqlstateError("23505")) is False  # unique violation
     assert _is_finalize_lock_retryable(ValueError("nope")) is False
+
+
+def test_dual_write_error_with_deadlock_sqlstate_is_not_retryable() -> None:
+    """MAJOR 4: ``DualWriteError`` is a fail-closed abort raised AFTER the run is
+    terminalised ``dual_write_failed``. Even when it carries a 40P01 SQLSTATE,
+    retrying would overwrite that truthful status — it must NOT be retryable."""
+    dwe = DualWriteError(
+        "new-table leg deadlocked",
+        run_id=uuid.uuid4(),
+        organisation_id=None,
+        sqlstate="40P01",
+    )
+    assert dwe.sqlstate == "40P01"  # the SQLSTATE that would otherwise match
+    assert _is_finalize_lock_retryable(dwe) is False
 
 
 async def test_finalize_txn_retries_deadlock_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:

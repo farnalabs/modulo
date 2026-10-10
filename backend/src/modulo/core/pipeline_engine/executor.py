@@ -140,7 +140,7 @@ from modulo.db.crud.run import (
     get_sandbox_concurrency_limit,
     update_run_status,
 )
-from modulo.db.crud.run_node_outputs import read_run_blobs, read_run_markers
+from modulo.db.crud.run_node_outputs import DualWriteError, read_run_blobs, read_run_markers
 from modulo.db.models.eval import Eval
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.model_backend import ModelBackend
@@ -150,7 +150,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
-from modulo.db.sqlstates import is_row_lock_timeout, sqlstate_of
+from modulo.db.sqlstates import is_lock_abort, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -174,15 +174,17 @@ _SANDBOX_AGENT_CACHE_MAX = 512
 # --- Bounded whole-transaction finalisation retry (money-correctness) ---
 # A deadlock (40P01) or the bounded lock_timeout expiry (55P03) taken at the
 # org / Run finalisation locks aborts the WHOLE finalisation transaction, so it
-# is re-run from its ownership layer (``_finalize_run_after_stream``, which owns
-# ``session.begin()``). Idempotent-safe: the rolled-back transaction commits
-# NOTHING — including the org accrual, which now lives inside the ledger
-# savepoint — so re-running cannot double-count. A small fixed number of
+# is re-run from its ownership layer (``_run_finalize_cost_transaction``, which
+# owns ``session.begin()``). Idempotent-safe: the rolled-back OUTER transaction
+# commits none of its own writes — including the org accrual, which lives inside
+# the ledger savepoint — so re-running cannot double-count. (``finalize_cost``
+# also runs side transactions that COMMIT independently — ``_reduced_escape``'s
+# fresh transaction and the journey/facts writes — so the claim is scoped to the
+# outer transaction, not to "nothing whatsoever".) A small fixed number of
 # attempts rides out transient contention; a persisting failure propagates and
 # the executor is terminal-failed truthfully (``executor_failed``), never a raw
 # 500 and never a silent swallow.
 FINALIZE_LOCK_RETRY_ATTEMPTS = 3
-_FINALIZE_DEADLOCK_SQLSTATE = "40P01"
 # Small linear backoff between attempts (0.1s, 0.2s) — long enough for the
 # contended lock holder to release, short enough to stay well inside the
 # finalisation's bounded envelope.
@@ -194,13 +196,18 @@ def _is_finalize_lock_retryable(exc: BaseException) -> bool:
 
     Covers a deadlock (40P01) and the bounded lock_timeout expiry (55P03) —
     both abort the transaction, so the only recovery is re-running it from its
-    ownership layer. ``is_row_lock_timeout`` recognises 55P03 across the raw
-    asyncpg ``LockNotAvailableError`` and SQLAlchemy ``OperationalError``
-    shapes; the deadlock state is read directly.
+    ownership layer. ``is_lock_abort`` recognises both SQLSTATEs across the raw
+    asyncpg ``LockNotAvailableError`` and SQLAlchemy ``OperationalError`` shapes.
+
+    EXCLUDES :class:`~modulo.db.crud.run_node_outputs.DualWriteError`: it is a
+    deliberate FAIL-CLOSED abort that ``finalize_cost`` raises only AFTER the
+    run has been terminalised ``dual_write_failed``. Its ``sqlstate`` reflects
+    the underlying failure (often 40P01), so a bare SQLSTATE test would retry
+    and overwrite that truthful status — the predicate must never do so.
     """
-    if is_row_lock_timeout(exc):
-        return True
-    return sqlstate_of(exc) == _FINALIZE_DEADLOCK_SQLSTATE
+    if isinstance(exc, DualWriteError):
+        return False
+    return is_lock_abort(exc)
 
 
 _log = logging.getLogger(__name__)

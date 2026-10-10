@@ -12,7 +12,9 @@ from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from modulo.core.cost_controller.finalize import _ledger_block
+import pytest
+
+from modulo.core.cost_controller.finalize import _ledger_block, _record_ledger_with_retry
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.run import Run
@@ -152,7 +154,7 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
     session = AsyncMock()
     session.execute = AsyncMock(return_value=result)
 
-    skip_ledger, accrual_org = await _apply_spend_ceiling_gate(
+    skip_ledger, accrual_org, accrual_cents = await _apply_spend_ceiling_gate(
         session,
         run,
         org_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
@@ -162,6 +164,7 @@ async def test_org_row_missing_skips_gate_and_ledger_write() -> None:
 
     assert skip_ledger is False
     assert accrual_org is None
+    assert accrual_cents == 0
 
 
 async def test_within_ceilings_increments_org_cumulative() -> None:
@@ -252,3 +255,136 @@ async def test_ledger_write_failure_then_refinalize_does_not_double_accrue() -> 
 
     assert org.org_cumulative_spend_cents == 800  # 500 + 300, NOT 500 + 300 + 300
     assert run.ledger_written is True
+
+
+# ---------------------------------------------------------------------------
+# MAJOR 2 — a retry must never re-read a savepoint-expired accrual attribute
+# ---------------------------------------------------------------------------
+
+
+class _SqlstateError(Exception):
+    """A stand-in DBAPI error carrying a SQLSTATE (no SQLAlchemy class)."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"sqlstate={sqlstate}")
+        self.sqlstate = sqlstate
+
+
+class _ExpiringOrg:
+    """An org whose cumulative attribute read FAILS once marked expired.
+
+    Mirrors SQLAlchemy's savepoint-rollback behaviour: a rolled-back savepoint
+    EXPIRES the Organisation's loaded state, so a subsequent attribute read
+    triggers a lazy refresh — which, outside an async greenlet, raises
+    ``MissingGreenlet``. Reading the base BEFORE the retry loop must never
+    touch the attribute again.
+    """
+
+    def __init__(self, base: int) -> None:
+        self._value = base
+        self.reads = 0
+        self.expired = False
+
+    @property
+    def org_cumulative_spend_cents(self) -> int:
+        self.reads += 1
+        if self.expired:
+            from sqlalchemy.exc import MissingGreenlet
+
+            raise MissingGreenlet("cannot lazy-load an expired attribute outside a greenlet")
+        return self._value
+
+    @org_cumulative_spend_cents.setter
+    def org_cumulative_spend_cents(self, value: int) -> None:
+        self._value = value
+
+    def stored_value(self) -> int:
+        """The raw stored value — reads WITHOUT incrementing ``reads`` or
+        raising once expired (for the test's own assertions)."""
+        return self._value
+
+
+async def test_accrual_retry_after_flush_failure_never_rereads_expired_org() -> None:
+    """A failed accrual flush expires the org; the retry must not re-read it.
+
+    Regression: reading ``org_cumulative_spend_cents`` on every attempt raised
+    ``MissingGreenlet`` after the savepoint rollback expired the object — a
+    non-abort error that exhausted the retries and lost the ledger. The base is
+    captured once before the loop, so the retry assigns the absolute value and
+    accrues exactly once.
+    """
+    org = _ExpiringOrg(base=500)
+    first_savepoint = AsyncMock()
+    first_savepoint.rollback = AsyncMock(side_effect=lambda: setattr(org, "expired", True))
+    first_savepoint.commit = AsyncMock()
+    second_savepoint = AsyncMock()
+    second_savepoint.rollback = AsyncMock()
+    second_savepoint.commit = AsyncMock()
+
+    session = AsyncMock()
+    session.begin_nested = AsyncMock(side_effect=[first_savepoint, second_savepoint])
+    # The accrual flush fails on attempt 1 (rolling the savepoint back and
+    # expiring the org), then succeeds on attempt 2.
+    session.flush = AsyncMock(side_effect=[RuntimeError("accrual flush failed"), None])
+
+    with patch(
+        "modulo.core.cost_controller.finalize.check_and_record_spend",
+        new=AsyncMock(return_value=(True, None)),
+    ):
+        ok, reason = await _record_ledger_with_retry(
+            session,
+            org_id=uuid.uuid4(),
+            cost_usd=Decimal("3.00"),
+            team_id=None,
+            run_id=uuid.uuid4(),
+            run_date=date(2026, 6, 24),
+            attempts=3,
+            accrued_org=org,  # type: ignore[arg-type]
+            accrued_cents=300,
+        )
+
+    assert ok is True
+    assert reason is None
+    assert org.reads == 1, "the base must be read exactly once, before the retry loop"
+    assert org.stored_value() == 800  # exactly one accrual of 300, no re-read
+    assert org.expired is True  # the rollback really did expire the object
+
+
+# ---------------------------------------------------------------------------
+# MAJOR 3 — a ledger-path lock abort is re-raised, never reduced-escaped
+# ---------------------------------------------------------------------------
+
+
+async def test_ledger_path_lock_abort_is_reraised_not_reduced_escaped() -> None:
+    """A 55P03 on the LEDGER-WRITE path must propagate so the ownership layer's
+    bounded whole-transaction retry owns it — NOT be converted to
+    ``whole_tx_abort`` + reduced escape (which would terminalize without a
+    ledger on the highest-contention path)."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    session = _session_for(run, org)
+
+    # If the reduced escape were reached, it would build a fresh session here.
+    escape_factory = MagicMock(side_effect=AssertionError("reduced escape must not run on a lock abort"))
+
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(side_effect=_SqlstateError("55P03")),
+        ),
+        pytest.raises(_SqlstateError),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=escape_factory,
+            claim_token=None,
+        )
+
+    escape_factory.assert_not_called()

@@ -127,6 +127,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import Run
 from modulo.db.models.run_daily_facts import JourneyFact
 from modulo.db.rls import set_rls_org
+from modulo.db.sqlstates import is_lock_abort
 from modulo.settings import get_settings, work_item_refs_cap
 
 _log = logging.getLogger(__name__)
@@ -1305,7 +1306,20 @@ async def _record_ledger_with_retry(
     The accrual is written after ``check_and_record_spend`` returns (a clean
     daily-limit refusal still commits it, preserving prior behaviour — only a
     genuine write FAILURE drops it).
+
+    The org's BASE cumulative is read ONCE here, BEFORE the retry loop, and the
+    absolute value ``base + accrued_cents`` is assigned on every attempt. This
+    is deliberate: when the accrual's own ``flush()`` fails, the savepoint
+    rollback EXPIRES the Organisation (SQLAlchemy drops its loaded state), so a
+    per-attempt attribute READ on the next attempt would trigger a lazy refresh
+    outside a greenlet and raise ``MissingGreenlet`` — a NON-abort error that
+    would exhaust the retries and lose the ledger to the reduced escape. The row
+    is held ``FOR ... UPDATE`` by the ceiling gate for the whole transaction, so
+    the pre-loop base cannot be changed concurrently and the absolute
+    assignment is idempotent under savepoint rollback.
     """
+    # Read the locked org's base ONCE, before any savepoint can expire it.
+    accrued_base = (accrued_org.org_cumulative_spend_cents or 0) if accrued_org is not None else 0
     last_reason: str | None = None
     for attempt in range(attempts):
         savepoint = await session.begin_nested()
@@ -1319,14 +1333,21 @@ async def _record_ledger_with_retry(
                 run_date=run_date,
             )
             if accrued_org is not None and accrued_cents:
-                accrued_org.org_cumulative_spend_cents = (accrued_org.org_cumulative_spend_cents or 0) + accrued_cents
+                # Absolute assignment from the pre-loop base — NEVER re-read the
+                # (possibly savepoint-expired) attribute inside the loop.
+                accrued_org.org_cumulative_spend_cents = accrued_base + accrued_cents
                 await session.flush()
         except asyncio.CancelledError:
             await savepoint.rollback()
             raise
         except Exception as exc:
             await savepoint.rollback()
-            if _is_abort_error(exc):
+            # Re-raise a whole-tx abort: retrying a savepoint inside an aborted
+            # transaction is pointless. ``_is_abort_error`` is the DBAPI-class
+            # classification; ``is_lock_abort`` adds the SQLSTATE-based 40P01 /
+            # 55P03 detection so a lock abort is never mistaken for a
+            # retryable contained failure when class-name detection misses it.
+            if _is_abort_error(exc) or is_lock_abort(exc):
                 raise
             last_reason = type(exc).__name__
             _log.warning(
@@ -1360,6 +1381,13 @@ async def _reduced_escape(
     try:
         async with ctx.session_factory() as fresh, fresh.begin():
             await set_rls_org(fresh, ctx.org_id)
+            # FAR-1313 / FAR-1592: bound this FRESH transaction's row-lock waits
+            # too. The reduced escape runs while the (aborted/rolled-back) outer
+            # transaction may still hold the ``runs`` FOR UPDATE, so the
+            # ``update_run_status`` below would otherwise queue unbounded on that
+            # lock — the exact wall-clock hang the finalisation lock bound exists
+            # to prevent. Fail open on non-Postgres (a no-op on the unit mocks).
+            await set_mutation_row_lock_timeout(fresh)
             # FAR-583: the reduced escape is also a dual-write chokepoint (the
             # finalize_fields may carry outputs/telemetry) — same catch/
             # orchestrate contract; a DualWriteError aborts the escape and is
@@ -1419,7 +1447,7 @@ async def _apply_spend_ceiling_gate(
     org_id: uuid.UUID,
     total: Decimal,
     run_id: uuid.UUID,
-) -> tuple[bool, Organisation | None]:
+) -> tuple[bool, Organisation | None, int]:
     """FAR-391: hard spend-ceiling gate (per-run + per-org).
 
     Runs BEFORE the daily-ledger write so a ceiling breach refuses the ledger
@@ -1428,11 +1456,14 @@ async def _apply_spend_ceiling_gate(
     halted (never resumed to spawn further billable steps), and an org at its
     lifetime budget stops spawning new runs.
 
-    Returns ``(skip_ledger, accrual_org)`` — ``skip_ledger`` is True when the
-    ledger write must be SKIPPED (the run was refused at its ceiling);
-    ``accrual_org`` is the LOCKED Organisation row whose lifetime consumed
-    total must be incremented by this run's cost, or ``None`` when no accrual
-    is due (the org row vanished, or the run was refused).
+    Returns ``(skip_ledger, accrual_org, accrual_cents)`` — ``skip_ledger`` is
+    True when the ledger write must be SKIPPED (the run was refused at its
+    ceiling); ``accrual_org`` is the LOCKED Organisation row whose lifetime
+    consumed total must be incremented by this run's cost, or ``None`` when no
+    accrual is due (the org row vanished, or the run was refused); and
+    ``accrual_cents`` is the SAME rounded-down cents value this gate compared
+    against the ceiling, so the value decided on IS the value accrued (the
+    ledger block must not recompute it independently).
 
     The accrual is deliberately NOT performed here (money-correctness): it is
     applied INSIDE the ledger write's savepoint by
@@ -1443,8 +1474,9 @@ async def _apply_spend_ceiling_gate(
 
     FAR-1025: opt out of the global soft-delete filter — a pending-deletion
     org (deleted_at stamped at initiate, before confirm) is still
-    operationally live.  Skipping the ceiling check and accrual here means
-    runs bill past the org's ceiling and lifetime spend under-counts.
+    operationally live.  Skipping the ceiling check here means runs bill past
+    the org's ceiling and the lifetime spend under-counts (the accrual rides
+    the ledger savepoint, which this gate gates).
     """
     from modulo.db.soft_delete import include_soft_deleted
 
@@ -1454,7 +1486,7 @@ async def _apply_spend_ceiling_gate(
         )
     ).scalar_one_or_none()
     if org_row is None:
-        return False, None
+        return False, None, 0
     # Use the same ROUND_HALF_UP cents conversion as the API boundary so the
     # gate value and the persisted org cumulative never diverge on sub-cent
     # run costs (the accrual in ``_record_ledger_with_retry`` uses the same
@@ -1468,9 +1500,10 @@ async def _apply_spend_ceiling_gate(
         spend_ceiling_cents=org_row.spend_ceiling_cents,
     )
     if decision.allowed:
-        # Billable: hand the LOCKED org row back so the ledger savepoint can
-        # accrue this run's cost atomically with the ledger row.
-        return False, org_row
+        # Billable: hand the LOCKED org row AND the decision cents back so the
+        # ledger savepoint accrues exactly the value this gate decided on,
+        # atomically with the ledger row.
+        return False, org_row, total_cents
     # Preserve an explicit terminal CANCEL (B6 / user-requested halt) so
     # the ceiling refuse does NOT overwrite it and feed the wrong status
     # to journey advancement. The ledger is still refused (the run is not
@@ -1479,7 +1512,7 @@ async def _apply_spend_ceiling_gate(
         locked.ledger_refused_at = datetime.now(UTC)
         record_limit_refused("spend_ceiling")
         await session.flush()
-        return True, None
+        return True, None, 0
     locked.ledger_refused_at = datetime.now(UTC)
     locked.status = "cost_ceiling_exceeded"
     locked.error_code = decision.reason
@@ -1496,7 +1529,7 @@ async def _apply_spend_ceiling_gate(
     record_limit_refused("spend_ceiling")
     await _ceiling_auto_pause_if_org_crossing(session, org_row=org_row, decision=decision, run_id=run_id)
     await session.flush()
-    return True, None
+    return True, None, 0
 
 
 async def _ledger_block(
@@ -1530,7 +1563,7 @@ async def _ledger_block(
 
     # --- FAR-391: hard spend-ceiling gate (per-run + per-org), see
     # ``_apply_spend_ceiling_gate`` — it runs BEFORE the daily-ledger write.
-    skip_ledger, accrual_org = await _apply_spend_ceiling_gate(
+    skip_ledger, accrual_org, accrual_cents = await _apply_spend_ceiling_gate(
         session, locked, org_id=org_id, total=total, run_id=run_id
     )
     if skip_ledger:
@@ -1548,11 +1581,22 @@ async def _ledger_block(
             # Accrual rides the ledger savepoint (same atomic unit) so a
             # contained write failure cannot commit it without the ledger.
             accrued_org=accrual_org,
-            accrued_cents=cents_from_usd(total) or 0,
+            # The cents the ceiling gate already compared — never recomputed
+            # here, so the value decided on IS the value accrued.
+            accrued_cents=accrual_cents,
         )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if is_lock_abort(exc):
+            # A GENUINE lock abort (deadlock 40P01 / bounded lock_timeout
+            # 55P03) has aborted the WHOLE outer transaction. Re-raise it so the
+            # ownership layer's bounded retry (``_run_finalize_cost_transaction``)
+            # re-runs the finalisation — reduced-escaping here would terminalize
+            # without a ledger on the HIGHEST-contention path, when a retry could
+            # legitimately still write it. The reduced escape stays for NON-lock
+            # ledger write failures (the ledger is not going to succeed on retry).
+            raise
         _log.warning(
             "cost_ledger.whole_tx_abort",
             extra={"run_id": str(run_id), "exc_type": type(exc).__name__},
@@ -2225,7 +2269,13 @@ async def _fallback_finalize(
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                if is_lock_abort(exc):
+                    # Do NOT swallow a whole-transaction lock abort (40P01 /
+                    # 55P03) here — it has aborted the outer transaction, so the
+                    # ownership layer's bounded retry must own it rather than the
+                    # fallback logging it and leaving the run un-ledgered.
+                    raise
                 _log.exception(
                     "cost_ledger.fallback_block_failed",
                     extra={"run_id": str(run_id)},
