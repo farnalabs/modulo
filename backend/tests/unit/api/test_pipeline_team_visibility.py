@@ -14,9 +14,11 @@ A member of Team A CAN read the pipeline; an org admin bypasses the gate; and
 org-visible pipelines (``visibility='org'``, ``owner_team_id=None``) are NOT
 team-gated even for a non-member.
 
-A second section (FAR-1515) covers the WRITE direction: the REST graph-save
-team gate must refuse a team pipeline that pins an org-only connector, while
-leaving the org-pipeline rule alone.
+A second section (FAR-1515, model restated by FAR-1618) covers the WRITE
+direction: the REST graph-save team gate refuses a team pipeline that pins
+ANOTHER team's team-private connector (and an org pipeline pinning any
+team-private connector), while an ORG-visibility connector stays shared with
+every pipeline — org pipelines and team pipelines alike.
 
 A third section (FAR-1515 expansion) covers the four write paths that used to
 re-create the forbidden state WITHOUT running that gate: an ownership-transfer
@@ -236,8 +238,9 @@ class TestCrossTeamPipelineVisibility:
 
 
 # ---------------------------------------------------------------------------
-# FAR-1515: the SAVE-side team gate — a team pipeline must not pin an
-# org-only connector. The GET tests above cover the read direction; this
+# FAR-1515 / FAR-1618: the SAVE-side team gate — a team pipeline must not pin
+# ANOTHER team's team-private connector; an org-visibility connector is shared
+# and always passes. The GET tests above cover the read direction; this
 # covers the write direction, through the exact helper the REST graph-save
 # endpoints call (``_enforce_connector_team_bindings``).
 # ---------------------------------------------------------------------------
@@ -269,21 +272,24 @@ def _enforcement_session(connector: MagicMock) -> AsyncMock:
     return session
 
 
-class TestOrgOnlyConnectorRejectedAtGraphSave:
-    """FAR-1515: save must mirror what the run actually enforces.
+class TestConnectorTeamGateAtGraphSave:
+    """FAR-1515 / FAR-1618: save must refuse only the team-PRIVATE direction.
 
-    Every run of a team-owned pipeline is team-scoped, and the ConnectorHub
-    ACL fails closed on team-scoped access to an org-only connector — so a
-    save accepted here produced a graph whose runs could never execute.
+    A team-private connector is usable solely by its owner team's pipeline, so
+    a binding from a different team (or from an org pipeline) is the named 409.
+    An ORG-visibility connector is shared across the organisation — teams are a
+    visibility grouping, not a credential trust boundary — so a team pipeline
+    pinning one is accepted (FAR-1618 removed the FAR-1515 reverse direction
+    and the FAR-516 run-gate it mirrored).
     """
 
-    async def test_team_pipeline_pinning_an_org_only_connector_is_409(self) -> None:
-        """FAILS without the new check: the rule returned False for org connectors."""
+    async def test_team_pipeline_pinning_another_teams_connector_is_409(self) -> None:
+        """FAILS without the check: the gate would return without raising."""
         from fastapi import HTTPException
 
         from modulo.api.routes.pipelines import _enforce_connector_team_bindings
 
-        connector = _connector_row(visibility="org", owner_team_id=None)
+        connector = _connector_row(visibility="team", owner_team_id=_TEAM_B)
         session = _enforcement_session(connector)
 
         with pytest.raises(HTTPException) as excinfo:
@@ -293,10 +299,41 @@ class TestOrgOnlyConnectorRejectedAtGraphSave:
         detail = str(excinfo.value.detail)
         assert detail.startswith("connector_team_mismatch"), detail
         assert "shared-ci" in detail
-        assert "is org-only" in detail
-        assert "flip the connector to `team`" in detail
+        assert "is team-private" in detail
 
-    async def test_org_pipeline_pinning_an_org_only_connector_still_saves(self) -> None:
+    async def test_org_pipeline_pinning_a_team_private_connector_is_409(self) -> None:
+        """The other half of the team-private rule: no owner team => refused."""
+        from fastapi import HTTPException
+
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+
+        connector = _connector_row(visibility="team", owner_team_id=_TEAM_A)
+        session = _enforcement_session(connector)
+
+        with pytest.raises(HTTPException) as excinfo:
+            await _enforce_connector_team_bindings(session, _ORG_ID, None, _binding_for(connector))
+
+        assert excinfo.value.status_code == 409
+        assert str(excinfo.value.detail).startswith("connector_team_mismatch")
+
+    async def test_team_pipeline_pinning_an_org_visibility_connector_saves(self) -> None:
+        """FAR-1618: an org-wide connector on a team pipeline is NOT a mismatch.
+
+        Reverses the FAR-1515 reverse direction: the predicate used to return
+        True for every non-team connector, so this raised the named 409 with
+        an "is org-only" detail. Org resources stay shared, so the helper must
+        complete without raising.
+        """
+        from modulo.api.routes.pipelines import _enforce_connector_team_bindings
+
+        connector = _connector_row(visibility="org", owner_team_id=None)
+        session = _enforcement_session(connector)
+
+        await _enforce_connector_team_bindings(session, _ORG_ID, _TEAM_A, _binding_for(connector))
+
+        session.execute.assert_awaited_once()
+
+    async def test_org_pipeline_pinning_an_org_visibility_connector_still_saves(self) -> None:
         """Regression guard: the ORG-pipeline rule must not change (FAR-1515)."""
         from modulo.api.routes.pipelines import _enforce_connector_team_bindings
 
@@ -372,12 +409,17 @@ def _pipeline_row_with_binding(
 
 
 def _mismatch(*, connector_id: uuid.UUID, pipeline_owner_team_id: uuid.UUID | None) -> MagicMock:
+    """A team-PRIVATE connector held outside ``pipeline_owner_team_id``.
+
+    The only shape ``connector_team_mismatch`` produces since FAR-1618 — an
+    org-visibility row is shared across the organisation and never mismatches —
+    so every gate-wiring test below drives its predicate double with this.
+    """
     return MagicMock(
         connector_id=connector_id,
         connector_name="shared-ci",
-        connector_owner_team_id=None,
+        connector_owner_team_id=_TEAM_B,
         pipeline_owner_team_id=pipeline_owner_team_id,
-        connector_visibility="org",
         node_id="node-1",
     )
 
@@ -470,10 +512,16 @@ class TestConfirmImportRunsConnectorTeamGate:
     transaction, so the named 409 rolls the whole import back.
     """
 
-    def test_import_of_a_team_pipeline_pinning_an_org_connector_is_409(
+    def test_import_of_a_team_pipeline_pinning_a_mismatching_connector_is_409(
         self, make_client: Callable[..., tuple[TestClient, Any]]
     ) -> None:
-        """FAILS without the fix: no gate call -> the import completes 200."""
+        """FAILS without the fix: no gate call -> the import completes 200.
+
+        The predicate double reports a cross-team binding (a team-private
+        connector held outside the importing pipeline's team — the only shape
+        it produces since FAR-1618); the gate must translate it into the named
+        409 and roll the import back.
+        """
         conn_id = uuid.uuid4()
         materialized = {
             "pipeline_id": str(_PIPELINE_ID),
@@ -649,14 +697,26 @@ def _bound_pipeline(*, owner_team_id: uuid.UUID | None, instance_id: uuid.UUID) 
 class TestConnectorReScopeRunsConnectorTeamGate:
     """FAR-1515 MAJOR 5: PATCH /connectors/{id} changing visibility/owner.
 
-    ``validate_team_transition_for_update`` checks team MEMBERSHIP only, so
-    flipping a bound connector to ``org`` (or handing it to another team)
-    used to recreate the state the graph-save gate refuses, with no check of
-    the pipelines already binding it.
+    ``validate_team_transition_for_update`` checks team MEMBERSHIP only, so a
+    re-scope that would strand an already-bound pipeline used to recreate the
+    state the graph-save gate refuses, with no check of the pipelines already
+    binding it. Since FAR-1618 only ONE direction can strand anyone: making a
+    connector team-PRIVATE (visibility -> ``team``, or handing it to a team)
+    leaves a bound pipeline outside that team unable to use it. Widening to
+    ``org`` is always safe — org resources are shared across the whole
+    organisation — so that direction now passes (FAR-1618).
     """
 
-    def test_flipping_a_bound_connector_to_org_is_409(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
-        """FAILS without the fix: the bound-pipeline lookup never runs -> 200."""
+    def test_flipping_a_bound_connector_to_org_is_allowed(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """FAR-1618: widening to org cannot strand any bound pipeline.
+
+        Reverses the FAR-1515 reverse direction: the gate still LOOKS UP the
+        bound pipelines (asserted below), but the narrowed predicate finds no
+        mismatch, so the re-scope completes instead of 409-ing on the removed
+        "is org-only" detail.
+        """
         existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
         updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
         bound = _bound_pipeline(owner_team_id=_TEAM_A, instance_id=existing.id)
@@ -668,13 +728,37 @@ class TestConnectorReScopeRunsConnectorTeamGate:
         ):
             resp = client.patch(f"/api/v1/connectors/{existing.id}", json={"visibility": "org"})
 
+        assert resp.status_code == 200, resp.text
+        assert "connector_team_mismatch" not in resp.text
+        find_bound.assert_awaited_once()
+
+    def test_narrowing_a_bound_connector_to_another_team_is_409(
+        self, make_client: Callable[..., tuple[TestClient, Any]]
+    ) -> None:
+        """The team-PRIVATE direction still refuses — a bound pipeline outside
+        the new owner team would be stranded, so the re-scope is the named 409.
+
+        This is the wiring proof the org-direction case used to carry.
+        """
+        existing = _connector_instance_row(visibility="org", owner_team_id=None)
+        updated = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
+        bound = _bound_pipeline(owner_team_id=_TEAM_B, instance_id=existing.id)
+        client, _ = make_client(org_role="admin")
+        with (
+            patch(f"{_CONN_PREFIX}get_connector_instance", new=AsyncMock(return_value=existing)),
+            patch(f"{_CONN_PREFIX}pipelines_binding_connector", new=AsyncMock(return_value=[bound])),
+            patch(f"{_CONN_PREFIX}update_connector_instance", new=AsyncMock(return_value=updated)),
+        ):
+            resp = client.patch(
+                f"/api/v1/connectors/{existing.id}",
+                json={"visibility": "team", "owner_team_id": str(_TEAM_A)},
+            )
+
         assert resp.status_code == 409, resp.text
         detail = str(resp.json()["detail"])
         assert detail.startswith("connector_team_mismatch"), detail
         assert "shared-ci" in detail
-        # Same named error the save path uses: team pipeline + org-only connector.
-        assert "is org-only" in detail
-        find_bound.assert_awaited_once()
+        assert "is team-private" in detail
 
     def test_a_re_scope_with_no_actual_change_does_not_query(
         self, make_client: Callable[..., tuple[TestClient, Any]]
@@ -731,8 +815,8 @@ class TestConnectorReScopeRunsConnectorTeamGate:
     def test_a_bound_pipeline_without_a_mismatch_does_not_block(
         self, make_client: Callable[..., tuple[TestClient, Any]]
     ) -> None:
-        """A pipeline binding the connector from a scope the rule allows (org
-        pipeline + org-only connector) is not a mismatch."""
+        """A pipeline binding the connector from a scope the rule allows (an org
+        pipeline binding a connector about to become org-wide) is not a mismatch."""
         existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
         updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
         candidate = _bound_pipeline(owner_team_id=None, instance_id=existing.id)

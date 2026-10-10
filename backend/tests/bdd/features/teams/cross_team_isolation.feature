@@ -40,6 +40,16 @@ Feature: Cross-Team Isolation
     When user "bob" requests GET /api/connectors/shared-connector
     Then the response status is 200
 
+  Scenario: An org-wide connector binds to any team's pipeline
+    Given a team "engineering" exists
+    And a team "design" exists
+    And a pipeline "design-pipeline" is owned by team "design" with visibility "team"
+    And connector "shared-connector" has visibility "org"
+    And I am authenticated as an admin in org "acme"
+    When I bind connector "shared-connector" to a node in pipeline "design-pipeline"
+    Then the response status is 200
+    And the error does not indicate connector_team_mismatch
+
   Scenario: No "N hidden" enumeration leak
     Given a team "engineering" exists
     And a team "design" exists

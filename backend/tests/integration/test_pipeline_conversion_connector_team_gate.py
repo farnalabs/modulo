@@ -27,11 +27,13 @@ The third test is the load-bearing one: the SAME request, with the enforcement
 patched out of the save path, must get past the connector gate. Without it, a
 green 409 would only prove that SOMETHING rejected the request.
 
-FAR-1515 widened the gate to BOTH directions, so the direction matrix here is:
-a team-private connector from another team -> 409; a team pipeline pinning an
-ORG-ONLY connector -> 409 (every run of that graph is team-scoped and would be
-rejected at the connector gate); a team pipeline with its own team's connector
--> accepted; an ORG pipeline with an org connector -> accepted (unchanged).
+FAR-1515 widened the gate to both directions; FAR-1618 narrowed it back to the
+team-PRIVATE direction only (teams are a visibility grouping, not a credential
+trust boundary), so the direction matrix here is: a team-private connector from
+another team -> 409; a team pipeline pinning an ORG-VISIBILITY connector ->
+accepted (org resources stay shared); a team pipeline with its own team's
+connector -> accepted; an ORG pipeline with an org connector -> accepted
+(unchanged).
 """
 
 from __future__ import annotations
@@ -168,8 +170,9 @@ async def _seed_pipeline_with_manual_node(
     """A committed pipeline holding one manual node.
 
     ``team_id=None`` seeds an ORG-scoped pipeline (``visibility='org'``,
-    ``owner_team_id=NULL``) — the FAR-1515 "does an org pipeline still save"
-    direction needs it, and the team gate only fires for a team-owned row.
+    ``owner_team_id=NULL``) — the "does an org pipeline still save" direction
+    needs it: an ORG pipeline keeps accepting an org-visibility connector, and
+    (the direction FAR-1618 keeps) still refuses a team-private one.
     """
     pipeline_id = uuid.uuid4()
     visibility = "team" if team_id is not None else "org"
@@ -275,8 +278,9 @@ async def _seed_scenario(
     """Team A owns the pipeline; Team B owns the connector bound into it.
 
     ``pipeline_scoped_to_team=False`` seeds an ORG-scoped pipeline instead
-    (``visibility='org'``, ``owner_team_id=NULL``) — the FAR-1515 direction
-    that must KEEP saving an org-only connector.
+    (``visibility='org'``, ``owner_team_id=NULL``) — the FAR-1515 regression
+    guard that must KEEP saving an org-visibility connector (and since
+    FAR-1618 so must a team-scoped pipeline).
 
     ``agent_connector_type_refs`` defaults to a GitHub grant (so the ordinary
     cases have a conforming Agent); the scope-widening test passes ``[]`` so the
@@ -476,22 +480,24 @@ async def test_rejection_comes_from_the_enforcement_itself(
 
 
 # ---------------------------------------------------------------------------
-# 1b. FAR-1515: team pipeline + ORG-ONLY connector is rejected 409
+# 1b. FAR-1618: team pipeline + ORG-VISIBILITY connector is ACCEPTED
 # ---------------------------------------------------------------------------
 
 
-async def test_org_only_connector_on_team_pipeline_is_rejected_409(
+async def test_org_visibility_connector_on_team_pipeline_is_accepted(
     integration_client: AsyncClient,
     db_engine: AsyncEngine,
     test_org: uuid.UUID,
     test_user: uuid.UUID,
 ) -> None:
-    """FAR-1515: the save must refuse a graph whose every run is dead on arrival.
+    """FAR-1618: an org-wide connector binds to a team pipeline just like any other.
 
-    The executor scopes a run by ``run.owner_team_id`` and the ConnectorHub ACL
-    fails closed on team-scoped access to an org-only connector (FAR-516), so
-    before this change an operator could persist a team pipeline whose runs
-    could never execute. The 409 carries the named error AND the fix.
+    Reverses the FAR-1515 reverse direction (and the FAR-516 run-gate it
+    mirrored): the executor no longer scopes a run against the connector's
+    visibility, so there is no dead-on-arrival graph to refuse. What matters
+    here is that the request is NOT stopped by this gate — it must not answer
+    409 / ``connector_team_mismatch``. Whatever the NEXT save-time gate says
+    is out of scope, exactly as in the other accepted cases.
     """
     scenario = await _seed_scenario(db_engine, test_org, test_user)
     org_connector = await _seed_org_connector(db_engine, test_org, test_user)
@@ -502,25 +508,10 @@ async def test_org_only_connector_on_team_pipeline_is_rejected_409(
             headers=_auth_headers(test_org, test_user, role="admin"),
             timeout=30.0,
         )
-        assert resp.status_code == 409, resp.text
-        detail = str(resp.json()["detail"])
-        assert "connector_team_mismatch" in detail, resp.text
-        assert "is org-only" in detail, resp.text
-        assert "flip the connector to `team`" in detail, resp.text
-
-        # Nothing was written: the gate fires BEFORE the graph write.
-        async with db_engine.begin() as conn:
-            await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(test_org)})
-            await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
-            raw = (
-                await conn.execute(
-                    text("SELECT graph_nodes_json FROM pipelines WHERE id = :id"),
-                    {"id": str(scenario.pipeline_id)},
-                )
-            ).scalar_one()
-        nodes = json.loads(raw) if isinstance(raw, str) else raw
-        assert nodes, "the seeded node must still be there"
-        assert nodes[0]["node_type"] == "manual", "the rejected conversion must not have been persisted"
+        assert resp.status_code != 409, (
+            f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
+        )
+        assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         await _cleanup(db_engine, test_org, scenario, org_connector)
 
