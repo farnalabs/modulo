@@ -2327,15 +2327,15 @@ def customise_agent_prompts(ctx):
 @then("the forked workflow is saved as a local primitive")
 def forked_is_local_primitive(request):
     body = getattr(request.node, "_resp_body", {})
-    if isinstance(body, dict):
-        assert body.get("source") == "local", "Forked workflow should be local"
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("source") == "local", "Forked workflow should be local"
 
 
 @then(parsers.parse("the forked_from metadata points to the community original"))
 def forked_from_points_to_original(request):
     body = getattr(request.node, "_resp_body", {})
-    if isinstance(body, dict):
-        assert body.get("forked_from") is not None, "Missing forked_from metadata"
+    assert isinstance(body, dict), f"Expected a JSON object response, got {type(body).__name__}"
+    assert body.get("forked_from") is not None, "Missing forked_from metadata"
 
 
 # ===========================================================================
@@ -2491,16 +2491,26 @@ def library_contains_workflow(name: str, request):
 
 
 @when("I copy the workflow to my workspace")
-def copy_workflow_to_workspace(request, ctx):
+def copy_workflow_to_workspace(request, ctx, client):
+    from modulo.db.models.library_primitive import LibraryPrimitive
+
     wf = getattr(request.node, "_library_workflow", None) or ctx.get("library_workflow") or {}
-    copied = {
-        **wf,
-        "id": str(uuid.uuid4()),
-        "source": "local",
-        "forked_from": wf.get("id"),
-    }
-    request.node._resp_body = copied
-    request.node._copied_workflow = copied
+    assert wf, "No library workflow configured by the given step"
+
+    original = _library_row({"id": wf["id"], "name": wf["name"], "primitive_type": "workflow"})
+    forked = LibraryPrimitive()
+    _copy_primitive_fields(original, forked)
+    forked.forked_from = original.id
+    with (
+        patch("modulo.api.routes.library.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.set_rls_user_context", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.validate_owner_team_for_create", new_callable=AsyncMock),
+        patch("modulo.api.routes.library.copy_to_adapt", new_callable=AsyncMock, return_value=forked),
+    ):
+        resp = client.post(f"/api/v1/libraries/{original.id}/adapt", json={"target_team_id": None})
+    request.node._resp = resp
+    _store_response(request, resp)
+    assert resp.status_code == 200, resp.text
 
 
 @when("I configure my GitHub connector")

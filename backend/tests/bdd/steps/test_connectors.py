@@ -2,12 +2,21 @@
 
 import contextlib
 import uuid
+from contextlib import ExitStack
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from modulo.api.dependencies import _get_engine, get_db_session
+from modulo.api.main import app
+from modulo.auth.dependencies import get_current_tenant_user, get_current_user
+from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.connectors.base import HealthResult
+from modulo.settings import Settings, get_settings
 
 # ---------------------------------------------------------------------------
 # Connector Health feature (active — 3 scenarios)
@@ -20,12 +29,134 @@ with contextlib.suppress(FileNotFoundError, OSError):
 # ---------------------------------------------------------------------------
 
 CONNECTOR_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+_HEALTH_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+_HEALTH_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
+
+_FERNET_KEY = Fernet.generate_key().decode()
 
 
 @pytest.fixture
 def ctx():
     """Shared mutable context dict for connector tests."""
     return {}
+
+
+def _make_health_settings() -> Settings:
+    return Settings(
+        database_url="postgresql+asyncpg://localhost/test",
+        secret_key="a" * 32,
+        fernet_key=_FERNET_KEY,
+        modulo_admin_password="testpass",
+        modulo_csrf_enabled=False,
+    )
+
+
+def _make_health_session() -> AsyncMock:
+    """AsyncSession double dispatching the health endpoint's reads.
+
+    ``require_permission``'s per-request org kill-switch read
+    (``organisations.authz_enforce``) resolves to None (defaults to
+    enforce=True in ``resolve_authz_enforce``), so the admin principal passes
+    the real org-role gate. Every other read returns an empty result so
+    un-seeded queries are deterministic.
+    """
+    session = AsyncMock()
+    bind = MagicMock()
+    bind.dialect.name = "sqlite"
+    session.get_bind = AsyncMock(return_value=bind)
+    session.in_transaction = MagicMock(return_value=True)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    session.add = MagicMock()
+
+    def _execute(stmt: object, *_args: object, **_kwargs: object) -> MagicMock:
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = None
+        result.all.return_value = []
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _make_health_client(session: AsyncMock) -> TestClient:
+    """Build an admin-principal TestClient against the real connectors app."""
+
+    async def override_session() -> Any:
+        yield session
+
+    app.dependency_overrides[get_settings] = _make_health_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="operator",
+        organisation_id=_HEALTH_ORG_ID,
+        account_id=_HEALTH_ACCOUNT_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="operator",
+        organisation_id=_HEALTH_ORG_ID,
+        account_id=_HEALTH_ACCOUNT_ID,
+        org_role="admin",
+    )
+    return TestClient(app)
+
+
+def _clear_health_overrides() -> None:
+    for dep in (get_settings, get_db_session, _get_engine, get_current_user, get_current_tenant_user):
+        app.dependency_overrides.pop(dep, None)
+
+
+def _make_mock_connector_instance(ctx) -> MagicMock:
+    """Build a mock ConnectorInstance matching the health route's reads."""
+    ci = MagicMock()
+    ci.id = ctx.get("connector_id", CONNECTOR_ID)
+    ci.organisation_id = _HEALTH_ORG_ID
+    ci.name = "Test GitHub Connector"
+    ci.connector_type_id = "github"
+    ci.credentials_ciphertext = b"gAAAAAB" if ctx.get("credentials_valid") else None
+    ci.config_json = {}
+    ci.allowed_operations = ["read", "write"]
+    ci.status = "healthy"
+    ci.visibility = "org"
+    ci.created_at = None
+    ci.updated_at = None
+    return ci
+
+
+def _health_route_patchers(ctx) -> list[Any]:
+    """Route use-site patches for the live health-check endpoint.
+
+    Only the DB lookup, the RLS seams and the connector-hub construction are
+    patched; the routing, ``require_permission`` auth gate, org-ownership
+    guard, transaction wrapper, decrypt ACL handling and response
+    serialisation all run for real. Note the hub class is patched where the
+    ROUTE imported it (``modulo.api.routes.connectors.ConnectorHub``), not in
+    ``modulo.core.connector_hub`` — the route captured its own
+    module-namespace reference at import time.
+    """
+    connector = MagicMock()
+    connector.connector_type = "github"
+    connector.health_check = AsyncMock(return_value=ctx["health_result"])
+    hub = MagicMock()
+    hub.initialise = AsyncMock()
+    hub.get = MagicMock(return_value=connector)
+    hub_cm = MagicMock()
+    hub_cm.__aenter__ = AsyncMock(return_value=hub)
+    hub_cm.__aexit__ = AsyncMock(return_value=False)
+    return [
+        patch("modulo.api.routes.connectors.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.connectors.set_rls_user_context", new=AsyncMock()),
+        patch(
+            "modulo.api.routes.connectors.get_connector_instance",
+            return_value=_make_mock_connector_instance(ctx),
+        ),
+        patch("modulo.api.routes.connectors.create_secrets_backend", new=MagicMock()),
+        patch("modulo.api.routes.connectors.ConnectorHub", new=MagicMock(return_value=hub_cm)),
+    ]
 
 
 # ============================================================================
@@ -39,31 +170,29 @@ def healthy_connector(ctx):
     ctx["health_result"] = HealthResult(ok=True, detail="octocat")
     ctx["credentials_valid"] = True
 
-    # Patch get_connector to return a mock connector instance
-    _patch_connector_health(ctx, ok=True, detail="octocat")
-
 
 @when(parsers.parse("I GET /api/connectors/{connector_id}/health"))
 def get_connector_health(request, connector_id, ctx):
-    # connector_id is parsed from the feature step text (literal placeholder)
-    # ctx["connector_id"] is the actual UUID we use
-    _ = connector_id  # feature file uses {connector_id} as REST placeholder
-    connector_id = ctx.get("connector_id", CONNECTOR_ID)
-    # Simulate GET /api/connectors/{connector_id}/health
-    # We mock at the route layer so the test doesn't require a running server.
-    with patch(
-        "modulo.api.routes.connectors.get_connector_instance",
-        return_value=_make_mock_connector_instance(ctx),
-    ):
-        from types import SimpleNamespace
-
-        request.node._resp = SimpleNamespace(status_code=200, ok=ctx["health_result"].ok)
-        request.node._resp_body = ctx["health_result"]
+    # connector_id is parsed from the feature step text (literal placeholder);
+    # the connector instance identity comes from the `given` steps via ctx.
+    _ = connector_id
+    with ExitStack() as stack:
+        for patcher in _health_route_patchers(ctx):
+            stack.enter_context(patcher)
+        client = _make_health_client(_make_health_session())
+        try:
+            resp = client.get(f"/api/v1/connectors/{CONNECTOR_ID}/health")
+        finally:
+            _clear_health_overrides()
+            client.close()
+    request.node._resp = resp
 
 
 @then("the response ok is true")
 def response_ok_true(request):
-    assert request.node._resp_body.ok is True
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200 for a healthy connector, got {resp.status_code}: {resp.text}"
+    assert resp.json()["ok"] is True, f"Expected ok=true in response body: {resp.json()}"
 
 
 # ============================================================================
@@ -76,21 +205,19 @@ def unhealthy_connector(ctx):
     ctx["connector_id"] = CONNECTOR_ID
     ctx["health_result"] = HealthResult(ok=False, detail="HTTP 401: Bad credentials")
     ctx["credentials_valid"] = False
-    _patch_connector_health(ctx, ok=False, detail="HTTP 401: Bad credentials")
 
 
 @then("the response ok is false")
 def response_ok_false(request):
-    assert request.node._resp_body.ok is False
+    resp = request.node._resp
+    assert resp.status_code == 200, f"Expected 200 for a failing health check, got {resp.status_code}: {resp.text}"
+    assert resp.json()["ok"] is False, f"Expected ok=false in response body: {resp.json()}"
 
 
 @then("the response detail describes the error")
 def response_detail_describes_error(request):
-    detail = getattr(request.node._resp, "detail", None) or (
-        request.node._resp_body.detail if hasattr(request.node._resp_body, "detail") else None
-    )
-    assert detail
-    assert len(detail) > 0
+    detail = request.node._resp.json()["detail"]
+    assert detail, f"Expected a non-empty error detail: {request.node._resp.text}"
 
 
 # ============================================================================
@@ -100,8 +227,6 @@ def response_detail_describes_error(request):
 
 @given(parsers.parse('a connector with API key "{api_key}"'))
 def connector_with_api_key(api_key, ctx):
-    from cryptography.fernet import Fernet
-
     key = Fernet.generate_key()
     f = Fernet(key)
     ciphertext = f.encrypt(api_key.encode())
@@ -135,213 +260,6 @@ def api_key_not_plaintext(ctx):
     # Must be Fernet ciphertext (base64-ish, token format)
     assert isinstance(stored, bytes)
     assert len(stored) > len(plain)
-
-
-# ============================================================================
-# Helper — patch connector health
-# ============================================================================
-
-
-def _patch_connector_health(ctx, *, ok: bool, detail: str):
-    """Set up mocks so that health_check returns the desired result."""
-    mock_connector = AsyncMock()
-    mock_connector.connector_type = "github"
-    mock_connector.health_check = AsyncMock(return_value=HealthResult(ok=ok, detail=detail))
-
-    mock_hub = MagicMock()
-    mock_hub.get = MagicMock(return_value=mock_connector)
-    ctx["_mock_hub"] = mock_hub
-    ctx["_mock_connector"] = mock_connector
-
-    patcher = patch(
-        "modulo.core.connector_hub.ConnectorHub",
-        return_value=mock_hub,
-    )
-    ctx["_hub_patcher"] = patcher
-    patcher.start()
-
-
-def _make_mock_connector_instance(ctx) -> MagicMock:
-    """Build a mock ConnectorInstance for CRUD responses."""
-    ci = MagicMock()
-    ci.id = ctx.get("connector_id", CONNECTOR_ID)
-    ci.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    ci.name = "Test GitHub Connector"
-    ci.connector_type_id = "github"
-    ci.credentials_ciphertext = b"gAAAAAB" if ctx.get("credentials_valid") else None
-    ci.config_json = {}
-    ci.allowed_operations = ["read", "write"]
-    ci.status = "healthy"
-    ci.visibility = "org"
-    ci.created_at = None
-    ci.updated_at = None
-    return ci
-
-
-# ============================================================================
-# Cleanup — stop all patchers after each scenario
-# ============================================================================
-
-
-@pytest.fixture(autouse=True)
-def _cleanup_patches(ctx):
-    yield
-    patcher = ctx.pop("_hub_patcher", None)
-    if patcher:
-        with contextlib.suppress(RuntimeError):
-            patcher.stop()
-
-
-@given("a connector instance with sample data")
-def step_inference_connector_samples(ctx):
-    from unittest.mock import MagicMock
-
-    ctx["connector_instance_id"] = uuid.uuid4()
-    ctx["sample_data"] = [
-        {"id": 1, "name": "Alice", "email": "alice@example.com"},
-        {"id": 2, "name": "Bob", "email": "bob@example.com"},
-    ]
-    mock_ci = MagicMock()
-    mock_ci.id = ctx["connector_instance_id"]
-    mock_ci.organisation_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    mock_ci.name = "Test Connector"
-    mock_ci.connector_type_id = "github"
-    ctx["_mock_ci"] = mock_ci
-
-
-@given("a model backend is configured")
-def step_inference_model_backend_configured(ctx):
-    ctx["model_backend_configured"] = True
-
-
-@given("a non-existent connector instance")
-def step_inference_non_existent_connector(ctx):
-    ctx["connector_instance_id"] = uuid.uuid4()
-    ctx["connector_not_found"] = True
-
-
-@given("no model backends are configured")
-def step_inference_no_model_backends(ctx):
-    ctx["model_backend_configured"] = False
-
-
-@given("a generated schema definition")
-def step_generated_schema_definition(ctx):
-    ctx["schema_definition"] = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "email": {"type": "string", "format": "email"},
-        },
-        "required": ["name", "email"],
-    }
-
-
-@given("a source schema and a target schema")
-def step_migration_schemas(ctx):
-    ctx["source_definition"] = {
-        "type": "object",
-        "properties": {"old_field": {"type": "string"}},
-        "required": ["old_field"],
-    }
-    ctx["target_definition"] = {
-        "type": "object",
-        "properties": {
-            "new_field": {"type": "string"},
-            "old_field": {"type": "string"},
-        },
-        "required": ["new_field"],
-    }
-
-
-def _infer_resp(status_code, **kwargs):
-    import json
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        status_code=status_code,
-        ok=200 <= status_code < 300,
-        json=lambda: kwargs,
-        text=json.dumps(kwargs),
-    )
-
-
-@when(
-    parsers.parse("I POST /api/schemas/infer with the connector instance"),
-)
-def step_infer_schema(request, ctx):
-    """POST /api/v1/schemas/infer — simulated response."""
-    if ctx.get("connector_not_found"):
-        request.node._resp = _infer_resp(404, detail="Connector instance not found")
-        return
-
-    if ctx.get("model_backend_configured") is False:
-        request.node._resp = _infer_resp(400, detail="No model backends configured")
-        return
-
-    request.node._resp = _infer_resp(
-        200,
-        definition_json={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "email": {"type": "string"},
-            },
-        },
-        sample_count=len(ctx.get("sample_data", [])),
-        suggestion_name="Inferred from Test Connector",
-        suggestion_description="Auto-inferred schema from Test Connector",
-    )
-
-
-@then("the response contains a definition_json")
-def step_response_has_definition_json(request, ctx):
-    body = request.node._resp.json()
-    assert "definition_json" in body, f"Response missing definition_json: {body}"
-
-
-@then("the response has a suggestion_name")
-def step_response_has_suggestion_name(request, ctx):
-    body = request.node._resp.json()
-    assert "suggestion_name" in body, f"Response missing suggestion_name: {body}"
-
-
-@when("I validate the schema")
-def step_validate_schema(ctx):
-    from jsonschema import Draft202012Validator, ValidationError
-
-    definition = ctx.get("schema_definition", {})
-    try:
-        Draft202012Validator.check_schema(definition)
-        ctx["schema_valid"] = True
-    except ValidationError:
-        ctx["schema_valid"] = False
-
-
-@then("the schema is structurally valid")
-def step_schema_structurally_valid(ctx):
-    assert ctx.get("schema_valid") is True, "Schema validation failed"
-
-
-@when(parsers.parse("I POST /api/schemas/migrate/plan with both definitions"))
-def step_migration_plan(request, ctx):
-    from modulo.core.schema_registry import create_migration
-
-    plan = create_migration(ctx["source_definition"], ctx["target_definition"])
-    ctx["migration_plan"] = {
-        "field_additions": plan.field_additions,
-        "field_removals": plan.field_removals,
-        "type_changes": {k: {"old_type": v.old_type, "new_type": v.new_type} for k, v in plan.type_changes.items()},
-        "renames": plan.renames,
-    }
-
-
-@then("the response contains field_additions and field_removals")
-def step_migration_plan_has_fields(ctx):
-    plan = ctx.get("migration_plan", {})
-    assert "field_additions" in plan, f"Missing field_additions: {plan}"
-    assert "field_removals" in plan, f"Missing field_removals: {plan}"
 
 
 # ============================================================================

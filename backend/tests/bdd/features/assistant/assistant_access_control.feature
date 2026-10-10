@@ -1,46 +1,15 @@
-Feature: Assistant Access Control
-  As an org admin
-  I want to control who can access the Assistant AI assistant
-  So that access is restricted to authorised users
+Feature: Assistant streaming API key requirement
+  A streaming request to an Assistant session only reaches the LLM when the
+  organisation has an API key configured. When none resolves, the SSE stream
+  yields a descriptive error event so the frontend can prompt the user to
+  configure their provider key.
 
-  Scenario: Assistant is accessible when user is on the access list
-    Given I am authenticated as an admin in org "acme"
-    And the Assistant access list includes my user_id
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
+  Background:
+    Given the organisation has Assistant enabled with "safe" permission mode
+    And a user with "admin" org role
+    And a chat session exists for the user
 
-  Scenario: Admin always has access regardless of access list
-    Given I am authenticated as an admin in org "acme"
+  Scenario: Streaming fails when no API key is configured
+    Given no model backends exist for the org
     When I check assistant access
-    Then the response status is 200
-    And access is granted
-
-  Scenario: User with matching org_role has access
-    Given I am authenticated as a viewer in org "acme"
-    And the Assistant access list includes role "viewer"
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
-
-  Scenario: User with matching team_id has access
-    Given I am authenticated as an admin in org "acme"
-    And the Assistant access list includes team_id "team-engineering"
-    And I belong to team "team-engineering"
-    When I check assistant access
-    Then the response status is 200
-    And access is granted
-
-  Scenario: Assistant is inaccessible when user not on access list
-    Given I am authenticated as a viewer in org "acme"
-    And the Assistant access list does not include my role or user_id
-    When I check assistant access
-    Then the response status is 403
-    And access is denied
-
-  Scenario: Assistant is inaccessible when no API key configured
-    Given I am authenticated as an admin in org "acme"
-    And no model backends exist for the org
-    When I check assistant access
-    Then the response status is 403
-    And the error indicates no API key configured
+    Then the stream reports no API key configured

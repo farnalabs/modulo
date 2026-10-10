@@ -14,16 +14,10 @@
 #     listed step is fixed but not removed from the baseline.
 #
 # Entry format: <path relative to backend/tests>:<step-function-name>
-bdd/steps/test_assistant.py:check_assistant_access
-bdd/steps/test_assistant.py:llm_emits_sequence
-bdd/steps/test_assistant.py:llm_emits_tool_call
 bdd/steps/test_auth.py:step_create_api_key
 bdd/steps/test_auth.py:step_list_api_keys
 bdd/steps/test_auth.py:step_revoke_api_key
 bdd/steps/test_auth.py:step_wrong_api_key_request
-bdd/steps/test_connectors.py:get_connector_health
-bdd/steps/test_connectors.py:step_infer_schema
-bdd/steps/test_convert_to_agent_steps.py:pipeline_saves_successfully
 bdd/steps/test_hitl.py:post_approve_decision
 bdd/steps/test_hitl.py:post_deliver_manual_expired
 bdd/steps/test_hitl.py:post_deliver_manual_no_token
@@ -32,8 +26,6 @@ bdd/steps/test_orgs.py:get_onboarding_status
 bdd/steps/test_orgs.py:get_onboarding_step
 bdd/steps/test_orgs.py:mark_all_steps_complete
 bdd/steps/test_orgs.py:post_onboarding_step
-bdd/steps/test_personas.py:copy_workflow_to_workspace
-bdd/steps/test_revert_to_manual_steps.py:pipeline_saves_successfully
 bdd/steps/test_stale_jwt_revocation.py:user_attempts_claim
 bdd/steps/test_stale_jwt_revocation.py:user_requests_pipeline
 bdd/steps/test_stale_jwt_revocation.py:user_uses_old_jwt
@@ -41,6 +33,5 @@ bdd/steps/test_team_hitl_review.py:mcp_attempts_approve
 bdd/steps/test_team_hitl_review.py:request_gate_context
 bdd/steps/test_team_hitl_review.py:user_approves_gate
 bdd/steps/test_team_hitl_review.py:user_claims_gate
-bdd/steps/test_team_pipeline_visibility.py:create_team_pipeline
 bdd/steps/test_view_as_team_non_admin_rejected.py:get_pipelines_with_view_as_team
 bdd/steps/test_view_as_team_non_admin_rejected.py:get_viewmodel_with_view_as_team
