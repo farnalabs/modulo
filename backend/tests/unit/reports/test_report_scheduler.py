@@ -284,7 +284,7 @@ class TestFireScheduledReport:
 
         update_params = session.execute.await_args_list[1].args[0].compile().params
         assert "last_sent_at" in update_params
-        assert isinstance(update_params["last_sent_at"], datetime.datetime)
+        assert isinstance(update_params["last_sent_at"], dt.datetime)
         assert update_params["last_sent_at"].tzinfo is not None
 
     async def test_reraises_cancelled_error_from_generator(self) -> None:
