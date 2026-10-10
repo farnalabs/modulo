@@ -31,6 +31,7 @@ walks.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 from typing import Any, Self
@@ -284,6 +285,33 @@ class TestLockTimeoutHandling:
             )
         assert not any("script_lease_lock_timeout" in message for message in caplog.messages)
 
+    async def test_script_lease_generic_failure_still_reraises(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A non-lock DB failure takes the ``except Exception`` arm's OTHER
+        side (never the 55P03 branch): it re-raises unchanged and claims no
+        lock-timeout event — the exactly-once fence is never silently released."""
+        session = _PgSession()
+        original_execute = session.execute
+
+        async def _execute(stmt: object, params: dict[str, Any] | None = None) -> _PgResult:
+            if "UPDATE runs SET sandbox_dispatch_state" in str(stmt):
+                raise RuntimeError("connection reset")
+            return await original_execute(stmt, params)
+
+        session.execute = _execute  # type: ignore[method-assign]
+        with caplog.at_level("WARNING", logger=_LOGGER), pytest.raises(RuntimeError, match="connection reset"):
+            await nr._sandbox_store_script_lease(
+                session_factory=lambda: session,
+                claim_lease="tok",
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                attempt_key="run:run-1:node:n1:0",
+                provider="e2b",
+            )
+        assert not any("script_lease_lock_timeout" in message for message in caplog.messages)
+
     async def test_clear_marker_lock_timeout_warns_and_swallows(
         self,
         caplog: pytest.LogCaptureFixture,
@@ -315,6 +343,58 @@ class TestLockTimeoutHandling:
 
         session.execute = _execute  # type: ignore[method-assign]
         with pytest.raises(RuntimeError, match="connection reset"):
+            await nr._sandbox_clear_dispatch_marker(
+                session_factory=lambda: session,
+                claim_lease="tok",
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Cancellation must propagate unchanged through the new try/except arms
+# ---------------------------------------------------------------------------
+
+
+class TestCancellationPropagates:
+    """A task cancellation (caller cancelled / worker shutting down) must pass
+    straight through every newly-wrapped writer — never be folded into the
+    55P03 fail-open path, which would swallow the cancellation (a ``CancelledError``
+    is a ``BaseException`` but the explicit ``except asyncio.CancelledError: raise``
+    arms are what keep this contract legible to a future reader). These pin the
+    arms added to the two writers whose lock bound landed here."""
+
+    async def test_script_lease_cancellation_still_propagates(self) -> None:
+        session = _PgSession()
+        original_execute = session.execute
+
+        async def _execute(stmt: object, params: dict[str, Any] | None = None) -> _PgResult:
+            if "UPDATE runs SET sandbox_dispatch_state" in str(stmt):
+                raise asyncio.CancelledError
+            return await original_execute(stmt, params)
+
+        session.execute = _execute  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
+            await nr._sandbox_store_script_lease(
+                session_factory=lambda: session,
+                claim_lease="tok",
+                org_id=_ORG_ID,
+                run_id=_RUN_ID,
+                attempt_key="run:run-1:node:n1:0",
+                provider="e2b",
+            )
+
+    async def test_clear_marker_cancellation_still_propagates(self) -> None:
+        session = _PgSession()
+        original_execute = session.execute
+
+        async def _execute(stmt: object, params: dict[str, Any] | None = None) -> _PgResult:
+            if "UPDATE runs SET sandbox_dispatch_state=NULL" in str(stmt):
+                raise asyncio.CancelledError
+            return await original_execute(stmt, params)
+
+        session.execute = _execute  # type: ignore[method-assign]
+        with pytest.raises(asyncio.CancelledError):
             await nr._sandbox_clear_dispatch_marker(
                 session_factory=lambda: session,
                 claim_lease="tok",
