@@ -76,6 +76,14 @@ def _make_mock_session(*, trigger_config: dict | None = None, stored_payload: bo
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync - a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
+    # FAR-1629: AsyncSession.add() is sync too - the engine-side-effect test
+    # calls _session.add(TriggerEvent(...)) directly; a bare AsyncMock would
+    # leave that coroutine un-awaited.
+    session.add = MagicMock()
 
     trigger_mock = MagicMock()
     trigger_mock.id = _TRIGGER_ID
@@ -403,6 +411,8 @@ def _make_org_aware_app_session(*, payload_org_id: uuid.UUID) -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: in_transaction() is sync on AsyncSession - see _make_mock_session.
+    session.in_transaction = MagicMock(return_value=True)
 
     payload_mock = MagicMock()
     payload_mock.raw_body = _STORED_BODY

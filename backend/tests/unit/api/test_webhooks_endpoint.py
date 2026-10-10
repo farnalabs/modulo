@@ -83,6 +83,10 @@ def _make_mock_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: AsyncSession.in_transaction() is sync — a bare AsyncMock
+    # auto-creates it as an async child, leaving an un-awaited coroutine when
+    # _ensure_active_transaction (db/rls.py) calls it.
+    session.in_transaction = MagicMock(return_value=True)
 
     # Explicitly configure execute so scalar_one_or_none() returns a MagicMock trigger
     # (not a coroutine — Python 3.13 AsyncMock can return coroutines for child attribute calls)
@@ -108,6 +112,8 @@ def _make_hmac_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1629: in_transaction() is sync on AsyncSession — see _make_mock_session.
+    session.in_transaction = MagicMock(return_value=True)
 
     trigger_mock = MagicMock()
     trigger_mock.pipeline_id = uuid.uuid4()
@@ -403,6 +409,8 @@ def test_receive_webhook_paused_org_missing_row_returns_202_without_event(client
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.add = MagicMock()
+    # FAR-1629: in_transaction() is sync on AsyncSession - see _make_mock_session.
+    session.in_transaction = MagicMock(return_value=True)
 
     trigger_mock = MagicMock()
     trigger_mock.pipeline_id = uuid.uuid4()
