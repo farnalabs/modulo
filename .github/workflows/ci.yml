@@ -963,19 +963,23 @@ jobs:
             echo "::error::SONAR_TOKEN secret is not available; cannot evaluate the new-issues gate (failing closed)."
             exit 1
           fi
+          # One source of truth for the host and project key inside this script.
+          SONAR_HOST="https://sonarcloud.io"
+          SONAR_COMPONENT="farnalabs_modulo-new"
           BODY="$(mktemp)"
-          trap 'rm -f "$BODY"' EXIT
-          API="https://sonarcloud.io/api/issues/search?componentKeys=farnalabs_modulo-new&pullRequest=${PR_NUMBER}&resolved=false&ps=1"
+          CURL_ERR="$(mktemp)"
+          trap 'rm -f "$BODY" "$CURL_ERR"' EXIT
+          API="${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=1"
           # Basic auth: the token is the username, the password is empty.
           # Capture the HTTP status explicitly (no -f): a guard must distinguish
           # "API failed" from "no issues", and every non-200 fails closed below.
           set +e
           HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-            -o "$BODY" -w '%{http_code}' "$API" 2>curl-err.txt)
+            -o "$BODY" -w '%{http_code}' "$API" 2>"$CURL_ERR")
           CURL_RC=$?
           set -e
           if [ "$CURL_RC" -ne 0 ]; then
-            echo "::error::SonarCloud issues API request failed (curl exit ${CURL_RC}): $(cat curl-err.txt 2>/dev/null || echo 'no stderr'); failing closed."
+            echo "::error::SonarCloud issues API request failed (curl exit ${CURL_RC}): $(cat "$CURL_ERR" 2>/dev/null || echo 'no stderr'); failing closed."
             exit 1
           fi
           if [ "$HTTP_CODE" != "200" ]; then
@@ -991,7 +995,7 @@ jobs:
             echo "::error::PR ${PR_NUMBER} introduces ${TOTAL} new SonarCloud issue(s) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
             # Best-effort detail listing; the job already fails either way.
             curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
-              "https://sonarcloud.io/api/issues/search?componentKeys=farnalabs_modulo-new&pullRequest=${PR_NUMBER}&resolved=false&ps=100" \
+              "${SONAR_HOST}/api/issues/search?componentKeys=${SONAR_COMPONENT}&pullRequest=${PR_NUMBER}&resolved=false&ps=100" \
               | jq -r '.issues[]? | "- \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
             exit 1
           fi
