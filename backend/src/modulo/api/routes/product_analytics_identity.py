@@ -10,6 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,11 +22,15 @@ from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.product_analytics.hmac_verify import verify_hmac
 from modulo.core.product_analytics.instance_identity import (
+    _INSTANCE_ID_KEY,
     get_or_create_instance_identity,
     get_secret_exists,
     rotate_secret,
 )
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.system_config import get_config, update_config
+from modulo.db.models.system_config import SystemConfig
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 
 _log = logging.getLogger(__name__)
 
@@ -229,6 +234,10 @@ async def rotate_identity_secret(
 
     try:
         async with session.begin():
+            # Bound every row-lock wait taken for the rest of this transaction
+            # BEFORE the first lock (canonical FAR-1313 pattern), so a contended
+            # rotation cannot wedge on an unbounded ``FOR UPDATE``.
+            await set_mutation_row_lock_timeout(session)
             instance_id, current_secret = await get_or_create_instance_identity(session)
 
             # Verify the old secret matches
@@ -253,8 +262,10 @@ async def rotate_identity_secret(
                     detail="HMAC verification failed. Check timestamp clock skew (5-min window).",
                 )
 
-            # Check sequence monotonicity — store last sequence in SystemConfig
-            last_seq = await _get_last_sequence(session, str(instance_id))
+            # Check sequence monotonicity — store last sequence in SystemConfig.
+            # ``for_update=True`` takes a per-instance row lock so the
+            # read-check-write below is atomic against concurrent rotations.
+            last_seq = await _get_last_sequence(session, str(instance_id), for_update=True)
             if req.sequence <= last_seq:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -269,6 +280,12 @@ async def rotate_identity_secret(
         raise
     except asyncio.CancelledError:
         raise
+    except SequenceStateError:
+        _log.error("%s.sequence_state_inconsistent", _LOG_ROTATE)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Rotation state is inconsistent: a required identity record is missing. Refusing to rotate.",
+        ) from None
     except ProgrammingError:
         _log.exception(_LOG_ROTATE)
         raise HTTPException(
@@ -277,9 +294,20 @@ async def rotate_identity_secret(
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "product_analytics_identity.rotate_identity_secret")
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # A bounded lock wait expired (55P03): the DB is healthy, another
+            # rotation simply holds the row lock. 409, never a retry-inviting 503.
+            _log.warning("%s.lock_timeout", _LOG_ROTATE)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Timed out waiting for the rotation lock; another rotation is in progress. "
+                    "Re-issue the request once it completes."
+                ),
+            ) from None
         _log.exception(_LOG_ROTATE)
         raise HTTPException(
-            status_code=503,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable.",
         ) from None
     except Exception:
@@ -291,22 +319,85 @@ async def rotate_identity_secret(
 
 
 _SEQUENCE_KEY_PREFIX = "product_analytics_last_sequence_"
+_HAS_ROTATED_KEY_PREFIX = "product_analytics_has_rotated_"
 
 
-async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
+class SequenceStateError(RuntimeError):
+    """Stored rotation-sequence state is inconsistent and cannot be trusted.
+
+    Raised when the per-instance sequence row is missing although a rotation has
+    already happened (the marker is set).  Continuing would reset the monotonic
+    guard to ``0`` and let previously-accepted sequences be re-minted, so the
+    rotation fails closed instead.
+    """
+
+
+def _sequence_key(instance_id: str) -> str:
+    return _SEQUENCE_KEY_PREFIX + instance_id
+
+
+def _has_rotated_key(instance_id: str) -> str:
+    return _HAS_ROTATED_KEY_PREFIX + instance_id
+
+
+async def _lock_rotation_anchor(session: AsyncSession) -> None:
+    """Take a transaction-scoped row lock that serialises rotations per instance.
+
+    The lock targets the per-instance identity row rather than the sequence row
+    because the latter does not exist before the first rotation — locking a
+    not-yet-existing row would not stop two concurrent first rotations from both
+    reading a missing sequence and both rotating.  The identity row is always
+    present by this point (``get_or_create_instance_identity`` runs first in the
+    same transaction), so ``SELECT … FOR UPDATE`` on it serialises the whole
+    read-check-write critical section until the transaction commits.
+
+    The row is verified after the select: a ``FOR UPDATE`` that matches no row
+    takes no lock, so a missing anchor row must fail closed rather than silently
+    degrading to an unserialised rotation.
+    """
+    anchor = (
+        await session.execute(select(SystemConfig).where(SystemConfig.key == _INSTANCE_ID_KEY).with_for_update())
+    ).scalar_one_or_none()
+    if anchor is None:
+        raise SequenceStateError(
+            "Rotation identity anchor row is missing; refusing to rotate without a serialising lock."
+        )
+
+
+async def _get_last_sequence(
+    session: AsyncSession,
+    instance_id: str,
+    *,
+    for_update: bool = False,
+) -> int:
     """Read the last accepted sequence number for this instance.
 
-    Fails CLOSED when the stored value is not a JSON integer. Accepting a
-    corrupt value — or returning a default (e.g. ``0``) for one — would
-    silently reset the monotonicity guard and let a caller replay an old
-    sequence, so refuse to rotate and surface a clear, actionable error
-    instead. A non-integer JSON number (float/bool) and every non-number shape
-    (string/``null``/list/object) are all treated as corrupt. A *missing* row
-    is the legitimate first-rotation state and reads as ``0``.
+    When ``for_update`` is set, first takes a row lock (see
+    :func:`_lock_rotation_anchor`) so the caller's read-check-write of the
+    sequence is atomic: a concurrent rotation with the same sequence blocks on
+    the lock, then observes the committed value and is rejected.
+
+    A missing sequence row is legitimate only *before the first rotation* and
+    reads as ``0``.  Once a rotation has happened (the has-rotated marker is
+    set) a missing row means the guard was tampered with, and this fails closed
+    with :class:`SequenceStateError` rather than silently resetting to ``0``.
+
+    A stored value that is not a JSON integer also fails CLOSED, with a 500:
+    accepting a corrupt value — or returning a default for one — would silently
+    reset the monotonicity guard and let a caller replay an old sequence. A
+    non-integer JSON number (float/bool) and every non-number shape
+    (string/``null``/list/object) are all treated as corrupt.
     """
-    key = _SEQUENCE_KEY_PREFIX + instance_id
+    if for_update:
+        await _lock_rotation_anchor(session)
+    key = _sequence_key(instance_id)
     entry = await get_config(session, key)
     if entry is None:
+        if await _has_rotated(session, instance_id):
+            raise SequenceStateError(
+                "Rotation sequence row is missing although this instance has already rotated; "
+                "refusing to reset the monotonic guard and re-mint old sequences."
+            )
         return 0
     value = entry.value
     if isinstance(value, bool) or not isinstance(value, int):
@@ -327,10 +418,16 @@ async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
     return int(value)
 
 
+async def _has_rotated(session: AsyncSession, instance_id: str) -> bool:
+    """Return True if a rotation has ever been recorded for this instance."""
+    marker = await get_config(session, _has_rotated_key(instance_id))
+    return bool(marker.value) if marker is not None else False
+
+
 async def _set_last_sequence(session: AsyncSession, instance_id: str, seq: int) -> None:
-    """Persist the last accepted sequence number."""
-    key = _SEQUENCE_KEY_PREFIX + instance_id
-    await update_config(session, key, seq)
+    """Persist the last accepted sequence number and the has-rotated marker."""
+    await update_config(session, _sequence_key(instance_id), seq)
+    await update_config(session, _has_rotated_key(instance_id), True)
 
 
 def _constant_time_equal(a: str, b: str) -> bool:

@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.product_analytics.constants import (
@@ -221,16 +222,44 @@ def is_partner_carve_out_active(license_data: Any, org_level: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def kill_switch_disables_enforcement(value: Any) -> bool:
+    """Interpret a stored license-enforcement kill-switch value.
+
+    This is the ONE canonical semantics for the kill switch, shared by
+    ``consent.is_license_enforcement_enabled`` and
+    ``license_enforcement.is_enforcement_active``.
+
+    Only an *explicitly truthy* value turns the kill switch ON (which disables
+    enforcement): boolean ``True`` or one of the strings ``"1"``/``"true"``/
+    ``"yes"`` (case-insensitive).  Every other stored value — including the
+    strings ``"false"``, ``"0"`` and ``"no"``, and boolean ``False`` — leaves
+    enforcement ENABLED.  In particular a stored ``"false"`` means "the kill
+    switch is off", i.e. enforcement is on; it must never be read as a truthy
+    non-empty string and invert the switch.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes")
+    return bool(value)
+
+
 async def is_license_enforcement_enabled(session: AsyncSession) -> bool:
     """Return True if license enforcement is active (kill switch is OFF by default).
 
     The kill switch is absent → enforced (matching authz_enforce convention).
+    See :func:`kill_switch_disables_enforcement` for the canonical stored-value
+    semantics.
+
+    A read failure also resolves to ``True`` (enforced): this mirrors
+    :func:`modulo.core.product_analytics.license_enforcement.is_enforcement_active`
+    so the two helpers agree on every input class, not only stored values.
     """
-    config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    try:
+        config = await get_config(session, LICENSE_ENFORCEMENT_KILL_SWITCH_KEY)
+    except SQLAlchemyError:
+        _log.warning("product_analytics.kill_switch_read_failed", exc_info=True)
+        return True  # read failure = fail safe = enforced
     if config is None:
         return True  # absent = enforced
-    if isinstance(config.value, bool):
-        return not config.value
-    if isinstance(config.value, str):
-        return config.value.lower() not in ("1", "true", "yes")
-    return not bool(config.value)
+    return not kill_switch_disables_enforcement(config.value)
