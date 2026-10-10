@@ -919,6 +919,84 @@ jobs:
           echo "::error::SonarCloud scan still hit a known transient scanner failure after 3 attempts; failing the required check (upstream SONARPY-2120 / security-engine plugin-classloader race)."
           exit 1
 
+  sonar-new-issues-gate:
+    # Free SonarCloud's quality gate ("Sonar way") is new-code RATIO-based
+    # (new_reliability/security/maintainability_rating > 1, new_coverage < 80,
+    # new_duplicated_lines_density > 3, new_security_hotspots_reviewed < 100)
+    # with NO new-issue-count condition, and the free tier cannot customise the
+    # gate. A PR that introduces one or two new smells still passes every
+    # rating condition - which is how 74 reliability-impact issues (mostly
+    # python:S7503) accumulated on main. This gate closes that hole: query the
+    # SonarCloud API for THIS PR's analysis and fail on ANY new unresolved
+    # issue. Fail-closed by design: an API error, an unexpected HTTP status,
+    # or a response without a numeric .total fails the job - it never passes
+    # on unknown state, and it carries no continue-on-error.
+    #
+    # PR-analysis-only: there is no pullRequest analysis on push to main, so
+    # the job runs on pull_request events only. The path gate is STEP-level
+    # (never job-level), matching the scan job and FAR-1427: a docs-only PR's
+    # check still reports success rather than a non-green "skipped".
+    # needs: sonarcloud-scan so the analysis is queryable by the time this
+    # runs - the scanner waits for SonarCloud to process the upload
+    # (sonar.qualitygate.wait=true in sonar-project.properties), so once the
+    # scan job succeeds the PR issues are in the API. merge-queue.yml decides
+    # on the whole ci.yml run conclusion, so a failing gate blocks merges with
+    # no merge-queue change (same mechanism as coverage-gate).
+    name: New issues gate (SonarCloud)
+    if: github.event_name == 'pull_request'
+    needs: [sonarcloud-scan, changes]
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 5
+    steps:
+      - name: Fail on any new SonarCloud issue in this PR
+        if: needs.changes.outputs.sonar == 'true'
+        shell: bash
+        env:
+          # SONAR_TOKEN / PR_NUMBER mapped through env (githubactions:S7630):
+          # GitHub expressions are interpolated before bash parses the script,
+          # so via env they are data, never code. Same pattern as the scan job.
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SONAR_TOKEN:-}" ]; then
+            echo "::error::SONAR_TOKEN secret is not available; cannot evaluate the new-issues gate (failing closed)."
+            exit 1
+          fi
+          BODY="$(mktemp)"
+          trap 'rm -f "$BODY"' EXIT
+          API="https://sonarcloud.io/api/issues/search?componentKeys=farnalabs_modulo-new&pullRequest=${PR_NUMBER}&resolved=false&ps=1"
+          # Basic auth: the token is the username, the password is empty.
+          # Capture the HTTP status explicitly (no -f): a guard must distinguish
+          # "API failed" from "no issues", and every non-200 fails closed below.
+          set +e
+          HTTP_CODE=$(curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+            -o "$BODY" -w '%{http_code}' "$API" 2>curl-err.txt)
+          CURL_RC=$?
+          set -e
+          if [ "$CURL_RC" -ne 0 ]; then
+            echo "::error::SonarCloud issues API request failed (curl exit ${CURL_RC}): $(cat curl-err.txt 2>/dev/null || echo 'no stderr'); failing closed."
+            exit 1
+          fi
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::SonarCloud issues API returned HTTP ${HTTP_CODE} (expected 200); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+          TOTAL=$(jq -r '.total' "$BODY" 2>/dev/null || echo "unparsed")
+          if ! [[ "$TOTAL" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unexpected SonarCloud API response (no numeric .total); failing closed. Body: $(head -c 500 "$BODY")"
+            exit 1
+          fi
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "::error::PR ${PR_NUMBER} introduces ${TOTAL} new SonarCloud issue(s) (unresolved on this PR's analysis). The free Sonar way gate has no issue-count condition, so this CI gate is what blocks them."
+            # Best-effort detail listing; the job already fails either way.
+            curl -sS --max-time 30 -u "${SONAR_TOKEN}:" \
+              "https://sonarcloud.io/api/issues/search?componentKeys=farnalabs_modulo-new&pullRequest=${PR_NUMBER}&resolved=false&ps=100" \
+              | jq -r '.issues[]? | "- \(.severity) [\(.rule)] \(.component): \(.message)"' 2>/dev/null || true
+            exit 1
+          fi
+          echo "No new SonarCloud issues on PR ${PR_NUMBER}."
+
   coverage-gate:
     # Enforces a coverage threshold on the lines each PR actually changes
     # (the analogue of SonarCloud's new_coverage). Free SonarCloud cannot
@@ -1220,7 +1298,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       actions: write
@@ -1598,7 +1676,7 @@ jobs:
     # gate. A job that is merely SKIPPED is neither failure() nor cancelled();
     # every job here either always runs (path gates are step-level) or is only
     # skipped because an ancestor already failed, which is itself a failure.
-    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [changes, backend-lint, backend-test, integration-changed, tier1b-light, frontend, sonarcloud-scan, sonar-new-issues-gate, coverage-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     permissions:
       contents: read
@@ -1744,7 +1822,7 @@ jobs:
     #
     # NOT a required check: this job is observability only.
     if: github.event_name == 'pull_request' && !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, sonarcloud-scan, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
+    needs: [backend-lint, backend-test, integration-changed, frontend, coverage-gate, sonarcloud-scan, sonar-new-issues-gate, schema-freshness, gitleaks, migration-heads-check, break-glass-deploy-gate]
     runs-on: ubicloud-standard-2
     steps:
       - name: Self-report CI Validate stage to Modulo (fail-open, best-effort)
