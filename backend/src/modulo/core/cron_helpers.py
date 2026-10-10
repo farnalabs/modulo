@@ -74,7 +74,7 @@ from modulo.db.models.run import (
     Run,
 )
 from modulo.db.settings_resolver import PAUSE_SKIP_REASON, org_is_paused, org_row_is_paused
-from modulo.db.sqlstates import is_row_lock_timeout, sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout, is_statement_timeout
 from modulo.settings import (
     MAX_NODE_TIMEOUT_SECONDS,
     SAQ_SETUP_GRACE_DEFAULT_SECONDS,
@@ -445,6 +445,9 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "terminalize_capped": 0,
     "facts_deferred": 0,
     # FAR-1525 per-org time bound counters (same additive .get() contract).
+    # ``org_timeouts`` counts TWO classes since FAR-1621 (see the summary
+    # builder below): the FAR-1525 per-org asyncio cut AND an in-pass
+    # ``TimeoutError`` raised before the slice ran out.
     "org_timeouts": 0,
     "orgs_deferred": 0,
     # FAR-1601 row-lock bound: orgs skipped because their bounded mutation
@@ -648,10 +651,12 @@ _ENGINE_LOCK = threading.Lock()
 # also matches the connect bound above, so session establishment as a whole is
 # bounded to ~20s (pool wait + connect), still inside the org slice.
 #
-# SETTINGS INVARIANT (qa re-review): the connect/pool bounds stay ATTRIBUTABLE
-# (``org_connect_timeouts`` / ``org_pool_timeouts``) only while the effective
-# per-org slice exceeds ``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` + slack
-# (``_RECONCILE_ORG_CUT_SLACK_SECONDS``, i.e. ~10.5s). If
+# SETTINGS INVARIANT (qa re-review, amended FAR-1644/M1): the connect/pool
+# bounds stay ATTRIBUTABLE (``org_connect_timeouts`` / ``org_pool_timeouts``)
+# only while the effective per-org slice exceeds
+# ``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` itself (~10s; the former 0.5s
+# ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` that padded this to ~10.5s is gone —
+# see the ``except TimeoutError`` arm). If
 # ``dispatcher_reconcile_org_budget_seconds`` is ever tuned below that — or the
 # slice is clamped below it by a nearly-exhausted tick budget — the asyncio cut
 # fires first and a connect/pool failure reclassifies into a generic
@@ -845,13 +850,12 @@ async def _set_rls_org(session: AsyncSession, org_id: uuid.UUID) -> None:
 # FAR-1621 — transaction-scoped statement bound for the per-org reconcile pass
 # ---------------------------------------------------------------------------
 
-#: SQLSTATE ``query_canceled``: what Postgres raises when ``statement_timeout``
-#: expires. Kept here next to its single consumer rather than in
-#: ``db.sqlstates`` because that module owns the SHARED vocabularies
-#: (``55P03``/``57014``-as-retryable) and this is a caller-local classification
-#: predicate — the same split as ``is_row_lock_timeout``'s shared
-#: ``LOCK_NOT_AVAILABLE_SQLSTATE`` vs. a consumer's own handler.
-_STATEMENT_TIMEOUT_SQLSTATE = "57014"
+# SQLSTATE ``query_canceled`` + its classifier live in ``db.sqlstates``
+# (``STATEMENT_TIMEOUT_SQLSTATE`` / :func:`is_statement_timeout`) — FAR-1644
+# DRY: this module used to keep a private copy of both, which is exactly the
+# spelling drift ``db.sqlstates`` exists to prevent (its stated mission is one
+# spelling per SQLSTATE, and ``LOCK_NOT_AVAILABLE_SQLSTATE`` already lived
+# there). The remaining ``57014`` mentions below are prose in log messages.
 
 #: Transaction-scoped ``statement_timeout`` for ONE org's reconcile pass, in ms.
 #:
@@ -887,28 +891,15 @@ async def _set_org_statement_timeout(session: AsyncSession) -> None:
     bound is a safety improvement, never a correctness requirement.
 
     An expired bound raises SQLSTATE 57014 (``query_canceled``), which
-    :func:`_is_statement_timeout` classifies so the reconcile body can skip
-    that ONE org with a WARNING + stage attribution instead of letting it
-    silently consume the org's time slice.
+    :func:`modulo.db.sqlstates.is_statement_timeout` classifies so the
+    reconcile body can skip that ONE org with a WARNING + stage attribution
+    instead of letting it silently consume the org's time slice.
     """
     if session.get_bind().dialect.name == "postgresql":
         await session.execute(
             text("SELECT set_config('statement_timeout', :val, true)"),
             {"val": f"{_RECONCILE_STATEMENT_TIMEOUT_MS}ms"},
         )
-
-
-def _is_statement_timeout(exc: BaseException) -> bool:
-    """True when *exc* is the transaction-scoped ``statement_timeout`` expiry.
-
-    ``sqlstate_of`` walks the whole exception chain (``.orig``/``__cause__``/
-    ``__context__``, incl. savepoint-rollback wrappers), so both the raw
-    asyncpg ``QueryCanceledError`` and a SQLAlchemy ``OperationalError``
-    wrapping it are recognised — dialect-tolerant, no exception-class import.
-    Deliberately the SAME shape as ``is_row_lock_timeout``: both classify one
-    bounded wait the org transaction sets at its head.
-    """
-    return sqlstate_of(exc) == _STATEMENT_TIMEOUT_SQLSTATE
 
 
 async def _count_active_runs(session: AsyncSession, trigger_id: uuid.UUID) -> int:
@@ -5546,14 +5537,16 @@ _RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
 # Smallest org slice worth starting: below this the remaining budget goes to
 # record_facts / the compensating sweeps and the org is deferred, not cut.
 _RECONCILE_ORG_MIN_SECONDS = 1.0
-# FAR-1621 (qa F2): how close the elapsed time must be to the org slice before
-# a builtin ``TimeoutError`` is reported as THE per-org asyncio cut. The cut
-# raises AT the slice deadline (so a genuine cut always has elapsed >= slice),
-# while the asyncpg connect bound (``_SYSTEM_CONNECT_TIMEOUT_SECONDS``) and any
-# in-pass timeout fire well before it — at 10s against a 30s slice the gap is
-# two orders of magnitude larger than this slack. Keeps scheduling jitter from
-# splitting a genuine cut from a near-slice non-cut.
-_RECONCILE_ORG_CUT_SLACK_SECONDS = 0.5
+# FAR-1644 (M2): the per-org-cut discriminator is the slice ITSELF — see the
+# ``except TimeoutError`` arm in ``_dispatcher_reconcile_body``. It used to
+# subtract a 0.5s ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` first, on the theory
+# that scheduling jitter could split a genuine cut from a near-slice non-cut.
+# It cannot: ``asyncio.timeout`` only fires at/after its deadline and
+# ``org_elapsed`` is measured from a timestamp taken before the timeout was
+# armed, so a genuine cut always has elapsed >= slice. The slack only shrank
+# the in-pass window, which is where the asyncpg connect bound lives — a
+# connect timeout at ~10s inside a clamped (10, 10.5]s slice was therefore
+# reported as the per-org cut. The constant is gone rather than left unused.
 
 
 @dataclass(frozen=True)
@@ -6432,20 +6425,34 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         bounded-failure counter reaches the readiness detail via
         ``_format_reconcile_detail`` so alert emails can tell the cases apart.
 
-        SETTINGS INVARIANT (qa re-review): ``org_connect_timeouts`` and
-        ``org_pool_timeouts`` are only reachable while the effective per-org
-        slice exceeds the session-establishment bounds
-        (``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` / ``_SYSTEM_POOL_TIMEOUT_SECONDS``,
-        both 10s) plus ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` — i.e. the slice
-        must stay above ~10.5s. The coded default
+        SETTINGS INVARIANT (qa re-review; amended FAR-1644/M1+M2):
+        ``org_connect_timeouts`` and ``org_pool_timeouts`` are only reachable
+        while the effective per-org slice exceeds the session-establishment
+        bounds (``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` / ``_SYSTEM_POOL_TIMEOUT_SECONDS``,
+        both 10s) — i.e. the slice must stay above ~10s. (The former 0.5s
+        ``_RECONCILE_ORG_CUT_SLACK_SECONDS`` that padded this to ~10.5s is
+        gone: the cut can only fire at or after the slice deadline, so no
+        slack was ever needed to recognise it, and it only shrank the window
+        in which a connect timeout is recognised as one — FAR-1644/M2.) The
+        coded default
         (``dispatcher_reconcile_org_budget_seconds`` = 30s) satisfies it, but
         the slice is ``min(org_budget, remaining tick budget - reserve)``, so a
         nearly-exhausted tick can clamp it below the bound. If that happens, or
-        if ops tunes ``dispatcher_reconcile_org_budget_seconds`` below ~10.5s,
+        if ops tunes ``dispatcher_reconcile_org_budget_seconds`` below ~10s,
         the asyncio per-org cut fires first and the connect/pool failure is
-        counted as a generic ``org_timeouts`` (with the in-pass message)
-        instead of its dedicated counter. The coded defaults are pinned by
+        counted as a generic ``org_timeouts``. The coded defaults are pinned by
         tests; this invariant is documented, not enforced.
+
+        M1 DECISION (FAR-1644): that reclassification is ACCEPTED, not
+        engineered around. In a slice that small neither 10s session-
+        establishment bound could have elapsed on its own, so the asyncio cut
+        is the truthful account of what stopped the pass — the loss is only
+        the DIAGNOSIS: the counter says ``org_timeouts`` rather than
+        ``org_pool_timeouts``. The stage still lands in ``last_error`` and the
+        WARNING (``stage=reconcile_org:<org>/session-acquire``), so the alert
+        names the blocking site either way; keeping the pool bound reachable
+        inside an arbitrarily clamped slice would mean weakening the bound
+        itself, which is worse than one degraded label on a rare edge.
     """
     settings = get_settings()
     queue_name = settings.saq_runs_queue
@@ -6769,7 +6776,19 @@ async def _dispatcher_reconcile_body(
                 # a DB session that was never established, so the per-org bound
                 # is claimed ONLY at the slice deadline; before it the real
                 # cause is named from the stage instead.
-                if org_elapsed < org_slice_seconds - _RECONCILE_ORG_CUT_SLACK_SECONDS:
+                #
+                # FAR-1644 (M2): the discriminator is the slice itself, with NO
+                # slack subtracted. ``asyncio.timeout`` can only fire at or
+                # after its deadline, and ``org_elapsed`` is measured from a
+                # timestamp taken BEFORE the ``async with`` armed it, so a
+                # genuine cut always has ``org_elapsed >= org_slice_seconds`` —
+                # a strict ``<`` therefore cannot misclaim a real cut. The
+                # former 0.5s slack only SHANK the in-pass window, so a connect
+                # bound firing at ~10s inside a clamped (10, 10.5]s slice
+                # landed at or past ``slice - slack`` and was reported as the
+                # per-org cut. Dropping it widens the in-pass window to the
+                # whole slice, which is exactly where a non-cut timeout lives.
+                if org_elapsed < org_slice_seconds:
                     if stage_label.endswith(("/session-acquire", "/session-acquired")):
                         # Session never established: the connect bound expired
                         # before the first statement of this transaction ran.
@@ -6891,7 +6910,7 @@ async def _dispatcher_reconcile_body(
                         exc_info=True,
                     )
                     continue
-                if _is_statement_timeout(exc):
+                if is_statement_timeout(exc):
                     # FAR-1621: the transaction-scoped statement bound fired
                     # (SQLSTATE 57014 query_canceled) — one statement in this
                     # org's pass ran longer than _RECONCILE_STATEMENT_TIMEOUT_MS
@@ -6999,10 +7018,16 @@ def _dispatcher_summary() -> dict[str, Any]:
         "last_error": None,
         "terminalize_capped": 0,
         "facts_deferred": 0,
-        # FAR-1525 per-org time bound: orgs cut by the bound this tick (a cut
-        # org's transaction rolled back — its counts are unwound, never
-        # reported as work done) and orgs NOT started because only the
-        # reserved tail of the budget remained (drains on later ticks).
+        # FAR-1525 per-org time bound, plus FAR-1621's reclassification of the
+        # builtin-``TimeoutError`` arm. ``org_timeouts`` counts TWO classes
+        # (M4, FAR-1644): (a) the FAR-1525 per-org asyncio cut, claimed only
+        # once the slice has actually elapsed, and (b) an in-pass
+        # ``TimeoutError`` raised BEFORE the slice ran out (still a bounded
+        # per-org failure, but the message must not claim the bound fired). A
+        # cut org's transaction rolled back — its counts are unwound, never
+        # reported as work done. ``orgs_deferred`` is separate: orgs NOT
+        # started because only the reserved tail of the budget remained
+        # (drains on later ticks).
         "org_timeouts": 0,
         "orgs_deferred": 0,
         # FAR-1601 row-lock bound: orgs skipped by the 55P03 lock-timeout
@@ -7091,11 +7116,14 @@ async def _reconcile_org(
     ``_dispatcher_reconcile_body``) skips that org with a ``WARNING`` + full
     chain — never a silent no-op, never a lost recovery — unwinds its counts
     and continues with the remaining orgs; every OTHER failure keeps its
-    existing contract — the read phase logs ``read failed``, unwinds this
-    pass's own counts/ids (FAR-1621 qa F3, see the anchors at its entry) and
-    skips the org, row-loop failures propagate to the tick's failure
-    heartbeat. No wait in this transaction MUST complete: there is no lock
-    here whose loss cannot be re-acquired next tick.
+    existing contract — the read phase logs ``read failed``, ROLLS THIS
+    TRANSACTION BACK explicitly, then unwinds this pass's own counts/ids
+    (FAR-1621 qa F3, amended FAR-1644/M3: the rollback is explicit because a
+    normal return from here would have COMMITTED a healthy transaction while
+    the counters were unwound) and skips the org; row-loop failures propagate
+    to the tick's failure heartbeat. No wait in this transaction MUST
+    complete: there is no lock here whose loss cannot be re-acquired next
+    tick.
 
     STATEMENT BOUND (FAR-1621): issued as this transaction's SECOND statement,
     immediately after the ``lock_timeout`` bound above — the transaction-scoped
@@ -7134,14 +7162,14 @@ async def _reconcile_org(
     # (hypothesis 2 of the FAR-1621 investigation) is distinguishable from a
     # block after it.
     _mark("session-acquire")
-    # FAR-1621 (qa F3): unwind anchors for THIS pass, captured before the first
-    # terminalizer runs. The read phase below can fail with a non-bounded error
-    # and return NORMALLY (its contract: log ``read failed`` and skip the org)
+    # FAR-1621 (qa F3, amended FAR-1644/M3): unwind anchors for THIS pass,
+    # captured before the first terminalizer runs. The read phase below can
+    # fail with a non-bounded error and return NORMALLY (its contract: log
+    # ``read failed``, roll the transaction back, skip the org)
     # — but by then the batch terminalizers may already have bumped ``summary``
-    # and appended to ``terminalized_run_ids`` from a transaction Postgres
-    # rolls back. Restore both on that path so the tick's counters and its
-    # compensating-fact ids only ever describe COMMITTED work (a rolled-back org
-    # contributes neither).
+    # and appended to ``terminalized_run_ids``. Restore both on that path so
+    # the tick's counters and its compensating-fact ids only ever describe
+    # COMMITTED work (a rolled-back org contributes neither).
     summary_before = dict(summary)
     terminalized_len_before = len(terminalized_run_ids)
     async with factory() as session, session.begin():
@@ -7252,7 +7280,7 @@ async def _reconcile_org(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if is_row_lock_timeout(exc) or _is_statement_timeout(exc):
+            if is_row_lock_timeout(exc) or is_statement_timeout(exc):
                 # FAR-1601: the bounded wait expired while a terminalizer (or
                 # the row select's locking read) held a contended ``runs`` row.
                 # Propagate OUT of the org transaction (which rolls back at the
@@ -7267,14 +7295,38 @@ async def _reconcile_org(
                 # exists to produce.
                 raise
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
-            # Postgres rolls this transaction back at the ``async with`` exit,
-            # so the terminalizer counts and compensating-fact ids this pass
-            # already collected must go with it (FAR-1621 qa F3): otherwise the
-            # tick records compensating facts and audits for runs that were
-            # never terminalized. Unwind BEFORE returning — same contract as
-            # every bounded per-org skip above, here for the read-failed
-            # swallow, whose normal return never reaches the reconcile body's
-            # unwind.
+            # FAR-1644 (M3): DECIDE the transaction outcome before touching the
+            # counters. This is a NORMAL return from inside
+            # ``async with session.begin()``, so ``SessionTransaction.__exit__``
+            # would take its COMMIT branch — and on a client-side/Python failure
+            # over a still-healthy connection that commit SUCCEEDS. The FAR-1621
+            # qa F3 comment this replaced claimed "Postgres rolls this
+            # transaction back at the ``async with`` exit"; it does not, unless
+            # something made it abort. Unwinding first therefore committed
+            # terminalizer writes that the summary had just disowned: their
+            # counters were zeroed and their compensating-fact ids dropped, so
+            # the tick reported less work than it had actually persisted.
+            #
+            # Roll back EXPLICITLY and only then unwind, so server-side state
+            # and the in-memory accounting can never disagree in either
+            # direction. ``session.rollback()`` inside a ``session.begin()``
+            # block is safe: on exit the transaction is no longer active, and
+            # SQLAlchemy's ``TransactionalContext.__exit__`` only commits an
+            # ACTIVE transaction, so it skips the commit and just closes
+            # (verified against SQLAlchemy 2.1.3, the pin this repo ships).
+            # The rollback is deliberately NOT wrapped in its own try/except:
+            # if it cannot complete the connection is already broken and the
+            # outcome genuinely is unknown — swallowing here would reintroduce
+            # exactly the disagree-with-the-server bug this fixes. Failing the
+            # tick with a truthful failure heartbeat is the honest outcome
+            # (the "swallow + keep going" contract is unchanged for every read
+            # failure whose rollback succeeds, which is all of them while the
+            # connection is alive). The ``nosemgrep`` follows the house
+            # precedent (run_outputs_dualwrite, library_service.community):
+            # the rule guards against destroying a SHARED session's writes,
+            # while this session was checked out for THIS org's pass alone and
+            # rolling all of it back is the intended semantics.
+            await session.rollback()  # nosemgrep: session-rollback-abuse
             _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
             return enqueue_failed_redispatched
 
