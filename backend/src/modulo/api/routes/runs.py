@@ -1775,16 +1775,20 @@ async def cancel_run(
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
-            # FAR-1610: the bounded (mutation_row_lock_timeout_ms) wait on the
-            # hot ``runs`` row lock expired (55P03). The DB is healthy and
-            # another change holds the row — 409, never the retry-inviting 503
-            # the rest of this arm returns (mirrors api.db_error_handling).
-            _log.warning("runs.cancel_run.lock_timeout", exc_info=True)
+            # FAR-1610: the transaction-scoped bound
+            # (``mutation_row_lock_timeout_ms``) on the hot ``runs`` row — taken
+            # first by ``request_cancellation``'s ``SELECT ... FOR UPDATE`` and
+            # also bounding ``finalize_cancelled_run``'s write (FAR-1642) —
+            # expired (55P03). The DB is healthy and another change holds the
+            # row, so answer 409, never the retry-inviting 503 the rest of this
+            # arm returns (mirrors api.db_error_handling /
+            # product_analytics_identity).
+            _log.warning("runs.cancel_run.lock_timeout")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "Timed out waiting for a lock on this run; another change is in progress. "
-                    "Re-issue the request once it completes."
+                    "Timed out waiting for a lock while cancelling this run; another change is in progress. "
+                    "Re-issue the cancel once the other change completes."
                 ),
             ) from None
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)

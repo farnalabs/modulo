@@ -55,7 +55,7 @@ from modulo.core.audit_logger.labels import (
     short_id,
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
+from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -4312,8 +4312,16 @@ class PipelineExecutor:
         The bounded retry rides out transient contention; if it persists, the
         exception propagates — ``run_executor_with_watchdog`` terminal-fails the
         run as ``executor_failed`` (truthful, non-silent), never a raw 500.
+
+        FAR-1642 retry-idempotent metrics: each attempt buffers its
+        ``limit_refused`` / ``duplicate_terminal`` counters on a FRESH
+        :class:`FinalizeMetricSink` and the sink is flushed only AFTER this
+        attempt's transaction commits — so a rolled-back attempt emits nothing
+        and a retried finalisation emits exactly one sample per event, instead
+        of one per attempt. A discarded sink (attempt failed) is simply dropped.
         """
         for attempt in range(1, FINALIZE_LOCK_RETRY_ATTEMPTS + 1):
+            metric_sink = FinalizeMetricSink()
             try:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
@@ -4331,8 +4339,11 @@ class PipelineExecutor:
                         is_terminal=final_status in _TERMINAL_STATUSES,
                         session_factory=self._session_factory,
                         claim_token=self._claim_token,
+                        metric_sink=metric_sink,
                     )
                     await _apply_work_intact_best_effort(session, run_id, work_intact, claim_token=self._claim_token)
+                # Committed — the buffered counters are now real (exactly once).
+                metric_sink.flush()
                 return
             except asyncio.CancelledError:
                 raise

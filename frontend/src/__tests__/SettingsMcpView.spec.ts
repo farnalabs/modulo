@@ -43,6 +43,20 @@ const mockOAuthClients = [
   { id: 'client-1', client_id: 'mod_oauth_xyz', name: 'CLI Client', scopes: ['trigger:run', 'hitl:review'], redirect_uris: ['https://example.com/callback'], created_at: '2026-06-20T00:00:00Z' },
 ]
 const mockNoOAuthClients: unknown[] = []
+
+/**
+ * Wire shape of `GET /api/v1/mcp/oauth/scopes` - the registration picker's
+ * scope vocabulary is fetched from the backend (registry keys + role floors),
+ * never hardcoded, so the fixture mirrors the canonical keys the backend
+ * serves (not the legacy `trigger:run` aliases).
+ */
+const mockOauthScopes = [
+  { key: 'run.trigger', min_role: 'runner' },
+  { key: 'hitl.review', min_role: 'operator' },
+  { key: 'hitl.approve', min_role: 'operator' },
+  { key: 'resource.read_only', min_role: 'viewer' },
+  { key: 'pipeline.create', min_role: 'operator' },
+]
 const mockCreatedOauthClient = {
   id: 'client-2',
   client_id: 'mod_oauth_new_client',
@@ -108,7 +122,7 @@ async function registerValidOauthClient(wrapper: ReturnType<typeof mountView>) {
   await nextTick()
   await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
   await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
-  const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+  const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
   ;(box.element as HTMLInputElement).checked = true
   await box.trigger('change')
   await nextTick()
@@ -123,6 +137,7 @@ function mockApiResponses(mcpConfig = mockMcpConfig, apiKeysData = mockApiKeys, 
     if (path === '/api/v1/api-keys/mcp-config') return Promise.resolve({ data: mcpConfig, error: undefined })
     if (path === '/api/v1/api-keys') return Promise.resolve({ data: apiKeysData, error: undefined })
     if (path === '/api/v1/mcp/oauth/clients') return Promise.resolve({ data: oauth, error: undefined })
+    if (path === '/api/v1/mcp/oauth/scopes') return Promise.resolve({ data: mockOauthScopes, error: undefined })
     if (path === '/api/v1/api-keys/grantable-permissions') {
       return Promise.resolve({ data: { enabled: false, permissions: [] }, error: undefined })
     }
@@ -899,9 +914,157 @@ describe('SettingsMcpView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="settings-mcp-oauth-name"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]').exists()).toBe(true)
+    // The offered scopes are fetched from GET /api/v1/mcp/oauth/scopes and
+    // rendered as canonical registry keys grouped by namespace.
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-library-browse"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-resource-read-only"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-filter"]').exists()).toBe(true)
+  })
+
+  it('groups the fetched scopes by namespace with an accessible group label', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+
+    // Group headings use a native <fieldset>/<legend> so the grouping
+    // semantics hold without an explicit ARIA role (Sonar Web:S6819).
+    const hitlGroup = wrapper.find('#settingsmcpview-oauth-scope-group-hitl')
+    expect(hitlGroup.exists()).toBe(true)
+    expect(hitlGroup.element.tagName).toBe('LEGEND')
+    expect(hitlGroup.text()).toBe('Human review')
+    const runGroup = wrapper.find('#settingsmcpview-oauth-scope-group-run')
+    expect(runGroup.exists()).toBe(true)
+    expect(runGroup.text()).toBe('Runs')
+    const group = wrapper.find('[data-testid="settings-mcp-oauth-scope-group-hitl"]')
+    expect(group.element.tagName).toBe('FIELDSET')
+    expect(group.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(true)
+  })
+
+  it('filters the scope list by the search box', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="settings-mcp-oauth-scope-filter"]').setValue('hitl')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-no-match"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="settings-mcp-oauth-scope-filter"]').setValue('no-such-scope')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-no-match"]').exists()).toBe(true)
+  })
+
+  it('surfaces a scope-load failure with a retry that recovers', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // Only the scope vocabulary endpoint fails; everything else keeps working.
+    const healthy = getMock.getMockImplementation()!
+    getMock.mockImplementation((path: string) =>
+      path === '/api/v1/mcp/oauth/scopes'
+        ? Promise.resolve({ data: undefined, error: { status: 503, detail: 'Service unavailable' } })
+        : healthy(path),
+    )
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-list"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(false)
+
+    // Endpoint recovers -> Retry re-fetches and the picker becomes usable.
+    mockApiResponses()
+    await wrapper.find('[data-testid="settings-mcp-oauth-scopes-retry"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-load-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
+  })
+
+  it('treats a rejected scopes fetch as a load failure, not a crash', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // A THROWN (rejected) request is a different path from a resolved
+    // `{ error }` body: it lands in the catch, which must still surface the
+    // inline failure + Retry rather than letting the dialog render an empty,
+    // unusable picker.
+    const healthy = getMock.getMockImplementation()!
+    getMock.mockImplementation((path: string) =>
+      path === '/api/v1/mcp/oauth/scopes'
+        ? Promise.reject(new Error('scopes endpoint down'))
+        : healthy(path),
+    )
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-retry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-list"]').exists()).toBe(false)
+    expect(warnSpy).toHaveBeenCalledWith('Failed to load OAuth scopes', expect.any(Error))
+    warnSpy.mockRestore()
+  })
+
+  it('ignores a second scope load while one is already in flight', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // The scope fetch never settles, so `scopesLoading` stays true and a
+    // concurrent second call must short-circuit instead of firing a
+    // duplicate request (the re-entrancy guard at the top of loadOauthScopes).
+    getMock.mockImplementation((path: string) =>
+      path === '/api/v1/mcp/oauth/scopes'
+        ? new Promise(() => {})
+        : Promise.resolve({ data: null, error: undefined }),
+    )
+
+    const vm = oauthVm(wrapper)
+    void vm.loadOauthScopes()
+    await nextTick()
+    expect(vm.scopesLoading).toBe(true)
+    await vm.loadOauthScopes()
+    expect(vm.scopesLoading).toBe(true)
+    expect(getMock.mock.calls.filter((c) => c[0] === '/api/v1/mcp/oauth/scopes').length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('caches the fetched scope vocabulary across dialog opens', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const scopeCalls = () =>
+      getMock.mock.calls.filter((c) => c[0] === '/api/v1/mcp/oauth/scopes').length
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(scopeCalls()).toBe(1)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
+
+    // Reopening the dialog reuses the cached vocabulary instead of refetching.
+    const vm = oauthVm(wrapper)
+    vm.openRegisterOauthDialog()
+    await nextTick()
+    expect(scopeCalls()).toBe(1)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
   })
 
   it('register validation blocks the POST and shows inline field errors', async () => {
@@ -927,7 +1090,7 @@ describe('SettingsMcpView', () => {
     expect(wrapper.find('[data-testid="settings-mcp-oauth-redirect-error"]').exists()).toBe(true)
 
     // touch scopes then leave none selected
-    const scope = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const scope = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(scope.element as HTMLInputElement).checked = true
     await scope.trigger('change')
     ;(scope.element as HTMLInputElement).checked = false
@@ -950,7 +1113,7 @@ describe('SettingsMcpView', () => {
     await wrapper
       .find('[data-testid="settings-mcp-oauth-redirect-uris"]')
       .setValue('https://a.example/cb\n\nhttps://b.example/cb')
-    for (const testid of ['settings-mcp-oauth-scope-trigger-run', 'settings-mcp-oauth-scope-hitl-review']) {
+    for (const testid of ['settings-mcp-oauth-scope-run-trigger', 'settings-mcp-oauth-scope-hitl-review']) {
       const box = wrapper.find(`[data-testid="${testid}"]`)
       ;(box.element as HTMLInputElement).checked = true
       await box.trigger('change')
@@ -965,7 +1128,8 @@ describe('SettingsMcpView', () => {
       body: {
         name: 'CLI Tool',
         redirect_uris: ['https://a.example/cb', 'https://b.example/cb'],
-        scopes: ['trigger:run', 'hitl:review'],
+        // Canonical registry keys - the backend serves and expects them.
+        scopes: ['run.trigger', 'hitl.review'],
       },
     })
     expect(vm.registerOauthDialogOpen).toBe(false)
@@ -995,7 +1159,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
     await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()
@@ -1301,7 +1465,7 @@ describe('SettingsMcpView', () => {
     await wrapper
       .find('[data-testid="settings-mcp-oauth-redirect-uris"]')
       .setValue('https://a.example/cb https://b.example/cb\nhttps://a.example/cb')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()
@@ -1314,7 +1478,7 @@ describe('SettingsMcpView', () => {
       body: {
         name: 'CLI Tool',
         redirect_uris: ['https://a.example/cb', 'https://b.example/cb'],
-        scopes: ['trigger:run'],
+        scopes: ['run.trigger'],
       },
     })
   })
@@ -1330,7 +1494,7 @@ describe('SettingsMcpView', () => {
     await wrapper
       .find('[data-testid="settings-mcp-oauth-redirect-uris"]')
       .setValue('https://ok.example/cb\nnot-a-url\nftp://x/y')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()
@@ -1359,7 +1523,7 @@ describe('SettingsMcpView', () => {
     await wrapper
       .find('[data-testid="settings-mcp-oauth-redirect-uris"]')
       .setValue('http://localhost:5173/cb http://127.0.0.1:8080/cb')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-library-browse"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-resource-read-only"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()
@@ -1371,7 +1535,7 @@ describe('SettingsMcpView', () => {
       body: {
         name: 'Local Client',
         redirect_uris: ['http://localhost:5173/cb', 'http://127.0.0.1:8080/cb'],
-        scopes: ['library:browse'],
+        scopes: ['resource.read_only'],
       },
     })
   })
@@ -1417,7 +1581,7 @@ describe('SettingsMcpView', () => {
     await nextTick()
     await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
     await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()
@@ -1474,17 +1638,19 @@ describe('SettingsMcpView', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Claude Key')
 
-    // Every GET AFTER the initial load fails with a transient 5xx - exactly
-    // the refetch the register emit triggers while the reveal dialog is open.
+    // Open the dialog FIRST so the backend-driven scope vocabulary loads and
+    // caches, then break every subsequent GET - exactly the refetch the
+    // register emit triggers while the reveal dialog is open.
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+
     getMock.mockImplementation(() =>
       Promise.resolve({ data: null, error: { status: 503, detail: 'Service unavailable' } }),
     )
 
-    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
-    await nextTick()
     await wrapper.find('[data-testid="settings-mcp-oauth-name"]').setValue('CLI Tool')
     await wrapper.find('[data-testid="settings-mcp-oauth-redirect-uris"]').setValue('https://a.example/cb')
-    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-trigger-run"]')
+    const box = wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]')
     ;(box.element as HTMLInputElement).checked = true
     await box.trigger('change')
     await nextTick()

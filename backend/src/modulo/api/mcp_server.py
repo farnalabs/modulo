@@ -99,6 +99,7 @@ from modulo.auth.oauth import (
     clamp_oauth_role,
     decode_oauth_access_token,
     get_oauth_client_team_id,
+    oauth_grant_set,
     scopes_required_role,
 )
 from modulo.auth.permissions import _clamp_role, grants_permit, set_authz_enforce
@@ -1158,6 +1159,11 @@ async def _validate_oauth_live(token: str) -> bool:
     if live_role is None:
         return False
     _ctx_role.set(clamp_oauth_role(scopes_required_role(claims.scopes), live_role))
+    # FAR-1476: re-derive the consented grant-set too — a long-lived
+    # connection must keep evaluating the token's permission set (and the
+    # live non-delegable exclusion inside ``grants_permit``), not a stale
+    # snapshot from auth time.
+    _ctx_key_grants.set(oauth_grant_set(claims.scopes))
     _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
     return True
 
@@ -1762,7 +1768,15 @@ async def _finalize_oauth_principal(
     # FAR-620: an OAuth token is the user's own identity — caller scope
     # 'user' (identity-bound, eligible for caller-scoped tools).
     _ctx_key_scope.set("user")
-    _ctx_key_grants.set(None)
+    # FAR-1476: the consented scope set IS the credential's grant-set, so the
+    # MCP tool-access resolver's grant leg (``resolve_tool_access`` leg 5,
+    # shared with API-key grant-sets) narrows every tool call to
+    # ``consented set INTERSECT bundle(live role)``. Without this the widened
+    # registry vocabulary would be unreachable-as-a-grant: the role leg alone
+    # would let a single-scope token call every tool at or below its role.
+    # ``grants_permit`` re-reads ``is_delegable`` live, so a token minted
+    # before an exclusion tightened is denied at the very next call.
+    _ctx_key_grants.set(oauth_grant_set(claims.scopes))
     _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
     request.scope["auth_principal"] = {
         "type": "user",

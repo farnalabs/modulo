@@ -89,10 +89,26 @@ class TestTriState:
 class TestDelegableFlag:
     @pytest.mark.parametrize(
         "key",
-        ["hitl.approve", "hitl.reject", "hitl.review", "hitl.claim", "hitl.deliver_manual", "org.delete"],
+        ["org.delete", "errors.resolve_instance"],
     )
-    def test_human_only_and_destructive_not_delegable(self, key: str) -> None:
+    def test_destructive_and_instance_scope_not_delegable(self, key: str) -> None:
         assert is_delegable(key) is False
+
+    @pytest.mark.parametrize(
+        "key",
+        ["hitl.approve", "hitl.reject", "hitl.review", "hitl.claim", "hitl.deliver_manual"],
+    )
+    def test_hitl_decision_keys_are_delegable(self, key: str) -> None:
+        """Decision record 2026-10-09: HITL decisions MAY be delegated.
+
+        They are grantable to a human-linked credential; the boundary for
+        them is the gate's runtime ``human_only`` policy (MCP denies a
+        ``human_only`` gate outright, REST denies a non-browser credential),
+        not this registry — see
+        ``tests/unit/mcp/test_hitl_delegation_boundary.py`` for the
+        end-to-end pin.
+        """
+        assert is_delegable(key) is True
 
     def test_break_glass_controls_not_delegable(self) -> None:
         assert is_delegable("org.authz_enforce.manage") is False
@@ -112,7 +128,9 @@ class TestDelegableFlag:
 
     def test_delegable_set_excludes_every_non_delegable_key(self) -> None:
         delegable = {k for k in PERMISSIONS if is_delegable(k)}
-        assert "hitl.approve" not in delegable
+        assert "org.delete" not in delegable
+        assert "api_key.create" not in delegable
+        assert "hitl.approve" in delegable
         assert "run.trigger" in delegable
 
     def test_flag_read_live_not_snapshotted(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +145,13 @@ class TestDelegableFlag:
         assert grants_permit(grants, "run.trigger") is False
 
     def test_excluded_key_in_stored_grants_still_denied(self) -> None:
-        assert grants_permit(frozenset({"hitl.approve"}), "hitl.approve") is False
+        # The live is_delegable read denies a still-excluded key even when a
+        # stored grant-set carries it.
+        assert grants_permit(frozenset({"system.config.manage"}), "system.config.manage") is False
+
+    def test_delegated_hitl_key_in_stored_grants_permitted(self) -> None:
+        # Decision record 2026-10-09: a stored HITL decision grant is live.
+        assert grants_permit(frozenset({"hitl.approve"}), "hitl.approve") is True
 
 
 # ── resolvers: effective = grants INTERSECT bundle(live_role) ───────────────
@@ -317,13 +341,17 @@ class TestMintCap:
         assert exc.value.status_code == 422
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "key", ["hitl.approve", "api_key.create", "oauth.client.create", "system.config.manage", "org.delete"]
-    )
+    @pytest.mark.parametrize("key", ["api_key.create", "oauth.client.create", "system.config.manage", "org.delete"])
     async def test_non_delegable_403_even_for_admin(self, key: str) -> None:
         with pytest.raises(HTTPException) as exc:
             await self._cap([key], "admin")
         assert exc.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_hitl_decision_key_mintable_by_operator(self) -> None:
+        # Decision record 2026-10-09: HITL decisions are delegable, so the
+        # mint cap no longer refuses them (the live role still caps them).
+        assert await self._cap(["hitl.approve", "hitl.review"], "operator") is None
 
     @pytest.mark.asyncio
     async def test_above_live_role_403(self) -> None:

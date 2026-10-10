@@ -49,6 +49,8 @@ from modulo.auth.oauth import (
     normalize_scopes,
     validate_redirect_uri,
 )
+from modulo.auth.permissions import PERMISSIONS, is_delegable
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
 from modulo.db.models.team import Team
@@ -92,6 +94,13 @@ class OAuthClientItem(BaseModel):
 
 class DeleteOAuthClientResponse(BaseModel):
     deleted: bool
+
+
+class OAuthScopeItem(BaseModel):
+    """One grantable OAuth scope (FAR-1476): the canonical registry key + its role floor."""
+
+    key: str
+    min_role: str
 
 
 async def _validate_oauth_team_binding(
@@ -178,7 +187,16 @@ async def register_oauth_client(
         )
 
     try:
-        normalize_scopes(" ".join(req.scopes))
+        # FAR-1476: the registered scope list is the client's CEILING, stored
+        # in canonical registry-key form (legacy aliases resolve through
+        # SCOPE_ALIASES). Unknown scopes and the registry's non-delegable
+        # exclusions (credential lifecycle api_key.* / oauth.client.*,
+        # system.*, org.delete, break-glass) are rejected here — fail closed
+        # at the registration boundary, never stored and never defaulted
+        # wider. The HITL decision keys are delegable (decision record
+        # 2026-10-09): the gate's runtime human_only policy is the boundary,
+        # not this vocabulary.
+        scopes = normalize_scopes(" ".join(req.scopes))
     except InvalidScopeError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -197,7 +215,9 @@ async def register_oauth_client(
         ) from e
 
     redirect_uris_str = " ".join(redirect_uris)
-    scopes_str = " ".join(req.scopes)
+    # Canonical registry keys only — what is stored is exactly what was
+    # validated (FAR-1281 pattern applied to scopes).
+    scopes_str = " ".join(scopes)
 
     try:
         async with session.begin():
@@ -297,6 +317,41 @@ async def list_oauth_clients_endpoint(
             detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
         ) from e
     return [OAuthClientItem(**c) for c in clients]
+
+
+# Read-only vocabulary listing - no mint, no mutation.
+@router.get("/scopes", dependencies=[require_feature("mcp_server")])
+async def list_oauth_scopes(
+    principal: TenantPrincipal = Depends(get_current_tenant_user),
+) -> list[OAuthScopeItem]:
+    """The delegable scope vocabulary a client may register (FAR-1476).
+
+    The registration picker's ONLY source of truth: served straight from the
+    ``PERMISSIONS`` registry through ``is_delegable`` — the same predicate the
+    registration boundary (``normalize_scopes``) and the enforcement resolvers
+    (``grants_permit``) use — so the UI can never offer a scope the backend
+    rejects, and a newly added registry key is reachable without a frontend
+    change. Non-delegable keys (``org.delete``, break-glass,
+    ``errors.resolve_instance``, and the prefix-excluded ``api_key.*`` /
+    ``oauth.client.*`` / ``system.*``) are never offered.
+
+    Filtered to the caller's own role level for the same reason
+    ``GET /api/v1/api-keys/grantable-permissions`` is: a scope above the
+    caller's floor could never be consented to by that caller at token time
+    (``verify_live_role_covers_scopes``), so offering it would be a dead
+    control. The registration boundary stays the authority.
+    """
+    if principal.org_role not in ("admin", "operator", "runner"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin, operator or runner users can list OAuth scopes",
+        )
+    caller_level = org_role_level(principal.org_role)
+    return [
+        OAuthScopeItem(key=key, min_role=min_role)
+        for key, min_role in sorted(PERMISSIONS.items())
+        if is_delegable(key) and org_role_level(min_role) <= caller_level
+    ]
 
 
 # Revoking a client invalidates its issued credentials -> fail closed.

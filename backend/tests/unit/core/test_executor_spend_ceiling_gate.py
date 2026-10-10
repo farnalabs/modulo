@@ -313,6 +313,77 @@ async def test_finalize_txn_zero_attempts_runs_no_attempt(monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
+# FAR-1642 item 3 — retry-idempotent metric emission
+# ---------------------------------------------------------------------------
+
+
+async def test_finalize_retry_flushes_buffered_metrics_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lock-aborted attempt's buffered counter must be discarded; only the
+    committing attempt's counter flushes — so one re-run emits ONE sample, not
+    one per attempt.
+
+    ``finalize_cost`` is replaced with a stand-in that buffers a
+    ``limit_refused`` on the attempt's sink and aborts the first attempt with a
+    deadlock (40P01). The sink is executor-owned: the failed attempt's sink must
+    never flush, and the successful attempt's must flush exactly once.
+    """
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+
+    sinks: list[object] = []
+
+    async def _finalize(session: object, **kwargs: object) -> None:
+        sink = kwargs["metric_sink"]
+        sinks.append(sink)
+        assert sink is not None
+        sink.limit_refused("team-a")  # type: ignore[attr-defined]
+        if len(sinks) == 1:
+            raise _SqlstateError("40P01")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+    ):
+        await _run_finalize(fake_self)
+
+    assert len(sinks) == 2, "the deadlock must re-run the whole transaction exactly once"
+    assert sinks[0] is not sinks[1], "each attempt must get a FRESH sink"
+    limit_refused.assert_called_once_with("team-a")
+
+
+async def test_finalize_persistent_failure_flushes_no_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When every attempt aborts, nothing committed — so no buffered counter
+    may be flushed (a metric must never count a finalisation that rolled back)."""
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+
+    async def _finalize(session: object, **kwargs: object) -> None:
+        sink = kwargs["metric_sink"]
+        assert sink is not None
+        sink.limit_refused("team-a")  # type: ignore[attr-defined]
+        raise _SqlstateError("40P01")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        pytest.raises(_SqlstateError),
+    ):
+        await _run_finalize(fake_self)
+
+    limit_refused.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # work_intact write failures inside the owned finalisation transaction
 # ---------------------------------------------------------------------------
 

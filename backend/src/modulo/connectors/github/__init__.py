@@ -817,6 +817,7 @@ class GitHubConnector(ConnectorBase):
         return set(REQUIRED_SCOPES - token_scopes)
 
     @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         """Check API access and verify required scopes/permissions.
 
