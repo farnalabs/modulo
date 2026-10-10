@@ -5,6 +5,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from modulo.core.product_analytics import consent as consent_module
+from modulo.core.product_analytics.consent import is_license_enforcement_enabled
 from modulo.core.product_analytics.license_enforcement import (
     PRODUCT_ANALYTICS_REQUIRED_KEY,
     _extract_org_license,
@@ -196,6 +200,47 @@ class TestIsEnforcementActive:
         ):
             assert await is_enforcement_active(session) is False
 
+    async def test_kill_switch_str_true_disables(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.system_config.get_config",
+            return_value=SimpleNamespace(value="true"),
+        ):
+            assert await is_enforcement_active(session) is False
+
+    async def test_kill_switch_str_false_enforces(self) -> None:
+        """Regression (FAR-1636): stored "false" must mean the switch is OFF → enforced."""
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.system_config.get_config",
+            return_value=SimpleNamespace(value="false"),
+        ):
+            assert await is_enforcement_active(session) is True
+
+    async def test_kill_switch_str_zero_enforces(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.system_config.get_config",
+            return_value=SimpleNamespace(value="0"),
+        ):
+            assert await is_enforcement_active(session) is True
+
+    async def test_kill_switch_str_no_enforces(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.system_config.get_config",
+            return_value=SimpleNamespace(value="no"),
+        ):
+            assert await is_enforcement_active(session) is True
+
+    async def test_kill_switch_str_yes_disables(self) -> None:
+        session = AsyncMock()
+        with patch(
+            "modulo.db.crud.system_config.get_config",
+            return_value=SimpleNamespace(value="yes"),
+        ):
+            assert await is_enforcement_active(session) is False
+
     async def test_kill_switch_read_error_fail_safe(self) -> None:
         from sqlalchemy.exc import SQLAlchemyError
 
@@ -205,6 +250,37 @@ class TestIsEnforcementActive:
             side_effect=SQLAlchemyError("db error"),
         ):
             assert await is_enforcement_active(session) is True
+
+
+class TestEnforcementHelpersAgree:
+    """FAR-1636: the two kill-switch helpers must share ONE canonical semantics."""
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            None,
+            True,
+            False,
+            "true",
+            "false",
+            "1",
+            "0",
+            "yes",
+            "no",
+        ],
+        ids=["absent", "bool_true", "bool_false", "str_true", "str_false", "str_one", "str_zero", "str_yes", "str_no"],
+    )
+    async def test_both_helpers_return_the_same_verdict(self, stored: object) -> None:
+        session = AsyncMock()
+        config = None if stored is None else SimpleNamespace(value=stored)
+        with (
+            patch("modulo.db.crud.system_config.get_config", return_value=config),
+            patch.object(consent_module, "get_config", new=AsyncMock(return_value=config)),
+        ):
+            license_active = await is_enforcement_active(session)
+            consent_active = await is_license_enforcement_enabled(session)
+
+        assert license_active is consent_active
 
 
 class TestShouldDegradeToCommunity:

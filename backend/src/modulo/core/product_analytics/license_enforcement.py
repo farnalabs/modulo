@@ -18,6 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.license import LicenseData, parse_and_verify
+from modulo.core.product_analytics.consent import kill_switch_disables_enforcement
 
 _log = logging.getLogger(__name__)
 
@@ -100,6 +101,11 @@ async def is_enforcement_active(session: AsyncSession) -> bool:
     Reads ``system_config.product_analytics_license_enforcement_kill_switch``.
     Absent = enforced (fail-safe, matching the ``authz_enforce`` pattern).
     A truthy value means enforcement is DISABLED (kill switch ON).
+
+    The stored-value semantics are the canonical ones defined once in
+    :func:`modulo.core.product_analytics.consent.kill_switch_disables_enforcement`
+    — in particular a stored ``"false"``/``"0"``/``"no"`` leaves enforcement
+    ENABLED, agreeing with ``consent.is_license_enforcement_enabled``.
     """
     from modulo.db.crud.system_config import get_config
 
@@ -110,7 +116,7 @@ async def is_enforcement_active(session: AsyncSession) -> bool:
         return True
     if config is None:
         return True
-    return not bool(config.value)
+    return not kill_switch_disables_enforcement(config.value)
 
 
 def should_degrade_to_community(org: Any, enforcement_active: bool) -> bool:

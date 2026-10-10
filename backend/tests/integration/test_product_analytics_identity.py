@@ -13,6 +13,7 @@ Covers the full round-trip of a real ``RotateRequest`` through
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections import defaultdict
@@ -25,7 +26,10 @@ from httpx import AsyncClient
 from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from modulo.api.routes.product_analytics_identity import _SEQUENCE_KEY_PREFIX
+from modulo.api.routes.product_analytics_identity import (
+    _HAS_ROTATED_KEY_PREFIX,
+    _SEQUENCE_KEY_PREFIX,
+)
 from modulo.auth.jwt import create_access_token
 from modulo.core.product_analytics.hmac_verify import sign_rotation_request
 from modulo.core.product_analytics.instance_identity import (
@@ -102,6 +106,7 @@ async def _fresh_instance_identity(db_engine) -> AsyncGenerator[None, None]:
                     SystemConfig.key == _INSTANCE_ID_KEY,
                     SystemConfig.key == _SECRET_KEY,
                     SystemConfig.key.like(_SEQUENCE_KEY_PREFIX + "%"),
+                    SystemConfig.key.like(_HAS_ROTATED_KEY_PREFIX + "%"),
                 )
             )
         )
@@ -264,6 +269,65 @@ class TestRotateSequenceMonotonicity:
         assert "secret" not in body
         assert "new_secret" not in body
         assert current not in resp.text
+
+    async def test_concurrent_duplicate_sequence_rotates_once(
+        self,
+        integration_client: AsyncClient,
+        app_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+    ) -> None:
+        """FAR-1633: two concurrent rotations with the SAME sequence → one wins.
+
+        Both requests pass HMAC auth with the same old secret and the same
+        sequence. The per-instance row lock serialises the read-check-write, so
+        exactly one rotation commits (200) and the other observes the committed
+        sequence and is rejected (400). Without the lock both can read the same
+        ``last_seq`` and both rotate.
+        """
+        instance_id, secret = await _mint_and_get_secret(app_engine)
+        token = _token(test_org, test_user, "admin", is_system_admin=True)
+        headers = {"Authorization": f"Bearer {token}"}
+        body = _rotate_body(secret, instance_id, sequence=1)
+
+        first, second = await asyncio.gather(
+            integration_client.post("/api/v1/product-analytics/rotate", json=body, headers=headers),
+            integration_client.post("/api/v1/product-analytics/rotate", json=body, headers=headers),
+        )
+        statuses = sorted([first.status_code, second.status_code])
+        assert statuses == [200, 400]
+
+    async def test_missing_sequence_row_after_rotation_fails_closed(
+        self,
+        integration_client: AsyncClient,
+        app_engine: AsyncEngine,
+        test_org: uuid.UUID,
+        test_user: uuid.UUID,
+    ) -> None:
+        """FAR-1634: deleting the sequence row after a rotation must fail closed."""
+        instance_id, secret = await _mint_and_get_secret(app_engine)
+        token = _token(test_org, test_user, "admin", is_system_admin=True)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp1 = await integration_client.post(
+            "/api/v1/product-analytics/rotate",
+            json=_rotate_body(secret, instance_id, sequence=1),
+            headers=headers,
+        )
+        assert resp1.status_code == 200, resp1.text
+        new_secret = resp1.json()["new_secret"]
+
+        # Tamper: remove ONLY the sequence row, leaving the has-rotated marker.
+        async with app_engine.begin() as conn:
+            await conn.execute(delete(SystemConfig).where(SystemConfig.key == _SEQUENCE_KEY_PREFIX + instance_id))
+
+        resp2 = await integration_client.post(
+            "/api/v1/product-analytics/rotate",
+            json=_rotate_body(new_secret, instance_id, sequence=2),
+            headers=headers,
+        )
+        assert resp2.status_code == 500
+        assert "inconsistent" in resp2.json()["detail"]
 
 
 class TestRotateRateLimit:
