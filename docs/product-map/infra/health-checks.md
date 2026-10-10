@@ -84,11 +84,16 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
       reading logs: `org_timeouts` (the FAR-1525 30s per-org cut), `orgs_deferred`
       (orgs never started because only the reserved tick tail remained),
       `org_lock_timeouts` (FAR-1601 SQLSTATE 55P03 skip), `org_pool_timeouts`
-      (system-engine pool checkout) and `org_statement_timeouts` (FAR-1621
-      SQLSTATE 57014 statement bound). Each defaults to 0 so a payload written
-      before the counter existed still renders; the matching cut/skip also lands
-      in the tick's `last_error` carrying the exact `stage=` the org pass had
-      reached
+      (system-engine pool checkout), `org_connect_timeouts` (asyncpg's TCP
+      connect bound during session acquisition) and `org_statement_timeouts`
+      (FAR-1621 SQLSTATE 57014 statement bound). Each defaults to 0 so a
+      payload written before the counter existed still renders. Only the
+      outcomes counted in `org_timeouts` also land in the tick's `last_error` —
+      the per-org TIME cut and an in-pass `TimeoutError` fired before the slice
+      deadline — each carrying the exact `stage=` the org pass had reached; the
+      lock/pool/connect/statement SKIPs deliberately leave `status="ok"` and
+      `last_error=None` and carry their stage in the matching WARNING log line
+      instead
 - [x] Fleet worker / fleet system-cron aggregation (worker process-group health, ADR 021)
 - [x] Break-glass watchdog exposure is advisory and never contributes to readiness
 - [x] Per-check timeout limits, configurable via `modulo_health_*_timeout_seconds` settings

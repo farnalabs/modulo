@@ -262,18 +262,20 @@ class TestCheckDispatcherReconcile:
 
     @pytest.mark.asyncio
     async def test_fresh_run_detail_surfaces_per_org_bounded_failure_counters(self) -> None:
-        """FAR-1621: the readiness detail must surface ALL four per-org
+        """FAR-1621: the readiness detail must surface ALL the per-org
         bounded-failure counters (plus ``orgs_deferred``) so an alert email can
         tell the FAR-1525 cut, the FAR-1601 skip, the pool-checkout cut, the
-        FAR-1621 statement-bound skip and a deferral apart — before this they
-        were absent from the detail entirely, making the cases indistinguishable."""
+        connect-bound skip, the FAR-1621 statement-bound skip and a deferral
+        apart — before this they were absent from the detail entirely, making
+        the cases indistinguishable."""
         fake = _FakeStatsRedis(
             blob=_fresh_payload(
                 org_timeouts=1,
                 orgs_deferred=2,
                 org_lock_timeouts=3,
                 org_pool_timeouts=4,
-                org_statement_timeouts=5,
+                org_connect_timeouts=5,
+                org_statement_timeouts=6,
             ).encode()
         )
         with (
@@ -284,14 +286,11 @@ class TestCheckDispatcherReconcile:
         assert result.status == "ok"
         assert result.detail is not None
         assert "org_timeouts=1" in result.detail
-        assert result.detail is not None
         assert "orgs_deferred=2" in result.detail
-        assert result.detail is not None
         assert "org_lock_timeouts=3" in result.detail
-        assert result.detail is not None
         assert "org_pool_timeouts=4" in result.detail
-        assert result.detail is not None
-        assert "org_statement_timeouts=5" in result.detail
+        assert "org_connect_timeouts=5" in result.detail
+        assert "org_statement_timeouts=6" in result.detail
 
     @pytest.mark.asyncio
     async def test_fresh_run_detail_defaults_the_per_org_counters_to_zero(self) -> None:
@@ -306,9 +305,8 @@ class TestCheckDispatcherReconcile:
         assert result.status == "ok"
         assert result.detail is not None
         assert "org_timeouts=0" in result.detail
-        assert result.detail is not None
         assert "org_pool_timeouts=0" in result.detail
-        assert result.detail is not None
+        assert "org_connect_timeouts=0" in result.detail
         assert "org_statement_timeouts=0" in result.detail
 
     @pytest.mark.asyncio

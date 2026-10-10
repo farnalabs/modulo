@@ -8,6 +8,7 @@ that gates enqueue) and by a real-Redis two-process integration test.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -22,6 +23,7 @@ import pytest
 from asyncpg import exceptions as asyncpg_exceptions
 from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
+from sqlalchemy.pool import QueuePool
 
 from modulo.core import cron_helpers as ch
 from modulo.db.models.eval_suite_run import SuiteRun
@@ -3698,7 +3700,10 @@ class _F1621Session:
       * *rows* — returned by the reconcile row select (identified by the
         selected ``retry_policy`` column) so the per-row loop runs;
       * *raise_on_update* — raised on the first ``UPDATE runs`` (i.e. out of a
-        batch terminalizer).
+        batch terminalizer);
+      * *raise_on_read* — raised on the reconcile row select (identified by
+        its ``outputs_absent`` SELECT-list label), for the read-phase failure
+        path that logs ``read failed`` and returns.
     """
 
     def __init__(
@@ -3707,6 +3712,7 @@ class _F1621Session:
         *,
         rows: list[Any] | None = None,
         raise_on_update: BaseException | None = None,
+        raise_on_read: BaseException | None = None,
     ) -> None:
         self.stage = stage
         self.statements: list[str] = []
@@ -3714,6 +3720,7 @@ class _F1621Session:
         self.params: list[dict[str, Any] | None] = []
         self.rows = rows or []
         self.raise_on_update = raise_on_update
+        self.raise_on_read = raise_on_read
         self.info: dict[str, Any] = {}
         bind = MagicMock()
         bind.dialect.name = "postgresql"
@@ -3741,6 +3748,8 @@ class _F1621Session:
         self.params.append(params)
         if self.raise_on_update is not None and "UPDATE runs" in sql:
             raise self.raise_on_update
+        if self.raise_on_read is not None and "outputs_absent" in sql:
+            raise self.raise_on_read
         result = MagicMock()
         if "retry_policy" in sql:
             result.all.return_value = list(self.rows)
@@ -3819,8 +3828,8 @@ class TestOrgStatementBound:
         """THE pin: the lock bound stays FIRST, the statement bound is SECOND,
         both are transaction-local (``set_config(..., true)`` == ``SET LOCAL``),
         the statement bound's value comes from the module constant, that
-        constant is at or under the 30s per-org budget, and both precede every
-        ``UPDATE runs`` the transaction makes."""
+        constant is STRICTLY under the 30s per-org budget, and both precede
+        every ``UPDATE runs`` the transaction makes."""
         stage: dict[str, str] = {}
         session = _F1621Session(stage)
         with patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()):
@@ -3836,9 +3845,14 @@ class TestOrgStatementBound:
         assert stmt_at == 1, f"the statement bound must be the SECOND statement; statements={sqls}"
         assert ", true)" in sqls[stmt_at], "the statement bound must be transaction-local (SET LOCAL)"
         assert session.params[stmt_at] == {"val": f"{ch._RECONCILE_STATEMENT_TIMEOUT_MS}ms"}
-        # Under the per-org budget is the whole point of the bound: it must
-        # fire BEFORE the asyncio cut, so the failure is catchable + attributed.
-        assert ch._RECONCILE_STATEMENT_TIMEOUT_MS <= 30000
+        # STRICTLY under the per-org budget is the whole point of the bound: it
+        # must fire BEFORE the asyncio cut, so the failure is catchable +
+        # attributed. Equality would race that cut (the asyncio timer starts
+        # before this transaction does), so the comparison is ``<`` — against
+        # the 30s the timeout message advertises AND against the module's own
+        # coded default for ``dispatcher_reconcile_org_budget_seconds``.
+        assert ch._RECONCILE_STATEMENT_TIMEOUT_MS < 30000
+        assert ch._RECONCILE_STATEMENT_TIMEOUT_MS < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS * 1000
         updates = session.indices_of("UPDATE runs")
         assert updates, "the batch terminalizers never ran an UPDATE runs"
         assert stmt_at < updates[0], "the statement bound must precede every runs write"
@@ -3868,10 +3882,23 @@ class TestOrgStatementBound:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Scope guard: a 55P03 keeps its existing path and is never counted
-        as a statement timeout (the two bounded waits are distinct classes)."""
+        as a statement timeout (the two bounded waits are distinct classes).
+
+        Asserted through BOTH seams: the 55P03 still propagates out of
+        ``_reconcile_org`` with its SQLSTATE intact (so the body's lock skip is
+        the one that sees it), and when the reconcile BODY drives that skip it
+        bumps ``org_lock_timeouts`` while ``org_statement_timeouts`` stays at
+        0 — asserted against the live summary and the captured log, both of
+        which that body run actually populates (the ``_reconcile_org`` half
+        alone could not: the ``org_statement_timeout`` WARNING is emitted by
+        the body, never by the org pass itself)."""
         stage: dict[str, str] = {}
-        driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
-        session = _F1621Session(stage, raise_on_update=OperationalError("UPDATE runs SET ...", {}, driver_error))
+        lock_error = OperationalError(
+            "UPDATE runs SET ...",
+            {},
+            asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout"),
+        )
+        session = _F1621Session(stage, raise_on_update=lock_error)
         caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
 
         with (
@@ -3881,7 +3908,38 @@ class TestOrgStatementBound:
             await _run_f1621_org(session, stage=stage)
 
         assert sqlstate_of(excinfo.value) == "55P03"
-        assert not any("org_statement_timeout" in record.getMessage() for record in caplog.records)
+
+        # The same 55P03 through the reconcile BODY: its dedicated lock skip
+        # fires, the statement-timeout counter does not.
+        lock_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == lock_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/terminalizer:mid_graph"
+                summary["scanned"] += 3
+                raise lock_error
+            summary["scanned"] += 1
+            return 0
+
+        summary_out, _sweeps, _stage, _facts = await _drive_f1621_body(
+            [lock_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=[],
+        )
+
+        assert summary_out["org_lock_timeouts"] == 1
+        assert summary_out["org_statement_timeouts"] == 0
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("org_lock_timeout" in message for message in messages)
+        assert not any("org_statement_timeout" in message for message in messages)
 
 
 class TestOrgStageHint:
@@ -3939,15 +3997,76 @@ class TestOrgStageHint:
 
     async def test_stage_is_a_noop_without_a_hint(self) -> None:
         """Direct callers (tests, other sweeps) pass no hint: the pass must run
-        exactly as before and never touch a stage dict."""
+        exactly as before — no refinement attempted, full pass, no crash.
+
+        Completion is the falsifiable half: without ``_mark``'s ``stage is not
+        None`` guard, refining a missing hint would raise ``TypeError``
+        mid-pass and this would never return 0."""
         stage: dict[str, str] = {}
         session = _F1621Session(stage)
         with patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()):
             got = await _run_f1621_org(session, stage=None)
         assert got == 0
-        # The pass really executed (otherwise the assertion above is vacuous).
+        # Ran END TO END: every bound + RLS statement executed and the row
+        # select was reached.
+        # (``session``'s own stage dict was never handed to the pass, so it
+        # proves nothing about refinement — ``test_stage_is_refined_at_every_site_of_the_pass``
+        # pins that side; this pins the other.)
         assert session.statements
-        assert stage == {}
+        assert session.index_of("outputs_absent") >= 0
+
+
+class TestReadFailureUnwind:
+    """FAR-1621 qa F3: the read phase's ``read failed`` swallow returns
+    NORMALLY from inside the org transaction. Postgres rolls that transaction
+    back, so the in-memory counts and compensating-fact ids the batch
+    terminalizers already recorded must be unwound with it — otherwise the tick
+    writes compensating facts and audits for runs that were never
+    terminalized."""
+
+    async def test_read_failure_unwinds_the_counts_the_rolled_back_transaction_recorded(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        terminalized = [uuid.uuid4(), uuid.uuid4()]
+
+        async def fake_terminalizer(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
+            return list(terminalized)
+
+        async def run(*, fail_read: bool) -> tuple[dict[str, Any], list[tuple[uuid.UUID, uuid.UUID]]]:
+            stage: dict[str, str] = {}
+            session = _F1621Session(
+                stage,
+                raise_on_read=SQLAlchemyError("connection reset during row select") if fail_read else None,
+            )
+            summary = ch._dispatcher_summary()
+            ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+            with (
+                patch("modulo.db.crud.row_lock.get_settings", return_value=_f1621_lock_settings()),
+                patch.object(ch, "_terminalize_claim_cap_exhausted", new=fake_terminalizer),
+            ):
+                await _run_f1621_org(session, stage=stage, summary=summary, terminalized_run_ids=ids)
+            return summary, ids
+
+        # Control: with a clean read the terminalizer's records SURVIVE. This
+        # is what makes the unwind below an observation — without it, a broken
+        # terminalizer double would leave both runs at zero and the test would
+        # pass for the wrong reason.
+        control_summary, control_ids = await run(fail_read=False)
+        assert control_summary["claim_cap_terminalized"] == len(terminalized)
+        assert len(control_ids) == len(terminalized)
+
+        caplog.set_level(logging.ERROR, logger="modulo.core.cron_helpers")
+        summary, ids = await run(fail_read=True)
+
+        # The failure was logged (never silently swallowed)...
+        assert any("read failed" in message for message in caplog.messages)
+        # ...and everything the rolled-back transaction had recorded is gone:
+        # no terminalizer counts, no compensating-fact ids for runs that were
+        # never actually terminalized.
+        assert summary["claim_cap_terminalized"] == 0
+        assert summary["terminalize_capped"] == 0
+        assert summary["scanned"] == 0
+        assert not ids
 
 
 async def _drive_f1621_body(
@@ -4107,7 +4226,13 @@ class TestOrgBoundedFailureCounters:
         pass reached — not just the org — so the next prod occurrence names the
         exact blocking site. The pre-existing substrings (``per-org bound``,
         the org id, ``stage=reconcile_org``) are kept for compatibility with
-        the alert text already in the wild."""
+        the alert text already in the wild.
+
+        The org WEDGES until the body's own ``asyncio.timeout`` cuts it (the
+        real bound), rather than raising ``TimeoutError`` by hand: since qa F2
+        the body only claims the per-org cut once the slice has actually
+        elapsed, so a hand-raised timeout at t=0 would (correctly) be reported
+        as an in-pass timeout instead."""
         hang_org = uuid.uuid4()
         summary = ch._dispatcher_summary()
         terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
@@ -4123,7 +4248,9 @@ class TestOrgBoundedFailureCounters:
                 if stage is not None:
                     stage["op"] = f"reconcile_org:{org_id}/{blocking_stage}"
                 summary["scanned"] += 2
-                raise TimeoutError
+                # Wedged await — only the per-org time bound can stop it.
+                await asyncio.Event().wait()
+                return 0  # pragma: no cover - reached only pre-fix
             summary["scanned"] += 1
             return 0
 
@@ -4146,6 +4273,121 @@ class TestOrgBoundedFailureCounters:
         assert blocking_stage in last_error, f"the stage detail was lost from last_error: {last_error}"
         records = [record for record in caplog.records if "per-org time bound fired" in record.getMessage()]
         assert records, f"no per-org bound WARNING emitted; log={caplog.text}"
+        assert blocking_stage in records[0].getMessage()
+
+    async def test_connect_stage_timeout_is_never_reported_as_the_per_org_cut(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """qa F2: asyncpg's connect bound (``connect_args={"timeout": 10}``)
+        raises the SAME builtin ``TimeoutError`` as the per-org asyncio cut,
+        ~10s into a 30s slice. Reported as "per-org bound after ~10.1s
+        (org_budget=30s)" it sends the alert at a slow sweep when the real
+        cause is a DB session that was never established — so the arm claims
+        the per-org cut ONLY when the elapsed time is at the slice deadline,
+        and otherwise attributes by stage to ``org_connect_timeouts``, leaving
+        the tick ``ok`` like every other bounded skip."""
+        connect_org, good_org = uuid.uuid4(), uuid.uuid4()
+        rolled_back_run, committed_run = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == connect_org:
+                if stage is not None:
+                    # The connect bound fires while acquiring the session —
+                    # before the first statement of this transaction ran.
+                    stage["op"] = f"reconcile_org:{org_id}/session-acquired"
+                summary["scanned"] += 4
+                summary["repaired"] += 2
+                terminalized_run_ids.append((rolled_back_run, org_id))
+                raise TimeoutError
+            summary["scanned"] += 1
+            terminalized_run_ids.append((committed_run, org_id))
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, record_facts = await _drive_f1621_body(
+            [connect_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+        )
+
+        # Its own counter — NOT the per-org cut — and the rolled-back org's
+        # counts/ids are unwound like every other bounded skip.
+        assert summary_out["org_connect_timeouts"] == 1
+        assert summary_out["org_timeouts"] == 0
+        assert summary_out["scanned"] == 1
+        assert summary_out["repaired"] == 0
+        fact_runs = [call.args[0] for call in record_facts.await_args_list]
+        assert rolled_back_run not in fact_runs
+        assert committed_run in fact_runs
+        assert sweeps.await_count == 1
+        # Bounded skips leave the tick healthy; the stage lives in the WARNING.
+        assert summary_out["status"] == "ok"
+        assert summary_out["last_error"] is None
+        records = [record for record in caplog.records if "org_connect_timeout" in record.getMessage()]
+        assert records, f"no org_connect_timeout WARNING emitted; log={caplog.text}"
+        message = records[0].getMessage()
+        assert str(connect_org) in message
+        assert "session-acquired" in message
+        assert "NOT the per-org time bound" in message
+        assert records[0].exc_info is not None
+
+    async def test_an_early_in_pass_timeout_is_not_reported_as_the_per_org_cut(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The other half of qa F2: a ``TimeoutError`` raised from INSIDE the
+        pass, well before the slice deadline, is still a bounded per-org
+        failure (counted, status ``timeout``, tick continues) — but
+        ``last_error`` must not claim the per-org bound fired. It reports the
+        elapsed time, the slice that had NOT elapsed, and the stage."""
+        early_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+        blocking_stage = "row_loop:3/10"
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == early_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/{blocking_stage}"
+                summary["scanned"] += 2
+                raise TimeoutError
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, _record_facts = await _drive_f1621_body(
+            [early_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+        )
+
+        assert summary_out["org_timeouts"] == 1
+        assert summary_out["org_connect_timeouts"] == 0
+        assert summary_out["status"] == "timeout"
+        # The rolled-back org's rows are unwound; the tick continued.
+        assert summary_out["scanned"] == 1
+        assert sweeps.await_count == 1
+        last_error = summary_out["last_error"]
+        assert last_error is not None
+        assert "per-org bound" not in last_error
+        assert "NOT elapsed" in last_error
+        assert str(early_org) in last_error
+        assert blocking_stage in last_error, f"the stage detail was lost from last_error: {last_error}"
+        records = [record for record in caplog.records if "in-pass TimeoutError" in record.getMessage()]
+        assert records, f"no in-pass TimeoutError WARNING emitted; log={caplog.text}"
         assert blocking_stage in records[0].getMessage()
 
     async def test_an_unbounded_failure_still_fails_the_tick(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -4184,6 +4426,7 @@ class TestOrgFailureStatsContract:
         assert summary["orgs_deferred"] == 0
         assert summary["org_lock_timeouts"] == 0
         assert summary["org_pool_timeouts"] == 0
+        assert summary["org_connect_timeouts"] == 0
         assert summary["org_statement_timeouts"] == 0
 
     def test_set_dispatcher_reconcile_stats_carries_the_new_counters(self) -> None:
@@ -4195,19 +4438,23 @@ class TestOrgFailureStatsContract:
                 "orgs_deferred": 2,
                 "org_lock_timeouts": 3,
                 "org_pool_timeouts": 4,
-                "org_statement_timeouts": 5,
+                "org_connect_timeouts": 5,
+                "org_statement_timeouts": 6,
             }
         )
         assert ch._dispatcher_reconcile_stats["org_timeouts"] == 1
         assert ch._dispatcher_reconcile_stats["orgs_deferred"] == 2
         assert ch._dispatcher_reconcile_stats["org_lock_timeouts"] == 3
         assert ch._dispatcher_reconcile_stats["org_pool_timeouts"] == 4
-        assert ch._dispatcher_reconcile_stats["org_statement_timeouts"] == 5
+        assert ch._dispatcher_reconcile_stats["org_connect_timeouts"] == 5
+        assert ch._dispatcher_reconcile_stats["org_statement_timeouts"] == 6
 
 
 class TestSystemEnginePoolKnobs:
     """FAR-1621 proposal 3: ``_get_system_engine`` mirrors
-    ``db.session._build_engine``'s pool settings and connect timeout."""
+    ``db.session._build_engine``'s pool settings and connect timeout — and the
+    bound those settings create is the one the reconcile body's pool arm can
+    actually catch at default config (qa F1 reachability)."""
 
     def _build(self, url: str) -> Any:
         ch._SYSTEM_ENGINE = None
@@ -4229,8 +4476,79 @@ class TestSystemEnginePoolKnobs:
         # defaults — and asyncpg's own connect wait is bounded too.
         assert kwargs["pool_size"] == 20
         assert kwargs["max_overflow"] == 10
-        assert kwargs["pool_timeout"] == 30
-        assert kwargs["connect_args"]["timeout"] == 10
+        assert kwargs["pool_timeout"] == ch._SYSTEM_POOL_TIMEOUT_SECONDS
+        assert kwargs["connect_args"]["timeout"] == ch._SYSTEM_CONNECT_TIMEOUT_SECONDS
+
+    def test_system_pool_timeout_is_strictly_below_the_default_org_budget(self) -> None:
+        """qa F1 (REACHABILITY): the per-org ``asyncio.timeout`` slice starts
+        BEFORE the org's pool checkout, so a ``pool_timeout`` at or above the
+        org budget could never win that race — the asyncio cut would fire
+        first, the checkout failure would be counted as a generic
+        ``org_timeouts`` and ``org_pool_timeouts`` would be unreachable at
+        default config. The bound must therefore sit strictly under the coded
+        default for ``dispatcher_reconcile_org_budget_seconds``."""
+        kwargs = self._build("postgresql+asyncpg://sys:pass@db:5432/modulo")
+        assert kwargs["pool_timeout"] == ch._SYSTEM_POOL_TIMEOUT_SECONDS
+        assert kwargs["pool_timeout"] < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS
+
+    async def test_starved_pool_checkout_raises_the_catchable_timeout_and_is_counted(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """qa F1 (the reachability chain, end to end): starving a REAL
+        QueuePool raises ``sqlalchemy.exc.TimeoutError`` — NOT the builtin,
+        which is exactly why the reconcile body needs a dedicated arm ahead of
+        ``except TimeoutError`` — on a bound far below the org budget, so the
+        pool arm wins the race against the asyncio cut instead of being
+        swallowed by it; and the body counts that very exception as
+        ``org_pool_timeouts``, skipping the org while the tick continues."""
+        starvation = 0.05
+        assert starvation < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS
+        pool = QueuePool(creator=lambda: MagicMock(), pool_size=1, max_overflow=0, timeout=starvation)
+        held = pool.connect()
+        try:
+            with pytest.raises(SATimeoutError) as excinfo:
+                pool.connect()
+        finally:
+            held.close()
+            pool.dispose()
+        # The load-bearing fact for the arm ordering: the builtin TimeoutError
+        # handler can never see this exception. (The async system engine's pool
+        # raises the same sqlalchemy.exc.TimeoutError class.)
+        assert TimeoutError not in type(excinfo.value).__mro__
+
+        pool_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == pool_org:
+                if stage is not None:
+                    stage["op"] = f"reconcile_org:{org_id}/session-acquired"
+                raise excinfo.value
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        summary_out, sweeps, _stage, _facts = await _drive_f1621_body(
+            [pool_org, good_org],
+            fake_reconcile_org,
+            summary=summary,
+            terminalized_run_ids=[],
+        )
+
+        assert summary_out["org_pool_timeouts"] == 1
+        assert summary_out["org_timeouts"] == 0
+        assert summary_out["status"] == "ok"
+        assert summary_out["scanned"] == 1
+        assert sweeps.await_count == 1
+        records = [record for record in caplog.records if "org_pool_timeout" in record.getMessage()]
+        assert records, f"no org_pool_timeout WARNING emitted; log={caplog.text}"
+        assert str(pool_org) in records[0].getMessage()
+        assert "session-acquired" in records[0].getMessage()
 
     def test_sqlite_system_url_keeps_no_pool_knobs(self) -> None:
         """The pool knobs are QueuePool-only — the same guard
@@ -4239,4 +4557,4 @@ class TestSystemEnginePoolKnobs:
         assert "pool_size" not in kwargs
         assert "max_overflow" not in kwargs
         assert "pool_timeout" not in kwargs
-        assert kwargs["connect_args"]["timeout"] == 10
+        assert kwargs["connect_args"]["timeout"] == ch._SYSTEM_CONNECT_TIMEOUT_SECONDS

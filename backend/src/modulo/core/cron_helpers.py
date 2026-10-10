@@ -452,9 +452,14 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "org_lock_timeouts": 0,
     # FAR-1621: orgs cut because the system-engine pool checkout ran out of
     # connections (sqlalchemy.exc.TimeoutError - NOT the builtin, so it needs
-    # its own arm), and orgs cut by the transaction-scoped statement bound
-    # (SQLSTATE 57014 query_canceled). Same additive .get() contract.
+    # its own arm), orgs cut because asyncpg's TCP connect bound expired
+    # before the org's session was ever established (the builtin TimeoutError
+    # raised at the session-acquire stage - a DIFFERENT cause from pool
+    # saturation, so it gets its own counter), and orgs cut by the
+    # transaction-scoped statement bound (SQLSTATE 57014 query_canceled). Same
+    # additive .get() contract.
     "org_pool_timeouts": 0,
+    "org_connect_timeouts": 0,
     "org_statement_timeouts": 0,
 }
 
@@ -502,9 +507,11 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["org_timeouts"] = stats.get("org_timeouts", 0)
     _dispatcher_reconcile_stats["orgs_deferred"] = stats.get("orgs_deferred", 0)
     _dispatcher_reconcile_stats["org_lock_timeouts"] = stats.get("org_lock_timeouts", 0)
-    # FAR-1621: pool-checkout / statement-bound cuts, same copy contract — a
-    # missing copy line would silently zero them and hide the diagnosis.
+    # FAR-1621: pool-checkout / connect / statement-bound cuts, same copy
+    # contract — a missing copy line would silently zero them and hide the
+    # diagnosis.
     _dispatcher_reconcile_stats["org_pool_timeouts"] = stats.get("org_pool_timeouts", 0)
+    _dispatcher_reconcile_stats["org_connect_timeouts"] = stats.get("org_connect_timeouts", 0)
     _dispatcher_reconcile_stats["org_statement_timeouts"] = stats.get("org_statement_timeouts", 0)
 
 
@@ -620,6 +627,29 @@ _ENGINE: AsyncEngine | None = None
 _SYSTEM_ENGINE: AsyncEngine | None = None
 _ENGINE_LOCK = threading.Lock()
 
+# FAR-1621 (qa F1/F2): session-establishment bounds for the SYSTEM engine, in
+# seconds.
+#
+# ``_SYSTEM_CONNECT_TIMEOUT_SECONDS`` bounds asyncpg's own TCP connect wait
+# (the driver default is 60s) and is also what the reconcile body's
+# ``except TimeoutError`` arm names when a connect bound fires during session
+# acquisition (qa F2) — one constant, so the message can never drift from the
+# value the engine actually passes.
+#
+# ``_SYSTEM_POOL_TIMEOUT_SECONDS`` is the QueuePool checkout bound, and it is
+# deliberately STRICTLY BELOW ``dispatcher_reconcile_org_budget_seconds``' 30s
+# default (``_RECONCILE_ORG_BUDGET_DEFAULT_SECONDS``): the per-org
+# ``asyncio.timeout`` slice starts BEFORE the org's pool checkout, so a bound
+# that met or exceeded the slice could never win that race — the asyncio cut
+# would fire first, the checkout failure would be counted as a generic
+# ``org_timeouts``, and ``org_pool_timeouts`` would be unreachable at default
+# config (the FAR-1621 qa finding). At 10s the pool raises its catchable
+# ``sqlalchemy.exc.TimeoutError`` first and the org loop attributes it. It
+# also matches the connect bound above, so session establishment as a whole is
+# bounded to ~20s (pool wait + connect), still inside the org slice.
+_SYSTEM_CONNECT_TIMEOUT_SECONDS = 10
+_SYSTEM_POOL_TIMEOUT_SECONDS = 10
+
 
 def _get_engine() -> AsyncEngine:
     global _ENGINE
@@ -668,11 +698,15 @@ def _get_system_engine() -> AsyncEngine:
             # CATCHABLE ``sqlalchemy.exc.TimeoutError`` after ``pool_timeout``
             # instead of relying on SQLAlchemy's implicit defaults (5+10
             # connections, pool_timeout=30s) — which the org loop can then
-            # attribute to ``org_pool_timeouts``. Same values as the shared
-            # engine factory (pool_size 20 / max_overflow 10 / pool_timeout 30)
-            # so both pools behave alike. SQLite keeps no pool knobs, exactly
-            # as ``_build_engine`` skips them there (they are QueuePool-only).
-            system_connect_args: dict[str, Any] = {"timeout": 10}
+            # attribute to ``org_pool_timeouts``. ``pool_size``/``max_overflow``
+            # match the shared engine factory (20 / 10) so both pools hold the
+            # same number of connections; ``pool_timeout`` deliberately does NOT
+            # match it — see ``_SYSTEM_POOL_TIMEOUT_SECONDS``: it must stay
+            # strictly below the per-org budget or the asyncio cut wins the race
+            # and ``org_pool_timeouts`` is unreachable. SQLite keeps no pool
+            # knobs, exactly as ``_build_engine`` skips them there (they are
+            # QueuePool-only).
+            system_connect_args: dict[str, Any] = {"timeout": _SYSTEM_CONNECT_TIMEOUT_SECONDS}
             if system_ssl_arg is not None:
                 system_connect_args["ssl"] = system_ssl_arg
                 system_connect_args["statement_cache_size"] = 0
@@ -689,7 +723,7 @@ def _get_system_engine() -> AsyncEngine:
             if "sqlite" not in str(sa.make_url(system_url).drivername):
                 system_engine_kw["pool_size"] = 20
                 system_engine_kw["max_overflow"] = 10
-                system_engine_kw["pool_timeout"] = 30
+                system_engine_kw["pool_timeout"] = _SYSTEM_POOL_TIMEOUT_SECONDS
             _SYSTEM_ENGINE = create_async_engine(system_url, **system_engine_kw)
         else:
             _log.error(
@@ -5503,6 +5537,14 @@ _RECONCILE_POST_ORGS_RESERVE_SECONDS = 15
 # Smallest org slice worth starting: below this the remaining budget goes to
 # record_facts / the compensating sweeps and the org is deferred, not cut.
 _RECONCILE_ORG_MIN_SECONDS = 1.0
+# FAR-1621 (qa F2): how close the elapsed time must be to the org slice before
+# a builtin ``TimeoutError`` is reported as THE per-org asyncio cut. The cut
+# raises AT the slice deadline (so a genuine cut always has elapsed >= slice),
+# while the asyncpg connect bound (``_SYSTEM_CONNECT_TIMEOUT_SECONDS``) and any
+# in-pass timeout fire well before it — at 10s against a 30s slice the gap is
+# two orders of magnitude larger than this slack. Keeps scheduling jitter from
+# splitting a genuine cut from a near-slice non-cut.
+_RECONCILE_ORG_CUT_SLACK_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -6363,15 +6405,22 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         threads its mutable ``stage`` hint INTO ``_reconcile_org``, which
         refines it at session-acquire, at the lock/statement bounds, at
         rls-set, per terminalizer, at the row select and per row; the cut's
-        ``last_error`` and its ``WARNING`` both carry that stage. Companion
-        bounds: a transaction-scoped ``statement_timeout``
+        ``last_error`` and its ``WARNING`` both carry that stage. A builtin
+        ``TimeoutError`` is claimed as THE per-org cut only when the elapsed
+        time is at the slice deadline — asyncpg's connect bound
+        (``_SYSTEM_CONNECT_TIMEOUT_SECONDS``) raises the same exception ~10s
+        into a 30s slice and is attributed by stage to its own
+        ``org_connect_timeouts`` skip instead (qa F2). Companion bounds: a
+        transaction-scoped ``statement_timeout``
         (``_RECONCILE_STATEMENT_TIMEOUT_MS``) turns a runaway statement into
         a catchable SQLSTATE 57014 with its own ``org_statement_timeouts``
         skip instead of silently burning the org slice, and
         ``_get_system_engine`` now takes explicit pool knobs so a saturated
         checkout surfaces as ``sqlalchemy.exc.TimeoutError`` (NOT a subclass
-        of the builtin) counted by ``org_pool_timeouts``. All four
-        bounded-failure counters reach the readiness detail via
+        of the builtin) counted by ``org_pool_timeouts`` — its
+        ``pool_timeout`` sits strictly below the per-org budget so that arm
+        can win the race against the asyncio cut (qa F1). Every
+        bounded-failure counter reaches the readiness detail via
         ``_format_reconcile_detail`` so alert emails can tell the cases apart.
     """
     settings = get_settings()
@@ -6676,14 +6725,67 @@ async def _dispatcher_reconcile_body(
                         stage=stage,
                     )
             except TimeoutError:
-                # FAR-1525: the org's pass hit the per-org bound. The session
-                # context managers inside _reconcile_org rolled back + closed at
-                # the safe boundary (same mechanism as the outer deadline), so
-                # unwind this org's in-memory accounting, record a TRUTHFUL
-                # bounded-failure marker, and CONTINUE — the remaining orgs,
-                # record_facts and the compensating sweeps still run this tick.
+                # FAR-1525: the org's pass raised a builtin TimeoutError. The
+                # session context managers inside _reconcile_org rolled back +
+                # closed at the safe boundary (same mechanism as the outer
+                # deadline), so unwind this org's in-memory accounting, record a
+                # TRUTHFUL bounded-failure marker, and CONTINUE — the remaining
+                # orgs, record_facts and the compensating sweeps still run this
+                # tick.
                 org_elapsed = time.monotonic() - org_pass_started
                 _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+                stage_label = _org_stage_label(stage, org_id)
+                # FAR-1621 (qa F2): a builtin TimeoutError here is EITHER the
+                # per-org asyncio cut — only once the slice has actually
+                # elapsed — OR asyncpg's TCP connect bound
+                # (``connect_args={"timeout": 10}``) expiring while the org's
+                # session was still being established, ~10s into a 30s slice.
+                # Reported as "per-org bound after ~10.1s (org_budget=30s)" the
+                # latter points the alert at a slow sweep when the real cause is
+                # a DB session that was never established, so the per-org bound
+                # is claimed ONLY at the slice deadline; before it the real
+                # cause is named from the stage instead.
+                if org_elapsed < org_slice_seconds - _RECONCILE_ORG_CUT_SLACK_SECONDS:
+                    if stage_label.endswith(("/session-acquire", "/session-acquired")):
+                        # Session never established: the connect bound expired
+                        # before the first statement of this transaction ran.
+                        summary["org_connect_timeouts"] = summary.get("org_connect_timeouts", 0) + 1
+                        _log.warning(
+                            "dispatcher_reconcile.org_connect_timeout org=%s at stage %s (asyncpg connect "
+                            "bound %ss reached after %.1fs — the org's DB session was NEVER established, so "
+                            "this is NOT the per-org time bound) — org transaction rolled back with NO rows "
+                            "terminalized or repaired; the same rows are re-selected by the reconcile "
+                            "predicates on the next 60s tick",
+                            org_id,
+                            stage_label,
+                            _SYSTEM_CONNECT_TIMEOUT_SECONDS,
+                            org_elapsed,
+                            exc_info=True,
+                        )
+                        continue
+                    # In-pass TimeoutError raised BEFORE the slice ran out:
+                    # still a bounded per-org failure (counted, tick continues),
+                    # but the message must not claim the per-org bound fired.
+                    summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
+                    summary["status"] = "timeout"
+                    summary["last_error"] = (
+                        f"in-pass TimeoutError after {org_elapsed:.1f}s (org slice "
+                        f"{org_slice_seconds:.1f}s NOT elapsed, org_budget={org_budget_seconds}s, "
+                        f"budget={outer_budget_seconds}s, max_rows={max_rows}) during stage={stage_label}"
+                    )[:400]
+                    _log.warning(
+                        "dispatcher_reconcile: in-pass TimeoutError after %.1fs (org slice %.1fs NOT "
+                        "elapsed, org_budget=%ds, budget=%ds) for org %s at stage %s; org transaction "
+                        "rolled back, tick continues",
+                        org_elapsed,
+                        org_slice_seconds,
+                        org_budget_seconds,
+                        outer_budget_seconds,
+                        org_id,
+                        stage_label,
+                        exc_info=True,
+                    )
+                    continue
                 summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
                 summary["status"] = "timeout"
                 # FAR-1621: the stage is the whole point of this message — it is
@@ -6694,7 +6796,7 @@ async def _dispatcher_reconcile_body(
                 summary["last_error"] = (
                     f"per-org bound after {org_elapsed:.1f}s "
                     f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
-                    f"during stage={_org_stage_label(stage, org_id)}"
+                    f"during stage={stage_label}"
                 )[:400]
                 _log.warning(
                     "dispatcher_reconcile: per-org time bound fired after %.1fs "
@@ -6704,7 +6806,7 @@ async def _dispatcher_reconcile_body(
                     org_budget_seconds,
                     outer_budget_seconds,
                     org_id,
-                    _org_stage_label(stage, org_id),
+                    stage_label,
                 )
                 continue
             except asyncio.CancelledError:
@@ -6728,7 +6830,7 @@ async def _dispatcher_reconcile_body(
                     "predicates on the next 60s tick",
                     org_id,
                     _org_stage_label(stage, org_id),
-                    30,
+                    _SYSTEM_POOL_TIMEOUT_SECONDS,
                     exc_info=True,
                 )
                 continue
@@ -6883,10 +6985,13 @@ def _dispatcher_summary() -> dict[str, Any]:
         # handler (same additive .get() contract as the counters above).
         "org_lock_timeouts": 0,
         # FAR-1621: orgs cut by the system-engine pool checkout
-        # (sqlalchemy.exc.TimeoutError) and by the transaction-scoped
-        # statement bound (SQLSTATE 57014) — the two bounded-failure classes
-        # that used to be indistinguishable from the generic per-org cut.
+        # (sqlalchemy.exc.TimeoutError), by asyncpg's TCP connect bound during
+        # session acquisition (builtin TimeoutError at the session-acquire
+        # stage) and by the transaction-scoped statement bound (SQLSTATE
+        # 57014) — the three bounded-failure classes that used to be
+        # indistinguishable from the generic per-org cut.
         "org_pool_timeouts": 0,
+        "org_connect_timeouts": 0,
         "org_statement_timeouts": 0,
     }
     # Terminalizer counters (and their healthz aliases) derive from the
@@ -6962,10 +7067,11 @@ async def _reconcile_org(
     ``_dispatcher_reconcile_body``) skips that org with a ``WARNING`` + full
     chain — never a silent no-op, never a lost recovery — unwinds its counts
     and continues with the remaining orgs; every OTHER failure keeps its
-    existing contract (read phase logs ``read failed`` and skips the org;
-    row-loop failures propagate to the tick's failure heartbeat). No wait in
-    this transaction MUST complete: there is no lock here whose loss cannot be
-    re-acquired next tick.
+    existing contract — the read phase logs ``read failed``, unwinds this
+    pass's own counts/ids (FAR-1621 qa F3, see the anchors at its entry) and
+    skips the org, row-loop failures propagate to the tick's failure
+    heartbeat. No wait in this transaction MUST complete: there is no lock
+    here whose loss cannot be re-acquired next tick.
 
     STATEMENT BOUND (FAR-1621): issued as this transaction's SECOND statement,
     immediately after the ``lock_timeout`` bound above — the transaction-scoped
@@ -7004,6 +7110,16 @@ async def _reconcile_org(
     # (hypothesis 2 of the FAR-1621 investigation) is distinguishable from a
     # block after it.
     _mark("session-acquire")
+    # FAR-1621 (qa F3): unwind anchors for THIS pass, captured before the first
+    # terminalizer runs. The read phase below can fail with a non-bounded error
+    # and return NORMALLY (its contract: log ``read failed`` and skip the org)
+    # — but by then the batch terminalizers may already have bumped ``summary``
+    # and appended to ``terminalized_run_ids`` from a transaction Postgres
+    # rolls back. Restore both on that path so the tick's counters and its
+    # compensating-fact ids only ever describe COMMITTED work (a rolled-back org
+    # contributes neither).
+    summary_before = dict(summary)
+    terminalized_len_before = len(terminalized_run_ids)
     async with factory() as session, session.begin():
         _mark("session-acquired")
         # FAR-1601: bound THIS org transaction's row-lock waits FIRST — the
@@ -7127,6 +7243,15 @@ async def _reconcile_org(
                 # exists to produce.
                 raise
             _log.exception("dispatcher_reconcile: read failed (org %s)", org_id)
+            # Postgres rolls this transaction back at the ``async with`` exit,
+            # so the terminalizer counts and compensating-fact ids this pass
+            # already collected must go with it (FAR-1621 qa F3): otherwise the
+            # tick records compensating facts and audits for runs that were
+            # never terminalized. Unwind BEFORE returning — same contract as
+            # every bounded per-org skip above, here for the read-failed
+            # swallow, whose normal return never reaches the reconcile body's
+            # unwind.
+            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
             return enqueue_failed_redispatched
 
         for row_index, row in enumerate(rows):
