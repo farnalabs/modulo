@@ -594,10 +594,12 @@ async def replace_run_node_outputs(
             "(NUL / lone surrogate) in the outputs/telemetry payload for run %s",
             run_id,
         )
-    if inherited_outputs is not None:
-        inherited_outputs = _sanitise_side(inherited_outputs)[0]
-    if inherited_telemetry is not None:
-        inherited_telemetry = _sanitise_side(inherited_telemetry)[0]
+    # ``_sanitise_side(None)`` is a no-op returning ``(None, False)``, so the
+    # inherited captures are sanitised unconditionally (guarding each on
+    # ``is not None`` added two branches for no behavioural difference and
+    # pushed this function's cognitive complexity over the Sonar limit).
+    inherited_outputs = _sanitise_side(inherited_outputs)[0]
+    inherited_telemetry = _sanitise_side(inherited_telemetry)[0]
 
     filtered = _split_inherited_sentinel_keys(outputs, inherited_outputs, kind="outputs node id")
     filtered |= _split_inherited_sentinel_keys(telemetry, inherited_telemetry, kind="telemetry node id")
