@@ -28,7 +28,7 @@ network. All evaluation logic is pure and operates on the returned dict.
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
+import datetime as dt
 import json
 import os
 import re
@@ -448,7 +448,7 @@ def gather_repo_evidence(target: str) -> dict[str, Any]:
     failure (so callers can report INCONCLUSIVE).
     """
     owner_repo = parse_target(target)
-    now = _dt.datetime.now(_dt.UTC)
+    now = dt.datetime.now(dt.UTC)
 
     repo = _api_get(f"repos/{owner_repo}")
     repo_id = repo.get("id")
@@ -479,7 +479,7 @@ def gather_repo_evidence(target: str) -> dict[str, Any]:
     tags = _paginate(f"repos/{owner_repo}/tags?per_page=100")
 
     # Commits in the last COMMITTER_WINDOW_DAYS.
-    since = (now - _dt.timedelta(days=COMMITTER_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since = (now - dt.timedelta(days=COMMITTER_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     commits = _paginate(f"repos/{owner_repo}/commits?since={since}&per_page=100")
 
     return {
@@ -587,12 +587,12 @@ def _evaluate_criteria(
     if not created_raw:
         raise GithubApiError("Repository created_at is missing or empty.")
     try:
-        created = _dt.datetime.fromisoformat(created_raw)
+        created = dt.datetime.fromisoformat(created_raw)
     except ValueError as exc:
         # An unparseable date is an evidence problem, not a policy fail --
         # report INCONCLUSIVE rather than a hard TOO_YOUNG reject.
         raise GithubApiError(f"Repository created_at is unparseable: {created_raw!r}") from exc
-    age_ok = (now - created) >= _dt.timedelta(days=MIN_AGE_DAYS)
+    age_ok = (now - created) >= dt.timedelta(days=MIN_AGE_DAYS)
     _set_criterion(criteria, "age", age_ok, RC_TOO_YOUNG)
 
     # 5. Tagged release.

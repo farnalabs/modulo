@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import uuid
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -164,13 +164,13 @@ async def test_deliver_cost_report_raises_when_smtp_unconfigured() -> None:
     ("schedule_type", "expected_active", "expected_next"),
     [
         ("one_time", False, None),
-        ("recurring", True, datetime.datetime(2026, 7, 15, tzinfo=datetime.UTC)),
+        ("recurring", True, dt.datetime(2026, 7, 15, tzinfo=dt.UTC)),
     ],
 )
 async def test_due_report_executes_and_transitions_schedule(
     schedule_type: str,
     expected_active: bool,
-    expected_next: datetime.datetime | None,
+    expected_next: dt.datetime | None,
 ) -> None:
     report = make_cost_report_mock(schedule_type=schedule_type)
     selected = MagicMock()

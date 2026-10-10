@@ -8,7 +8,7 @@ DB session (same pattern as ``test_agent_signal.py``).
 
 import asyncio
 import contextlib
-import datetime
+import datetime as dt
 import uuid
 from decimal import Decimal
 from typing import Any, cast
@@ -69,7 +69,7 @@ def _make_trigger(**overrides: Any) -> MagicMock:
             "snapshot_id": str(uuid.uuid4()),
         },
     )
-    t.next_fire_at = datetime.datetime.now(datetime.UTC)
+    t.next_fire_at = dt.datetime.now(dt.UTC)
     t.last_fired_at = None
     return t
 

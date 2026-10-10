@@ -6,7 +6,7 @@ calls are made -- every scenario is driven from a synthetic evidence dict.
 
 from __future__ import annotations
 
-import datetime as _dt
+import datetime as dt
 import json
 import subprocess
 
@@ -15,7 +15,7 @@ import pytest
 from check_partner_eligibility import GithubApiError
 
 
-def _base_evidence(now: _dt.datetime) -> dict:
+def _base_evidence(now: dt.datetime) -> dict:
     """A fully-qualifying repo as of *now*."""
     return {
         "repo_id": 123456,
@@ -24,7 +24,7 @@ def _base_evidence(now: _dt.datetime) -> dict:
         "fork": False,
         "archived": False,
         "stargazers_count": 1500,
-        "created_at": (now - _dt.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created_at": (now - dt.timedelta(days=400)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "spdx_id": "MIT",
         "license_file_present": True,
         "tags": [{"name": "v1.0.0"}],
@@ -38,18 +38,18 @@ def _base_evidence(now: _dt.datetime) -> dict:
 
 
 @pytest.fixture
-def now() -> _dt.datetime:
-    return _dt.datetime(2026, 1, 15, 12, 0, 0, tzinfo=_dt.UTC)
+def now() -> dt.datetime:
+    return dt.datetime(2026, 1, 15, 12, 0, 0, tzinfo=dt.UTC)
 
 
-def test_fully_qualifying_repo_is_eligible(now: _dt.datetime) -> None:
+def test_fully_qualifying_repo_is_eligible(now: dt.datetime) -> None:
     result = mod.evaluate_evidence(_base_evidence(now))
     assert result["verdict"] == mod.VERDICT_ELIGIBLE
     assert result["repo_id"] == 123456
     assert all(c["status"] == mod.STATUS_PASS for c in result["criteria"].values())
 
 
-def test_fork_is_ineligible(now: _dt.datetime) -> None:
+def test_fork_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["fork"] = True
     result = mod.evaluate_evidence(ev)
@@ -57,7 +57,7 @@ def test_fork_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["public"]["reason"] == mod.RC_IS_FORK
 
 
-def test_archived_is_ineligible(now: _dt.datetime) -> None:
+def test_archived_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["archived"] = True
     result = mod.evaluate_evidence(ev)
@@ -65,7 +65,7 @@ def test_archived_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["public"]["reason"] == mod.RC_IS_ARCHIVED
 
 
-def test_private_is_ineligible(now: _dt.datetime) -> None:
+def test_private_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["private"] = True
     result = mod.evaluate_evidence(ev)
@@ -73,7 +73,7 @@ def test_private_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["public"]["reason"] == mod.RC_NOT_PUBLIC
 
 
-def test_below_stars_is_ineligible(now: _dt.datetime) -> None:
+def test_below_stars_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["stargazers_count"] = 42
     result = mod.evaluate_evidence(ev)
@@ -81,15 +81,15 @@ def test_below_stars_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["stars"]["reason"] == mod.RC_BELOW_STARS
 
 
-def test_too_young_is_ineligible(now: _dt.datetime) -> None:
+def test_too_young_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
-    ev["created_at"] = (now - _dt.timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ev["created_at"] = (now - dt.timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = mod.evaluate_evidence(ev)
     assert result["verdict"] == mod.VERDICT_INELIGIBLE
     assert result["criteria"]["age"]["reason"] == mod.RC_TOO_YOUNG
 
 
-def test_no_tagged_release_is_ineligible(now: _dt.datetime) -> None:
+def test_no_tagged_release_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["tags"] = []
     result = mod.evaluate_evidence(ev)
@@ -97,7 +97,7 @@ def test_no_tagged_release_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["release"]["reason"] == mod.RC_NO_TAGGED_RELEASE
 
 
-def test_insufficient_committers_is_ineligible(now: _dt.datetime) -> None:
+def test_insufficient_committers_is_ineligible(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     # Only one human committer (the other entries are bots).
     ev["commits"] = [
@@ -110,7 +110,7 @@ def test_insufficient_committers_is_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["committers"]["reason"] == mod.RC_INSUFFICIENT_COMMITTERS
 
 
-def test_license_file_fallback_passes(now: _dt.datetime) -> None:
+def test_license_file_fallback_passes(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["spdx_id"] = "NOASSERTION"
     # licence file present -> fallback pass.
@@ -119,7 +119,7 @@ def test_license_file_fallback_passes(now: _dt.datetime) -> None:
     assert result["criteria"]["license"]["reason"] == mod.RC_LICENSE_FILE_FALLBACK
 
 
-def test_no_osi_license_fails(now: _dt.datetime) -> None:
+def test_no_osi_license_fails(now: dt.datetime) -> None:
     ev = _base_evidence(now)
     ev["spdx_id"] = "NOASSERTION"
     ev["license_file_present"] = False
@@ -128,7 +128,7 @@ def test_no_osi_license_fails(now: _dt.datetime) -> None:
     assert result["criteria"]["license"]["reason"] == mod.RC_NO_OSI_LICENSE
 
 
-def test_no_osi_license_with_unknown_spdx_id(now: _dt.datetime) -> None:
+def test_no_osi_license_with_unknown_spdx_id(now: dt.datetime) -> None:
     # A non-OSI spdx id (e.g. LicenseRef-Unknown) with no LICENSE file -> fail.
     ev = _base_evidence(now)
     ev["spdx_id"] = "LicenseRef-Unknown"
@@ -138,7 +138,7 @@ def test_no_osi_license_with_unknown_spdx_id(now: _dt.datetime) -> None:
     assert result["criteria"]["license"]["reason"] == mod.RC_NO_OSI_LICENSE
 
 
-def test_license_file_fallback_with_null_spdx(now: _dt.datetime) -> None:
+def test_license_file_fallback_with_null_spdx(now: dt.datetime) -> None:
     # spdx_id null (GitHub returned no license object) but a LICENSE file is
     # detected -> the fallback path still passes the licence criterion.
     ev = _base_evidence(now)
@@ -149,7 +149,7 @@ def test_license_file_fallback_with_null_spdx(now: _dt.datetime) -> None:
     assert result["criteria"]["license"]["reason"] == mod.RC_LICENSE_FILE_FALLBACK
 
 
-def test_lowercase_osi_spdx_is_eligible(now: _dt.datetime) -> None:
+def test_lowercase_osi_spdx_is_eligible(now: dt.datetime) -> None:
     # Licence match must be case-insensitive: "mit" (lowercase) is accepted.
     ev = _base_evidence(now)
     ev["spdx_id"] = "mit"
@@ -159,7 +159,7 @@ def test_lowercase_osi_spdx_is_eligible(now: _dt.datetime) -> None:
     assert result["criteria"]["license"]["reason"] is None
 
 
-def test_known_non_osi_spdx_with_license_file_is_ineligible(now: _dt.datetime) -> None:
+def test_known_non_osi_spdx_with_license_file_is_ineligible(now: dt.datetime) -> None:
     # A KNOWN non-OSI spdx id (GPL-1.0) must be rejected even when a LICENSE
     # file is present -- it must not be false-accepted via the fallback.
     ev = _base_evidence(now)
@@ -178,26 +178,26 @@ def test_exit_code_mapping() -> None:
     assert mod._exit_code(mod.VERDICT_INCONCLUSIVE) == 2
 
 
-def test_age_boundary_exactly_eligible(now: _dt.datetime) -> None:
+def test_age_boundary_exactly_eligible(now: dt.datetime) -> None:
     # A repo exactly MIN_AGE_DAYS old is old enough to pass.
     ev = _base_evidence(now)
-    ev["created_at"] = (now - _dt.timedelta(days=mod.MIN_AGE_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ev["created_at"] = (now - dt.timedelta(days=mod.MIN_AGE_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = mod.evaluate_evidence(ev)
     assert result["criteria"]["age"]["status"] == mod.STATUS_PASS
     assert result["verdict"] == mod.VERDICT_ELIGIBLE
 
 
-def test_age_boundary_just_below_ineligible(now: _dt.datetime) -> None:
+def test_age_boundary_just_below_ineligible(now: dt.datetime) -> None:
     # One day under the boundary -> TOO_YOUNG (covers the ~5 months 29 days case).
     ev = _base_evidence(now)
-    ev["created_at"] = (now - _dt.timedelta(days=mod.MIN_AGE_DAYS - 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ev["created_at"] = (now - dt.timedelta(days=mod.MIN_AGE_DAYS - 1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = mod.evaluate_evidence(ev)
     assert result["criteria"]["age"]["status"] == mod.STATUS_FAIL
     assert result["criteria"]["age"]["reason"] == mod.RC_TOO_YOUNG
 
 
 def test_reason_code_surfaced_in_human_output(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    now: dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ev = _base_evidence(now)
     ev["private"] = True
@@ -212,7 +212,7 @@ def test_reason_code_surfaced_in_human_output(
 
 
 def test_reason_code_surfaced_in_json_output(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    now: dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ev = _base_evidence(now)
     ev["private"] = True
@@ -251,7 +251,7 @@ def _patch_api_responses(monkeypatch, status_code: int, headers: dict) -> None:
     monkeypatch.setattr(mod.requests, "get", _get)
 
 
-def test_403_rate_limit_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_403_rate_limit_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_api_responses(
         monkeypatch,
         status_code=403,
@@ -264,7 +264,7 @@ def test_403_rate_limit_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.M
     assert result["verdict"] != mod.VERDICT_INELIGIBLE
 
 
-def test_401_token_expiry_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_401_token_expiry_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_api_responses(monkeypatch, status_code=401, headers={})
     result = mod.check_eligibility("acme/widgets", fetcher=mod.gather_repo_evidence)
     assert result["verdict"] == mod.VERDICT_INCONCLUSIVE
@@ -272,7 +272,7 @@ def test_401_token_expiry_is_inconclusive(now: _dt.datetime, monkeypatch: pytest
     assert result["verdict"] != mod.VERDICT_INELIGIBLE
 
 
-def test_api_failure_is_inconclusive(monkeypatch, now: _dt.datetime) -> None:
+def test_api_failure_is_inconclusive(monkeypatch, now: dt.datetime) -> None:
     def _raise(target: str) -> dict:
         raise GithubApiError("rate limit")
 
@@ -284,7 +284,7 @@ def test_api_failure_is_inconclusive(monkeypatch, now: _dt.datetime) -> None:
 
 
 def test_json_output_shape(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    now: dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ev = _base_evidence(now)
 
@@ -313,7 +313,7 @@ def test_parse_target_variants() -> None:
         mod.parse_target("not-a-repo")
 
 
-def test_gh_nonjson_stdout_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gh_nonjson_stdout_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     # gh returns 0 but emits non-JSON stdout -> must degrade to INCONCLUSIVE.
     cp = subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="not json", stderr="")
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: cp)
@@ -322,7 +322,7 @@ def test_gh_nonjson_stdout_is_inconclusive(now: _dt.datetime, monkeypatch: pytes
     assert result["criteria"]["api"]["reason"] == mod.RC_API_FAILURE
 
 
-def test_gh_oserror_falls_through_to_requests(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gh_oserror_falls_through_to_requests(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     # gh cannot be launched (OSError) -> the requests path must be used.
     calls = {"gh": 0, "requests": 0}
 
@@ -372,7 +372,7 @@ def test_gh_oserror_falls_through_to_requests(now: _dt.datetime, monkeypatch: py
     assert result["verdict"] == mod.VERDICT_ELIGIBLE
 
 
-def _fake_api_get_factory(now: _dt.datetime):
+def _fake_api_get_factory(now: dt.datetime):
     """Build an ``_api_get_with_headers`` fake that returns per-path fixtures."""
 
     def _fake(path: str, *, allow_codes: tuple[int, ...] = ()):
@@ -389,7 +389,7 @@ def _fake_api_get_factory(now: _dt.datetime):
     return _fake
 
 
-def test_partial_repos_response_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_partial_repos_response_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     # A /repos response missing stargazers_count must be INCONCLUSIVE, not a
     # definitive reject.
     fake = _fake_api_get_factory(now)
@@ -408,7 +408,7 @@ def test_partial_repos_response_is_inconclusive(now: _dt.datetime, monkeypatch: 
     assert result["criteria"]["api"]["reason"] == mod.RC_API_FAILURE
 
 
-def test_unparseable_created_at_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unparseable_created_at_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     # An unparseable created_at from the API must be INCONCLUSIVE, never a
     # hard TOO_YOUNG reject.
     fake = _fake_api_get_factory(now)
@@ -511,7 +511,7 @@ def test_gh_link_header_unparseable_next_is_inconclusive(monkeypatch: pytest.Mon
     assert result["criteria"]["api"]["reason"] == mod.RC_API_FAILURE
 
 
-def test_non_numeric_stargazers_count_is_inconclusive(now: _dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_numeric_stargazers_count_is_inconclusive(now: dt.datetime, monkeypatch: pytest.MonkeyPatch) -> None:
     # G3: a non-numeric stargazers_count from the API must be INCONCLUSIVE, not
     # a crash (TypeError/ValueError escaping the narrow GithubApiError catch).
     fake = _fake_api_get_factory(now)

@@ -8,7 +8,7 @@ URLs:
     POST   /api/v1/triggers/{id}/polling/test   — test polling query/condition
 """
 
-import datetime
+import datetime as dt
 import hashlib
 import json
 import logging
@@ -590,7 +590,7 @@ def _bump_ongoing_next_fire(trigger: Trigger, changed: bool) -> None:
     makes a freshly configured ongoing trigger fire promptly.
     """
     if trigger.trigger_type == "ongoing" and changed:
-        trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+        trigger.next_fire_at = dt.datetime.now(dt.UTC)
 
 
 def _serialize_trigger_detail(trigger: Trigger, *, in_flight: int, streak_status: dict[str, Any]) -> dict[str, Any]:
@@ -602,7 +602,7 @@ def _resolve_cron_next_fire(
     trigger_type: str,
     cron_expression: str | None,
     cron_timezone: str | None,
-) -> datetime.datetime | None:
+) -> dt.datetime | None:
     """Validate cron fields when supplied; returns the next UTC fire time or ``None``.
 
     Raises 400 when cron fields are supplied for a non-cron trigger.
@@ -692,7 +692,7 @@ class CronConfigUpdate(BaseModel):
     input_template: dict[str, Any] | None = None
 
 
-def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None) -> datetime.datetime:
+def _validated_next_fire(cron_expression: str | None, cron_timezone: str | None) -> dt.datetime:
     """Validate a complete cron configuration and return its next UTC fire time."""
     if cron_expression is None:
         raise HTTPException(
@@ -833,7 +833,7 @@ async def preview_cron_schedule(
                 )
 
             times: list[str] = []
-            next_fire = datetime.datetime.now(datetime.UTC)
+            next_fire = dt.datetime.now(dt.UTC)
             preview_count = max(1, min(count, _MAX_PREVIEW_COUNT))
             for _ in range(preview_count):
                 next_fire = compute_next_fire(
@@ -1291,7 +1291,7 @@ async def create_trigger(
                 )
                 # A fresh ongoing trigger must fire on the first scheduler tick
                 # (the scan selects next_fire_at IS NULL OR due).
-                next_fire_at = datetime.datetime.now(datetime.UTC)
+                next_fire_at = dt.datetime.now(dt.UTC)
             encrypted_config = _encrypt_trigger_config_secrets(req.config_json, settings.fernet_key)
             trigger = Trigger(
                 organisation_id=principal.organisation_id,
@@ -1308,7 +1308,7 @@ async def create_trigger(
                 next_fire_at=next_fire_at,
                 # FAR-190: creation anchors the no-delivery streak epoch (the
                 # streak boundary) so pre-existing history can never count.
-                streak_epoch=datetime.datetime.now(datetime.UTC),
+                streak_epoch=dt.datetime.now(dt.UTC),
             )
             session.add(trigger)
             await session.flush()
@@ -1581,7 +1581,7 @@ async def restore_trigger(
             # An ongoing trigger restored back into service must fire on the
             # next tick (its next_fire_at was advanced while it was deleted).
             if trigger.trigger_type == "ongoing":
-                trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+                trigger.next_fire_at = dt.datetime.now(dt.UTC)
             # FAR-190: a restored trigger back in service re-anchors its
             # no-delivery streak epoch (no un-epoch'd re-enable path).
             if trigger.active:
@@ -1654,7 +1654,7 @@ async def toggle_trigger(
             # An ongoing trigger being turned back ON must fire on the next
             # tick (its next_fire_at was advanced while it was inactive).
             if trigger.trigger_type == "ongoing" and trigger.active:
-                trigger.next_fire_at = datetime.datetime.now(datetime.UTC)
+                trigger.next_fire_at = dt.datetime.now(dt.UTC)
             # FAR-190: re-anchor the no-delivery streak epoch on any active=True
             # transition (no un-epoch'd re-enable path).
             if trigger.active:

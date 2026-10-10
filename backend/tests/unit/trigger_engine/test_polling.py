@@ -1,7 +1,7 @@
 """Unit tests for polling trigger — evaluate_condition, _fire_polling_trigger, scheduler."""
 
 import asyncio
-import datetime
+import datetime as dt
 import hashlib
 import uuid
 from decimal import Decimal
@@ -172,7 +172,7 @@ def _make_trigger(
     t.max_concurrent_runs = max_concurrent_runs
     t.daily_spend_limit = daily_spend_limit
     t.config_json = config or {}
-    t.next_fire_at = datetime.datetime.now(datetime.UTC)
+    t.next_fire_at = dt.datetime.now(dt.UTC)
     return t
 
 
@@ -745,7 +745,7 @@ class TestFirePollingTriggerSkips:
         next_fire_at still fires when this job runs."""
         session = mock_db_components
         trigger = _make_trigger(config={"poll_interval_seconds": 60})
-        trigger.next_fire_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+        trigger.next_fire_at = dt.datetime.now(dt.UTC) + dt.timedelta(hours=1)
         _setup_session_for_polling(session, trigger, connector_instance=MagicMock())
 
         result = await _fire_polling_trigger(

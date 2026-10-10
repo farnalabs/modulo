@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 import logging
 import uuid
 from collections.abc import Iterator
@@ -89,7 +89,7 @@ class TestRegistry:
 class TestComputeNextSend:
     def test_computes_next_minute(self) -> None:
         result = compute_next_send("* * * * *")
-        assert isinstance(result, datetime.datetime)
+        assert isinstance(result, dt.datetime)
         assert result.tzinfo is not None
 
     def test_daily_at_midnight(self) -> None:
@@ -216,7 +216,7 @@ class TestFireScheduledReport:
             report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
-                return_value=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC),
+                return_value=dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.UTC),
             ),
         ):
             result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
@@ -246,7 +246,7 @@ class TestFireScheduledReport:
             report_firing_env(session),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
-                return_value=datetime.datetime(2026, 7, 8, 9, 0, tzinfo=datetime.UTC),
+                return_value=dt.datetime(2026, 7, 8, 9, 0, tzinfo=dt.UTC),
             ),
         ):
             result = await _fire_scheduled_report(report_id=report_mock.id, org_id=org_id)
@@ -256,7 +256,7 @@ class TestFireScheduledReport:
 
         update_params = session.execute.await_args_list[1].args[0].compile().params
         assert "last_sent_at" in update_params
-        assert isinstance(update_params["last_sent_at"], datetime.datetime)
+        assert isinstance(update_params["last_sent_at"], dt.datetime)
         assert update_params["last_sent_at"].tzinfo is not None
 
     async def test_reraises_cancelled_error_from_generator(self) -> None:
@@ -498,9 +498,9 @@ class TestGetEngine:
 
 class TestComputeNextSendAfter:
     def test_uses_after_when_provided(self) -> None:
-        base = datetime.datetime(2026, 7, 1, 12, 0, tzinfo=datetime.UTC)
+        base = dt.datetime(2026, 7, 1, 12, 0, tzinfo=dt.UTC)
         result = compute_next_send("0 9 * * *", after=base)
-        assert result == datetime.datetime(2026, 7, 2, 9, 0, tzinfo=datetime.UTC)
+        assert result == dt.datetime(2026, 7, 2, 9, 0, tzinfo=dt.UTC)
 
 
 # ---------------------------------------------------------------------------
