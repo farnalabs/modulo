@@ -1356,8 +1356,6 @@ async def zombie_watchdog(
         # Expected: first_progress did not fire within the grace window.
         # Stall handling follows below.
         pass
-    except asyncio.CancelledError:
-        raise
 
     if exec_task.done():
         return
@@ -1610,7 +1608,6 @@ async def node_deadline_watchdog(
     node_completed_event: asyncio.Event,
     run_done_event: asyncio.Event,
     node_deadlines: dict[str, tuple[float, int]],
-    default_timeout: int | None = None,
     retry_hook: Callable[[str, str], Awaitable[Any]] | None = None,
 ) -> None:
     """Fail a node that does not COMPLETE within its configured ``timeout_seconds``.
@@ -1659,9 +1656,6 @@ async def node_deadline_watchdog(
     an already-finished run and never double-fails with the idle-watchdog or the
     35-min backstop.
     """
-    if default_timeout is None:
-        default_timeout = int(get_settings().saq_node_default_timeout_seconds)
-
     while True:
         # Stand down if the run is already over or the executor finished. We
         # also wait on exec_task.done() (below) so that when the wrapper cancels
@@ -1906,6 +1900,8 @@ async def run_executor_with_watchdog(
     # _prepare_and_stream before streaming). Pass the same object — NOT a copy
     # — so the watchdog sees the per-node timeouts once they are filled in.
     node_timeouts = executor._node_timeouts if executor is not None else {}
+    # Settings default for nodes with no explicit timeout — read by the
+    # _on_node_started closure above (node_timeouts.get(nid, default_timeout)).
     default_timeout = get_settings().saq_node_default_timeout_seconds
     node_deadline_task = asyncio.create_task(
         node_deadline_watchdog(
@@ -1918,7 +1914,6 @@ async def run_executor_with_watchdog(
             node_completed_event=node_completed_event,
             run_done_event=run_done_event,
             node_deadlines=node_deadlines,
-            default_timeout=default_timeout,
             retry_hook=watchdog_retry_hook,
         ),
         name=f"saq-node-deadline-watchdog-{rid}",

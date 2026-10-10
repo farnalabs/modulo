@@ -1056,20 +1056,17 @@ async def create_snapshot_from_live_graph(
             version_read_completed = False
             try:
                 async with session.begin_nested():
-                    try:
-                        version_result = await session.execute(
-                            select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
-                                PipelineSnapshot.pipeline_id == pipeline_id
-                            )
+                    # A ProgrammingError propagates so the SAVEPOINT ROLLS BACK
+                    # (swallowing it would let the block exit cleanly and
+                    # RELEASE the savepoint on an aborted transaction (25P02),
+                    # masking the original error); it is mapped to the
+                    # historical ``None`` outside the block.
+                    version_result = await session.execute(
+                        select(func.coalesce(func.max(PipelineSnapshot.snapshot_version), 0)).where(
+                            PipelineSnapshot.pipeline_id == pipeline_id
                         )
-                        snapshot_version = int(version_result.scalar_one()) + 1
-                    except ProgrammingError:
-                        # Re-raised so the SAVEPOINT ROLLS BACK — catching it
-                        # here would make the block exit cleanly and RELEASE the
-                        # savepoint on an aborted transaction (25P02), masking
-                        # the original error. Mapped to the historical ``None``
-                        # outside the block.
-                        raise
+                    )
+                    snapshot_version = int(version_result.scalar_one()) + 1
                     version_read_completed = True
 
                     connector_bindings = _build_connector_bindings(nodes, connectors_by_id)

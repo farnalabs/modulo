@@ -77,8 +77,9 @@ POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
 
 # Strict grammar for any SQL identifier the launcher interpolates into DDL
-# (CREATE DATABASE cannot take a bound parameter).
-_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# (CREATE DATABASE cannot take a bound parameter). re.ASCII pins \w to
+# [A-Za-z0-9_] so the accepted set stays byte-identical to the old class.
+_SQL_IDENTIFIER_RE = re.compile(r"[A-Za-z_]\w*", re.ASCII)
 
 
 def _validate_sql_identifier(name: str, what: str) -> str:

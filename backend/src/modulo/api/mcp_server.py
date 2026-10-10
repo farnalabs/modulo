@@ -10615,9 +10615,13 @@ async def resource_run(run_id: str) -> str:
         parts.append(f"Error: {map_legacy_code(run.error_code)}")
     if run.total_cost_usd is not None:
         parts.append(f"Total cost: ${run.total_cost_usd}")
-    parts.append(f"Child runs cost: ${child_cost}")
-    parts.append(f"Child runs count: {child_count}")
-    parts.append(f"Aggregate cost: ${aggregate_cost}")
+    parts.extend(
+        [
+            f"Child runs cost: ${child_cost}",
+            f"Child runs count: {child_count}",
+            f"Aggregate cost: ${aggregate_cost}",
+        ]
+    )
     if run.cost_breakdown is not None:
         breakdown = _sanitize_cost_breakdown(run.cost_breakdown)
         if breakdown:

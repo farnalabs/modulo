@@ -153,7 +153,7 @@ class EvidenceFact:
     """
 
     key: str
-    value: bool | None  # True = has_work, False = verified_empty, None = unverifiable
+    value: bool | None  # True for has_work, False for verified_empty, None for unverifiable
     subject_type: str
     subject_id: str
     producer_type: str = "run"
