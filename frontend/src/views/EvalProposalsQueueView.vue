@@ -272,25 +272,34 @@ const actionMessages = ref<Record<string, { type: string; text: string }>>({})
 // FeedbackRecord stores no proposed-eval fields, so the reviewer supplies the
 // eval definition (name, type, config) at publish time. These fields feed the
 // POST /feedback/proposals/{id}/publish request body verbatim.
+// Single source of truth for the publish dialog's eval_type enum. The select
+// options and the submit guard below both derive from it, so a backend enum
+// addition is a one-line change here instead of a silent drift. Option labels
+// stay i18n-driven: the locale key is `views.EvalProposalsQueueView.<value>`,
+// which matches each enum value by name.
+const EVAL_TYPES = ['llm_judge', 'regex', 'json_schema', 'custom_function'] as const
+type EvalType = (typeof EVAL_TYPES)[number]
+const DEFAULT_EVAL_TYPE: EvalType = EVAL_TYPES[0]
+
 const publishDialogVisible = ref(false)
 const publishTarget = ref<EvalProposalItem | null>(null)
 const publishSubmitting = ref(false)
 const publishDialogError = ref<string | null>(null)
-const publishForm = reactive({
+const publishForm = reactive<{ name: string; eval_type: EvalType; config_json: string }>({
   name: '',
-  eval_type: 'llm_judge',
+  eval_type: DEFAULT_EVAL_TYPE,
   config_json: '{}',
 })
 
-const evalTypeOptions = computed(() => [
-  { value: 'llm_judge', label: t('views.EvalProposalsQueueView.llm_judge') },
-  { value: 'regex', label: t('views.EvalProposalsQueueView.regex') },
-  { value: 'json_schema', label: t('views.EvalProposalsQueueView.json_schema') },
-  { value: 'custom_function', label: t('views.EvalProposalsQueueView.custom_function') },
-])
+const evalTypeOptions = computed(() =>
+  EVAL_TYPES.map((value) => ({
+    value,
+    label: t(`views.EvalProposalsQueueView.${value}`),
+  })),
+)
 
 const publishConfigPlaceholder = computed(() =>
-  t(`views.EvalProposalsQueueView.config_placeholders.${publishForm.eval_type || 'llm_judge'}`),
+  t(`views.EvalProposalsQueueView.config_placeholders.${publishForm.eval_type || DEFAULT_EVAL_TYPE}`),
 )
 
 const publishConfigError = computed<string | null>(() => {
@@ -311,7 +320,7 @@ const publishConfigError = computed<string | null>(() => {
 const canSubmitPublish = computed(
   () =>
     publishForm.name.trim().length > 0 &&
-    publishForm.eval_type.length > 0 &&
+    EVAL_TYPES.includes(publishForm.eval_type) &&
     !publishConfigError.value,
 )
 
@@ -354,7 +363,7 @@ function isActionable(status: string): boolean {
 function openPublishDialog(p: EvalProposalItem) {
   publishTarget.value = p
   publishForm.name = ''
-  publishForm.eval_type = 'llm_judge'
+  publishForm.eval_type = DEFAULT_EVAL_TYPE
   publishForm.config_json = '{}'
   publishDialogError.value = null
   publishDialogVisible.value = true

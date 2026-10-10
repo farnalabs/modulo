@@ -201,6 +201,31 @@ describe('EvalProposalsQueueView', () => {
     expect(mockPost).not.toHaveBeenCalled()
   })
 
+  it('blocks publishing with an empty or whitespace-only name', async () => {
+    const wrapper = mountView()
+    await flush()
+
+    await wrapper.find('[data-testid="proposal-publish"]').trigger('click')
+    await nextTick()
+
+    // Empty name: the confirm button is disabled and the handler refuses
+    // before reaching the API, even if the click is dispatched anyway.
+    let confirm = wrapper.find('[data-testid="publish-confirm"]')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    await confirm.trigger('click')
+    await flush()
+    expect(mockPost).not.toHaveBeenCalled()
+
+    // Whitespace-only names trim to empty and are blocked the same way.
+    await wrapper.find('[data-testid="publish-name"]').setValue('   ')
+    await nextTick()
+    confirm = wrapper.find('[data-testid="publish-confirm"]')
+    expect(confirm.attributes('disabled')).toBeDefined()
+    await confirm.trigger('click')
+    await flush()
+    expect(mockPost).not.toHaveBeenCalled()
+  })
+
   it('surfaces a publish failure in the dialog and keeps it open', async () => {
     mockPost.mockResolvedValueOnce({ data: undefined, error: { detail: 'publish exploded' } })
     const wrapper = mountView()
