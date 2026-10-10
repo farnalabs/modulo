@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Self
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -91,6 +91,20 @@ class _MarkerSession:
 
     def begin(self) -> Self:
         return self
+
+    def in_transaction(self) -> bool:
+        return True
+
+    def get_bind(self) -> Any:
+        # FAR-1611: the node_runner marker writers now issue the Postgres-only
+        # transaction-scoped ``set_config('lock_timeout', ...)`` bound
+        # (set_mutation_row_lock_timeout). A sqlite-reporting bind makes that a
+        # documented no-op here, exactly as the other unit-suite session
+        # doubles do (the FAR-1601 precedent) — the double is shape-faithful
+        # without modelling a Postgres-only GUC.
+        bind = MagicMock()
+        bind.dialect.name = "sqlite"
+        return bind
 
     async def execute(self, stmt: object, params: dict | None = None) -> _MarkerResult:
         sql = str(stmt)

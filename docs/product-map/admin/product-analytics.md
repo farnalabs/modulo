@@ -71,8 +71,12 @@ an eligible tier.
       enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
       metrics dump writes (`constants.DUMP_WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
-      organisation `settings_json` (`get_product_analytics_block(...).get("level")`,
-      default `off`). The dump increments `product_analytics_dump_count` once per
+      organisation `settings_json` (read through `consent.org_consent_level`)
+      — the per-org value is the PREFERRED source; when the caller org cannot be
+      resolved the endpoint reports an instance-level aggregate
+      (`_instance_consent_level`: `all` if any active org has opted in, else
+      `off`) instead of a hardcoded `off` (FAR-1635). The dump increments
+      `product_analytics_dump_count` once per
       successful (non-skipped) dump in the same transaction that advances the
       watermark (`api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
@@ -85,16 +89,34 @@ an eligible tier.
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
 
+## Consent scoping (FAR-1635)
+
+Decision: the transparency endpoint reports consent **per organisation, with an
+instance fallback** — "per org preferable, per instance acceptable". This is
+intentional, not an open question:
+
+- **Per-org is primary.** `consent_level` / `egress_allowed` read the caller's own
+  organisation `settings_json`, so a system admin sees their org's real posture.
+  On a single-org (self-hosted) instance this _is_ the instance posture.
+- **Instance fallback when the caller org is unknown.** When the caller has no
+  `organisation_id`, or the org row cannot be found, the endpoint reports an
+  instance-level aggregate (`_instance_consent_level`): `all` if at least one
+  active organisation has opted in, else `off`. It no longer hardcodes `off`.
+- The aggregate and the daily dump share ONE consent predicate
+  (`consent.org_consent_level` / `consent.is_org_consenting`), which both
+  `_instance_consent_level` and `metrics_dump._get_consenting_orgs` call, so the
+  reported posture cannot drift from what actually leaves the instance. A
+  malformed (non-dict) `settings_json` degrades to `off` rather than raising.
+
 ## Known Gaps
 
 - Metrics telemetry is vendor-bound; a fully self-hosted, in-product analytics
   warehouse is not a shipped surface (that is the scope of `feat-analytics`).
-- The transparency endpoint's `consent_level` / `egress_allowed` report the
-  **caller's organisation** consent, not an instance-wide aggregate of consenting
-  orgs. On a single-org (self-hosted) instance these coincide; on a multi-org
-  instance the page can show the admin's own org as `off` while a different org's
-  telemetry is actively egressing. Reporting an instance-aggregate posture is a
-  future enhancement.
+- On a multi-org instance the transparency page still shows the **caller's own
+  org** consent by preference; it does not display every consenting org's posture
+  side by side. Reporting a full per-org breakdown to the admin is a future
+  enhancement (the instance aggregate is used only when the caller org is
+  unknown).
 - The `/admin/product-analytics` page still cannot show in-product usage/adoption
   metrics — it renders only the transparency endpoint's delivery/consent/enforcement
   fields, which now reflect real state. An in-product analytics export/administration
@@ -102,6 +124,16 @@ an eligible tier.
   remains unshipped (warehouse scope sits under `feat-analytics`).
 
 ## QA History
+- 2026-10-10: **FAR-1635 (consent scope)** — replaced the transparency
+  endpoint's hardcoded `off` fallback with an instance-level posture. Per-org
+  consent remains the primary source; when the caller org cannot be resolved
+  (no `organisation_id`, or no matching row) the endpoint reports
+  `_instance_consent_level` — `all` if any active org has opted in, else `off`.
+  `_resolve_org` now returns the org row (not just its settings) so "resolved but
+  no settings" stays per-org `off` and only a genuinely unresolvable org takes
+  the instance fallback. Documented the decision (was an undecided Known Gap) and
+  added tests for both paths; the fallback tests fail against the previous
+  hardcoded-`off` behaviour.
 - 2026-10-10: **deliver/pa-transparency** — closed the transparency "phantom
   keys" gap: the endpoint read five `system_config` keys that no feature wrote, so
   `/admin/product-analytics` always rendered defaults. It now sources every field
