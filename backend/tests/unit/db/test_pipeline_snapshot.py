@@ -8,7 +8,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import DBAPIError, IntegrityError, ProgrammingError
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -26,6 +27,7 @@ from modulo.db.crud.pipeline_snapshot import (
     terminate_snapshot_lock_holders,
 )
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.sqlstates import is_row_lock_timeout
 
 
 def _scalar_result(value: object) -> MagicMock:
@@ -77,11 +79,12 @@ def _lock_attempt_result(acquired: bool) -> MagicMock:
 
 
 def _allocation_lock_result() -> MagicMock:
-    """The (ignored) result of the FAR-1625 ``pg_advisory_xact_lock`` SELECT.
+    """The (ignored) result of the FAR-1625 allocation row-lock SELECT.
 
-    The allocation lock is acquired on the CALLER's session, so it consumes one
-    ``session.execute`` result. Nothing reads the value — the lock's existence is
-    the side effect — so a bare ``MagicMock`` suffices.
+    The allocation lock is the ``SELECT pipelines ... FOR NO KEY UPDATE`` taken
+    on the CALLER's session, so it consumes one ``session.execute`` result.
+    Nothing reads the value — the row lock's existence is the side effect — so a
+    bare ``MagicMock`` suffices.
     """
     return MagicMock()
 
@@ -180,7 +183,7 @@ async def test_live_graph_becomes_executable_snapshot_with_dependency_pins() -> 
         _scalars_result([connector]),
         _scalars_result([input_schema, output_schema]),
         _scalars_result([backend]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(4),
         _scalars_result([guardrail_row]),
         _scalars_result([]),  # policy gate rows (empty - no gates bound)
@@ -284,7 +287,7 @@ async def test_snapshot_carries_condition_expression_for_conditional_edge() -> N
     session.execute.side_effect = [
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
         _scalars_result([]),  # policy gate rows (none bound)
@@ -341,7 +344,7 @@ async def test_snapshot_carries_pipeline_default_autonomy_level(autonomy: str | 
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),
         _scalars_result([]),
         _scalars_result([]),  # policy gate rows (none bound)
@@ -389,7 +392,7 @@ async def test_snapshot_carries_pipeline_max_autonomy_level(ceiling: str | None)
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),
         _scalars_result([]),
         _scalars_result([]),  # policy gate rows (none bound)
@@ -465,7 +468,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     session.execute.side_effect = [
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),  # snapshot_version max
         _scalars_result([]),  # guardrail rows (none bound)
         _scalars_result([]),  # policy gate rows (none bound)
@@ -487,14 +490,55 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     assert lock_conn.execute.await_count == 3
     lock_conn.close.assert_awaited_once()
     # The caller's session ran the 5 graph-copy reads plus the FAR-1625
-    # TRANSACTION-scoped allocation lock — but NEVER the session-scoped
-    # graph-copy lock, so an aborted caller transaction can no longer strand the
-    # graph lock (FAR-1287). The allocation lock is transaction-scoped and dies
-    # with the caller's transaction by construction.
+    # TRANSACTION-scoped allocation ROW lock — but NEVER the session-scoped
+    # graph-copy advisory lock, so an aborted caller transaction can no longer
+    # strand the graph lock (FAR-1287). The row lock is transaction-scoped and
+    # dies with the caller's transaction by construction.
     assert session.execute.await_count == 6
-    session_lock_sql = [str(call.args[0]) for call in session.execute.call_args_list]
-    assert any("pg_advisory_xact_lock" in sql for sql in session_lock_sql)
+    # Render with the Postgres dialect: the generic ``str()`` compiler downgrades
+    # ``FOR NO KEY UPDATE`` to ``FOR UPDATE`` and would hide the lock mode.
+    session_lock_sql = [
+        str(call.args[0].compile(dialect=postgresql.dialect())) for call in session.execute.call_args_list
+    ]
+    assert any("FOR NO KEY UPDATE" in sql for sql in session_lock_sql)
     assert not any("pg_try_advisory_lock" in sql for sql in session_lock_sql)
+    assert not any("pg_advisory_xact_lock" in sql for sql in session_lock_sql)
+
+
+async def test_allocation_row_lock_timeout_maps_to_retryable_snapshot_lock_error() -> None:
+    """FAR-1625: the allocation row lock is bounded by the transaction-scoped
+    ``lock_timeout``; a 55P03 expiry is re-raised as
+    ``SnapshotLockNotAvailableError`` — the same retryable mapping as the
+    graph-copy bounded wait — so a contended allocation surfaces as a 503, never
+    an unbounded park and never a generic 500. The original driver error stays
+    chained as ``__cause__``."""
+    pipeline_id = uuid.uuid4()
+    pipeline, edge = _two_node_pipeline(pipeline_id)
+
+    class _LockNotAvailableError(Exception):
+        sqlstate = "55P03"
+
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.side_effect = [
+        _scalar_result(pipeline),
+        _scalars_result([edge]),
+        OperationalError(
+            "SELECT pipelines ... FOR NO KEY UPDATE",
+            {},
+            _LockNotAvailableError("canceling statement due to lock timeout"),
+        ),
+    ]
+
+    with (
+        _bind_lock_connection(session, _lock_attempt_result(True)),
+        pytest.raises(SnapshotLockNotAvailableError, match="lock_timeout bound") as excinfo,
+    ):
+        await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
+
+    assert is_row_lock_timeout(excinfo.value.__cause__)
+    # The bounded allocation failure happens before the version read/insert.
+    session.begin_nested.assert_not_called()
+    session.flush.assert_not_awaited()
 
 
 async def test_snapshot_lock_raises_after_exhausting_retry_budget() -> None:
@@ -575,7 +619,7 @@ async def test_lock_connection_comes_from_a_dedicated_engine_not_the_callers_poo
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),
         _scalars_result([]),
         _scalars_result([]),  # policy gate rows (none bound)
@@ -850,7 +894,7 @@ async def test_snapshot_version_conflict_retries_and_lands_on_the_next_version()
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         *_per_attempt_reads(0),  # attempt 1: max=0 -> version 1 -> conflict
         *_per_attempt_reads(1),  # attempt 2: competitor committed -> max=1 -> version 2
     ]
@@ -885,7 +929,7 @@ async def test_snapshot_version_conflict_exhausts_the_bounded_retry_loudly(
     reads: list[MagicMock] = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
     ]
     for _ in range(SNAPSHOT_VERSION_ATTEMPTS):
         reads.extend(_per_attempt_reads(0))
@@ -924,7 +968,7 @@ async def test_non_version_integrity_error_is_never_retried() -> None:
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         *_per_attempt_reads(0),
     ]
 
@@ -949,7 +993,7 @@ async def test_programming_error_at_the_version_read_still_returns_none() -> Non
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         ProgrammingError("SELECT max(snapshot_version)", {}, Exception("column does not exist")),
     ]
 
@@ -974,7 +1018,7 @@ async def test_programming_error_after_the_version_read_propagates() -> None:
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(0),  # the version read completes ...
         ProgrammingError("SELECT evals", {}, Exception("relation does not exist")),  # ... then a later read fails
     ]
@@ -998,7 +1042,7 @@ async def test_zero_allocation_attempts_still_fails_loudly() -> None:
     session.execute.side_effect = [
         _scalar_result(pipeline),
         _scalars_result([edge]),
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
     ]
 
     with (
@@ -1216,7 +1260,7 @@ def _binding_snapshot_setup(bound_profile_id: uuid.UUID | None) -> tuple[AsyncMo
     session.execute.side_effect = [
         _scalar_result(pipeline),  # _load_pipeline_and_edges -> Pipeline
         _scalars_result([edge]),  # _load_pipeline_and_edges -> PipelineEdge
-        _allocation_lock_result(),  # FAR-1625 pg_advisory_xact_lock (result ignored)
+        _allocation_lock_result(),  # FAR-1625 allocation row lock (result ignored)
         _scalar_result(1),  # snapshot_version max -> version 2
         _scalars_result([]),  # guardrail rows (none bound)
         _scalars_result([]),  # policy gate rows (none bound)

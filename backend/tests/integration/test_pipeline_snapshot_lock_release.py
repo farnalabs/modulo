@@ -38,15 +38,15 @@ The graph-copy lock is released in ``create_snapshot_from_live_graph``'s
 second creator that runs in that window would read ``max(snapshot_version)``
 WITHOUT seeing the first creator's uncommitted row, compute the same version,
 and collide on ``uq_pipeline_snapshot_version`` — the reproduced 12-way prod
-burst (9 accepted, 3 lost). FAR-1625 serialises the read+insert with a
-TRANSACTION-scoped advisory lock on the caller's session
-(``pg_advisory_xact_lock``, held until the caller commits). ``test_concurrent_
-creators_after_lock_release_succeed_with_distinct_versions`` reproduces the
-window deterministically (A holds its transaction open after the graph copy; B
-blocks on the allocation lock) and is the discriminating test: without the
-allocation lock B reads the stale max and its ``IntegrityError`` escapes.
-``test_far1625_concurrent_snapshot_version.py`` raises the bar to the reproduced
-concurrency level (N >= 12 concurrent creators, all must succeed).
+burst. FAR-1625 serialises the read+insert with a TRANSACTION-scoped row lock on
+the ``pipelines`` row (``SELECT ... FOR NO KEY UPDATE``, held until the caller
+commits). ``test_concurrent_creators_after_lock_release_succeed_with_distinct_
+versions`` reproduces the window deterministically (A holds its transaction open
+after the graph copy; B blocks on the allocation row lock) and is the
+discriminating test: without the allocation lock B reads the stale max and its
+``IntegrityError`` escapes. ``test_far1625_concurrent_snapshot_version.py``
+raises the bar to the reproduced concurrency level (N >= 12 concurrent creators,
+all must succeed with distinct RUN ids).
 
 Part 2 (Workstream A) — the operator clear path
 -----------------------------------------------
@@ -78,7 +78,6 @@ from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.crud.pipeline_snapshot import (
     _pipeline_lock_keys,
-    _snapshot_allocation_lock_keys,
     create_snapshot_from_live_graph,
 )
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -89,8 +88,10 @@ pytestmark = pytest.mark.integration
 _log = logging.getLogger(__name__)
 
 # How long the FAR-1625 race test waits for B to show up as BLOCKED on the
-# allocation lock in pg_locks before declaring the window was not reproduced.
-_BLOCKED_WAIT_SECONDS = 10.0
+# allocation row lock before declaring the window was not reproduced. Must stay
+# well below the allocation lock's transaction-scoped lock_timeout (5s), or B
+# would time out (SnapshotLockNotAvailableError) before we observe it.
+_BLOCKED_WAIT_SECONDS = 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -383,13 +384,22 @@ async def test_cancelled_snapshot_releases_the_advisory_lock(
 # FAR-1625: the version-allocation race window, reproduced deterministically —
 # and proven handled by the transaction-scoped allocation lock.
 # ---------------------------------------------------------------------------
-async def _wait_for_allocation_lock_waiter(engine: AsyncEngine, key1: int, key2: int) -> bool:
-    """Poll ``pg_locks`` until an UNGRANTED advisory row appears for these keys.
+async def _wait_for_allocation_row_lock_waiter(engine: AsyncEngine) -> bool:
+    """Poll ``pg_stat_activity`` until a backend is BLOCKED on the pipelines
+    allocation row lock.
 
-    FAR-1625: creator B blocks on ``pg_advisory_xact_lock`` (the allocation
-    lock) while A holds it inside its still-open transaction, so the moment a
-    ``NOT granted`` row appears for the ALLOCATION keys is the moment the
-    release-before-commit window is provably open. Returns False after
+    FAR-1625: creator B blocks on ``SELECT ... FOR NO KEY UPDATE`` on the
+    ``pipelines`` row (the allocation lock) while A holds it inside its
+    still-open transaction. A row-lock wait surfaces as a ``transactionid``
+    lock wait, so a backend in THIS database with ``wait_event_type='Lock'`` and
+    ``wait_event='transactionid'`` running a ``pipelines`` SELECT is the moment
+    the release-before-commit window is provably open.
+
+    The ``query`` predicate deliberately matches the leading ``pipelines.``
+    column list rather than the trailing ``FOR NO KEY UPDATE`` clause:
+    ``pg_stat_activity.query`` is truncated at ``track_activity_query_size``
+    (default 1KB), and the Pipeline SELECT list alone exceeds that, so the lock
+    clause never survives into the column. Returns False after
     ``_BLOCKED_WAIT_SECONDS`` so the caller fails with a precise message instead
     of hanging.
     """
@@ -400,10 +410,11 @@ async def _wait_for_allocation_lock_waiter(engine: AsyncEngine, key1: int, key2:
                 (
                     await conn.execute(
                         text(
-                            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' "
-                            "AND classid = :k1 AND objid = :k2 AND NOT granted"
-                        ),
-                        {"k1": key1 & 0xFFFFFFFF, "k2": key2 & 0xFFFFFFFF},
+                            "SELECT count(*) FROM pg_stat_activity "
+                            "WHERE datname = current_database() "
+                            "AND wait_event_type = 'Lock' AND wait_event = 'transactionid' "
+                            "AND query LIKE '%pipelines.%'"
+                        )
                     )
                 ).scalar_one()
             )
@@ -426,21 +437,20 @@ async def test_concurrent_creators_after_lock_release_succeed_with_distinct_vers
 
     1. creator A runs to completion of ``create_snapshot_from_live_graph`` — the
        graph-copy lock is released early, but A still holds the
-       TRANSACTION-scoped allocation lock — and its transaction is held open, so
-       its snapshot row is still invisible to other transactions;
+       TRANSACTION-scoped allocation row lock — and its transaction is held
+       open, so its snapshot row is still invisible to other transactions;
     2. creator B is started; it completes the graph copy and then BLOCKS on the
-       allocation lock (asserted via an ungranted ``pg_locks`` row on the
-       ALLOCATION keys) — it cannot read ``max(snapshot_version)`` until A
-       commits;
-    3. only then is A allowed to commit, releasing the allocation lock, so B
-       reads the committed max and lands on the next version.
+       allocation row lock (asserted via a blocked ``pg_stat_activity`` backend
+       running ``FOR NO KEY UPDATE``) — it cannot read ``max(snapshot_version)``
+       until A commits;
+    3. only then is A allowed to commit, releasing the row lock, so B reads the
+       committed max and lands on the next version.
 
     Without the allocation lock B would read the stale max and collide on
     ``uq_pipeline_snapshot_version``; the gather below fails if B raises.
     """
     pipeline_id = await _insert_pipeline(pooled_engine, test_org, test_user)
     graph_key1, graph_key2 = _pipeline_lock_keys(pipeline_id)
-    alloc_key1, alloc_key2 = _snapshot_allocation_lock_keys(pipeline_id)
 
     a_lock_released = asyncio.Event()
     commit_a = asyncio.Event()
@@ -449,7 +459,7 @@ async def test_concurrent_creators_after_lock_release_succeed_with_distinct_vers
         async with _session_factory(pooled_engine)() as session, session.begin():
             await set_rls_org(session, test_org)
             snapshot = await create_snapshot_from_live_graph(session, pipeline_id=pipeline_id)
-            # Allocation lock held inside the call above; the row is NOT committed.
+            # Allocation row lock held inside the call above; the row is NOT committed.
             a_lock_released.set()
             await commit_a.wait()
             return snapshot
@@ -466,14 +476,16 @@ async def test_concurrent_creators_after_lock_release_succeed_with_distinct_vers
         await asyncio.wait_for(a_lock_released.wait(), timeout=10)
         task_b = asyncio.create_task(_creator_b())
         try:
-            blocked = await _wait_for_allocation_lock_waiter(pooled_engine, alloc_key1, alloc_key2)
+            blocked = await _wait_for_allocation_row_lock_waiter(pooled_engine)
         finally:
             # Always let A commit, or B would wait on it forever.
             commit_a.set()
         first, second = await asyncio.gather(task_a, task_b)
 
         # (1) the race window really was open ...
-        assert blocked, "B never blocked on the allocation lock, so the release-before-commit window was not reproduced"
+        assert blocked, (
+            "B never blocked on the allocation row lock, so the release-before-commit window was not reproduced"
+        )
         # (2) ... and NEITHER caller saw uq_pipeline_snapshot_version: both
         # creations succeeded with distinct versions. The gather above is the
         # assertion that the constraint was never surfaced — without the
@@ -481,9 +493,8 @@ async def test_concurrent_creators_after_lock_release_succeed_with_distinct_vers
         assert isinstance(first, PipelineSnapshot)
         assert isinstance(second, PipelineSnapshot)
         assert {first.snapshot_version, second.snapshot_version} == {1, 2}
-        # Both advisory locks are gone once the transactions have ended.
+        # The graph-copy advisory lock is gone once the transactions have ended.
         assert await _advisory_lock_count(pooled_engine, graph_key1, graph_key2) == 0
-        assert await _advisory_lock_count(pooled_engine, alloc_key1, alloc_key2) == 0
     finally:
         commit_a.set()
         for task in (task_a, task_b):

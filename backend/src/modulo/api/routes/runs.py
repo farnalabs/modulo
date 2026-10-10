@@ -1301,14 +1301,13 @@ async def trigger_run(
         ) from None
 
     except SnapshotLockNotAvailableError as exc:
-        # FAR-1625: the per-pipeline snapshot graph-copy lock's bounded wait was
-        # exhausted under a concurrent-trigger burst. That is CONTENTION, not an
-        # unexpected fault — a truthful, retryable 503 (matching the webhook and
-        # MCP trigger paths), never the generic 500 this path used to produce
-        # (the reproduced prod burst lost 3 of 12 runs that way). The
-        # snapshot_version allocation itself no longer surfaces this: FAR-1625
-        # serialises it with a transaction-scoped lock that waits rather than
-        # fails.
+        # FAR-1625: a per-pipeline snapshot lock's bounded wait was exhausted
+        # under concurrent triggers. That is CONTENTION, not an unexpected fault
+        # — a truthful, retryable 503 (matching the webhook and MCP trigger
+        # paths), so a lost race can be retried rather than surfacing as a
+        # generic 500. Both bounded waits on the snapshot path report here: the
+        # graph-copy advisory lock's acquisition budget and the allocation row
+        # lock's transaction-scoped lock_timeout.
         _log.warning("runs.trigger_run snapshot_lock_busy: %s", exc)
         log_service_unavailable(
             "snapshot_lock_unavailable",

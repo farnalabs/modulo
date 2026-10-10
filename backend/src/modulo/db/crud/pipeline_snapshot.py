@@ -26,7 +26,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.models.snapshot_schema_pin import SnapshotSchemaPin
-from modulo.db.sqlstates import sqlstate_of
+from modulo.db.sqlstates import is_row_lock_timeout, sqlstate_of
 from modulo.db.url_utils import split_engine_sslmode
 from modulo.settings import get_settings
 
@@ -43,50 +43,15 @@ def _pipeline_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
     return (key1, key2)
 
 
-# FAR-1625: namespace salt for the snapshot-VERSION allocation lock. The
-# graph-copy lock keys (``_pipeline_lock_keys``) and the allocation-lock keys
-# MUST be disjoint: the graph-copy lock is SESSION-scoped on a dedicated
-# connection, the allocation lock is TRANSACTION-scoped on the caller's session
-# and is held until the caller COMMITS. If the two shared one key pair, every
-# creator's transaction-scoped allocation lock (held until commit) would block
-# the NEXT creator's session-scoped graph-copy acquisition — starving the
-# bounded ``pg_try_advisory_lock`` budget (SnapshotLockNotAvailableError → 503)
-# instead of merely queueing. Disjoint key pairs let the two locks protect
-# disjoint phases (graph copy vs version allocation) with no cross-phase
-# contention.
-_SNAPSHOT_ALLOCATION_LOCK_NAMESPACE = "modulo:snapshot-version-allocation"
-
-
-def _snapshot_allocation_lock_keys(pipeline_id: uuid.UUID) -> tuple[int, int]:
-    """Derive two int4 advisory lock keys for the snapshot-VERSION allocation.
-
-    A DISTINCT key pair from :func:`_pipeline_lock_keys` (see the namespace
-    rationale above). Every creator for the same pipeline derives the SAME pair,
-    so allocation is fully serialised per pipeline; it can never collide with the
-    graph-copy lock's pair.
-    """
-    digest = hashlib.md5(
-        f"{_SNAPSHOT_ALLOCATION_LOCK_NAMESPACE}:{pipeline_id}".encode("ascii"),
-        usedforsecurity=False,
-    ).digest()
-    key1 = int.from_bytes(digest[:4], "big", signed=True)
-    key2 = int.from_bytes(digest[4:8], "big", signed=True)
-    return (key1, key2)
-
-
 # FAR-527: bounded-wait acquisition of the snapshot advisory lock. Snapshot
 # creation is a fast graph copy, so contention between two near-simultaneous
 # run-starts resolves in milliseconds — a short retry loop nearly always
 # succeeds where a single pg_try_advisory_lock attempt raised and the caller
 # silently dropped the trigger. Module-level so tests can patch them.
 #
-# FAR-1625: the original 5 x 0.25s budget (1.25s) was sized for TWO contenders.
-# The reproduced prod burst was 12 simultaneous triggers for one pipeline, and a
-# graph-copy holder that itself blocked on the previous creator's commit held
-# this lock far longer than 1.25s — so latecomers exhausted the budget and the
-# route surfaced ``SnapshotLockNotAvailableError`` as an HTTP 500 (3 of the 12
-# triggers lost their run). The budget is widened to cover the reproduced burst
-# while the wall-clock bound below still caps the worst case.
+# FAR-1625: the budget was widened from 5 to cover the reproduced burst (12
+# simultaneous triggers for one pipeline); the wall-clock bound below still caps
+# the worst case.
 SNAPSHOT_LOCK_ATTEMPTS = 40
 SNAPSHOT_LOCK_RETRY_SLEEP_SECONDS = 0.1
 
@@ -107,25 +72,17 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# FAR-1287 Part 2 / FAR-1625: snapshot_version allocation
+# FAR-1287 Part 2: snapshot_version allocation backstop
 # ---------------------------------------------------------------------------
-# FAR-1625 is the AUTHORITATIVE fix: a transaction-scoped advisory lock on the
-# caller's session (``_acquire_snapshot_allocation_lock``) serialises the version
-# read+insert and is held until the caller commits, so two creators can no longer
-# read the same ``max(snapshot_version)``. Before it, the graph-copy advisory
-# lock was released in ``create_snapshot_from_live_graph``'s ``finally`` — BEFORE
-# the caller's transaction commits — so concurrent creators read the same max and
-# collided on ``uq_pipeline_snapshot_version`` at insert time (12-way prod burst:
-# 9 accepted, 3 lost).
-#
-# The FAR-1287 Part 2 OPTIMISTIC retry below is kept as a DEFENSIVE BACKSTOP: a
-# SAVEPOINT contains the read+insert, and an ``IntegrityError`` on that unique
-# constraint is rolled back to the savepoint and retried with a freshly read
-# version. With the allocation lock in place a collision should essentially never
-# occur, but if the lock is ever bypassed (a caller outside a transaction, a
-# backend where advisory locks are unavailable) the retry still contains a
-# two-creator collision rather than surfacing it. Module-level so tests can patch
-# the bound.
+# FAR-1625 serialises the version read+insert with a transaction-scoped row lock
+# on the pipelines row — see :func:`_acquire_snapshot_allocation_lock`. The
+# OPTIMISTIC retry below is kept as a DEFENSIVE BACKSTOP: a SAVEPOINT contains
+# the read+insert and an ``IntegrityError`` on that unique constraint is rolled
+# back to the savepoint and retried with a freshly read version. With the
+# allocation lock in place a collision should essentially never occur, but if the
+# lock is ever bypassed (a caller outside a transaction, a backend without row
+# locks) the retry still contains a two-creator collision rather than surfacing
+# it. Module-level so tests can patch the bound.
 SNAPSHOT_VERSION_ATTEMPTS = 3
 
 # The unique constraint whose violation identifies an allocation collision.
@@ -438,42 +395,59 @@ async def _release_snapshot_lock(lock_conn: AsyncConnection, *, key1: int, key2:
 
 
 async def _acquire_snapshot_allocation_lock(session: AsyncSession, *, pipeline_id: uuid.UUID) -> None:
-    """Take the transaction-scoped advisory lock serialising version allocation (FAR-1625).
+    """Serialise ``snapshot_version`` allocation for one pipeline (FAR-1625).
 
-    ``pg_advisory_xact_lock`` — unlike the session-scoped ``pg_advisory_lock``
-    used for the graph copy — is owned by the CURRENT transaction and released
-    automatically at COMMIT/ROLLBACK. Two properties follow, and both are
-    required:
+    Takes a transaction-scoped row lock on the ``pipelines`` row —
+    ``SELECT ... FOR NO KEY UPDATE`` — held until the caller COMMITS or ROLLS
+    BACK. The version read+insert must be serialised per pipeline: the graph-copy
+    advisory lock is released before the caller commits, so without this a second
+    creator reads the same ``max(snapshot_version)`` and collides on
+    ``uq_pipeline_snapshot_version``.
 
-    * **It cannot leak.** The FAR-1287 lock-leak class (an aborted caller
-      transaction rejecting the unlock, stranding a session-scoped lock on a
-      pooled connection) is structurally impossible here: the lock dies with the
-      transaction, whether it commits or rolls back.
-    * **It stays held until the caller commits.** That is the whole point: a
-      competing creator BLOCKS on ``pg_advisory_xact_lock`` until the previous
-      creator's snapshot row is committed and therefore visible to its
-      ``max(snapshot_version)`` read, so two creators can never compute the same
-      next version. Before FAR-1625 the graph-copy lock was released in the
-      ``finally`` — BEFORE the caller's commit — so concurrent creators read the
-      same max and collided on ``uq_pipeline_snapshot_version``; the bounded
-      optimistic retry (FAR-1287 Part 2) contained that collision for two
-      creators but exhausted at the reproduced 12-way burst.
+    The lock RESOURCE is the load-bearing choice — it must be one the EDIT and
+    ROLLBACK paths already take BEFORE they call in, or the lock order inverts
+    into an ABBA cycle:
 
-    Acquired on the CALLER's session on purpose — the lock must be scoped to the
-    caller's transaction. It is NOT acquired on the dedicated lock connection,
-    whose ``close()`` would release it before the caller commits.
+    * EDIT (``routes.pipelines._reapply_team_gate_inside_mutation_txn``) and
+      ROLLBACK (``crud.pipeline_snapshot_versioning``) hold the ``pipelines``
+      row ``FOR UPDATE`` FIRST, then call ``create_snapshot_from_live_graph``;
+    * every RUN path reaches this helper first, before any snapshot/run insert
+      takes a foreign-key ``FOR KEY SHARE`` on that same row.
 
-    ``pg_advisory_xact_lock`` blocks until the lock frees. That is the intended
-    semantics (a lost race retries transparently rather than surfacing an
-    error): the wait is bounded by the holder's transaction, and a holder that
-    dies or is cancelled releases the lock via its rollback. No polling, no
-    retry budget to exhaust, no 500.
+    A ``FOR NO KEY UPDATE`` on the caller's session gives the consistent order:
+    it is self-reentrant when the caller already holds ``FOR UPDATE`` (no wait,
+    no cycle); it conflicts with itself, so concurrent creators still serialise;
+    and it is COMPATIBLE with the ``FOR KEY SHARE`` the snapshot/run FK inserts
+    take, so it neither blocks them nor forces a lock upgrade. An advisory
+    allocation lock instead took a resource the edit/rollback paths did NOT
+    already hold — RUN held advisory and wanted the row, EDIT held the row and
+    wanted advisory.
+
+    The wait is bounded by transaction-scoped ``SET LOCAL lock_timeout``
+    (``db.crud.row_lock.set_mutation_row_lock_timeout``, default 5s). A 55P03
+    expiry is re-raised as :class:`SnapshotLockNotAvailableError` — the same
+    retryable 503 the graph-copy bounded wait maps to — so a contended
+    allocation never parks a pooled connection unbounded and never surfaces as a
+    generic 500.
     """
-    key1, key2 = _snapshot_allocation_lock_keys(pipeline_id)
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(:key1, :key2)"),
-        {"key1": key1, "key2": key2},
-    )
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
+
+    await set_mutation_row_lock_timeout(session)
+    try:
+        await session.execute(
+            select(Pipeline)
+            .where(Pipeline.id == pipeline_id)
+            .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
+        )
+    except SQLAlchemyError as exc:
+        if not is_row_lock_timeout(exc):
+            raise
+        _log.warning("snapshot_allocation_lock_timeout pipeline_id=%s", pipeline_id)
+        raise SnapshotLockNotAvailableError(
+            f"Cannot acquire snapshot allocation lock for pipeline {pipeline_id}: a concurrent creator "
+            "held it past the lock_timeout bound"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -1012,27 +986,12 @@ async def create_snapshot_from_live_graph(
     lock source fails fast instead of stalling. Raises
     SnapshotLockNotAvailableError only after a bound is exhausted.
 
-    FAR-1625 (version-allocation race, serialised): the graph-copy lock above is
-    STILL released before the caller's commit — that ordering is unavoidable
-    (the lock lives on its own connection and the caller owns the commit). The
-    consequence is now handled by a SEPARATE, transaction-scoped advisory lock
-    on the CALLER's session: :func:`_acquire_snapshot_allocation_lock` takes
-    ``pg_advisory_xact_lock`` on a key pair disjoint from the graph-copy pair,
-    immediately before the version read, so it is held until the caller COMMITS
-    or ROLLS BACK. A competing creator blocks there until the previous creator's
-    snapshot row is committed — so two creators can never read the same
-    ``max(snapshot_version)``. The reproduced 12-way prod burst (9 accepted, 3
-    lost) exhausted the FAR-1287 Part 2 optimistic retry (``SNAPSHOT_VERSION_
-    ATTEMPTS=3``) because the creators piled up on the same max; that retry is
-    kept below as a defensive backstop, but with the allocation lock serialised
-    it should essentially never fire.
-
-    The graph-copy lock is released BEFORE the allocation phase on purpose: the
-    allocation phase can BLOCK on the previous creator's transaction-scoped
-    lock, and holding the session-scoped graph-copy lock across that wait would
-    starve every other creator's bounded graph-copy acquisition (turning queueing
-    into ``SnapshotLockNotAvailableError`` → 503) — the exact 500-class failure
-    FAR-1625 removes.
+    FAR-1625 (version-allocation race): the graph-copy lock above is released
+    before the caller's commit, so a SEPARATE transaction-scoped lock serialises
+    the version read+insert — see :func:`_acquire_snapshot_allocation_lock`,
+    which is the authoritative description of the lock resource and ordering.
+    The graph-copy lock is released BEFORE that allocation phase so its wait
+    never holds the session-scoped graph lock.
 
     Retry scope (the documented choice): the GRAPH COPY — pipeline + edges,
     composite expansion, agent materialisation, parameter bindings, reference
@@ -1070,12 +1029,9 @@ async def create_snapshot_from_live_graph(
         parameter_bindings = await _resolve_parameter_bindings(session, nodes, parameter_schema_ids)
         connectors_by_id, schema_models_by_id, backends_by_id = await _load_reference_models(session, nodes, agents)
 
-        # FAR-1625: release the graph-copy lock BEFORE the allocation phase. The
-        # allocation phase can block on another creator's transaction-scoped
-        # lock (held until that creator commits); holding the session-scoped
-        # graph-copy lock across that wait would starve every other creator's
-        # bounded graph-copy acquisition. The graph copy itself is done, so the
-        # lock has served its purpose.
+        # FAR-1625: release the graph-copy lock BEFORE the allocation phase, so
+        # its wait never holds the session-scoped graph lock (see the helper).
+        # The graph copy itself is done, so the lock has served its purpose.
         #
         # The flag is set BEFORE the call: ``_release_snapshot_lock``'s dispose
         # runs under ``asyncio.shield`` on every path (including cancellation),
@@ -1085,10 +1041,7 @@ async def create_snapshot_from_live_graph(
         graph_lock_released = True
         await _release_snapshot_lock(lock_conn, key1=key1, key2=key2)
 
-        # FAR-1625: serialise the version allocation for this pipeline on the
-        # caller's transaction. Held until COMMIT/ROLLBACK, so a competing
-        # creator cannot read the same max. Blocks (transparently) rather than
-        # failing — a lost race retries by waiting, never by erroring.
+        # FAR-1625: serialise the version read+insert (see the helper).
         await _acquire_snapshot_allocation_lock(session, pipeline_id=pipeline_id)
 
         # FAR-1287 Part 2: bounded OPTIMISTIC retry of the version allocation —
