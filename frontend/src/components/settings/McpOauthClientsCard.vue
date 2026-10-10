@@ -457,7 +457,7 @@ const filteredScopeCount = computed(() => filteredScopes.value.length)
 function scopeGroupLabel(namespace: string): string {
   const key = `views.SettingsMcpView.grants_group_${namespace}`
   if (translationExists(key)) return translate(key)
-  return namespace.charAt(0).toUpperCase() + namespace.slice(1).replace(/_/g, ' ')
+  return namespace.charAt(0).toUpperCase() + namespace.slice(1).replaceAll('_', ' ')
 }
 
 const oauthCreatedDialogOpen = ref(false)
