@@ -17,8 +17,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core.cost_controller.finalize import (
+    FinalizeMetricSink,
+    _emit_duplicate_terminal,
+    _emit_limit_refused,
     _fallback_finalize,
     _ledger_block,
+    _MergedSets,
     _record_ledger_with_retry,
 )
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
@@ -582,9 +586,7 @@ async def _run_fallback(session: AsyncMock, run: MagicMock) -> None:
         "complete",
         None,
         None,
-        {},
-        {},
-        {},
+        _MergedSets({}, {}, {}),
         True,
         None,
         None,
@@ -644,3 +646,63 @@ async def test_fallback_finalize_swallows_non_lock_ledger_error() -> None:
         await _run_fallback(session, run)
 
     ledger.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1642 item 3 — retry-idempotent metric emission (sink semantics)
+# ---------------------------------------------------------------------------
+
+
+def test_metric_sink_buffers_until_flush() -> None:
+    """A sink must not emit when a metric is queued — only on ``flush`` (which
+    the executor calls after the committing attempt), so a rolled-back attempt
+    cannot leak a counter."""
+    sink = FinalizeMetricSink()
+    with (
+        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+        patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
+    ):
+        sink.limit_refused("team-a")
+        sink.duplicate_terminal()
+        limit_refused.assert_not_called()
+        duplicate.assert_not_called()
+
+        sink.flush()
+        limit_refused.assert_called_once_with("team-a")
+        duplicate.assert_called_once_with()
+
+
+def test_metric_sink_flush_emits_once_then_clears() -> None:
+    """A second ``flush`` must not re-emit — the buffer is drained, so a retry
+    that flushed once cannot double-count on a later flush."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+        sink.limit_refused("team-a")
+        sink.flush()
+        sink.flush()
+        limit_refused.assert_called_once_with("team-a")
+
+
+def test_emit_limit_refused_defers_with_sink_and_emits_inline_without() -> None:
+    """``_emit_limit_refused`` buffers when a retry-owning sink is present and
+    emits inline when it is not (the cancel path / any caller without a retry)."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+        _emit_limit_refused("team-a", sink)
+        limit_refused.assert_not_called()
+
+    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as inline:
+        _emit_limit_refused("team-a", None)
+        inline.assert_called_once_with("team-a")
+
+
+def test_emit_duplicate_terminal_defers_with_sink_and_emits_inline_without() -> None:
+    """``_emit_duplicate_terminal`` mirrors ``_emit_limit_refused``'s defer/inline split."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate:
+        _emit_duplicate_terminal(sink)
+        duplicate.assert_not_called()
+
+    with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as inline:
+        _emit_duplicate_terminal(None)
+        inline.assert_called_once_with()

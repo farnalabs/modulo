@@ -117,6 +117,7 @@ from modulo.db.models.run import CANCEL_REASON_USER_REQUESTED, TERMINAL_STATUSES
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
 from modulo.otel_bridge import trace_id_for_thread
 from modulo.settings import Settings, get_settings
 
@@ -1761,6 +1762,24 @@ async def cancel_run(
 
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
+        if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
+            # FAR-1642: ``_cancel_run`` finalises cost, which takes the bounded
+            # finalisation row locks (``set_mutation_row_lock_timeout`` +
+            # ``FOR UPDATE``). When that bound fires the DB is healthy — the
+            # cancel simply could not take the lock. Map it to the SAME 409 the
+            # shared ``handle_db_errors`` classifier gives every other bounded
+            # lock timeout (and the route-local precedent in
+            # ``product_analytics_identity``), never the retry-inviting generic
+            # 503 below. The comment stays here rather than on the except arm so
+            # the WHY is next to the mapping.
+            _log.warning("runs.cancel_run.lock_timeout")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Timed out waiting for a lock while cancelling this run; another change is in progress. "
+                    "Re-issue the cancel once the other change completes."
+                ),
+            ) from None
         _log.warning(_CODE_ROUTE_DB_ERROR, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
