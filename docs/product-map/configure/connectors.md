@@ -13,6 +13,7 @@ code:
   - backend/src/modulo/connectors/base.py
   - backend/src/modulo/connectors/rest
   - backend/src/modulo/core/guardrails/conformance.py
+  - backend/src/modulo/core/graph_validator/__init__.py
   - frontend/src/views/AdminConnectorsView.vue
 unit-tests:
   - backend/tests/unit/api/test_connectors_endpoint.py
@@ -92,18 +93,25 @@ and per-destination rate limiting.
 - [x] Non-2xx/3xx responses surface typed RESTStatusError with status_code,
       location, and Retry-After metadata; response body capped at max_response_size
       (`backend/src/modulo/connectors/rest`)
-- [x] Per-destination rate limiting (Redis-atomic when available, per-process
-      fallback) enforces one budget per tenant:destination; shared limiter fails
-      closed on Redis outage (`connectors/rest`)
+- [x] Per-destination rate limiting enforces one budget per tenant:destination:
+      a Redis-atomic shared bucket when a `redis_client` is wired at the
+      composition root (fleet-wide), otherwise the connector-local per-process
+      bucket is authoritative (single-worker / dev parity); a configured shared
+      limiter FAILS CLOSED on a Redis outage — it never falls back to a
+      per-process bucket that would multiply the effective cap by the worker
+      count (`connectors/rest`)
 - [x] Fan-out emits items sequentially with redacted outcome records; cardinality
       exceeds max_cardinality fails CLOSED before any request
-- [x] Health check issues the configured request and reports OK only for sub-400
-      status (`backend/tests/bdd/features/connectors/connector_health.feature`)
+- [x] The REST connector's health check issues the configured request with the
+      credentials applied and reports OK only for a 2xx status — redirects are
+      never followed, so a 3xx is raised as the typed `RESTStatusError` before
+      the sub-400 check and is reported unhealthy
+      (`backend/tests/bdd/features/connectors/connector_health.feature`)
 - [x] AdminConnectorsView renders schema-driven structured forms for REST
       connector config (base_url, method, credentials, advanced JSON)
       (`frontend/src/views/AdminConnectorsView.vue`)
 - [x] ConnectorHub registers and manages 30+ native connector types with
-      per-connector BDD features (`backend/src/modulo/connector_hub`,
+      per-connector BDD features (`backend/src/modulo/core/connector_hub`,
       `backend/tests/unit/connector_hub/`)
 - [x] The Sentry connector is BDD-exercised against the real `SentryConnector`
       (respx-mocked Sentry API): token validation via `/` (200 => healthy, 401
@@ -234,18 +242,26 @@ and per-destination rate limiting.
       `core.guardrails.conformance` (certification) import the SAME code and can
       never give opposite answers for one stored value — before FAR-1594
       conformance certified a stored `["github.read"]` as `read` while the ACL
-      denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so its
-      redundant type qualifier is reduced to the bare `Capability`
-      (`github.read` / `github:write` -> `read`); a conformance CLAIM is a
-      binding REQUEST, so it keeps its qualifier (`github.read` binds to the
-      github surface specifically). `ConnectorACL` builds its restricted set
-      through `canonical_capability_set` and canonicalises the requested
+      denied the read. A stored ALLOWLIST entry is a declaration of GRANT, so a
+      type qualifier is reduced to the bare `Capability` if it names the
+      surface's OWN connector type (`github.read` -> `read`, `github:write` /
+      `github.write` -> `write`); the qualifier is only TRUSTED for that surface
+      type (FAR-1616), so a mis-typed qualifier (`github.write` on a filesystem
+      connector), or a qualified entry whose surface type cannot be verified, is
+      REJECTED fail-closed and logged (it grants nothing) — it is never dropped
+      to the bare capability and granted on the wrong surface. A conformance
+      CLAIM is a binding REQUEST, so it keeps its qualifier (`github.read` binds
+      to the github surface specifically). `ConnectorACL` builds its restricted
+      set through `canonical_capability_set` (the connector hub passes the
+      instance's own `connector_type_id`) and canonicalises the requested
       operation through `canonical_capability`, so `check("read")` grants a
-      stored `["github.read"]` exactly as the conformance reader certifies
-      `read`; entries that are not capabilities in any accepted spelling
-      (`sandbox.egress`, `egress:github.com`) are never rewritten and malformed
-      list entries are dropped with a log (they grant nothing), while a non-list
-      value yields the empty set matching the fail-closed FAR-1564 treatment
+      stored same-type `["github.read"]` in the hub exactly as the conformance
+      reader certifies `read`;
+      entries that are not capabilities in any accepted spelling
+      (`sandbox.egress`, `egress:github.com`) are never rewritten (a non-string
+      list entry is dropped silently; a string entry that is not a capability is
+      dropped with a log — both grant nothing), while a non-list value yields the
+      empty set matching the fail-closed FAR-1564 treatment
       (`backend/src/modulo/connectors/base.py`,
       `backend/src/modulo/core/guardrails/conformance.py`;
       `unit-tests: test_acl.py, test_guardrail_conformance_midrun.py`)
@@ -274,10 +290,17 @@ and per-destination rate limiting.
       constants live in `core/team_visibility.py` and are enforced at every
       write path that can create the binding: the REST graph save /
       node-conversion chokepoint (`_enforce_connector_team_bindings`), the MCP
-      graph-update tool, the workflow import confirm, the library collection
-      install, and a connector visibility/owner re-scope
-      (`_reject_re_scope_that_breaks_a_bound_pipeline`), each raising the
-      shared 409 detail (`backend/src/modulo/core/team_visibility.py`,
+      graph-update tool and the MCP `bind_connector_to_node` tool, the workflow
+      import confirm, the library collection install, and a connector
+      visibility/owner re-scope
+      (`_reject_re_scope_that_breaks_a_bound_pipeline`), each surfacing the
+      shared named `connector_team_mismatch` code + detail builder (HTTP 409 on
+      the REST/library surfaces, the shared error envelope on the MCP tools;
+      `bind_connector_to_node` evaluates the predicate directly, so it refuses a
+      caller-RLS-hidden row as `connector_not_found`, while the team-blind read
+      behind the graph-save / import / MCP-graph-update paths fails closed as
+      `ConnectorBindingMissingError`)
+      (`backend/src/modulo/core/team_visibility.py`,
       `backend/src/modulo/db/crud/team_scope.py`,
       `backend/src/modulo/api/routes/pipelines.py`,
       `backend/src/modulo/api/mcp_server.py`,
@@ -289,8 +312,16 @@ and per-destination rate limiting.
 
 ## Known Gaps
 
-- Per-item fan-out outcome trace spans are deferred to FAR-404 (operation-level
-  OTel spans shipped in v1).
+- Per-item fan-out outcome trace spans are deferred — operation-level OTel trace
+  spans and per-destination outcome/latency metrics are emitted in v1; only the
+  per-item spans are deferred.
+- A per-tenant weighted concurrency semaphore / bounded-concurrency fan-out fork
+  is deferred — fan-out emits items sequentially in v1 (no concurrent fork);
+  throughput relies on pipeline-level concurrency limits and the connector's
+  single connection-pooled client.
+- The distinct request-to-response classification layer is deferred — ingestion
+  classification currently runs as one opaque hop (a separate
+  deduplicate/classify layer is not modelled).
 
 ## QA History
 - 2026-10-09: **Improve Architecture product-map walk** – closed the untracked
