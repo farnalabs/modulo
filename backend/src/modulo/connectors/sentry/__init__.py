@@ -45,6 +45,8 @@ class SentryConnector(ConnectorBase):
             timeout=30,
         )
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:

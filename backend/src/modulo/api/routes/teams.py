@@ -56,6 +56,18 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 _CODE_TEAM_LIST = "team.list"
 _MSG_MEMBERSHIP_NOT_FOUND = "Membership not found"
 
+_CODE_TEAMS_LIST_TEAMS_ENDPOINT = "teams.list_teams_endpoint"
+_CODE_TEAMS_CREATE_TEAM_ENDPOINT = "teams.create_team_endpoint"
+_CODE_TEAMS_GET_TEAM_ENDPOINT = "teams.get_team_endpoint"
+_CODE_TEAMS_UPDATE_TEAM_ENDPOINT = "teams.update_team_endpoint"
+_CODE_TEAMS_DELETE_TEAM_ENDPOINT = "teams.delete_team_endpoint"
+_CODE_TEAMS_REASSIGN_TEAM_RESOURCES_ENDPOINT = "teams.reassign_team_resources_endpoint"
+_CODE_TEAMS_LIST_MEMBERS_ENDPOINT = "teams.list_members_endpoint"
+_CODE_TEAMS_ADD_MEMBER_ENDPOINT = "teams.add_member_endpoint"
+_CODE_TEAMS_REMOVE_MEMBER_ENDPOINT = "teams.remove_member_endpoint"
+_CODE_TEAMS_CHANGE_MEMBER_ROLE_ENDPOINT = "teams.change_member_role_endpoint"
+_CODE_TEAM_MEMBERS_MANAGE = "team.members.manage"
+
 
 _log = logging.getLogger(__name__)
 
@@ -421,7 +433,7 @@ async def my_teams_endpoint(
 
 
 @router.get("")
-@handle_db_errors("teams.list_teams_endpoint")
+@handle_db_errors(_CODE_TEAMS_LIST_TEAMS_ENDPOINT)
 async def list_teams_endpoint(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -434,19 +446,19 @@ async def list_teams_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             result = await list_teams(session, org_id=current_user.organisation_id, page=page, page_size=page_size)
     except IntegrityError as exc:
-        _log.exception("teams.list_teams_endpoint")
+        _log.exception(_CODE_TEAMS_LIST_TEAMS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.list_teams_endpoint")
+        _log.exception(_CODE_TEAMS_LIST_TEAMS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.list_teams_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_LIST_TEAMS_ENDPOINT)
         _log.exception("list_teams SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -481,7 +493,7 @@ async def list_teams_endpoint(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(audited("api_access_post", "team", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("teams.create_team_endpoint")
+@handle_db_errors(_CODE_TEAMS_CREATE_TEAM_ENDPOINT)
 async def create_team_endpoint(
     req: CreateTeamRequest,
     current_user: TenantPrincipal = require_permission("team.create"),
@@ -506,19 +518,19 @@ async def create_team_endpoint(
                 description=req.description,
             )
     except IntegrityError:
-        _log.exception("teams.create_team_endpoint")
+        _log.exception(_CODE_TEAMS_CREATE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_TEAM_NAME_ALREADY_EXISTS,
         ) from None
     except ProgrammingError:
-        _log.exception("teams.create_team_endpoint")
+        _log.exception(_CODE_TEAMS_CREATE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.create_team_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_CREATE_TEAM_ENDPOINT)
         _log.exception("create_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -566,7 +578,7 @@ async def create_team_endpoint(
 
 
 @router.get("/{team_id}")
-@handle_db_errors("teams.get_team_endpoint")
+@handle_db_errors(_CODE_TEAMS_GET_TEAM_ENDPOINT)
 async def get_team_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = require_permission(_CODE_TEAM_LIST),
@@ -578,19 +590,19 @@ async def get_team_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             team = await get_team(session, team_id)
     except IntegrityError as exc:
-        _log.exception("teams.get_team_endpoint")
+        _log.exception(_CODE_TEAMS_GET_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.get_team_endpoint")
+        _log.exception(_CODE_TEAMS_GET_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.get_team_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_GET_TEAM_ENDPOINT)
         _log.exception(
             "get_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -624,7 +636,7 @@ async def get_team_endpoint(
 @router.patch(
     "/{team_id}", dependencies=[Depends(audited("api_access_patch", "team", principal_dep=get_current_tenant_user))]
 )
-@handle_db_errors("teams.update_team_endpoint")
+@handle_db_errors(_CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
 async def update_team_endpoint(
     team_id: uuid.UUID,
     req: UpdateTeamRequest,
@@ -647,19 +659,19 @@ async def update_team_endpoint(
                 req.expected_updated_at,
             )
     except IntegrityError as exc:
-        _log.exception("teams.update_team_endpoint")
+        _log.exception(_CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.update_team_endpoint")
+        _log.exception(_CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.update_team_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_UPDATE_TEAM_ENDPOINT)
         _log.exception(
             "update_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -723,7 +735,7 @@ async def update_team_endpoint(
         )
     ],
 )
-@handle_db_errors("teams.delete_team_endpoint")
+@handle_db_errors(_CODE_TEAMS_DELETE_TEAM_ENDPOINT)
 async def delete_team_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = require_permission("team.delete"),
@@ -767,19 +779,19 @@ async def delete_team_endpoint(
 
             deleted = await delete_team(session, team_id)
     except IntegrityError as exc:
-        _log.exception("teams.delete_team_endpoint")
+        _log.exception(_CODE_TEAMS_DELETE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.delete_team_endpoint")
+        _log.exception(_CODE_TEAMS_DELETE_TEAM_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.delete_team_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_DELETE_TEAM_ENDPOINT)
         _log.exception(
             "delete_team SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -834,7 +846,7 @@ async def delete_team_endpoint(
         )
     ],
 )
-@handle_db_errors("teams.reassign_team_resources_endpoint")
+@handle_db_errors(_CODE_TEAMS_REASSIGN_TEAM_RESOURCES_ENDPOINT)
 async def reassign_team_resources_endpoint(
     team_id: uuid.UUID,
     current_user: TenantPrincipal = require_permission("team.delete"),
@@ -865,19 +877,19 @@ async def reassign_team_resources_endpoint(
                 team_id=team_id,
             )
     except IntegrityError as exc:
-        _log.exception("teams.reassign_team_resources_endpoint")
+        _log.exception(_CODE_TEAMS_REASSIGN_TEAM_RESOURCES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A resource with this value already exists",
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.reassign_team_resources_endpoint")
+        _log.exception(_CODE_TEAMS_REASSIGN_TEAM_RESOURCES_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Feature is not available. Run database migrations to enable it.",
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.reassign_team_resources_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_REASSIGN_TEAM_RESOURCES_ENDPOINT)
         _log.exception(
             "reassign_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -902,7 +914,7 @@ async def reassign_team_resources_endpoint(
 
 
 @router.get("/{team_id}/members")
-@handle_db_errors("teams.list_members_endpoint")
+@handle_db_errors(_CODE_TEAMS_LIST_MEMBERS_ENDPOINT)
 async def list_members_endpoint(
     team_id: uuid.UUID,
     page: int = Query(1, ge=1),
@@ -919,19 +931,19 @@ async def list_members_endpoint(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TEAM_NOT_FOUND)
             result = await list_team_members(session, team_id=team_id, page=page, page_size=page_size)
     except IntegrityError as exc:
-        _log.exception("teams.list_members_endpoint")
+        _log.exception(_CODE_TEAMS_LIST_MEMBERS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.list_members_endpoint")
+        _log.exception(_CODE_TEAMS_LIST_MEMBERS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.list_members_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_LIST_MEMBERS_ENDPOINT)
         _log.exception(
             "list_members SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -978,11 +990,11 @@ async def list_members_endpoint(
         )
     ],
 )
-@handle_db_errors("teams.add_member_endpoint")
+@handle_db_errors(_CODE_TEAMS_ADD_MEMBER_ENDPOINT)
 async def add_member_endpoint(
     team_id: uuid.UUID,
     req: AddMemberRequest,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_MEMBERS_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     user_id = uuid.UUID(req.user_id)
@@ -998,19 +1010,19 @@ async def add_member_endpoint(
 
             membership = await _add_team_member_checked(session, current_user, team_id, user_id, req.role)
     except IntegrityError as exc:
-        _log.exception("teams.add_member_endpoint")
+        _log.exception(_CODE_TEAMS_ADD_MEMBER_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.add_member_endpoint")
+        _log.exception(_CODE_TEAMS_ADD_MEMBER_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.add_member_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_ADD_MEMBER_ENDPOINT)
         _log.exception(
             "add_member SQLAlchemyError", extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)}
         )
@@ -1075,11 +1087,11 @@ async def add_member_endpoint(
         )
     ],
 )
-@handle_db_errors("teams.remove_member_endpoint")
+@handle_db_errors(_CODE_TEAMS_REMOVE_MEMBER_ENDPOINT)
 async def remove_member_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_MEMBERS_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     try:
@@ -1088,19 +1100,19 @@ async def remove_member_endpoint(
             await set_rls_user_context(session, current_user.account_id, current_user.org_role)
             membership = await _remove_member_checked(session, current_user, team_id, membership_id)
     except IntegrityError as exc:
-        _log.exception("teams.remove_member_endpoint")
+        _log.exception(_CODE_TEAMS_REMOVE_MEMBER_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.remove_member_endpoint")
+        _log.exception(_CODE_TEAMS_REMOVE_MEMBER_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.remove_member_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_REMOVE_MEMBER_ENDPOINT)
         _log.exception(
             "remove_member SQLAlchemyError",
             extra={
@@ -1166,12 +1178,12 @@ async def remove_member_endpoint(
         )
     ],
 )
-@handle_db_errors("teams.change_member_role_endpoint")
+@handle_db_errors(_CODE_TEAMS_CHANGE_MEMBER_ROLE_ENDPOINT)
 async def change_member_role_endpoint(
     team_id: uuid.UUID,
     membership_id: uuid.UUID,
     req: ChangeMemberRoleRequest,
-    current_user: TenantPrincipal = require_permission("team.members.manage"),
+    current_user: TenantPrincipal = require_permission(_CODE_TEAM_MEMBERS_MANAGE),
     session: AsyncSession = Depends(get_db_session),
 ) -> MembershipResponse:
     try:
@@ -1191,19 +1203,19 @@ async def change_member_role_endpoint(
                 req.role,
             )
     except IntegrityError as exc:
-        _log.exception("teams.change_member_role_endpoint")
+        _log.exception(_CODE_TEAMS_CHANGE_MEMBER_ROLE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=MSG_RESOURCE_ALREADY_EXISTS,
         ) from exc
     except ProgrammingError:
-        _log.exception("teams.change_member_role_endpoint")
+        _log.exception(_CODE_TEAMS_CHANGE_MEMBER_ROLE_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "teams.change_member_role_endpoint")
+        raise_session_contract_error(exc, _CODE_TEAMS_CHANGE_MEMBER_ROLE_ENDPOINT)
         _log.exception(
             "change_member_role SQLAlchemyError",
             extra={

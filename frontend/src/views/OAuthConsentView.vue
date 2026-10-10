@@ -107,10 +107,7 @@
               :value="scope"
               :data-testid="`oauth-consent-scope-toggle-${scope}`"
             />
-            <span class="block">
-              <span class="block text-sm">{{ scopeLabel(scope) }}</span>
-              <span class="block text-xs text-muted-foreground">{{ scope }}</span>
-            </span>
+            <span class="block font-mono text-sm">{{ scope }}</span>
           </label>
         </fieldset>
 
@@ -166,15 +163,11 @@ interface ConsentContext {
   team: ConsentContextTeam | null
 }
 
-// FAR-1476 slice 3: reuse the registration scope picker's i18n keys (the
-// SettingsMcpView scope_*_desc family) rather than inventing a second
-// labelling scheme. Unknown keys degrade to the raw scope key.
-const SCOPE_LABEL_KEYS: Record<string, string> = {
-  'trigger:run': 'views.SettingsMcpView.scope_trigger_run_desc',
-  'hitl:review': 'views.SettingsMcpView.scope_hitl_review_desc',
-  'library:browse': 'views.SettingsMcpView.scope_library_browse_desc',
-}
-
+// FAR-1476 post-merge: the grantable vocabulary is the whole delegable
+// PERMISSIONS registry, so the registration picker labels scopes by their raw
+// canonical key (there is no fixed per-scope description set any more). The
+// consent screen follows the same single labelling scheme — the canonical key
+// is rendered verbatim.
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -191,11 +184,6 @@ const success = ref(false)
 const declined = ref(false)
 const error = ref('')
 const contextError = ref('')
-
-function scopeLabel(scope: string): string {
-  const key = SCOPE_LABEL_KEYS[scope]
-  return key ? t(key) : scope
-}
 
 onMounted(async () => {
   if (!state.value) {

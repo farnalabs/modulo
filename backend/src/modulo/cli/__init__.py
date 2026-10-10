@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+_MIGRATE_ORG_MODULE = "modulo.cli.migrate_org"
+
 if TYPE_CHECKING:
     from modulo.cli.break_glass import cli as break_glass_cli
     from modulo.cli.migrate_org import build_parser, cmd_export, cmd_import, main
@@ -37,10 +39,10 @@ __all__ = [
 #: attribute name -> (module, attribute) resolved on first access.
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "break_glass_cli": ("modulo.cli.break_glass", "cli"),
-    "build_parser": ("modulo.cli.migrate_org", "build_parser"),
-    "cmd_export": ("modulo.cli.migrate_org", "cmd_export"),
-    "cmd_import": ("modulo.cli.migrate_org", "cmd_import"),
-    "main": ("modulo.cli.migrate_org", "main"),
+    "build_parser": (_MIGRATE_ORG_MODULE, "build_parser"),
+    "cmd_export": (_MIGRATE_ORG_MODULE, "cmd_export"),
+    "cmd_import": (_MIGRATE_ORG_MODULE, "cmd_import"),
+    "main": (_MIGRATE_ORG_MODULE, "main"),
 }
 
 

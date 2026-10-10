@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from modulo.db.models.account import Account
     from modulo.db.models.organisation import Organisation
 
+# Repeated FK fragments (S1192).
+_ONDELETE_SET_NULL = "SET NULL"
+_ACCOUNTS_FK = "accounts.id"
+
 
 class Pipeline(SoftDeleteMixin, OrgScoped):
     __tablename__ = "pipelines"
@@ -81,7 +85,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(2000))
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("pipeline_folders.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("pipeline_folders.id", ondelete=_ONDELETE_SET_NULL), index=True
     )
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
@@ -93,10 +97,10 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # invariant (active org member + team member when visibility='team') in
     # ``db.crud.pipeline_owner``.
     business_owner_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True
     )
     reliability_owner_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete=_ONDELETE_SET_NULL), index=True
     )
     # FAR-1558: per-pipeline environment-profile binding — WHICH runtime
     # provider tier (runner_docker / e2b / kubernetes / ...) this pipeline's
@@ -108,7 +112,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # tenant trigger ``trg_pipelines_environment_profile_id_tenant`` (migration
     # 0289) plus a route-level eligibility check (org + owner-team visibility).
     environment_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("environment_profiles.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("environment_profiles.id", ondelete=_ONDELETE_SET_NULL), index=True
     )
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, server_default="org")
     max_concurrent_runs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
@@ -179,7 +183,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     )
     collection_install_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid(), ForeignKey(_ACCOUNTS_FK, ondelete="RESTRICT"), nullable=False, index=True
     )
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     organisation: Mapped["Organisation"] = relationship()

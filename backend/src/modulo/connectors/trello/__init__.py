@@ -85,6 +85,7 @@ class TrelloConnector(ConnectorBase):
                 resp.raise_for_status()
         return resp
 
+    @redacting
     async def health_check(self) -> HealthResult:
         """Verify connectivity by fetching the authenticated user's profile."""
         r = await self._request("GET", "/members/me", raise_on_status=False)
@@ -92,11 +93,11 @@ class TrelloConnector(ConnectorBase):
         if r.status_code != 200:
             return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {self._redactor.redact(r.text[:200])}")
 
-        body: dict[str, Any] = r.json()
-        if "id" not in body:
+        profile: dict[str, Any] = r.json()
+        if "id" not in profile:
             return HealthResult(ok=False, detail="Unexpected response — no 'id' in member profile")
 
-        display_name = body.get("fullName") or body.get("username") or ""
+        display_name = profile.get("fullName") or profile.get("username") or ""
         return HealthResult(ok=True, detail=display_name)
 
     @redacting

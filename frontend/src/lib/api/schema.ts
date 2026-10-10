@@ -6408,6 +6408,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/oauth/scopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Oauth Scopes
+         * @description The delegable scope vocabulary a client may register (FAR-1476).
+         *
+         *     The registration picker's ONLY source of truth: served straight from the
+         *     ``PERMISSIONS`` registry through ``is_delegable`` — the same predicate the
+         *     registration boundary (``normalize_scopes``) and the enforcement resolvers
+         *     (``grants_permit``) use — so the UI can never offer a scope the backend
+         *     rejects, and a newly added registry key is reachable without a frontend
+         *     change. Non-delegable keys (``org.delete``, break-glass,
+         *     ``errors.resolve_instance``, and the prefix-excluded ``api_key.*`` /
+         *     ``oauth.client.*`` / ``system.*``) are never offered.
+         *
+         *     Filtered to the caller's own role level for the same reason
+         *     ``GET /api/v1/api-keys/grantable-permissions`` is: a scope above the
+         *     caller's floor could never be consented to by that caller at token time
+         *     (``verify_live_role_covers_scopes``), so offering it would be a dead
+         *     control. The registration boundary stays the authority.
+         */
+        get: operations["list_oauth_scopes_api_v1_mcp_oauth_scopes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/oauth/clients/{client_id}": {
         parameters: {
             query?: never;
@@ -15308,6 +15343,16 @@ export interface components {
             redirect_uris: string[];
             /** Created At */
             created_at: string;
+        };
+        /**
+         * OAuthScopeItem
+         * @description One grantable OAuth scope (FAR-1476): the canonical registry key + its role floor.
+         */
+        OAuthScopeItem: {
+            /** Key */
+            key: string;
+            /** Min Role */
+            min_role: string;
         };
         /** ObserveNodeResponse */
         ObserveNodeResponse: {
@@ -34341,6 +34386,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateOAuthClientResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_oauth_scopes_api_v1_mcp_oauth_scopes_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthScopeItem"][];
                 };
             };
             /** @description Validation Error */

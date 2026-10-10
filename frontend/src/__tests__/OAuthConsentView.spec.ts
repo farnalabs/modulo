@@ -93,8 +93,8 @@ describe('OAuthConsentView', () => {
     expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('My MCP App')
     const rows = wrapper.findAll('label[data-testid^="oauth-consent-scope-"]')
     expect(rows).toHaveLength(3)
-    // The registration picker's i18n labels are reused (not a second scheme).
-    expect(wrapper.text()).toContain('Allow this client to trigger pipeline runs.')
+    // The canonical scope key is the single labelling scheme (shared with the
+    // registration picker) — rendered verbatim.
     expect(wrapper.text()).toContain('trigger:run')
     const teamLine = wrapper.find('[data-testid="oauth-consent-team-line"]')
     expect(teamLine.exists()).toBe(true)
@@ -114,7 +114,7 @@ describe('OAuthConsentView', () => {
     expect(wrapper.find('[data-testid="oauth-consent-team-line"]').exists()).toBe(false)
   })
 
-  it('renders an unknown scope key verbatim (no label mapping)', async () => {
+  it('renders an unknown scope key verbatim', async () => {
     const wrapper = await mountWithContext({ client_name: 'App', scopes: ['mystery:scope'], team: null })
 
     expect(wrapper.text()).toContain('mystery:scope')

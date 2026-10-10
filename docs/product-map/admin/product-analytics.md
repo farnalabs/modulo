@@ -69,7 +69,7 @@ an eligible tier.
       `MODULO_PRODUCT_ANALYTICS_ENABLED` env fallback), `enforcement_enabled` via
       `consent.is_license_enforcement_enabled` (the real kill switch; absent =
       enforced), `last_successful_dump_at` / `dump_count_total` from the keys the
-      metrics dump writes (`metrics_dump._WATERMARK_KEY`,
+      metrics dump writes (`constants.DUMP_WATERMARK_KEY`,
       `metrics_dump.DUMP_COUNT_KEY`), and `consent_level` from the caller's
       organisation `settings_json` (read through `consent.org_consent_level`)
       — the per-org value is the PREFERRED source; when the caller org cannot be
@@ -139,7 +139,7 @@ intentional, not an open question:
   `/admin/product-analytics` always rendered defaults. It now sources every field
   from real state: `instance_enabled` / `enforcement_enabled` delegate to the shared
   consent helpers (`is_instance_analytics_enabled`, `is_license_enforcement_enabled`),
-  `last_successful_dump_at` reads `metrics_dump._WATERMARK_KEY`, `consent_level` reads
+  `last_successful_dump_at` reads `constants.DUMP_WATERMARK_KEY`, `consent_level` reads
   the caller's org `settings_json`, and `dump_count_total` reads a new
   `product_analytics_dump_count` the metrics dump increments once per successful
   (non-skipped) dump. This removes the `bool("false") -> True` fail-open on the
