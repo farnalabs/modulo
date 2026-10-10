@@ -97,6 +97,20 @@ _MSG_ONLY_CRON_TRIGGERS_CAN = "Only cron triggers can have cron configuration"
 _CODE_TRIGGERS_TEST_TRIGGER = "triggers.test_trigger"
 _MAX_PREVIEW_COUNT = 50
 
+_CODE_TRIGGERS_LIST_TRIGGERS = "triggers.list_triggers"
+_CODE_TRIGGERS_UPDATE_CRON_CONFIG = "triggers.update_cron_config"
+_CODE_TRIGGERS_PREVIEW_CRON_SCHEDULE = "triggers.preview_cron_schedule"
+_CODE_TRIGGERS_UPDATE_POLLING_CONFIG = "triggers.update_polling_config"
+_CODE_TRIGGERS_UPDATE_ONGOING_CONFIG = "triggers.update_ongoing_config"
+_CODE_TRIGGERS_TEST_POLLING_CONDITION = "triggers.test_polling_condition"
+_CODE_TRIGGERS_CREATE_TRIGGER = "triggers.create_trigger"
+_CODE_TRIGGERS_UPDATE_TRIGGER = "triggers.update_trigger"
+_CODE_TRIGGERS_DELETE_TRIGGER = "triggers.delete_trigger"
+_CODE_TRIGGERS_RESTORE_TRIGGER = "triggers.restore_trigger"
+_CODE_TRIGGERS_TOGGLE_TRIGGER = "triggers.toggle_trigger"
+_CODE_TRIGGERS_LIST_TRIGGER_EVENTS = "triggers.list_trigger_events"
+_CODE_TRIGGERS_LIST_PIPELINE_TRIGGERS = "triggers.list_pipeline_triggers"
+
 # Keys the trigger engine actually reads from config_json.  A create/update
 # whose config_json declares a key NOT in this set is rejected with a clear
 # 400 — the key would be silently ignored at delivery time, which is worse
@@ -615,7 +629,7 @@ def _resolve_cron_next_fire(
 
 
 @router.get("/triggers", status_code=status.HTTP_200_OK)
-@handle_db_errors("triggers.list_triggers")
+@handle_db_errors(_CODE_TRIGGERS_LIST_TRIGGERS)
 async def list_triggers(
     pipeline_id: uuid.UUID | None = Query(None),
     trigger_type: str | None = Query(None),
@@ -651,14 +665,14 @@ async def list_triggers(
             # showing a deactivated trigger as state 'ok'.
             items.extend([await _serialize_trigger(session, r) for r in rows])
     except ProgrammingError:
-        _log.exception("triggers.list_triggers")
+        _log.exception(_CODE_TRIGGERS_LIST_TRIGGERS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.list_triggers")
-        _log.exception("triggers.list_triggers")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_LIST_TRIGGERS)
+        _log.exception(_CODE_TRIGGERS_LIST_TRIGGERS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -742,7 +756,7 @@ async def _apply_cron_update(session: AsyncSession, trigger: Trigger, req: "Cron
         Depends(audited("trigger_cron_config_updated", "trigger", principal_dep=get_current_tenant_user)),
     ],
 )
-@handle_db_errors("triggers.update_cron_config")
+@handle_db_errors(_CODE_TRIGGERS_UPDATE_CRON_CONFIG)
 async def update_cron_config(
     trigger_id: uuid.UUID,
     req: CronConfigUpdate,
@@ -767,14 +781,14 @@ async def update_cron_config(
             prev_active = await _apply_cron_update(session, trigger, req)
             await session.flush()
     except ProgrammingError:
-        _log.exception("triggers.update_cron_config")
+        _log.exception(_CODE_TRIGGERS_UPDATE_CRON_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.update_cron_config")
-        _log.exception("triggers.update_cron_config")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_UPDATE_CRON_CONFIG)
+        _log.exception(_CODE_TRIGGERS_UPDATE_CRON_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -804,7 +818,7 @@ async def update_cron_config(
 
 
 @router.get("/triggers/{trigger_id}/cron/preview", status_code=status.HTTP_200_OK)
-@handle_db_errors("triggers.preview_cron_schedule")
+@handle_db_errors(_CODE_TRIGGERS_PREVIEW_CRON_SCHEDULE)
 async def preview_cron_schedule(
     trigger_id: uuid.UUID,
     count: int = Query(5, ge=1, le=50),
@@ -843,14 +857,14 @@ async def preview_cron_schedule(
                 )
                 times.append(next_fire.isoformat())
     except ProgrammingError:
-        _log.exception("triggers.preview_cron_schedule")
+        _log.exception(_CODE_TRIGGERS_PREVIEW_CRON_SCHEDULE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.preview_cron_schedule")
-        _log.exception("triggers.preview_cron_schedule")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_PREVIEW_CRON_SCHEDULE)
+        _log.exception(_CODE_TRIGGERS_PREVIEW_CRON_SCHEDULE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -899,7 +913,7 @@ class PollingConfigUpdate(BaseModel):
         Depends(audited("trigger_polling_config_updated", "trigger", principal_dep=get_current_tenant_user)),
     ],
 )
-@handle_db_errors("triggers.update_polling_config")
+@handle_db_errors(_CODE_TRIGGERS_UPDATE_POLLING_CONFIG)
 async def update_polling_config(
     trigger_id: uuid.UUID,
     req: PollingConfigUpdate,
@@ -964,14 +978,14 @@ async def update_polling_config(
 
             await session.flush()
     except ProgrammingError:
-        _log.exception("triggers.update_polling_config")
+        _log.exception(_CODE_TRIGGERS_UPDATE_POLLING_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.update_polling_config")
-        _log.exception("triggers.update_polling_config")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_UPDATE_POLLING_CONFIG)
+        _log.exception(_CODE_TRIGGERS_UPDATE_POLLING_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1008,7 +1022,7 @@ class OngoingConfigUpdate(BaseModel):
     target_runs: int | None = Field(None, ge=1, le=20, description="Ongoing pool target (max_concurrent_runs)")
 
 
-@handle_db_errors("triggers.update_ongoing_config")
+@handle_db_errors(_CODE_TRIGGERS_UPDATE_ONGOING_CONFIG)
 @router.patch(
     "/triggers/{trigger_id}/ongoing",
     status_code=status.HTTP_200_OK,
@@ -1067,14 +1081,14 @@ async def update_ongoing_config(
             updated_in_flight = await _ongoing_in_flight(session, trigger)
             ongoing_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
-        _log.exception("triggers.update_ongoing_config")
+        _log.exception(_CODE_TRIGGERS_UPDATE_ONGOING_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.update_ongoing_config")
-        _log.exception("triggers.update_ongoing_config")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_UPDATE_ONGOING_CONFIG)
+        _log.exception(_CODE_TRIGGERS_UPDATE_ONGOING_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1113,7 +1127,7 @@ class PollingTestRequest(BaseModel):
 
 
 @router.post("/triggers/{trigger_id}/polling/test", status_code=status.HTTP_200_OK)
-@handle_db_errors("triggers.test_polling_condition")
+@handle_db_errors(_CODE_TRIGGERS_TEST_POLLING_CONDITION)
 async def test_polling_condition(
     trigger_id: uuid.UUID,
     req: PollingTestRequest,
@@ -1173,14 +1187,14 @@ async def test_polling_condition(
                 condition_expression=req.condition_expression,
             )
     except ProgrammingError:
-        _log.exception("triggers.test_polling_condition")
+        _log.exception(_CODE_TRIGGERS_TEST_POLLING_CONDITION)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.test_polling_condition")
-        _log.exception("triggers.test_polling_condition")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_TEST_POLLING_CONDITION)
+        _log.exception(_CODE_TRIGGERS_TEST_POLLING_CONDITION)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1224,7 +1238,7 @@ class TriggerCreate(BaseModel):
         Depends(audited("trigger_created", "trigger", principal_dep=get_current_tenant_user_or_api_key)),
     ],
 )
-@handle_db_errors("triggers.create_trigger")
+@handle_db_errors(_CODE_TRIGGERS_CREATE_TRIGGER)
 async def create_trigger(
     pipeline_id: uuid.UUID,
     req: TriggerCreate,
@@ -1317,14 +1331,14 @@ async def create_trigger(
             created_in_flight = await _ongoing_in_flight(session, trigger)
             created_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
-        _log.exception("triggers.create_trigger")
+        _log.exception(_CODE_TRIGGERS_CREATE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.create_trigger")
-        _log.exception("triggers.create_trigger")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_CREATE_TRIGGER)
+        _log.exception(_CODE_TRIGGERS_CREATE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1413,7 +1427,7 @@ async def _apply_trigger_update(
         Depends(audited("trigger_updated", "trigger", principal_dep=get_current_tenant_user_or_api_key)),
     ],
 )
-@handle_db_errors("triggers.update_trigger")
+@handle_db_errors(_CODE_TRIGGERS_UPDATE_TRIGGER)
 async def update_trigger(
     trigger_id: uuid.UUID,
     req: TriggerUpdate,
@@ -1453,14 +1467,14 @@ async def update_trigger(
             updated_in_flight = await _ongoing_in_flight(session, trigger)
             updated_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
-        _log.exception("triggers.update_trigger")
+        _log.exception(_CODE_TRIGGERS_UPDATE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.update_trigger")
-        _log.exception("triggers.update_trigger")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_UPDATE_TRIGGER)
+        _log.exception(_CODE_TRIGGERS_UPDATE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1489,7 +1503,7 @@ async def update_trigger(
         Depends(audited("trigger_deleted", "trigger", principal_dep=get_current_tenant_user, fail_closed=True)),
     ],
 )
-@handle_db_errors("triggers.delete_trigger")
+@handle_db_errors(_CODE_TRIGGERS_DELETE_TRIGGER)
 async def delete_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1512,14 +1526,14 @@ async def delete_trigger(
             if deleted is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_TRIGGER_NOT_FOUND)
     except ProgrammingError:
-        _log.exception("triggers.delete_trigger")
+        _log.exception(_CODE_TRIGGERS_DELETE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.delete_trigger")
-        _log.exception("triggers.delete_trigger")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_DELETE_TRIGGER)
+        _log.exception(_CODE_TRIGGERS_DELETE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1542,7 +1556,7 @@ async def delete_trigger(
         Depends(audited("trigger_restored", "trigger", principal_dep=get_current_tenant_user)),
     ],
 )
-@handle_db_errors("triggers.restore_trigger")
+@handle_db_errors(_CODE_TRIGGERS_RESTORE_TRIGGER)
 async def restore_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1589,14 +1603,14 @@ async def restore_trigger(
             restored_in_flight = await _ongoing_in_flight(session, trigger)
             restored_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
-        _log.exception("triggers.restore_trigger")
+        _log.exception(_CODE_TRIGGERS_RESTORE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.restore_trigger")
-        _log.exception("triggers.restore_trigger")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_RESTORE_TRIGGER)
+        _log.exception(_CODE_TRIGGERS_RESTORE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1625,7 +1639,7 @@ async def restore_trigger(
         Depends(audited("trigger_toggled", "trigger", principal_dep=get_current_tenant_user)),
     ],
 )
-@handle_db_errors("triggers.toggle_trigger")
+@handle_db_errors(_CODE_TRIGGERS_TOGGLE_TRIGGER)
 async def toggle_trigger(
     trigger_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -1662,14 +1676,14 @@ async def toggle_trigger(
             await session.flush()
             toggled_streak_status = await _streak_status_for(session, trigger)
     except ProgrammingError:
-        _log.exception("triggers.toggle_trigger")
+        _log.exception(_CODE_TRIGGERS_TOGGLE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.toggle_trigger")
-        _log.exception("triggers.toggle_trigger")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_TOGGLE_TRIGGER)
+        _log.exception(_CODE_TRIGGERS_TOGGLE_TRIGGER)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1861,7 +1875,7 @@ async def test_trigger(
 
 
 @router.get("/triggers/{trigger_id}/events", status_code=status.HTTP_200_OK)
-@handle_db_errors("triggers.list_trigger_events")
+@handle_db_errors(_CODE_TRIGGERS_LIST_TRIGGER_EVENTS)
 async def list_trigger_events(
     trigger_id: uuid.UUID,
     event_status: str | None = Query(None, alias="status"),
@@ -1902,14 +1916,14 @@ async def list_trigger_events(
             q = q.order_by(TriggerEvent.created_at.desc(), TriggerEvent.id.desc()).limit(limit + 1)
             rows = (await session.execute(q)).scalars().all()
     except ProgrammingError:
-        _log.exception("triggers.list_trigger_events")
+        _log.exception(_CODE_TRIGGERS_LIST_TRIGGER_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.list_trigger_events")
-        _log.exception("triggers.list_trigger_events")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_LIST_TRIGGER_EVENTS)
+        _log.exception(_CODE_TRIGGERS_LIST_TRIGGER_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,
@@ -1992,14 +2006,14 @@ async def list_pipeline_triggers(
                 item["created_at"] = r.created_at.isoformat() if r.created_at else None
                 pipeline_items.append(item)
     except ProgrammingError:
-        _log.exception("triggers.list_pipeline_triggers")
+        _log.exception(_CODE_TRIGGERS_LIST_PIPELINE_TRIGGERS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "triggers.list_pipeline_triggers")
-        _log.exception("triggers.list_pipeline_triggers")
+        raise_session_contract_error(exc, _CODE_TRIGGERS_LIST_PIPELINE_TRIGGERS)
+        _log.exception(_CODE_TRIGGERS_LIST_PIPELINE_TRIGGERS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DB_OPERATION_FAILED,

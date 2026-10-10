@@ -30,6 +30,12 @@ from modulo.db.rls import set_rls_org, set_rls_user_context
 _MSG_NODE_CATEGORY_NAME_ALREADY = "A node category with this name already exists."
 _MSG_NODE_CATEGORY_NOT_FOUND = "Node category not found"
 
+_CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT = "node_categories.list_node_categories_endpoint"
+_CODE_NODE_CATEGORIES_CREATE_NODE_CATEGORY_ENDPOINT = "node_categories.create_node_category_endpoint"
+_CODE_NODE_CATEGORIES_GET_NODE_CATEGORY_ENDPOINT = "node_categories.get_node_category_endpoint"
+_CODE_NODE_CATEGORIES_UPDATE_NODE_CATEGORY_ENDPOINT = "node_categories.update_node_category_endpoint"
+_CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT = "node_categories.delete_node_category_endpoint"
+
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +81,7 @@ class NodeCategoryListResponse(BaseModel):
 
 
 @router.get("")
-@handle_db_errors("node_categories.list_node_categories_endpoint")
+@handle_db_errors(_CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT)
 async def list_node_categories_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -90,21 +96,21 @@ async def list_node_categories_endpoint(
                 session, org_id=principal.organisation_id, page=page, page_size=page_size
             )
     except ProgrammingError:
-        logger.exception("node_categories.list_node_categories_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT)
         logger.warning("node_categories.list.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        logger.exception("node_categories.list_node_categories_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT)
         logger.warning("node_categories.list.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "node_categories.list_node_categories_endpoint")
+        raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_LIST_NODE_CATEGORIES_ENDPOINT)
         logger.warning("node_categories.list.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -133,7 +139,7 @@ async def list_node_categories_endpoint(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(audited("node_category_created", "node_category", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("node_categories.create_node_category_endpoint")
+@handle_db_errors(_CODE_NODE_CATEGORIES_CREATE_NODE_CATEGORY_ENDPOINT)
 async def create_node_category_endpoint(
     req: NodeCategoryCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -154,21 +160,21 @@ async def create_node_category_endpoint(
                 sort_order=req.sort_order,
             )
     except ProgrammingError:
-        logger.exception("node_categories.create_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_CREATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.create.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        logger.exception("node_categories.create_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_CREATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.create.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "node_categories.create_node_category_endpoint")
+        raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_CREATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.create.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -188,7 +194,7 @@ async def create_node_category_endpoint(
 
 
 @router.get("/{category_id}")
-@handle_db_errors("node_categories.get_node_category_endpoint")
+@handle_db_errors(_CODE_NODE_CATEGORIES_GET_NODE_CATEGORY_ENDPOINT)
 async def get_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -200,21 +206,21 @@ async def get_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await get_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
-        logger.exception("node_categories.get_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_GET_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.get.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        logger.exception("node_categories.get_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_GET_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.get.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "node_categories.get_node_category_endpoint")
+        raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_GET_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.get.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -239,7 +245,7 @@ async def get_node_category_endpoint(
     "/{category_id}",
     dependencies=[Depends(audited("node_category_updated", "node_category", principal_dep=get_current_tenant_user))],
 )
-@handle_db_errors("node_categories.update_node_category_endpoint")
+@handle_db_errors(_CODE_NODE_CATEGORIES_UPDATE_NODE_CATEGORY_ENDPOINT)
 async def update_node_category_endpoint(
     category_id: uuid.UUID,
     req: NodeCategoryUpdate,
@@ -253,21 +259,21 @@ async def update_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             category = await update_node_category(session, category_id, updates, org_id=principal.organisation_id)
     except ProgrammingError:
-        logger.exception("node_categories.update_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_UPDATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.update.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        logger.exception("node_categories.update_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_UPDATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.update.integrity_error — duplicate name")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_MSG_NODE_CATEGORY_NAME_ALREADY,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "node_categories.update_node_category_endpoint")
+        raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_UPDATE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.update.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -298,7 +304,7 @@ async def update_node_category_endpoint(
         )
     ],
 )
-@handle_db_errors("node_categories.delete_node_category_endpoint")
+@handle_db_errors(_CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT)
 async def delete_node_category_endpoint(
     category_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -310,14 +316,14 @@ async def delete_node_category_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             deleted = await soft_delete_node_category(session, category_id, org_id=principal.organisation_id)
     except ProgrammingError:
-        logger.exception("node_categories.delete_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.delete.programming_error — missing DB table?")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except IntegrityError:
-        logger.exception("node_categories.delete_node_category_endpoint")
+        logger.exception(_CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.delete.integrity_error")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -331,7 +337,7 @@ async def delete_node_category_endpoint(
             f"pipeline(s): {', '.join(str(p.get('name')) for p in e.pipelines)}",
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "node_categories.delete_node_category_endpoint")
+        raise_session_contract_error(exc, _CODE_NODE_CATEGORIES_DELETE_NODE_CATEGORY_ENDPOINT)
         logger.warning("node_categories.delete.database_error", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

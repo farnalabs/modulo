@@ -55,6 +55,11 @@ from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
+_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT = "mcp_oauth.register_oauth_client"
+_CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT = "mcp_oauth.list_oauth_clients_endpoint"
+_CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT = "mcp_oauth.remove_oauth_client"
+_CODE_MCP_OAUTH_APPROVE_CONSENT = "mcp_oauth.approve_consent"
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/mcp/oauth", tags=["mcp-oauth"])
@@ -149,7 +154,7 @@ async def _validate_oauth_team_binding(
         ),
     ],
 )
-@handle_db_errors("mcp_oauth.register_oauth_client")
+@handle_db_errors(_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
 async def register_oauth_client(
     req: CreateOAuthClientRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -208,7 +213,7 @@ async def register_oauth_client(
                 team_id=req.team_id,
             )
     except ProgrammingError:
-        _log.exception("mcp_oauth.register_oauth_client")
+        _log.exception(_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
         _log.warning(
             "mcp_oauth.register_oauth_client.programming_error", extra={"org_id": str(principal.organisation_id)}
         )
@@ -217,8 +222,8 @@ async def register_oauth_client(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "mcp_oauth.register_oauth_client")
-        _log.exception("mcp_oauth.register_oauth_client")
+        raise_session_contract_error(exc, _CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
+        _log.exception(_CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT)
         _log.warning(
             "mcp_oauth.register_oauth_client.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)}
         )
@@ -248,7 +253,7 @@ async def register_oauth_client(
 
 
 @router.get("/clients", dependencies=[require_feature("mcp_server")])
-@handle_db_errors("mcp_oauth.list_oauth_clients_endpoint")
+@handle_db_errors(_CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT)
 async def list_oauth_clients_endpoint(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = Depends(get_current_tenant_user),
@@ -265,15 +270,15 @@ async def list_oauth_clients_endpoint(
             await set_rls_org(session, principal.organisation_id)
             clients = await list_oauth_clients(session, principal.organisation_id)
     except ProgrammingError:
-        _log.exception("mcp_oauth.list_oauth_clients_endpoint")
+        _log.exception(_CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT)
         _log.warning("mcp_oauth.list_oauth_clients.programming_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "mcp_oauth.list_oauth_clients_endpoint")
-        _log.exception("mcp_oauth.list_oauth_clients_endpoint")
+        raise_session_contract_error(exc, _CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT)
+        _log.exception(_CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT)
         _log.warning("mcp_oauth.list_oauth_clients.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -306,7 +311,7 @@ async def list_oauth_clients_endpoint(
         ),
     ],
 )
-@handle_db_errors("mcp_oauth.remove_oauth_client")
+@handle_db_errors(_CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT)
 async def remove_oauth_client(
     client_id: str,
     session: AsyncSession = Depends(get_db_session),
@@ -323,7 +328,7 @@ async def remove_oauth_client(
             await set_rls_org(session, principal.organisation_id)
             deleted = await delete_oauth_client(session, client_id=client_id, org_id=principal.organisation_id)
     except ProgrammingError:
-        _log.exception("mcp_oauth.remove_oauth_client")
+        _log.exception(_CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT)
         _log.warning(
             "mcp_oauth.remove_oauth_client.programming_error",
             extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
@@ -333,8 +338,8 @@ async def remove_oauth_client(
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "mcp_oauth.remove_oauth_client")
-        _log.exception("mcp_oauth.remove_oauth_client")
+        raise_session_contract_error(exc, _CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT)
+        _log.exception(_CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT)
         _log.warning(
             "mcp_oauth.remove_oauth_client.sqlalchemy_error",
             extra={"client_id": client_id, "org_id": str(principal.organisation_id)},
@@ -394,7 +399,7 @@ class ConsentApproveResponse(BaseModel):
         ),
     ],
 )
-@handle_db_errors("mcp_oauth.approve_consent")
+@handle_db_errors(_CODE_MCP_OAUTH_APPROVE_CONSENT)
 async def approve_consent(
     req: ConsentApproveRequest,
     session: AsyncSession = Depends(get_db_session),
@@ -458,15 +463,15 @@ async def approve_consent(
                 code_challenge_method="S256",
             )
     except ProgrammingError:
-        _log.exception("mcp_oauth.approve_consent")
+        _log.exception(_CODE_MCP_OAUTH_APPROVE_CONSENT)
         _log.warning("mcp_oauth.approve_consent.programming_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "mcp_oauth.approve_consent")
-        _log.exception("mcp_oauth.approve_consent")
+        raise_session_contract_error(exc, _CODE_MCP_OAUTH_APPROVE_CONSENT)
+        _log.exception(_CODE_MCP_OAUTH_APPROVE_CONSENT)
         _log.warning("mcp_oauth.approve_consent.sqlalchemy_error", extra={"org_id": str(principal.organisation_id)})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

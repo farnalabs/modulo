@@ -150,6 +150,12 @@ _MSG_INVITATION_NOT_FOUND = "Invitation not found"
 _MSG_EMAIL_ALREADY_MEMBER = "A user with this email already exists in this organisation"
 _MSG_INVITE_ALREADY_PENDING = "An active invitation for this email already exists in this organisation"
 
+_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES = "admin.admin_reassign_all_team_resources"
+_CODE_ADMIN_EVAL_DASHBOARD = "admin.eval_dashboard"
+_CODE_ADMIN_EVAL_REGRESSIONS = "admin.eval_regressions"
+_CODE_ADMIN_OKR_PROGRESS = "admin.okr_progress"
+_CODE_ADMIN_ADMIN_MANUAL_PURGE = "admin.admin_manual_purge"
+
 
 logger = logging.getLogger(__name__)
 
@@ -2200,13 +2206,13 @@ async def admin_reassign_all_team_resources(
                 team_id=team_id,
             )
     except IntegrityError:
-        logger.exception("admin.admin_reassign_all_team_resources")
+        logger.exception(_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.admin_reassign_all_team_resources")
+        logger.exception(_CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.admin_reassign_all_team_resources")
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_REASSIGN_ALL_TEAM_RESOURCES)
         logger.exception(
             "admin_reassign_all_team_resources SQLAlchemyError",
             extra={"org_id": str(current_user.organisation_id), "team_id": str(team_id)},
@@ -3072,7 +3078,7 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
 
 
 @router.get("/evals/dashboard")
-@handle_db_errors("admin.eval_dashboard")
+@handle_db_errors(_CODE_ADMIN_EVAL_DASHBOARD)
 async def eval_dashboard(
     current_user: TenantPrincipal = Depends(get_current_tenant_user),
     session: AsyncSession = Depends(get_db_session),
@@ -3090,13 +3096,13 @@ async def eval_dashboard(
             coverage_gaps = await _eval_coverage_gaps(session, current_user.organisation_id)
             recent_results = await _eval_recent_results(session, current_user.organisation_id)
     except IntegrityError:
-        logger.exception("admin.eval_dashboard")
+        logger.exception(_CODE_ADMIN_EVAL_DASHBOARD)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.eval_dashboard")
+        logger.exception(_CODE_ADMIN_EVAL_DASHBOARD)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.eval_dashboard")
+        raise_session_contract_error(exc, _CODE_ADMIN_EVAL_DASHBOARD)
         logger.warning("Eval dashboard DB error", exc_info=True)
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
 
@@ -3133,7 +3139,7 @@ class RegressionAlertsResponse(BaseModel):
 
 
 @router.get("/evals/regressions")
-@handle_db_errors("admin.eval_regressions")
+@handle_db_errors(_CODE_ADMIN_EVAL_REGRESSIONS)
 async def eval_regressions(
     days: int = Query(default=7, ge=1, le=90, description="Lookback period in days"),
     threshold: float = Query(default=0.15, ge=0.0, le=1.0, description="Minimum drop fraction to trigger an alert"),
@@ -3178,10 +3184,10 @@ async def eval_regressions(
                 trend=trend,
             )
     except IntegrityError:
-        logger.exception("admin.eval_regressions")
+        logger.exception(_CODE_ADMIN_EVAL_REGRESSIONS)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.eval_regressions")
+        logger.exception(_CODE_ADMIN_EVAL_REGRESSIONS)
         logger.warning("Eval regressions unavailable — DB may need migration")
         _raise_feature_not_available()
     except TimeoutError:
@@ -3191,7 +3197,7 @@ async def eval_regressions(
             detail="Query timed out. Please try again or reduce the lookback period.",
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.eval_regressions")
+        raise_session_contract_error(exc, _CODE_ADMIN_EVAL_REGRESSIONS)
         logger.exception("Eval regressions DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3242,7 +3248,7 @@ class OkrProgressResponse(BaseModel):
 
 
 @router.get("/evals/okr-progress/{suite_id}")
-@handle_db_errors("admin.okr_progress")
+@handle_db_errors(_CODE_ADMIN_OKR_PROGRESS)
 async def okr_progress(
     suite_id: str,
     target_date: str | None = Query(
@@ -3272,13 +3278,13 @@ async def okr_progress(
             detail=str(exc),
         ) from exc
     except IntegrityError:
-        logger.exception("admin.okr_progress")
+        logger.exception(_CODE_ADMIN_OKR_PROGRESS)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.okr_progress")
+        logger.exception(_CODE_ADMIN_OKR_PROGRESS)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.okr_progress")
+        raise_session_contract_error(exc, _CODE_ADMIN_OKR_PROGRESS)
         logger.exception("OKR progress DB error")
         _raise_db_unavailable(_MSG_DATABASE_ERROR_PLEASE_TRY)
     except Exception:
@@ -3676,13 +3682,13 @@ async def admin_manual_purge(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        logger.exception("admin.admin_manual_purge")
+        logger.exception(_CODE_ADMIN_ADMIN_MANUAL_PURGE)
         _raise_conflict()
     except ProgrammingError:
-        logger.exception("admin.admin_manual_purge")
+        logger.exception(_CODE_ADMIN_ADMIN_MANUAL_PURGE)
         _raise_feature_not_available()
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin.admin_manual_purge")
+        raise_session_contract_error(exc, _CODE_ADMIN_ADMIN_MANUAL_PURGE)
         logger.exception(_CODE_ROUTES_ADMIN)
 
         _raise_db_error_occurred()

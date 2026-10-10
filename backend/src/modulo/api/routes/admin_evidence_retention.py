@@ -40,6 +40,9 @@ from modulo.core.evidence_retention import (
 )
 from modulo.db.rls import set_rls_org
 
+_MSG_MIGRATIONS_REQUIRED = "Feature is not available. Run database migrations to enable it."
+_MSG_DB_UNAVAILABLE = "Database temporarily unavailable."
+
 _log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/evidence-retention", tags=["admin-evidence-retention"])
@@ -129,14 +132,14 @@ async def get_evidence_retention(
         _log.exception("evidence_retention.get.programming_error")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=_MSG_MIGRATIONS_REQUIRED,
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_evidence_retention.get_evidence_retention")
         _log.exception("evidence_retention.get.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -200,14 +203,14 @@ async def update_evidence_retention(
         _log.exception("evidence_retention.update.programming_error")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=_MSG_MIGRATIONS_REQUIRED,
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_evidence_retention.update_evidence_retention")
         _log.exception("evidence_retention.update.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise
@@ -268,14 +271,14 @@ async def purge_evidence_retention(
         _log.exception("evidence_retention.purge.programming_error")
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Feature is not available. Run database migrations to enable it.",
+            detail=_MSG_MIGRATIONS_REQUIRED,
         ) from None
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, "admin_evidence_retention.purge_evidence_retention")
         _log.exception("evidence_retention.purge.db_error")
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Database temporarily unavailable.",
+            detail=_MSG_DB_UNAVAILABLE,
         ) from None
     except HTTPException:
         raise

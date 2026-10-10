@@ -58,6 +58,11 @@ _CODE_ERRORS_RESOLVE_INSTANCE = "errors.resolve_instance"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 
+_CODE_ERRORS_LIST_ERROR_GROUPS = "errors.list_error_groups"
+_CODE_ERRORS_GET_ERROR_GROUP_DETAIL = "errors.get_error_group_detail"
+_CODE_ERRORS_PATCH_ERROR_GROUP = "errors.patch_error_group"
+_CODE_ERRORS_LIST_ERROR_EVENTS = "errors.list_error_events"
+
 # Scheduler-starvation surfacing (FAR-604). Pending runs blocked on a capacity
 # cap carry a RAW marker in ``runs.error_code`` (``error_codes.LEGACY_ALIASES``
 # maps them to the dotted capacity.org / capacity.pipeline presentation codes).
@@ -655,7 +660,7 @@ async def _error_group_events_body(
 
 
 @router.get("", response_model=ErrorListResponse, dependencies=[require_feature("error_tracking")])
-@handle_db_errors("errors.list_error_groups")
+@handle_db_errors(_CODE_ERRORS_LIST_ERROR_GROUPS)
 async def list_error_groups(
     status_filter: str | None = Query(None, alias="status"),
     level: str | None = Query(None),
@@ -684,14 +689,14 @@ async def list_error_groups(
             offset=offset,
         )
     except ProgrammingError as exc:
-        _log.exception("errors.list_error_groups")
+        _log.exception(_CODE_ERRORS_LIST_ERROR_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.list_error_groups")
-        _log.exception("errors.list_error_groups")
+        raise_session_contract_error(exc, _CODE_ERRORS_LIST_ERROR_GROUPS)
+        _log.exception(_CODE_ERRORS_LIST_ERROR_GROUPS)
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -858,7 +863,7 @@ async def list_instance_error_events(
 
 
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
-@handle_db_errors("errors.get_error_group_detail")
+@handle_db_errors(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -873,14 +878,14 @@ async def get_error_group_detail(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.get_error_group_detail")
+        _log.exception(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.get_error_group_detail")
-        _log.exception("errors.get_error_group_detail")
+        raise_session_contract_error(exc, _CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
+        _log.exception(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -902,7 +907,7 @@ async def get_error_group_detail(
         require_feature("error_tracking"),
     ],
 )
-@handle_db_errors("errors.patch_error_group")
+@handle_db_errors(_CODE_ERRORS_PATCH_ERROR_GROUP)
 async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
@@ -931,14 +936,14 @@ async def patch_error_group(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.patch_error_group")
+        _log.exception(_CODE_ERRORS_PATCH_ERROR_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.patch_error_group")
-        _log.exception("errors.patch_error_group")
+        raise_session_contract_error(exc, _CODE_ERRORS_PATCH_ERROR_GROUP)
+        _log.exception(_CODE_ERRORS_PATCH_ERROR_GROUP)
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -969,7 +974,7 @@ async def patch_error_group(
     response_model=ErrorEventListResponse,
     dependencies=[require_feature("error_tracking")],
 )
-@handle_db_errors("errors.list_error_events")
+@handle_db_errors(_CODE_ERRORS_LIST_ERROR_EVENTS)
 async def list_error_events(
     error_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=100),
@@ -986,14 +991,14 @@ async def list_error_events(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.list_error_events")
+        _log.exception(_CODE_ERRORS_LIST_ERROR_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.list_error_events")
-        _log.exception("errors.list_error_events")
+        raise_session_contract_error(exc, _CODE_ERRORS_LIST_ERROR_EVENTS)
+        _log.exception(_CODE_ERRORS_LIST_ERROR_EVENTS)
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
