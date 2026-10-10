@@ -2355,28 +2355,31 @@ async def _fallback_finalize(
     status: str,
     error_code: str | None,
     error_detail: str | None,
-    merged_usage: dict[str, Any],
-    merged_outputs: dict[str, Any],
-    merged_telemetry: dict[str, Any],
+    merged: _MergedSets,
     is_terminal: bool,
     session_factory: Callable[[], Any] | None,
     claim_token: str | None,
     metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """The LEGACY FALLBACK write (§1.5) — runs when the component build failed."""
+    """The LEGACY FALLBACK write (§1.5) — runs when the component build failed.
+
+    *merged* bundles the three segment-wins sets (``usage`` / ``outputs`` /
+    ``telemetry``) — see :class:`_MergedSets` — keeping this helper's argument
+    count below the S107 threshold.
+    """
     _log.exception("cost_component_finalize_failed", extra={"run_id": str(run_id)})
     record_fallback_legacy()
     # FAR-104 — the budget check is FAIL-OPEN (never raises), so it is safe
     # inside the never-fail fallback envelope: an agent-budget breach still
     # terminalizes ``budget_exceeded`` even when the component build failed.
     status, error_code, error_detail = await _apply_agent_budget_override(
-        session, run, merged_usage, is_terminal, status, error_code, error_detail
+        session, run, merged.usage, is_terminal, status, error_code, error_detail
     )
     fallback_total = await _fallback_write(
         session,
         run_id,
         status,
-        _MergedSets(merged_usage, merged_outputs, merged_telemetry),
+        merged,
         error_code,
         error_detail,
         is_terminal=is_terminal,
@@ -2429,32 +2432,34 @@ async def _terminal_ledger_block(
     run: Run,
     run_id: uuid.UUID,
     org_id: uuid.UUID,
-    status: str,
+    write: _TerminalWrite,
     total: Decimal,
     built: _BuiltCost,
     merged_outputs: dict[str, Any],
     merged_telemetry: dict[str, Any],
-    error_code: str | None,
-    error_detail: str | None,
     is_terminal: bool,
     session_factory: Callable[[], Any] | None,
-    claim_token: str | None,
     metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """The ledger block — terminal only, guarded, converged (§4.2/§4.6)."""
+    """The ledger block — terminal only, guarded, converged (§4.2/§4.6).
+
+    *write* bundles the terminal scalars (``status`` / ``error_code`` /
+    ``error_detail`` / ``claim_token``) — see :class:`_TerminalWrite` — keeping
+    this helper's argument count below the S107 threshold.
+    """
     run_date = _ledger_run_date(is_terminal, total, run)
     if run_date is not None:
         await _ledger_block(
             session,
             run_id=run_id,
             org_id=org_id,
-            status=status,
+            status=write.status,
             total=total,
             owner_team_id=run.owner_team_id,
             run_date=run_date,
             finalize_fields={
-                "error_code": error_code,
-                "error_detail": error_detail,
+                "error_code": write.error_code,
+                "error_detail": write.error_detail,
                 "total_cost_usd": total,
                 "cost_breakdown": built.breakdown,
                 "node_token_usage": built.enriched,
@@ -2463,7 +2468,7 @@ async def _terminal_ledger_block(
                 "total_tokens": built.total_tokens,
             },
             session_factory=session_factory,
-            claim_token=claim_token,
+            claim_token=write.claim_token,
             metric_sink=metric_sink,
         )
 
@@ -2619,9 +2624,7 @@ async def finalize_cost(
             status,
             error_code,
             error_detail,
-            merged_usage,
-            merged_outputs,
-            merged_telemetry,
+            _MergedSets(merged_usage, merged_outputs, merged_telemetry),
             is_terminal,
             session_factory,
             claim_token,
@@ -2635,16 +2638,13 @@ async def finalize_cost(
         run=run,
         run_id=run_id,
         org_id=org_id,
-        status=status,
+        write=_TerminalWrite(status, error_code, error_detail, claim_token),
         total=built.total,
         built=built,
         merged_outputs=merged_outputs,
         merged_telemetry=merged_telemetry,
-        error_code=error_code,
-        error_detail=error_detail,
         is_terminal=is_terminal,
         session_factory=session_factory,
-        claim_token=claim_token,
         metric_sink=metric_sink,
     )
 

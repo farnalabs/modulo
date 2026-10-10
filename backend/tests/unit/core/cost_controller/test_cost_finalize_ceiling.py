@@ -22,6 +22,7 @@ from modulo.core.cost_controller.finalize import (
     _emit_limit_refused,
     _fallback_finalize,
     _ledger_block,
+    _MergedSets,
     _record_ledger_with_retry,
 )
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, RUN_CEILING_EXCEEDED
@@ -585,9 +586,7 @@ async def _run_fallback(session: AsyncMock, run: MagicMock) -> None:
         "complete",
         None,
         None,
-        {},
-        {},
-        {},
+        _MergedSets({}, {}, {}),
         True,
         None,
         None,
