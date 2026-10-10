@@ -843,3 +843,142 @@ class TestUpdateAllowedDomainsValidation:
         assert resp.status_code == 422
         assert "allowed_domains" in resp.json()["detail"]
         upd.assert_not_called()
+
+
+class _StubSecretVault:
+    """In-memory org-vault double recording reads (FAR-1640).
+
+    A key absent from ``values`` raises ``KeyError`` — the same observable
+    failure a missing key AND a key owned by another organisation produce
+    (the vault read is org-scoped), so one stub models both.
+    """
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+        self.get_calls: list[str] = []
+
+    async def get_secret(self, key: str) -> str:
+        self.get_calls.append(key)
+        if key not in self._values:
+            raise KeyError(key)
+        return self._values[key]
+
+    async def set_secret(self, key: str, value: str) -> None:
+        return None
+
+    async def delete_secret(self, key: str) -> None:
+        return None
+
+
+class TestSsoClientSecretVaultReference:
+    """FAR-1640: an SSO ``client_secret`` may be a ``secretref://<key>``.
+
+    The SERVER resolves the reference against the caller's org vault at write
+    time (create AND update) via the shared ``resolve_credential`` seam, and
+    fails closed with a typed 422 naming the key when it cannot be resolved.
+    """
+
+    CREATE_URL = "/api/v1/admin/sso/providers"
+    UPDATE_URL = "/api/v1/admin/sso/providers/00000000-0000-0000-0000-000000000010"
+
+    def test_create_resolves_secretref_client_secret(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(allowed_domains=["example.com"])
+        vault = _StubSecretVault({"kv/idp": "resolved-idp-secret"})
+        with (
+            patch(
+                "modulo.api.routes.admin_sso.create_provider",
+                new=AsyncMock(return_value=mock_provider),
+            ) as created,
+            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+        ):
+            resp = client.post(
+                self.CREATE_URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Vault OIDC",
+                    "client_id": "client-id",
+                    "client_secret": "secretref://kv/idp",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "allowed_domains": ["example.com"],
+                },
+            )
+        assert resp.status_code == 201
+        assert vault.get_calls == ["kv/idp"]
+        # The RESOLVED literal reaches the CRUD layer — never the reference string.
+        assert created.call_args.kwargs["client_secret"] == "resolved-idp-secret"
+
+    def test_create_literal_does_not_consult_vault(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(allowed_domains=["example.com"])
+        vault = _StubSecretVault({})
+        with (
+            patch(
+                "modulo.api.routes.admin_sso.create_provider",
+                new=AsyncMock(return_value=mock_provider),
+            ) as created,
+            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+        ):
+            resp = client.post(
+                self.CREATE_URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Literal OIDC",
+                    "client_id": "client-id",
+                    "client_secret": "literal-secret",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "allowed_domains": ["example.com"],
+                },
+            )
+        assert resp.status_code == 201
+        assert not vault.get_calls
+        assert created.call_args.kwargs["client_secret"] == "literal-secret"
+
+    def test_create_missing_vault_key_fails_closed(self, client: TestClient) -> None:
+        vault = _StubSecretVault({})
+        with (
+            patch("modulo.api.routes.admin_sso.create_provider", new=AsyncMock()) as created,
+            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+        ):
+            resp = client.post(
+                self.CREATE_URL,
+                json={
+                    "provider_type": "oidc",
+                    "name": "Missing Key OIDC",
+                    "client_id": "client-id",
+                    "client_secret": "secretref://kv/missing",
+                    "discovery_url": "https://example.com/.well-known/openid-configuration",
+                    "allowed_domains": ["example.com"],
+                },
+            )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "credential_reference_error" in detail
+        assert "kv/missing" in detail
+        created.assert_not_awaited()
+
+    def test_update_resolves_secretref_client_secret(self, client: TestClient) -> None:
+        mock_provider = _make_mock_provider(auto_provision=False)
+        vault = _StubSecretVault({"kv/idp": "rotated-idp-secret"})
+        with (
+            patch(
+                "modulo.api.routes.admin_sso.update_provider",
+                new=AsyncMock(return_value=mock_provider),
+            ) as updated,
+            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+        ):
+            resp = client.put(self.UPDATE_URL, json={"client_secret": "secretref://kv/idp"})
+        assert resp.status_code == 200
+        assert vault.get_calls == ["kv/idp"]
+        assert updated.call_args.kwargs["client_secret"] == "rotated-idp-secret"
+
+    def test_update_missing_vault_key_fails_closed(self, client: TestClient) -> None:
+        vault = _StubSecretVault({})
+        with (
+            patch("modulo.api.routes.admin_sso.update_provider", new=AsyncMock()) as updated,
+            patch("modulo.api.routes.admin_sso.create_secrets_backend", return_value=vault),
+        ):
+            resp = client.put(self.UPDATE_URL, json={"client_secret": "secretref://kv/missing"})
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "credential_reference_error" in detail
+        assert "kv/missing" in detail
+        updated.assert_not_awaited()
