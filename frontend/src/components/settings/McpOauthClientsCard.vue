@@ -185,16 +185,15 @@
           class="max-h-72 space-y-3 overflow-y-auto rounded-lg border p-3"
           data-testid="settings-mcp-oauth-scope-list"
         >
-          <div
+          <fieldset
             v-for="group in filteredScopeGroups"
             :key="group.namespace"
-            role="group"
-            :aria-labelledby="`settingsmcpview-oauth-scope-group-${group.namespace}`"
+            :data-testid="`settings-mcp-oauth-scope-group-${group.namespace}`"
           >
-            <p
+            <legend
               :id="`settingsmcpview-oauth-scope-group-${group.namespace}`"
               class="mb-1 text-xs font-semibold uppercase text-muted-foreground"
-            >{{ scopeGroupLabel(group.namespace) }}</p>
+            >{{ scopeGroupLabel(group.namespace) }}</legend>
             <label
               v-for="scope in group.items"
               :key="scope.key"
@@ -213,7 +212,7 @@
               <span aria-hidden="true" class="rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">{{ scope.min_role }}</span>
               <span class="sr-only">{{ $t('views.SettingsMcpView.scope_min_role', { role: scope.min_role }) }}</span>
             </label>
-          </div>
+          </fieldset>
           <p
             v-if="filteredScopeCount === 0"
             class="text-sm text-muted-foreground"
@@ -422,7 +421,7 @@ function retryScopeLoad(): void {
 
 /** A scope id fragment that is a valid HTML id / testid (lowercase, dashed). */
 function scopeSlug(key: string): string {
-  return key.replace(/[^a-zA-Z0-9]+/g, '-')
+  return key.replaceAll(/[^a-zA-Z0-9]+/g, '-')
 }
 
 function scopeTestid(key: string): string {

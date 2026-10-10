@@ -930,15 +930,17 @@ describe('SettingsMcpView', () => {
     await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
     await nextTick()
 
-    // Group headings are wired with role="group" + aria-labelledby.
+    // Group headings use a native <fieldset>/<legend> so the grouping
+    // semantics hold without an explicit ARIA role (Sonar Web:S6819).
     const hitlGroup = wrapper.find('#settingsmcpview-oauth-scope-group-hitl')
     expect(hitlGroup.exists()).toBe(true)
+    expect(hitlGroup.element.tagName).toBe('LEGEND')
     expect(hitlGroup.text()).toBe('Human review')
     const runGroup = wrapper.find('#settingsmcpview-oauth-scope-group-run')
     expect(runGroup.exists()).toBe(true)
     expect(runGroup.text()).toBe('Runs')
-    const group = wrapper.find('[role="group"][aria-labelledby="settingsmcpview-oauth-scope-group-hitl"]')
-    expect(group.exists()).toBe(true)
+    const group = wrapper.find('[data-testid="settings-mcp-oauth-scope-group-hitl"]')
+    expect(group.element.tagName).toBe('FIELDSET')
     expect(group.find('[data-testid="settings-mcp-oauth-scope-hitl-review"]').exists()).toBe(true)
   })
 
@@ -988,6 +990,80 @@ describe('SettingsMcpView', () => {
     await wrapper.find('[data-testid="settings-mcp-oauth-scopes-retry"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-load-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
+  })
+
+  it('treats a rejected scopes fetch as a load failure, not a crash', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // A THROWN (rejected) request is a different path from a resolved
+    // `{ error }` body: it lands in the catch, which must still surface the
+    // inline failure + Retry rather than letting the dialog render an empty,
+    // unusable picker.
+    const healthy = getMock.getMockImplementation()!
+    getMock.mockImplementation((path: string) =>
+      path === '/api/v1/mcp/oauth/scopes'
+        ? Promise.reject(new Error('scopes endpoint down'))
+        : healthy(path),
+    )
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scopes-retry"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-list"]').exists()).toBe(false)
+    expect(warnSpy).toHaveBeenCalledWith('Failed to load OAuth scopes', expect.any(Error))
+    warnSpy.mockRestore()
+  })
+
+  it('ignores a second scope load while one is already in flight', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // The scope fetch never settles, so `scopesLoading` stays true and a
+    // concurrent second call must short-circuit instead of firing a
+    // duplicate request (the re-entrancy guard at the top of loadOauthScopes).
+    getMock.mockImplementation((path: string) =>
+      path === '/api/v1/mcp/oauth/scopes'
+        ? new Promise(() => {})
+        : Promise.resolve({ data: null, error: undefined }),
+    )
+
+    const vm = oauthVm(wrapper)
+    void vm.loadOauthScopes()
+    await nextTick()
+    expect(vm.scopesLoading).toBe(true)
+    await vm.loadOauthScopes()
+    expect(vm.scopesLoading).toBe(true)
+    expect(getMock.mock.calls.filter((c) => c[0] === '/api/v1/mcp/oauth/scopes').length).toBe(1)
+    wrapper.unmount()
+  })
+
+  it('caches the fetched scope vocabulary across dialog opens', async () => {
+    const wrapper = mountView()
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    const scopeCalls = () =>
+      getMock.mock.calls.filter((c) => c[0] === '/api/v1/mcp/oauth/scopes').length
+
+    await wrapper.find('[data-testid="settings-mcp-register-oauth-client"]').trigger('click')
+    await nextTick()
+    expect(scopeCalls()).toBe(1)
+    expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
+
+    // Reopening the dialog reuses the cached vocabulary instead of refetching.
+    const vm = oauthVm(wrapper)
+    vm.openRegisterOauthDialog()
+    await nextTick()
+    expect(scopeCalls()).toBe(1)
     expect(wrapper.find('[data-testid="settings-mcp-oauth-scope-run-trigger"]').exists()).toBe(true)
   })
 
