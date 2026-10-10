@@ -25,6 +25,16 @@ from modulo.db.rls import set_rls_org
 _CODE_ADMIN_ASSISTANT_MANAGE = "admin.assistant.manage"
 _MSG_CLAUDE_SONNET_4_20250514 = "claude-sonnet-4-20250514"
 
+_CODE_ADMIN_ASSISTANT_GET_ASSISTANT_CONFIG = "admin_assistant.get_assistant_config"
+_CODE_ADMIN_ASSISTANT_UPDATE_ASSISTANT_CONFIG = "admin_assistant.update_assistant_config"
+_CODE_ADMIN_ASSISTANT_LIST_ORG_SKILLS = "admin_assistant.list_org_skills"
+_CODE_ADMIN_ASSISTANT_CREATE_ORG_SKILL = "admin_assistant.create_org_skill"
+_CODE_ADMIN_ASSISTANT_UPDATE_ORG_SKILL = "admin_assistant.update_org_skill"
+_CODE_ADMIN_ASSISTANT_DELETE_ORG_SKILL = "admin_assistant.delete_org_skill"
+_CODE_ADMIN_ASSISTANT_GET_ORG_CONTEXT_SOURCES = "admin_assistant.get_org_context_sources"
+_CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE = "admin_assistant.set_org_context_source"
+_CODE_ADMIN_ASSISTANT_RESET_ORG_CONTEXT_SOURCES = "admin_assistant.reset_org_context_sources"
+
 
 # Labels for all known providers (both native and custom).
 # Derived from the Assistant runtime providers and ModelBackendProvider enum (custom).
@@ -168,14 +178,14 @@ async def get_assistant_config(
             allowed_models=value.get("allowed_models", []),
         )
     except ProgrammingError:
-        logger.exception("admin_assistant.get_assistant_config")
+        logger.exception(_CODE_ADMIN_ASSISTANT_GET_ASSISTANT_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.get_assistant_config")
-        logger.exception("admin_assistant.get_assistant_config")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_GET_ASSISTANT_CONFIG)
+        logger.exception(_CODE_ADMIN_ASSISTANT_GET_ASSISTANT_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching Assistant config.",
@@ -303,14 +313,14 @@ async def update_assistant_config(
 
         return _assistant_config_response(current)
     except ProgrammingError:
-        logger.exception("admin_assistant.update_assistant_config")
+        logger.exception(_CODE_ADMIN_ASSISTANT_UPDATE_ASSISTANT_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.update_assistant_config")
-        logger.exception("admin_assistant.update_assistant_config")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_UPDATE_ASSISTANT_CONFIG)
+        logger.exception(_CODE_ADMIN_ASSISTANT_UPDATE_ASSISTANT_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating Assistant config.",
@@ -375,14 +385,14 @@ async def list_org_skills(
             skills = list(result.scalars())
         return [_skill_to_response(s) for s in skills]
     except ProgrammingError:
-        logger.exception("admin_assistant.list_org_skills")
+        logger.exception(_CODE_ADMIN_ASSISTANT_LIST_ORG_SKILLS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.list_org_skills")
-        logger.exception("admin_assistant.list_org_skills")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_LIST_ORG_SKILLS)
+        logger.exception(_CODE_ADMIN_ASSISTANT_LIST_ORG_SKILLS)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while listing skills.",
@@ -427,14 +437,14 @@ async def create_org_skill(
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
-        logger.exception("admin_assistant.create_org_skill")
+        logger.exception(_CODE_ADMIN_ASSISTANT_CREATE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.create_org_skill")
-        logger.exception("admin_assistant.create_org_skill")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_CREATE_ORG_SKILL)
+        logger.exception(_CODE_ADMIN_ASSISTANT_CREATE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while creating skill.",
@@ -479,14 +489,14 @@ async def update_org_skill(
             await session.flush()
         return _skill_to_response(skill)
     except ProgrammingError:
-        logger.exception("admin_assistant.update_org_skill")
+        logger.exception(_CODE_ADMIN_ASSISTANT_UPDATE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.update_org_skill")
-        logger.exception("admin_assistant.update_org_skill")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_UPDATE_ORG_SKILL)
+        logger.exception(_CODE_ADMIN_ASSISTANT_UPDATE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating skill.",
@@ -527,14 +537,14 @@ async def delete_org_skill(
             skill = await _get_org_skill(session, skill_id, principal.organisation_id)
             await session.delete(skill)
     except ProgrammingError:
-        logger.exception("admin_assistant.delete_org_skill")
+        logger.exception(_CODE_ADMIN_ASSISTANT_DELETE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.delete_org_skill")
-        logger.exception("admin_assistant.delete_org_skill")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_DELETE_ORG_SKILL)
+        logger.exception(_CODE_ADMIN_ASSISTANT_DELETE_ORG_SKILL)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while deleting skill.",
@@ -575,14 +585,14 @@ async def get_org_context_sources(
             "effective": {**builtin_defaults, **org_defaults},
         }
     except ProgrammingError:
-        logger.exception("admin_assistant.get_org_context_sources")
+        logger.exception(_CODE_ADMIN_ASSISTANT_GET_ORG_CONTEXT_SOURCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.get_org_context_sources")
-        logger.exception("admin_assistant.get_org_context_sources")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_GET_ORG_CONTEXT_SOURCES)
+        logger.exception(_CODE_ADMIN_ASSISTANT_GET_ORG_CONTEXT_SOURCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while fetching context sources.",
@@ -624,14 +634,14 @@ async def set_org_context_source(
             await service.set_org_default(principal.organisation_id, source_key, req.source_mode)
             return await service.get_org_defaults(principal.organisation_id)
     except ProgrammingError:
-        logger.exception("admin_assistant.set_org_context_source")
+        logger.exception(_CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.set_org_context_source")
-        logger.exception("admin_assistant.set_org_context_source")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
+        logger.exception(_CODE_ADMIN_ASSISTANT_SET_ORG_CONTEXT_SOURCE)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while updating context source.",
@@ -680,14 +690,14 @@ async def reset_org_context_sources(
                 await session.delete(row)
         return {}
     except ProgrammingError:
-        logger.exception("admin_assistant.reset_org_context_sources")
+        logger.exception(_CODE_ADMIN_ASSISTANT_RESET_ORG_CONTEXT_SOURCES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_assistant.reset_org_context_sources")
-        logger.exception("admin_assistant.reset_org_context_sources")
+        raise_session_contract_error(exc, _CODE_ADMIN_ASSISTANT_RESET_ORG_CONTEXT_SOURCES)
+        logger.exception(_CODE_ADMIN_ASSISTANT_RESET_ORG_CONTEXT_SOURCES)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error while resetting context sources.",

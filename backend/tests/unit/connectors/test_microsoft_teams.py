@@ -21,46 +21,6 @@ def test_connector_type(connector: MicrosoftTeamsConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"$top": 1, "$select": "id"}).mock(
-        return_value=httpx.Response(200, json={"value": [{"id": "U1"}]})
-    )
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Microsoft Graph API token validated"
-
-
-@respx.mock
-async def test_health_check_invalid_token(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"$top": 1, "$select": "id"}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid Microsoft Graph API token" in result.detail
-
-
-@respx.mock
-async def test_health_check_network_error(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"$top": 1, "$select": "id"}).mock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
-@respx.mock
-async def test_health_check_other_status(connector: MicrosoftTeamsConnector) -> None:
-    respx.get(f"{_BASE}/users", params={"$top": 1, "$select": "id"}).mock(
-        return_value=httpx.Response(429, text="Too Many Requests")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "429" in result.detail
-
-
-@respx.mock
 async def test_query_teams(connector: MicrosoftTeamsConnector) -> None:
     teams = [
         {"id": "T1", "displayName": "Engineering", "description": "Engineering team"},

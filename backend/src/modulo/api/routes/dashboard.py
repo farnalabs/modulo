@@ -47,6 +47,9 @@ from modulo.settings import get_settings
 _MSG_DATABASE_TEMPORARILY_UNAVAILABLE = "The database is temporarily unavailable."
 _CODE_DASHBOARD_DAILY_RUN_COUNTS = "dashboard.daily_run_counts"
 
+_CODE_DASHBOARD_DASHBOARD_SUMMARY = "dashboard.dashboard_summary"
+_CODE_DASHBOARD_DASHBOARD_TRENDS = "dashboard.dashboard_trends"
+
 
 _log = logging.getLogger(__name__)
 
@@ -676,7 +679,7 @@ async def _load_config_warnings(session: AsyncSession, org_id: uuid.UUID) -> lis
 
 
 @router.get("/summary")
-@handle_db_errors("dashboard.dashboard_summary")
+@handle_db_errors(_CODE_DASHBOARD_DASHBOARD_SUMMARY)
 async def dashboard_summary(
     days: int | None = Query(None, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
@@ -734,14 +737,14 @@ async def dashboard_summary(
         await _set_cached_dashboard(org_id_str, result, days)
         return result
     except ProgrammingError as exc:
-        _log.exception("dashboard.dashboard_summary")
+        _log.exception(_CODE_DASHBOARD_DASHBOARD_SUMMARY)
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "dashboard.dashboard_summary")
-        _log.exception("dashboard.dashboard_summary")
+        raise_session_contract_error(exc, _CODE_DASHBOARD_DASHBOARD_SUMMARY)
+        _log.exception(_CODE_DASHBOARD_DASHBOARD_SUMMARY)
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -948,7 +951,7 @@ async def _load_feedback_volume(
 
 
 @router.get("/trends")
-@handle_db_errors("dashboard.dashboard_trends")
+@handle_db_errors(_CODE_DASHBOARD_DASHBOARD_TRENDS)
 async def dashboard_trends(
     days: int = Query(7, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
@@ -981,14 +984,14 @@ async def dashboard_trends(
             "feedback_volume": feedback_volume,
         }
     except ProgrammingError as exc:
-        _log.exception("dashboard.dashboard_trends")
+        _log.exception(_CODE_DASHBOARD_DASHBOARD_TRENDS)
         raise HTTPException(
             status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "dashboard.dashboard_trends")
-        _log.exception("dashboard.dashboard_trends")
+        raise_session_contract_error(exc, _CODE_DASHBOARD_DASHBOARD_TRENDS)
+        _log.exception(_CODE_DASHBOARD_DASHBOARD_TRENDS)
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_MSG_DATABASE_TEMPORARILY_UNAVAILABLE,

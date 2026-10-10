@@ -1023,12 +1023,14 @@ def _format_reconcile_detail(stats: dict[str, Any]) -> str:
     without error.
 
     FAR-1621: the per-org counters are included so an alert email can tell the
-    cases apart at a glance — ``org_timeouts`` (the FAR-1525 30s per-org
-    cut), ``orgs_deferred`` (orgs never started because only the reserved tick
+    cases apart at a glance - ``org_timeouts`` (TWO classes since FAR-1621,
+    per M4/FAR-1644: the FAR-1525 per-org asyncio cut at the slice deadline
+    AND an in-pass ``TimeoutError`` raised before the slice ran out),
+    ``orgs_deferred`` (orgs never started because only the reserved tick
     tail remained), ``org_lock_timeouts`` (FAR-1601 SQLSTATE 55P03 skip),
     ``org_pool_timeouts`` (system-engine pool checkout), ``org_connect_timeouts``
     (asyncpg's TCP connect bound during session acquisition) and
-    ``org_statement_timeouts`` (FAR-1621 SQLSTATE 57014 statement bound) —
+    ``org_statement_timeouts`` (FAR-1621 SQLSTATE 57014 statement bound) -
     five bounded-failure counters plus ``orgs_deferred``. Before them the
     detail ended at ``rows_deferred``, so the exact class of bounded failure
     was invisible to the alert.

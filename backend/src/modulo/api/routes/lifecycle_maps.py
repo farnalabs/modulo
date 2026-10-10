@@ -81,6 +81,12 @@ _CODE_LIFECYCLE_MAPS_GRADUATE_STAGE = "lifecycle_maps.graduate_stage_endpoint"
 _CODE_LIFECYCLE_MAPS_LIST_JOURNEYS = "lifecycle_maps.list_journeys_endpoint"
 _CODE_LIFECYCLE_MAPS_GET_JOURNEY = "lifecycle_maps.get_journey_endpoint"
 
+_CODE_LIFECYCLE_MAPS_LIST_LIFECYCLE_MAPS_ENDPOINT = "lifecycle_maps.list_lifecycle_maps_endpoint"
+_CODE_LIFECYCLE_MAPS_EXPORT_LIFECYCLE_MAP_ENDPOINT = "lifecycle_maps.export_lifecycle_map_endpoint"
+_CODE_LIFECYCLE_MAPS_GET_LIFECYCLE_MAP_ENDPOINT = "lifecycle_maps.get_lifecycle_map_endpoint"
+_CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT = "lifecycle_maps.delete_lifecycle_map_endpoint"
+_CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT = "lifecycle_maps.self_report_journeys_endpoint"
+
 # SQLSTATE ``insufficient_privilege``: Postgres refused a statement because an
 # RLS policy's WITH CHECK (for ``FOR ALL`` policies Postgres defaults WITH CHECK
 # to the USING expression) rejected the NEW row — here a team-ownership /
@@ -544,7 +550,7 @@ def _build_detail(lm: Any) -> LifecycleMapDetailResponse:
 
 
 @router.get("")
-@handle_db_errors("lifecycle_maps.list_lifecycle_maps_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_LIST_LIFECYCLE_MAPS_ENDPOINT)
 async def list_lifecycle_maps_endpoint(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -565,14 +571,14 @@ async def list_lifecycle_maps_endpoint(
                 include_archived=include_archived,
             )
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_LIST_LIFECYCLE_MAPS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "lifecycle_maps.list_lifecycle_maps_endpoint")
-        _log.exception("lifecycle_maps.list_lifecycle_maps_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_LIST_LIFECYCLE_MAPS_ENDPOINT)
+        _log.exception(_CODE_LIFECYCLE_MAPS_LIST_LIFECYCLE_MAPS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -733,7 +739,7 @@ async def import_lifecycle_map_endpoint(
 
 
 @router.get("/{lifecycle_map_id}/export")
-@handle_db_errors("lifecycle_maps.export_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_EXPORT_LIFECYCLE_MAP_ENDPOINT)
 async def export_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -749,14 +755,14 @@ async def export_lifecycle_map_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_EXPORT_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "lifecycle_maps.export_lifecycle_map_endpoint")
-        _log.exception("lifecycle_maps.export_lifecycle_map_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_EXPORT_LIFECYCLE_MAP_ENDPOINT)
+        _log.exception(_CODE_LIFECYCLE_MAPS_EXPORT_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -776,7 +782,7 @@ async def export_lifecycle_map_endpoint(
 
 
 @router.get("/{lifecycle_map_id}")
-@handle_db_errors("lifecycle_maps.get_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_GET_LIFECYCLE_MAP_ENDPOINT)
 async def get_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -789,14 +795,14 @@ async def get_lifecycle_map_endpoint(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             lifecycle_map = await get_lifecycle_map(session, lifecycle_map_id)
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_GET_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "lifecycle_maps.get_lifecycle_map_endpoint")
-        _log.exception("lifecycle_maps.get_lifecycle_map_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_GET_LIFECYCLE_MAP_ENDPOINT)
+        _log.exception(_CODE_LIFECYCLE_MAPS_GET_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -919,7 +925,7 @@ async def update_lifecycle_map_endpoint(
         )
     ],
 )
-@handle_db_errors("lifecycle_maps.delete_lifecycle_map_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT)
 async def delete_lifecycle_map_endpoint(
     lifecycle_map_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -941,14 +947,14 @@ async def delete_lifecycle_map_endpoint(
                     payload_json={},
                 )
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "lifecycle_maps.delete_lifecycle_map_endpoint")
-        _log.exception("lifecycle_maps.delete_lifecycle_map_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT)
+        _log.exception(_CODE_LIFECYCLE_MAPS_DELETE_LIFECYCLE_MAP_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,
@@ -1605,7 +1611,7 @@ async def get_journey_endpoint(
         )
     ],
 )
-@handle_db_errors("lifecycle_maps.self_report_journeys_endpoint")
+@handle_db_errors(_CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT)
 async def self_report_journeys_endpoint(
     lifecycle_map_id: uuid.UUID,
     req: JourneySelfReportRequest,
@@ -1688,14 +1694,14 @@ async def self_report_journeys_endpoint(
                 explicit_stage=explicit_stage,
             )
     except ProgrammingError as exc:
-        _log.exception("lifecycle_maps.self_report_journeys_endpoint")
+        _log.exception(_CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "lifecycle_maps.self_report_journeys_endpoint")
-        _log.exception("lifecycle_maps.self_report_journeys_endpoint")
+        raise_session_contract_error(exc, _CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT)
+        _log.exception(_CODE_LIFECYCLE_MAPS_SELF_REPORT_JOURNEYS_ENDPOINT)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=MSG_DATABASE_TEMPORARILY_UNAVAILABLE,

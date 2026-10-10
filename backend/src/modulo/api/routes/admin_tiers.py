@@ -18,6 +18,8 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.db.crud.tier_catalog import list_tiers
 from modulo.settings import Settings, get_settings
 
+_CODE_ADMIN_TIERS_LIST_TIERS_ENDPOINT = "admin_tiers.list_tiers_endpoint"
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin/tiers", tags=["admin-tiers"])
@@ -78,11 +80,11 @@ async def list_tiers_endpoint(
     except HTTPException:
         raise
     except ProgrammingError:
-        logger.exception("admin_tiers.list_tiers_endpoint")
+        logger.exception(_CODE_ADMIN_TIERS_LIST_TIERS_ENDPOINT)
         raise HTTPException(status_code=501, detail="Database not available. Run migrations.") from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_tiers.list_tiers_endpoint")
-        logger.exception("admin_tiers.list_tiers_endpoint")
+        raise_session_contract_error(exc, _CODE_ADMIN_TIERS_LIST_TIERS_ENDPOINT)
+        logger.exception(_CODE_ADMIN_TIERS_LIST_TIERS_ENDPOINT)
         raise HTTPException(status_code=503, detail="Database error occurred.") from None
     except Exception:
         logger.exception("Unexpected error in list_tiers_endpoint")

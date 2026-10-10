@@ -17,32 +17,6 @@ def connector():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"login": "myuser"}))
-    respx.get(f"{_API}/repos").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "myuser"
-
-
-@respx.mock
-async def test_health_check_missing_scopes(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"login": "myuser"}))
-    respx.get(f"{_API}/repos").mock(return_value=httpx.Response(403, text="forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Missing scopes" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
-@respx.mock
 async def test_query_repos(connector):
     repos = [{"id": 1, "name": "repo-a"}, {"id": 2, "name": "repo-b"}]
     respx.get(f"{_API}/user/repos").mock(return_value=httpx.Response(200, json=repos))

@@ -7482,6 +7482,21 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
     the sweep/heartbeat path heals the row — accepted, because failing the
     dispatch over a marker write would turn a DB hiccup into a dispatch
     outage.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this is a writer on
+    the hot ``runs`` row with NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout``
+    (``db.crud.row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock — a contended row
+    lock waits at most that long, never the unbounded, >=30-minute silent
+    wait HAProxy culls mid-operation (FAR-1524 O11). Because this write is
+    best-effort, the bounded wait expiring (SQLSTATE 55P03) is handled
+    NON-silently and without changing the outcome: a distinct
+    ``sandbox_agent.best_effort_marker_lock_timeout`` WARNING carries the
+    SQLSTATE + the (markerless) recovery, and the SAME claim-token-derived
+    fallback key is returned — exactly the fail-open the generic handler
+    already gives, just no longer indistinguishable from a real DB fault. The
+    marker sweep / rollback-detector healing is the designed backstop.
     """
     if session_factory is None or not claim_lease:
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
@@ -7494,12 +7509,17 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
         return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
     try:
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_uuid)
             await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
             row = (
                 await session.execute(
                     _sql_text(
@@ -7531,7 +7551,28 @@ async def _sandbox_acquire_dispatch_marker_best_effort(
             return key
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # a different outcome — the write is best-effort BY DESIGN, so the
+            # transaction rolled back whole and the dispatch proceeds
+            # MARKERLESS exactly as the generic fail-open below; the distinct
+            # event keeps this from being confused with an unexpected DB fault.
+            _log.warning(
+                "sandbox_agent.best_effort_marker_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "node_id": node_id,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT written (transaction "
+                        "rolled back), dispatch proceeds markerless (fail-open) and the marker "
+                        "sweep / rollback-detector heals the row"
+                    ),
+                },
+                exc_info=True,
+            )
+            return f"run:{run_id}:node:{node_id}:{_claim_token_attempt_suffix(claim_lease)}"
         _log.warning(
             "sandbox_agent.best_effort_marker_failed",
             extra={
@@ -7566,6 +7607,22 @@ async def _sandbox_store_dispatch_marker_sandbox(
     ``via_provider`` (FAR-1050) stamps the provider-routing state onto the
     SAME marker, so a run is attributable to provider-mediated execution
     from the persisted dispatch marker alone (ADR 040 revert observability).
+
+    FAR-1611 — deliberately NOT given the FAR-1601 lock bound. Audited, not
+    skipped. This write persists ``runs.sandbox_id``, the ONLY durable record
+    the heartbeat-lost kill path reads (``pipeline_execution.
+    _kill_sandbox_best_effort`` -> ``SELECT sandbox_id FROM runs``): the
+    in-process teardown handles the normal path, but when the worker is culled
+    the heartbeat-lost kill is the sole reaper, and there is no Modulo-side
+    sweep that re-creates a lost ``sandbox_id`` (the sandbox lingers until the
+    provider's own timeout). A bounded wait expiring here would therefore
+    permanently drop that record on a transient row-lock contention — state
+    loss with no recovery — while the caller has NO dedicated 55P03 contract:
+    the exception surfaces in the dispatch's generic ``except Exception`` as
+    ``sandbox_agent.command_failed``, not as a recoverable marker fault. Until
+    that caller is given a fail-open contract that keeps the sandbox
+    reclaimable, bounding this write is unsafe; the unbounded wait is the
+    lesser hazard and is recorded as the remaining FAR-1611 gap.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7621,6 +7678,21 @@ async def _sandbox_store_script_lease(
     re-stamps the D8 tier attribution.  Required (FAR-995) — every call
     site must pass its value explicitly. ``via_provider`` carries the
     FAR-1050 provider-routing state alongside it.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this writer on the
+    hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so its
+    transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. A bounded wait
+    expiring (SQLSTATE 55P03) is NOT fail-open here, and MUST NOT be: the
+    lease is the exactly-once fence, so proceeding to ``sandbox.commands.run``
+    without a persisted claim would silently degrade the node to at-least-once
+    (a later fault would be re-dispatchable and the script could double-run).
+    The expiry is therefore claimed NON-silently under the distinct
+    ``sandbox_agent.script_lease_lock_timeout`` WARNING and RE-RAISED: the
+    caller never sets ``_script_lease_claimed``, the script process never
+    starts, and the run stays pre-claim (safe to re-dispatch / sweep). The
+    marker sweep's fence rules own any partially-written lease state.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7636,39 +7708,70 @@ async def _sandbox_store_script_lease(
     from modulo.core.runner_capacity import (
         MARKER_STATE_SCRIPT_EXECUTING,
     )
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        result = await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=:marker "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
-            ),
-            {
-                "rid": run_id,
-                "oid": str(org_uuid),
-                "tok": claim_lease,
-                "marker": json.dumps(
-                    {
-                        "state": MARKER_STATE_SCRIPT_EXECUTING,
-                        "attempt_key": attempt_key or "",
-                        "provider": provider,
-                        "via_provider": bool(via_provider),
-                        "written_at": datetime.now(UTC).isoformat(),
-                    }
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            result = await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=:marker "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running'"
                 ),
-            },
-        )
-        if result.rowcount == 0:
-            # The UPDATE was fenced on claim_token + status but matched
-            # zero rows — the claim was superseded (token rotated by a
-            # successor) or the run is no longer running. The lease was
-            # NEVER acquired, so a subsequent fault must NOT be treated as
-            # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
-            # so the caller never marks the lease claimed.
-            raise SupersededNodeError("script lease denied — run superseded or not running")
+                {
+                    "rid": run_id,
+                    "oid": str(org_uuid),
+                    "tok": claim_lease,
+                    "marker": json.dumps(
+                        {
+                            "state": MARKER_STATE_SCRIPT_EXECUTING,
+                            "attempt_key": attempt_key or "",
+                            "provider": provider,
+                            "via_provider": bool(via_provider),
+                            "written_at": datetime.now(UTC).isoformat(),
+                        }
+                    ),
+                },
+            )
+            if result.rowcount == 0:
+                # The UPDATE was fenced on claim_token + status but matched
+                # zero rows — the claim was superseded (token rotated by a
+                # successor) or the run is no longer running. The lease was
+                # NEVER acquired, so a subsequent fault must NOT be treated as
+                # post-claim/terminal. Fail as a RETRYABLE SupersededNodeError
+                # so the caller never marks the lease claimed.
+                raise SupersededNodeError("script lease denied — run superseded or not running")
+    except asyncio.CancelledError:
+        raise
+    except SupersededNodeError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Claim it LOUDLY and
+            # re-raise — the caller must NOT mark the lease claimed and the
+            # script must NOT start (see the docstring): the run stays
+            # pre-claim, so a re-dispatch is exactly-once-safe and the sweep
+            # owns any partially-written lease state.
+            _log.warning(
+                "sandbox_agent.script_lease_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "attempt_key": attempt_key,
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); lease NOT acquired (transaction "
+                        "rolled back), script NOT started, run stays pre-claim (re-dispatchable)"
+                    ),
+                },
+                exc_info=True,
+            )
+        raise
 
 
 async def _sandbox_mint_run_api_key_for_sandbox(
@@ -7767,6 +7870,21 @@ async def _sandbox_clear_dispatch_marker(
 
     A superseded original (token rotated by a successor) must not clear
     the successor's dispatch marker / sandbox id.
+
+    Lock bound (FAR-1611, the FAR-1601/1584/1592 class): this teardown writer
+    on the hot ``runs`` row had NO client-side ``asyncio.wait_for`` bound, so
+    its transaction issues the transaction-scoped ``lock_timeout`` (``db.crud.
+    row_lock.set_mutation_row_lock_timeout``, ``Settings.
+    mutation_row_lock_timeout_ms``) BEFORE its first lock. The clear is
+    BEST-EFFORT (the dispatch marker is a capacity signal, not a correctness
+    dependency), so a bounded wait expiring (SQLSTATE 55P03) is claimed
+    NON-silently under the distinct ``sandbox_agent.
+    dispatch_marker_clear_lock_timeout`` WARNING and then swallowed: the
+    transaction rolled back whole, the marker SURVIVES (the run is past its
+    teardown and no longer holds capacity), and the marker sweep clears it
+    under its own stale-marker rules. Any OTHER failure still propagates to
+    the caller's existing ``sandbox_agent.dispatch_marker_clear_failed``
+    handler, so the two remain distinguishable.
     """
     if session_factory is None or not claim_lease:
         return
@@ -7779,18 +7897,45 @@ async def _sandbox_clear_dispatch_marker(
         return
     from sqlalchemy import text as _sql_text
 
+    from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
     from modulo.db.rls import set_rls_execution_context, set_rls_org
+    from modulo.db.sqlstates import is_row_lock_timeout
 
-    async with session_factory() as session, session.begin():
-        await set_rls_org(session, org_uuid)
-        await set_rls_execution_context(session)
-        await session.execute(
-            _sql_text(
-                "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
-                "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
-            ),
-            {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
-        )
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_uuid)
+            await set_rls_execution_context(session)
+            # FAR-1611: bound this transaction's row-lock waits first (the
+            # helper takes no lock itself, so it cannot disturb ordering).
+            await set_mutation_row_lock_timeout(session)
+            await session.execute(
+                _sql_text(
+                    "UPDATE runs SET sandbox_dispatch_state=NULL, sandbox_id=NULL "
+                    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok"
+                ),
+                {"rid": run_id, "oid": str(org_uuid), "tok": claim_lease},
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1611: the BOUNDED wait expired (55P03). Never silent, never
+            # raised — the clear is best-effort and the marker sweep owns the
+            # surviving stale marker (transaction rolled back whole).
+            _log.warning(
+                "sandbox_agent.dispatch_marker_clear_lock_timeout",
+                extra={
+                    "run_id": run_id,
+                    "org_id": str(org_uuid),
+                    "note": (
+                        "bounded wait expired (SQLSTATE 55P03); marker NOT cleared (transaction "
+                        "rolled back), marker SURVIVES teardown and the marker sweep clears it"
+                    ),
+                },
+                exc_info=True,
+            )
+            return
+        raise
 
 
 def _emit_script_span_event(name: str, attrs: dict[str, Any]) -> None:
