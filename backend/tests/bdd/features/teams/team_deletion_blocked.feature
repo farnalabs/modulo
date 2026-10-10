@@ -31,6 +31,16 @@ Feature: Team Deletion Blocked When Resources Exist
     And the error message contains "model backend"
     And the error message does not contain "pipeline"
 
+  Scenario: Delete team with owned library primitives is blocked
+    Given I am authenticated as an admin in org "acme"
+    And a team "engineering" exists
+    And library primitive "eng-primitive" is owned by team "engineering"
+    When I delete the team "engineering"
+    Then the response status is 409
+    And the error indicates the team still has resources
+    And the error message contains "library primitive"
+    And the error message does not contain "pipeline"
+
   Scenario: Reassign resources then delete succeeds
     Given I am authenticated as an admin in org "acme"
     And a team "engineering" exists
