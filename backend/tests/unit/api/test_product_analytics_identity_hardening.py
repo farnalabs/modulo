@@ -213,6 +213,32 @@ class TestAtomicSequenceLock:
 
         assert exc_info.value.status_code == 409
 
+    async def test_generic_sqlalchemy_error_maps_to_503(self) -> None:
+        """A non-lock SQLAlchemyError is a database outage → 503, never a 409.
+
+        Only SQLSTATE 55P03 (bounded lock wait expired) is a conflict; every
+        other ``SQLAlchemyError`` must fall through to the retryable 503 arm.
+        """
+        from sqlalchemy.exc import SQLAlchemyError
+
+        session = _mock_session()
+        with (
+            patch.object(pa, "set_mutation_row_lock_timeout", new=AsyncMock()),
+            patch.object(
+                pa,
+                "get_or_create_instance_identity",
+                new=AsyncMock(return_value=(uuid.uuid4(), "current")),
+            ),
+            patch.object(pa, "_constant_time_equal", return_value=True),
+            patch.object(pa, "verify_hmac", return_value=True),
+            patch.object(pa, "_get_last_sequence", new=AsyncMock(side_effect=SQLAlchemyError("db down"))),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await pa.rotate_identity_secret(_rotate_req(), _request("10.9.9.23"), session, _current_user=None)
+
+        assert exc_info.value.status_code == 503
+        assert "temporarily unavailable" in exc_info.value.detail
+
     async def test_route_bounds_the_lock_wait(self) -> None:
         """The route must bound the row-lock wait before taking the lock (FAR-1313 pattern)."""
         session = _mock_session()

@@ -382,3 +382,18 @@ class TestKillSwitchValueParsing:
     )
     def test_everything_else_leaves_enforcement_enabled(self, stored: object) -> None:
         assert kill_switch_disables_enforcement(stored) is False
+
+    @pytest.mark.parametrize(
+        "stored",
+        [0, 1, None, [], {}],
+        ids=["int_zero", "int_one", "none", "empty_list", "empty_dict"],
+    )
+    def test_non_bool_non_str_values_fall_back_to_truthiness(self, stored: object) -> None:
+        """A stored value that is neither bool nor str uses truthiness (never truthy-by-shape).
+
+        The kill-switch column may hold any JSON shape (integer, null, list).
+        Only an explicitly truthy bool or a recognised string turns the switch
+        on, so every other shape must read through ``bool(value)`` — a
+        non-empty list must never be treated as "kill switch on".
+        """
+        assert kill_switch_disables_enforcement(stored) is bool(stored)
