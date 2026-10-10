@@ -1278,6 +1278,16 @@ class TestOAuthMiddlewareAccountBinding:
                 "modulo.api.mcp_server.check_oauth_token_family_valid",
                 new=family_check,
             ),
+            # FAR-1476: both OAuth principal legs now also resolve the client's
+            # team boundary (``get_oauth_client_team_id``). These account-binding
+            # tests are not about the team boundary, so stub it to None
+            # (org-wide) — the boundary itself is covered by
+            # test_mcp_oauth_team_scope.py. Without this the strict mock session
+            # raises on the unexpected ``oauth_clients`` SELECT.
+            patch(
+                "modulo.api.mcp_server.get_oauth_client_team_id",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             middleware = McpAuthMiddleware(app=MagicMock())
             response = await middleware.dispatch(request, fake_call_next)

@@ -110,6 +110,15 @@ def _make_session() -> AsyncMock:
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
     session.begin_nested = MagicMock(return_value=begin_cm)
+    # FAR-1629: ``AsyncSession.in_transaction()`` is SYNC (returns bool, it is
+    # not awaitable — unlike ``execute``/``commit``). The bare ``AsyncMock``
+    # session auto-creates it as an async child, so ``_ensure_active_transaction``
+    # (db/rls.py) called it and left an un-awaited coroutine behind (8x
+    # RuntimeWarning "coroutine 'AsyncMockMixin._execute_mock_call' was never
+    # awaited" attributed here via PYTHONTRACEMALLOC). A coroutine is also
+    # always truthy, so the guard passed vacuously. Type the double to match
+    # the real contract.
+    session.in_transaction = MagicMock(return_value=True)
     result = MagicMock()
     result.scalar_one_or_none.return_value = None
     result.scalar_one.return_value = 0

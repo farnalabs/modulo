@@ -27,8 +27,8 @@ place: it and the composite FK are independent same-org guards.
 Postgres-only: SQLite/ORM-created schemas get the composite FK from the model
 ``create_all`` (the 0246 / 0250 precedent). Downgrade restores the plain FK.
 
-Revision ID: 0293_eval_results_org_fk
-Revises: 0292_audit_events_resource_lookup
+Revision ID: 0294_eval_results_org_fk
+Revises: 0293_oauth_clients_team_id
 Create Date: 2026-10-10
 """
 
@@ -37,8 +37,8 @@ from __future__ import annotations
 from alembic import op
 from sqlalchemy import text
 
-revision: str = "0293_eval_results_org_fk"
-down_revision: str | None = "0292_audit_events_resource_lookup"
+revision: str = "0294_eval_results_org_fk"
+down_revision: str | None = "0293_oauth_clients_team_id"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

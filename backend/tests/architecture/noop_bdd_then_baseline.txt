@@ -76,18 +76,13 @@ bdd/steps/test_alpha_schemas.py:the run uses schema version {version:d}
 bdd/steps/test_assistant.py:a summary of pruned messages is generated
 bdd/steps/test_assistant.py:all {count:d} messages are kept
 bdd/steps/test_assistant.py:no pruning occurs
-bdd/steps/test_assistant.py:the URL changes to "/admin/pipelines"
 bdd/steps/test_assistant.py:the budget is {expected:d} tokens
 bdd/steps/test_assistant.py:the context has only the system message and user message
 bdd/steps/test_assistant.py:the conversation has has_summary set to true
-bdd/steps/test_assistant.py:the frontend executes the navigate command
-bdd/steps/test_assistant.py:the frontend fills the input field
-bdd/steps/test_assistant.py:the frontend returns the element's text content
 bdd/steps/test_assistant.py:the frontend shows the approval card
 bdd/steps/test_assistant.py:the messages are ordered by created_at ascending
 bdd/steps/test_assistant.py:the newest user message is always preserved
 bdd/steps/test_assistant.py:the oldest messages are pruned
-bdd/steps/test_assistant.py:the results are fed back to the LLM for the next turn
 bdd/steps/test_assistant.py:the sessions are ordered by updated_at descending
 bdd/steps/test_assistant.py:the system prompt is always preserved
 bdd/steps/test_conditional_hitl.py:execution continues to the next node

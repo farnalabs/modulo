@@ -352,8 +352,15 @@ async def create_oauth_client(
     scopes: str,
     redirect_uris: str,
     created_by: uuid.UUID | None = None,
+    team_id: uuid.UUID | None = None,
 ) -> tuple[OAuthClient, str]:
-    """Create a new OAuth client. Returns (OAuthClient, raw_client_secret)."""
+    """Create a new OAuth client. Returns (OAuthClient, raw_client_secret).
+
+    ``team_id`` (FAR-1476) binds the client to a team so every token it is
+    issued carries that team boundary. NULL (default) is an org-wide client
+    with no boundary. The route validates that the team exists in the caller's
+    org and that a ``runner`` caller is a member of it before calling this.
+    """
     client_id, client_secret, hashed = generate_client_credentials()
     client = OAuthClient(
         organisation_id=org_id,
@@ -363,6 +370,7 @@ async def create_oauth_client(
         scopes=scopes,
         redirect_uris=redirect_uris,
         account_id=created_by,
+        team_id=team_id,
     )
     session.add(client)
     await session.flush()
@@ -372,6 +380,20 @@ async def create_oauth_client(
 async def get_oauth_client_by_client_id(session: AsyncSession, client_id: str) -> OAuthClient | None:
     """Look up an OAuth client by its client_id. Returns None if not found."""
     result = await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+    return result.scalar_one_or_none()
+
+
+async def get_oauth_client_team_id(session: AsyncSession, client_id: str) -> uuid.UUID | None:
+    """Return the client's team boundary (FAR-1476), or None for an org-wide client.
+
+    A lightweight single-column read used by the MCP auth legs: the client row
+    is NOT loaded on those paths (only the token family is), so this is the one
+    DB round-trip the leg already makes. A missing client yields None (org-wide)
+    — the token-family check upstream already gates on client existence, so a
+    dangling reference here is a race that must not widen access (None is the
+    no-boundary posture, matching the pre-FAR-1476 behaviour).
+    """
+    result = await session.execute(select(OAuthClient.team_id).where(OAuthClient.client_id == client_id))
     return result.scalar_one_or_none()
 
 

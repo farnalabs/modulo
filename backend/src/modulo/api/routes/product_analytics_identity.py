@@ -6,7 +6,6 @@ import asyncio
 import hmac
 import logging
 import time
-from collections import defaultdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -42,24 +41,85 @@ router = APIRouter(
 # Note: this rate limiter is per-process and not shared across workers behind
 # a load balancer; a Redis-backed limiter would be required for that.
 
-_rotation_timestamps: dict[str, list[float]] = defaultdict(list)
+# A plain dict (not a defaultdict): every read is an explicit ``.get()`` and
+# every write an explicit assignment, so a stray read can never silently grow
+# the map past its bound.
+_rotation_timestamps: dict[str, list[float]] = {}
 _MAX_ROTATIONS = 5
 _ROTATION_WINDOW = 3600.0  # 1 hour
+# Hard bound on the number of tracked client keys. When the map reaches this
+# size, idle keys are swept first; if it is still at the bound the
+# least-recently-used keys are evicted, so a burst of distinct client IPs can
+# never grow the map without limit. (A key is only pruned when a request
+# arrives, so without this bound one-off client IPs accumulate forever.)
+_MAX_TRACKED_CLIENTS = 10_000
+
+
+def _sweep_expired_clients(window_start: float) -> None:
+    """Drop client keys that hold no timestamps inside the current window.
+
+    A client with no rotations left in the active window can never trip the
+    limiter again, so its key carries no rate-limiting information and is safe
+    to evict.
+    """
+    stale = [key for key, stamps in _rotation_timestamps.items() if not any(t > window_start for t in stamps)]
+    for key in stale:
+        del _rotation_timestamps[key]
+
+
+def _touch_client(client_key: str, timestamps: list[float]) -> None:
+    """Store ``timestamps`` for ``client_key``, marking it most-recently-used.
+
+    Re-inserting an existing key moves it to the end of the dict's insertion
+    order, so ``_evict_least_recently_used`` evicts the client that has gone
+    longest without a rotation request rather than the one that has been
+    tracked longest.
+    """
+    _rotation_timestamps.pop(client_key, None)
+    _rotation_timestamps[client_key] = timestamps
+
+
+def _evict_least_recently_used(limit: int) -> None:
+    """Evict least-recently-used client keys until at most ``limit`` remain.
+
+    Backstop for the case the sweep cannot help with: every tracked client
+    still holds an in-window timestamp, yet the map is at its bound. Evicting
+    the least-recently-used keys keeps memory hard-bounded while sparing the
+    clients that are actively rotating (mirrors the drop-oldest bound used by
+    the demo rate-limit floor).
+    """
+    while len(_rotation_timestamps) > limit:
+        del _rotation_timestamps[next(iter(_rotation_timestamps))]
 
 
 def _check_rotation_rate_limit(client_key: str) -> None:
     """Raise 429 if the client has exceeded the rotation rate limit."""
     now = time.time()
     window_start = now - _ROTATION_WINDOW
-    timestamps = _rotation_timestamps[client_key]
-    # Prune old entries
-    _rotation_timestamps[client_key] = [t for t in timestamps if t > window_start]
-    if len(_rotation_timestamps[client_key]) >= _MAX_ROTATIONS:
+    # Prune old entries for the current key (read-only access avoids creating
+    # an entry for a client that is not being tracked).
+    timestamps = [t for t in _rotation_timestamps.get(client_key, ()) if t > window_start]
+    if len(timestamps) >= _MAX_ROTATIONS:
+        _touch_client(client_key, timestamps)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rotation rate limit exceeded. Max {_MAX_ROTATIONS} per hour.",
         )
-    _rotation_timestamps[client_key].append(now)
+    # Keep the tracked-client map hard-bounded before admitting a new key:
+    # sweep idle clients first (cheap), then evict the least-recently-used keys
+    # if the sweep could not bring the map under the cap. Evict down to one
+    # below the cap so the incoming key fits without exceeding the bound.
+    if client_key not in _rotation_timestamps and len(_rotation_timestamps) >= _MAX_TRACKED_CLIENTS:
+        _sweep_expired_clients(window_start)
+        if len(_rotation_timestamps) >= _MAX_TRACKED_CLIENTS:
+            _log.warning(
+                "%s: rotation rate-limiter at capacity (%d tracked clients); evicting least-recently-used",
+                _LOG_ROTATE,
+                _MAX_TRACKED_CLIENTS,
+            )
+            _evict_least_recently_used(_MAX_TRACKED_CLIENTS - 1)
+    timestamps.append(now)
+    _touch_client(client_key, timestamps)
 
 
 # ── Response models ─────────────────────────────────────────────────────────
@@ -234,12 +294,37 @@ _SEQUENCE_KEY_PREFIX = "product_analytics_last_sequence_"
 
 
 async def _get_last_sequence(session: AsyncSession, instance_id: str) -> int:
-    """Read the last accepted sequence number for this instance."""
+    """Read the last accepted sequence number for this instance.
+
+    Fails CLOSED when the stored value is not a JSON integer. Accepting a
+    corrupt value — or returning a default (e.g. ``0``) for one — would
+    silently reset the monotonicity guard and let a caller replay an old
+    sequence, so refuse to rotate and surface a clear, actionable error
+    instead. A non-integer JSON number (float/bool) and every non-number shape
+    (string/``null``/list/object) are all treated as corrupt. A *missing* row
+    is the legitimate first-rotation state and reads as ``0``.
+    """
     key = _SEQUENCE_KEY_PREFIX + instance_id
     entry = await get_config(session, key)
     if entry is None:
         return 0
-    return int(entry.value)
+    value = entry.value
+    if isinstance(value, bool) or not isinstance(value, int):
+        _log.error(
+            "%s: corrupt stored sequence for key %r: expected an integer, got %r",
+            _LOG_ROTATE,
+            key,
+            value,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Corrupt product-analytics rotation sequence config at key '{key}': "
+                "stored value is not a valid integer. Refusing to rotate; repair the "
+                "SystemConfig value before retrying."
+            ),
+        )
+    return int(value)
 
 
 async def _set_last_sequence(session: AsyncSession, instance_id: str, seq: int) -> None:

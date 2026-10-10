@@ -1,9 +1,9 @@
-"""Unit tests for migration 0293_eval_results_org_fk (FAR-969).
+"""Unit tests for migration 0294_eval_results_org_fk (FAR-969).
 
 Structural + model-parity contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
-  0292_audit_events_resource_lookup parent, and the migrations directory has
+  0293_oauth_clients_team_id parent, and the migrations directory has
   exactly one head (this migration), so the pre-commit ``check-migration-heads``
   hook can never be ambushed by a renumber.
 * **Composite FK emission (mocked ``op``)** — on Postgres the upgrade swaps the
@@ -33,9 +33,9 @@ from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0293_eval_results_org_fk"
+_MIGRATION_NAME = "0294_eval_results_org_fk"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0292_audit_events_resource_lookup"
+_DOWN_REVISION = "0293_oauth_clients_team_id"
 
 _COMPOSITE_FK = "fk_eval_results_eval_org"
 _OLD_FK = "eval_results_eval_id_fkey"
@@ -74,7 +74,7 @@ class TestChain:
     def test_revision_id_matches_filename(self) -> None:
         assert _load_migration().revision == _MIGRATION_NAME
 
-    def test_down_revision_is_0292_audit_events_resource_lookup(self) -> None:
+    def test_down_revision_is_0293_oauth_clients_team_id(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_single_head_is_this_migration(self) -> None:

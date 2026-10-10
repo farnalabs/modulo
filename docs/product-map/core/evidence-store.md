@@ -9,6 +9,7 @@ code:
   - backend/src/modulo/core/eval_engine/author_warnings.py
   - backend/src/modulo/core/evidence_retention.py
   - backend/src/modulo/api/routes/admin_evidence_retention.py
+  - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/core/pipeline_engine/evidence.py
 unit-tests:
   - backend/tests/architecture/test_evidence_deletion_carveout.py
@@ -16,6 +17,7 @@ unit-tests:
   - backend/tests/unit/core/test_evidence_fetch.py
   - backend/tests/unit/core/test_evidence_write_auth.py
   - backend/tests/unit/core/evidence/test_retention.py
+  - backend/tests/unit/core/evidence/test_author_warnings.py
   - backend/tests/unit/api/test_evidence_retention_routes_coverage.py
   - backend/tests/integration/db/test_evidence_retention.py
   - backend/tests/integration/test_evidence_table.py
@@ -100,13 +102,22 @@ the manifest registry.
 
 - **The predicate language and `decide` function are deferred.** The evidence
   layer's predicate evaluation and the compatibility adapter (§4) remain parked
-  — reads today are the subject-scoped fetch + author-warning checks, not a
-  general decision predicate over the store.
+  — the only live read of the store today is the author-warning check's own
+  query; the subject-scoped `fetch()` and `map_run_evidence_to_evidence` seam
+  have no production call site yet, not a general decision predicate over the
+  store.
 - **Author warnings are advisory and can be noisy on purpose.** They warn on the
   safe direction (indeterminate producer position, store-query failure), so a
   gate's rigour is ultimately the author's judgment.
 
 ## QA History
+
+- 2026-10-10: **qa-iterate product-map pass** — added the missing citations for
+  the author-warning surface: `api/routes/evals.py` (the `policy-gate` routes and
+  `PolicyGateResponse.warnings`) and
+  `tests/unit/core/evidence/test_author_warnings.py`. Clarified in Known Gaps
+  that `fetch()` / `map_run_evidence_to_evidence` have no production call site yet
+  (the live read is the author-warning query). Status: covered.
 
 - 2026-09-30: **Improve Architecture product-map walk** — new behaviour tracker
   closing the feature-graph gap left by chunk 9a (FAR-961 / FAR-957): the
