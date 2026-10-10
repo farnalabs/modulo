@@ -16005,6 +16005,8 @@ export interface components {
             hitl_config?: {
                 [key: string]: unknown;
             } | null;
+            /** @description Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. Absent means no gate is declared on this node. */
+            policy_gate?: components["schemas"]["PipelineGraphPolicyGate"] | null;
             fan_out?: components["schemas"]["FanOutConfig"] | null;
             /** Collect */
             collect?: components["schemas"]["JoinCollectSpec"][] | null;
@@ -16057,6 +16059,37 @@ export interface components {
              * @description dispatch nodes only: seconds to wait for a terminal substrate status when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry raises the terminal dispatch.wait_timeout error — never retried, because a retry would fire a second job on the customer's substrate. Keep it below the node's timeout_seconds so this error (not the node deadline) is what fires.
              */
             wait_timeout?: number | null;
+        };
+        /**
+         * PipelineGraphPolicyGate
+         * @description Node-attached policy-gate configuration (FAR-1109).
+         *
+         *     Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+         *     config can carry the gate as part of the graph write. ``action`` is the
+         *     gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+         *     ``eval_id`` references the eval bound to this node (the CLI never
+         *     auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+         *     time).
+         *
+         *     The node model previously had no field for this block, so Pydantic's
+         *     default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+         *     before the graph write — leaving declarative gate config permanently inert
+         *     (the plan always reported "unchanged" and the write never carried the
+         *     gate). Declaring the field means the validated node dict retains the block
+         *     and ``replace_pipeline_graph`` persists it verbatim in
+         *     ``pipeline.graph_nodes_json``, and the read path round-trips it.
+         */
+        PipelineGraphPolicyGate: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "warn" | "block";
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {
