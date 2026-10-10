@@ -19,7 +19,7 @@ trigger_engine test package:
 """
 
 import asyncio
-import datetime
+import datetime as dt
 import hashlib
 import hmac
 import json
@@ -652,23 +652,23 @@ class TestTryInsertDedup:
     async def test_default_ttl_is_five_minutes(self) -> None:
         engine = TriggerEngine()
         session = self._session()
-        before = datetime.datetime.now(datetime.UTC)
+        before = dt.datetime.now(dt.UTC)
         await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1")
-        after = datetime.datetime.now(datetime.UTC)
+        after = dt.datetime.now(dt.UTC)
         expires_at = session.add.call_args.args[0].expires_at
-        assert datetime.timedelta(seconds=_DEDUP_TTL_SECONDS - 5) <= expires_at - before
-        assert expires_at - after <= datetime.timedelta(seconds=_DEDUP_TTL_SECONDS)
+        assert dt.timedelta(seconds=_DEDUP_TTL_SECONDS - 5) <= expires_at - before
+        assert expires_at - after <= dt.timedelta(seconds=_DEDUP_TTL_SECONDS)
 
     async def test_custom_ttl_overrides_default(self) -> None:
         engine = TriggerEngine()
         session = self._session()
-        before = datetime.datetime.now(datetime.UTC)
+        before = dt.datetime.now(dt.UTC)
         await engine._try_insert_dedup(session, uuid.uuid4(), uuid.uuid4(), "hash-1", ttl_seconds=3600)
-        after = datetime.datetime.now(datetime.UTC)
+        after = dt.datetime.now(dt.UTC)
         expires_at = session.add.call_args.args[0].expires_at
         # The clicked-in custom window (FAR-1034) must be reflected in the row.
-        assert datetime.timedelta(seconds=3600 - 5) <= expires_at - before
-        assert expires_at - after <= datetime.timedelta(seconds=3600)
+        assert dt.timedelta(seconds=3600 - 5) <= expires_at - before
+        assert expires_at - after <= dt.timedelta(seconds=3600)
 
 
 # ---------------------------------------------------------------------------
@@ -832,7 +832,7 @@ async def test_handle_webhook_success_no_hmac() -> None:
     assert te.validation_result == "accepted"
     # A delivery that created a run stamps the trigger's last-fired time so the
     # trigger list reflects the real fire (cron/polling do the same).
-    assert isinstance(trigger.last_fired_at, datetime.datetime)
+    assert isinstance(trigger.last_fired_at, dt.datetime)
 
 
 async def test_handle_webhook_success_with_hmac() -> None:
@@ -2160,13 +2160,13 @@ async def test_schedule_polling_trigger_default_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
-    before = datetime.datetime.now(datetime.UTC)
+    before = dt.datetime.now(dt.UTC)
     await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
-    after = datetime.datetime.now(datetime.UTC)
+    after = dt.datetime.now(dt.UTC)
 
     assert trigger.next_fire_at is not None
-    assert trigger.next_fire_at - before >= datetime.timedelta(seconds=55)
-    assert trigger.next_fire_at - after <= datetime.timedelta(seconds=60)
+    assert trigger.next_fire_at - before >= dt.timedelta(seconds=55)
+    assert trigger.next_fire_at - after <= dt.timedelta(seconds=60)
     session.flush.assert_awaited_once()
 
 
@@ -2175,13 +2175,13 @@ async def test_schedule_polling_trigger_custom_interval() -> None:
     session = AsyncMock()
     session.flush = AsyncMock()
 
-    before = datetime.datetime.now(datetime.UTC)
+    before = dt.datetime.now(dt.UTC)
     await TriggerEngine().schedule_polling_trigger(session, trigger=trigger, _org_id=_ORG)
-    after = datetime.datetime.now(datetime.UTC)
+    after = dt.datetime.now(dt.UTC)
 
     assert trigger.next_fire_at is not None
-    assert trigger.next_fire_at - before >= datetime.timedelta(seconds=115)
-    assert trigger.next_fire_at - after <= datetime.timedelta(seconds=120)
+    assert trigger.next_fire_at - before >= dt.timedelta(seconds=115)
+    assert trigger.next_fire_at - after <= dt.timedelta(seconds=120)
 
 
 @pytest.mark.parametrize("bad_interval", [0, -5, "10"])

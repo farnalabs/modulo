@@ -10,7 +10,7 @@ removed in PR C of the Celery->SAQ migration.
 """
 
 import asyncio
-import datetime
+import datetime as dt
 import hashlib
 import inspect
 import logging
@@ -391,8 +391,8 @@ async def _update_next_fire(session: AsyncSession, trigger: Trigger) -> None:
     """
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    now = datetime.datetime.now(datetime.UTC)
-    next_fire = now + datetime.timedelta(seconds=interval)
+    now = dt.datetime.now(dt.UTC)
+    next_fire = now + dt.timedelta(seconds=interval)
     await session.execute(
         update(Trigger).where(Trigger.id == trigger.id).values(last_fired_at=now, next_fire_at=next_fire)
     )
@@ -404,8 +404,8 @@ async def _update_next_fire_no_last(session: AsyncSession, trigger: Trigger) -> 
     """
     config = trigger.config_json or {}
     interval = max(int(config.get("poll_interval_seconds") or 60), 1)
-    now = datetime.datetime.now(datetime.UTC)
-    next_fire = now + datetime.timedelta(seconds=interval)
+    now = dt.datetime.now(dt.UTC)
+    next_fire = now + dt.timedelta(seconds=interval)
     await session.execute(update(Trigger).where(Trigger.id == trigger.id).values(next_fire_at=next_fire))
 
 

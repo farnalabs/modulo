@@ -467,9 +467,9 @@ class TestTimeFunctionsMultiBackend:
         assert "current_timestamp" in compiled.lower()
 
     def test_default_factory_is_not_backend_specific(self) -> None:
-        import datetime
+        import datetime as dt
 
-        now = datetime.datetime.now(datetime.UTC)
+        now = dt.datetime.now(dt.UTC)
         assert now.tzinfo is not None
 
     def test_created_at_column_uses_default_factory(self) -> None:

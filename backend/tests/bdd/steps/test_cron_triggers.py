@@ -2,7 +2,7 @@
 input template, event logging, timezone support, and disable."""
 
 import contextlib
-import datetime
+import datetime as dt
 import json
 import uuid
 from decimal import Decimal
@@ -30,7 +30,7 @@ def _make_mock_trigger(**overrides) -> MagicMock:
     t.cron_timezone = overrides.get("cron_timezone", "UTC")
     t.config_json = overrides.get("config_json", {})
     t.last_fired_at = overrides.get("last_fired_at")
-    t.next_fire_at = overrides.get("next_fire_at", datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1))
+    t.next_fire_at = overrides.get("next_fire_at", dt.datetime.now(dt.UTC) + dt.timedelta(hours=1))
     t.created_by = uuid.UUID("00000000-0000-0000-0000-000000000002")
     return t
 
@@ -119,17 +119,17 @@ def create_cron_trigger_timezone(pipeline: str, expression: str, timezone: str, 
 
 
 def _do_create_cron_trigger(client, request, expression, timezone, input_template):
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     mock_trigger = _make_mock_trigger(
         cron_expression=expression,
         cron_timezone=timezone,
         config_json={"input_template": input_template},
-        next_fire_at=now + datetime.timedelta(hours=1),
+        next_fire_at=now + dt.timedelta(hours=1),
     )
 
     with (
         patch("modulo.api.routes.triggers.set_rls_org"),
-        patch("modulo.api.routes.triggers.compute_next_fire", return_value=now + datetime.timedelta(hours=1)),
+        patch("modulo.api.routes.triggers.compute_next_fire", return_value=now + dt.timedelta(hours=1)),
     ):
         resp = client.post(
             f"/api/v1/pipelines/{mock_trigger.pipeline_id}/triggers",

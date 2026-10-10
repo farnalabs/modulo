@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
+import datetime as dt
 import logging
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -84,7 +84,7 @@ class TestRegistry:
 class TestComputeNextSend:
     def test_computes_next_minute(self) -> None:
         result = compute_next_send("* * * * *")
-        assert isinstance(result, datetime.datetime)
+        assert isinstance(result, dt.datetime)
         assert result.tzinfo is not None
 
     def test_daily_at_midnight(self) -> None:
@@ -238,7 +238,7 @@ class TestFireScheduledReport:
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
-                return_value=datetime.datetime(2026, 7, 1, 9, 0, tzinfo=datetime.UTC),
+                return_value=dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.UTC),
             ),
         ):
             result = await _fire_scheduled_report(report_id=report_id, org_id=org_id)
@@ -273,7 +273,7 @@ class TestFireScheduledReport:
             patch("modulo.core.reports.scheduler._set_rls_org", new_callable=AsyncMock),
             patch(
                 "modulo.core.reports.scheduler.compute_next_send",
-                return_value=datetime.datetime(2026, 7, 8, 9, 0, tzinfo=datetime.UTC),
+                return_value=dt.datetime(2026, 7, 8, 9, 0, tzinfo=dt.UTC),
             ),
         ):
             result = await _fire_scheduled_report(report_id=report_mock.id, org_id=org_id)
@@ -613,9 +613,9 @@ class TestGetEngine:
 
 class TestComputeNextSendAfter:
     def test_uses_after_when_provided(self) -> None:
-        base = datetime.datetime(2026, 7, 1, 12, 0, tzinfo=datetime.UTC)
+        base = dt.datetime(2026, 7, 1, 12, 0, tzinfo=dt.UTC)
         result = compute_next_send("0 9 * * *", after=base)
-        assert result == datetime.datetime(2026, 7, 2, 9, 0, tzinfo=datetime.UTC)
+        assert result == dt.datetime(2026, 7, 2, 9, 0, tzinfo=dt.UTC)
 
 
 # ---------------------------------------------------------------------------

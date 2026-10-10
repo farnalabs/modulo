@@ -1,6 +1,6 @@
 """Unit tests for cron expression validation and next-fire computation."""
 
-import datetime
+import datetime as dt
 from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
@@ -52,7 +52,7 @@ class TestValidateCronExpression:
 
 class TestComputeNextFire:
     def test_next_fire_every_minute(self):
-        now = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("* * * * *", after=now)
         assert next_fire > now
         # Next minute
@@ -61,39 +61,39 @@ class TestComputeNextFire:
         assert next_fire.day == 1
 
     def test_next_fire_hourly(self):
-        now = datetime.datetime(2026, 1, 1, 12, 30, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 12, 30, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("0 * * * *", after=now)
         assert next_fire > now
         assert next_fire.minute == 0
         assert next_fire.hour == 13
 
     def test_next_fire_daily_at_9am(self):
-        now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 8, 0, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("0 9 * * *", after=now)
         assert next_fire > now
         assert next_fire.hour == 9
         assert next_fire.minute == 0
 
     def test_next_fire_daily_past_today(self):
-        now = datetime.datetime(2026, 1, 1, 10, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 10, 0, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("0 9 * * *", after=now)
         # Should fire tomorrow at 9am
         assert next_fire.day == 2
         assert next_fire.hour == 9
 
     def test_next_fire_every_5_minutes(self):
-        now = datetime.datetime(2026, 1, 1, 12, 3, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 12, 3, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("*/5 * * * *", after=now)
         assert next_fire > now
         assert next_fire.minute in (5, 10, 15)
 
     def test_next_fire_without_after_defaults_to_now(self):
         result = compute_next_fire("* * * * *")
-        assert result > datetime.datetime.now(datetime.UTC)
+        assert result > dt.datetime.now(dt.UTC)
 
     def test_naive_after_interpreted_as_utc(self):
-        result = compute_next_fire("0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, 0, 0))
-        assert result == datetime.datetime(2026, 1, 1, 9, 0, tzinfo=datetime.UTC)
+        result = compute_next_fire("0 9 * * *", after=dt.datetime(2026, 1, 1, 8, 0, 0))
+        assert result == dt.datetime(2026, 1, 1, 9, 0, tzinfo=dt.UTC)
 
     def test_invalid_expression_raises(self):
         with pytest.raises(ValueError, match="columns has to be specified"):
@@ -101,67 +101,65 @@ class TestComputeNextFire:
 
     def test_invalid_timezone_raises(self):
         with pytest.raises(ZoneInfoNotFoundError):
-            compute_next_fire(
-                "0 9 * * *", after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC), timezone="Mars/Olympus"
-            )
+            compute_next_fire("0 9 * * *", after=dt.datetime(2026, 1, 1, 8, tzinfo=dt.UTC), timezone="Mars/Olympus")
 
     def test_new_york_winter_and_summer_offsets(self):
         winter = compute_next_fire(
             "0 9 * * *",
-            after=datetime.datetime(2026, 1, 15, 12, tzinfo=datetime.UTC),
+            after=dt.datetime(2026, 1, 15, 12, tzinfo=dt.UTC),
             timezone="America/New_York",
         )
         summer = compute_next_fire(
             "0 9 * * *",
-            after=datetime.datetime(2026, 7, 15, 12, tzinfo=datetime.UTC),
+            after=dt.datetime(2026, 7, 15, 12, tzinfo=dt.UTC),
             timezone="America/New_York",
         )
 
-        assert winter == datetime.datetime(2026, 1, 15, 14, tzinfo=datetime.UTC)
-        assert summer == datetime.datetime(2026, 7, 15, 13, tzinfo=datetime.UTC)
+        assert winter == dt.datetime(2026, 1, 15, 14, tzinfo=dt.UTC)
+        assert summer == dt.datetime(2026, 7, 15, 13, tzinfo=dt.UTC)
 
     def test_nonexistent_dst_time_advances_to_first_valid_instant(self):
         result = compute_next_fire(
             "30 2 * * *",
-            after=datetime.datetime(2026, 3, 7, 12, tzinfo=datetime.UTC),
+            after=dt.datetime(2026, 3, 7, 12, tzinfo=dt.UTC),
             timezone="America/New_York",
         )
 
-        assert result == datetime.datetime(2026, 3, 8, 7, tzinfo=datetime.UTC)
+        assert result == dt.datetime(2026, 3, 8, 7, tzinfo=dt.UTC)
 
     def test_ambiguous_dst_time_uses_first_occurrence(self):
         result = compute_next_fire(
             "30 1 * * *",
-            after=datetime.datetime(2026, 10, 31, 12, tzinfo=datetime.UTC),
+            after=dt.datetime(2026, 10, 31, 12, tzinfo=dt.UTC),
             timezone="America/New_York",
         )
 
-        assert result == datetime.datetime(2026, 11, 1, 5, 30, tzinfo=datetime.UTC)
+        assert result == dt.datetime(2026, 11, 1, 5, 30, tzinfo=dt.UTC)
 
     def test_default_timezone_is_utc(self):
         result = compute_next_fire(
             "0 9 * * *",
-            after=datetime.datetime(2026, 1, 1, 8, tzinfo=datetime.UTC),
+            after=dt.datetime(2026, 1, 1, 8, tzinfo=dt.UTC),
         )
 
-        assert result == datetime.datetime(2026, 1, 1, 9, tzinfo=datetime.UTC)
+        assert result == dt.datetime(2026, 1, 1, 9, tzinfo=dt.UTC)
 
     def test_next_fire_strictly_after_exact_match(self):
         """An ``after`` exactly on a fire time must return the NEXT occurrence."""
-        now = datetime.datetime(2026, 1, 1, 9, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 9, 0, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("0 9 * * *", after=now)
-        assert next_fire == datetime.datetime(2026, 1, 2, 9, 0, 0, tzinfo=datetime.UTC)
+        assert next_fire == dt.datetime(2026, 1, 2, 9, 0, 0, tzinfo=dt.UTC)
 
     def test_next_fire_monthly_rollover(self):
         """First-of-month expressions roll into the following month."""
-        now = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt.UTC)
         next_fire = compute_next_fire("0 0 1 * *", after=now)
-        assert next_fire == datetime.datetime(2026, 2, 1, 0, 0, 0, tzinfo=datetime.UTC)
+        assert next_fire == dt.datetime(2026, 2, 1, 0, 0, 0, tzinfo=dt.UTC)
 
 
 class TestComputeNextSend:
     def test_next_send_returns_future_datetime(self):
-        now = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 12, 0, 0, tzinfo=dt.UTC)
         next_send = compute_next_send("* * * * *", after=now)
         assert next_send > now
         assert next_send.minute == 1
@@ -169,32 +167,32 @@ class TestComputeNextSend:
         assert next_send.day == 1
 
     def test_next_send_daily_at_9am(self):
-        now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 8, 0, 0, tzinfo=dt.UTC)
         next_send = compute_next_send("0 9 * * *", after=now)
         assert next_send.hour == 9
         assert next_send.minute == 0
         assert next_send.day == 1
 
     def test_next_send_daily_past_today_rolls_to_tomorrow(self):
-        now = datetime.datetime(2026, 1, 1, 10, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 10, 0, 0, tzinfo=dt.UTC)
         next_send = compute_next_send("0 9 * * *", after=now)
         assert next_send.day == 2
         assert next_send.hour == 9
 
     def test_next_send_without_after_defaults_to_now(self):
         result = compute_next_send("* * * * *")
-        assert result > datetime.datetime.now(datetime.UTC)
+        assert result > dt.datetime.now(dt.UTC)
 
     def test_next_send_weekly_on_monday(self):
-        now = datetime.datetime(2026, 1, 1, 8, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 8, 0, 0, tzinfo=dt.UTC)
         next_send = compute_next_send("0 9 * * 1", after=now)
         # 2026-01-01 is a Thursday; next Monday is 2026-01-05.
-        assert next_send == datetime.datetime(2026, 1, 5, 9, 0, 0, tzinfo=datetime.UTC)
+        assert next_send == dt.datetime(2026, 1, 5, 9, 0, 0, tzinfo=dt.UTC)
 
     def test_next_send_strictly_after_exact_match(self):
-        now = datetime.datetime(2026, 1, 1, 9, 0, 0, tzinfo=datetime.UTC)
+        now = dt.datetime(2026, 1, 1, 9, 0, 0, tzinfo=dt.UTC)
         next_send = compute_next_send("0 9 * * *", after=now)
-        assert next_send == datetime.datetime(2026, 1, 2, 9, 0, 0, tzinfo=datetime.UTC)
+        assert next_send == dt.datetime(2026, 1, 2, 9, 0, 0, tzinfo=dt.UTC)
 
     def test_next_send_invalid_expression_raises(self):
         with pytest.raises(ValueError, match="columns has to be specified"):
