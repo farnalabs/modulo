@@ -32,6 +32,10 @@ CONNECTOR_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 _HEALTH_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _HEALTH_ACCOUNT_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 
+_MISSING = object()
+
+_HEALTH_OVERRIDE_DEPS = (get_settings, get_db_session, _get_engine, get_current_user, get_current_tenant_user)
+
 _FERNET_KEY = Fernet.generate_key().decode()
 
 
@@ -105,9 +109,18 @@ def _make_health_client(session: AsyncMock) -> TestClient:
     return TestClient(app)
 
 
-def _clear_health_overrides() -> None:
-    for dep in (get_settings, get_db_session, _get_engine, get_current_user, get_current_tenant_user):
-        app.dependency_overrides.pop(dep, None)
+def _snapshot_health_overrides() -> dict[Any, Any]:
+    """Snapshot the shared overrides this step replaces, so every one is restored."""
+    return {dep: app.dependency_overrides.get(dep, _MISSING) for dep in _HEALTH_OVERRIDE_DEPS}
+
+
+def _restore_health_overrides(saved: dict[Any, Any]) -> None:
+    """Restore overrides to their pre-step state instead of clobbering shared ones."""
+    for dep, value in saved.items():
+        if value is _MISSING:
+            app.dependency_overrides.pop(dep, None)
+        else:
+            app.dependency_overrides[dep] = value
 
 
 def _make_mock_connector_instance(ctx) -> MagicMock:
@@ -179,11 +192,12 @@ def get_connector_health(request, connector_id, ctx):
     with ExitStack() as stack:
         for patcher in _health_route_patchers(ctx):
             stack.enter_context(patcher)
+        saved_overrides = _snapshot_health_overrides()
         client = _make_health_client(_make_health_session())
         try:
             resp = client.get(f"/api/v1/connectors/{CONNECTOR_ID}/health")
         finally:
-            _clear_health_overrides()
+            _restore_health_overrides(saved_overrides)
             client.close()
     request.node._resp = resp
 

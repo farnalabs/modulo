@@ -1014,6 +1014,34 @@ def check_assistant_access(request, ctx) -> None:
     request.node._resp = resp
 
 
+@when("I evaluate assistant access control")
+def evaluate_assistant_access_control(ctx) -> None:
+    """Drive the REAL ``AssistantConfigService.check_access`` gate.
+
+    The admin config routes persist the ``access_list``, and the request-time
+    allow-list gate lives in ``check_access`` (user_ids / org_roles / team_ids
+    matching, deny on no match). The pre-refactor BDD step reimplemented that
+    boolean in the test itself (it was in the self-asserting baseline); this
+    calls the production function against a stored config row instead, so the
+    scenarios cover the real gate rather than a copy of it.
+    """
+    from modulo.core.assistant.config_service import AssistantConfigService
+
+    access_rules = ctx.get("access_rules") or {"user_ids": [], "team_ids": [], "org_roles": []}
+    role = ctx.get("org_role", "admin")
+    team_ids = [uuid.UUID(str(team_id)) for team_id in ctx.get("team_ids", [])]
+
+    entry = MagicMock()
+    entry.value = {"access_rules": access_rules}
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=entry)
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    service = AssistantConfigService(session)
+    ctx["access_granted"] = asyncio.run(service.check_access(ORG_ID, USER_ID, role, team_ids))
+
+
 # ── When steps (Context Window) ───────────────────────────────────────
 
 
@@ -1298,6 +1326,16 @@ def stream_reports_no_api_key(request) -> None:
     assert "API key configured" in text
 
 
+@then("access is granted")
+def access_granted(ctx) -> None:
+    assert ctx.get("access_granted") is True, "the real access gate denied a user on the access list"
+
+
+@then("access is denied")
+def access_denied(ctx) -> None:
+    assert ctx.get("access_granted") is False, "the real access gate granted a user on no access list"
+
+
 # ── Then steps (Context Window) ──────────────────────────────────────
 
 
@@ -1376,6 +1414,31 @@ def user_sent_message(ctx) -> None:
 @given('permission mode is "safe"')
 def permission_mode_is_safe(ctx) -> None:
     ctx["config"]["permission_mode"] = "safe"
+
+
+@given("the Assistant access list includes my user_id")
+def access_list_includes_user(ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [str(USER_ID)], "team_ids": [], "org_roles": []}
+
+
+@given(parsers.parse('the Assistant access list includes role "{role}"'))
+def access_list_includes_role(role: str, ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [], "org_roles": [role]}
+
+
+@given(parsers.parse('the Assistant access list includes team_id "{team_id}"'))
+def access_list_includes_team(team_id: str, ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [team_id], "org_roles": []}
+
+
+@given("the Assistant access list does not include my role or user_id")
+def access_list_excludes_user(ctx) -> None:
+    ctx["access_rules"] = {"user_ids": [], "team_ids": [], "org_roles": []}
+
+
+@given(parsers.parse('I belong to team "{team_id}"'))
+def user_belongs_to_team(team_id: str, ctx) -> None:
+    ctx.setdefault("team_ids", []).append(team_id)
 
 
 # ── When steps (UI Commands) ──────────────────────────────────────────
