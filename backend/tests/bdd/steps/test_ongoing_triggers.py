@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import datetime as dt
+import datetime
 import uuid
 from decimal import Decimal
 from typing import Any, Self, cast
@@ -209,7 +209,7 @@ def _when_ongoing_topup_runs(request: Any) -> None:
                 trigger_id=trigger.id,
                 org_id=trigger.organisation_id,
                 pipeline_id=trigger.pipeline_id,
-                now=dt.datetime.now(dt.UTC),
+                now=datetime.datetime.now(datetime.UTC),
                 redis_client=None,
                 outcome=outcome,
             )

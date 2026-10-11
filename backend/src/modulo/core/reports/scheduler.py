@@ -10,7 +10,7 @@ bounded SAQ job. The Celery beat scheduler (``DatabaseReportScheduler`` /
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
+import datetime
 import hashlib
 import hmac
 import json
@@ -136,15 +136,15 @@ def _set_test_engine(engine: AsyncEngine | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def compute_next_send(cron_expression: str, after: dt.datetime | None = None) -> dt.datetime:
+def compute_next_send(cron_expression: str, after: datetime.datetime | None = None) -> datetime.datetime:
     """Compute the next send time for a cron expression.
 
     If *after* is None, uses the current UTC time.
     """
-    base = after or dt.datetime.now(dt.UTC)
+    base = after or datetime.datetime.now(datetime.UTC)
     cron = croniter(cron_expression, base)
-    next_dt = cron.get_next(dt.datetime)
-    if not isinstance(next_dt, dt.datetime):
+    next_dt = cron.get_next(datetime.datetime)
+    if not isinstance(next_dt, datetime.datetime):
         msg = f"croniter returned unexpected type: {type(next_dt)}"
         raise TypeError(msg)
     return next_dt
@@ -177,7 +177,7 @@ async def _fire_scheduled_report(
     async with factory() as session, session.begin():
         await _set_rls_org(session, org_id)
 
-        now = dt.datetime.now(dt.UTC)
+        now = datetime.datetime.now(datetime.UTC)
         result = await session.execute(
             select(ScheduledReport)
             .where(
