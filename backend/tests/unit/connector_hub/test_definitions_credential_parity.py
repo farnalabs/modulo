@@ -110,6 +110,35 @@ def _single_field_types() -> list[str]:
     return [ct for ct in _parity_checkable_types() if len(_definition_for(ct)["credential_fields"]) == 1]
 
 
+def _parity_checkable_field_cases() -> list[tuple[str, str]]:
+    """Every (connector_type, credential-key) pair under the per-field contract.
+
+    Parametrizing per KEY (not per type) means one drifting key cannot abort the
+    probes for its siblings: each key is its own test item, so a single broken
+    read surfaces every affected key in one run rather than only the first.
+    """
+    cases: list[tuple[str, str]] = []
+    for connector_type in _parity_checkable_types():
+        cases.extend((connector_type, key) for key in _definition_for(connector_type)["credential_fields"])
+    return cases
+
+
+_PARITY_FIELD_CASES = _parity_checkable_field_cases()
+
+
+@pytest.mark.parametrize("connector_type", _parity_checkable_types())
+def test_parity_checkable_types_declare_credential_fields(connector_type: str) -> None:
+    """Every parity-checkable type declares at least one credential field.
+
+    The load-bearing probe below is parametrized per key, so a type declaring no
+    fields would contribute zero probes; this guards the partition against that
+    silent drift.
+    """
+    assert _definition_for(connector_type)["credential_fields"], (
+        f"definition for {connector_type!r} declares no credential_fields to probe"
+    )
+
+
 @pytest.mark.parametrize("connector_type", _parity_checkable_types())
 async def test_connector_configured_via_definitions_is_resolvable(connector_type: str) -> None:
     """A connector whose credentials use the definition's field names must build
@@ -131,42 +160,46 @@ async def test_connector_configured_via_definitions_is_resolvable(connector_type
     )
 
 
-@pytest.mark.parametrize("connector_type", _parity_checkable_types())
-async def test_definition_credential_fields_are_load_bearing(connector_type: str) -> None:
-    """Removing EACH declared credential field individually must be fatal.
+@pytest.mark.parametrize(
+    ("connector_type", "removed_key"),
+    _PARITY_FIELD_CASES,
+    ids=[f"{connector_type}-no-{key}" for connector_type, key in _PARITY_FIELD_CASES],
+)
+async def test_definition_credential_fields_are_load_bearing(connector_type: str, removed_key: str) -> None:
+    """Removing a declared credential field must be fatal.
 
     With one field removed, instantiate must fail with a skip summary naming
     the missing field — proving the hub exactly consumes every declared key.
-    A key the hub never reads would pass silently here. The parity test composes
-    the four statements of the contract per field:
+    A key the hub never reads would pass silently here. Parametrized per KEY, so
+    a first failing key cannot abort the remaining keys for its type. The parity
+    test composes the four statements of the contract per field:
       (a) not registered, (b) in hub.skipped, (c) summary is ValueError: Missing credential key '<key>'.
     """
     definition = _definition_for(connector_type)
     all_keys = list(definition["credential_fields"].keys())
-    assert all_keys, f"definition for {connector_type!r} declares no credential_fields to probe"
-    for removed_key in all_keys:
-        creds = dict.fromkeys(all_keys, "test-value")
-        creds.pop(removed_key)
-        ci = _FakeCI(
-            id=uuid.uuid4(),
-            connector_type_id=connector_type,
-            config_json=_CONFIGS.get(connector_type, {}),
-            credentials_ciphertext=encrypt_credentials(creds),
-        )
-        backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
-        with patch.object(backend, "get_secret", return_value=json.dumps(creds)):
-            hub = ConnectorHub(secrets_backend=backend)
-            await hub.initialise([ci])
-        summary = hub.skipped.get(ci.id)
-        assert summary is not None, (
-            f"removing {removed_key!r} from {connector_type!r} credentials did not skip the connector at initialise"
-        )
-        assert summary.startswith("ValueError: Missing credential key "), (
-            f"removing {removed_key!r} from {connector_type!r} produced an unexpected skip: {summary!r}"
-        )
-        assert f"'{removed_key}'" in summary.split("Missing credential key")[1], (
-            f"skip summary for {connector_type!r} does not name the missing field {removed_key!r}: {summary!r}"
-        )
+    assert removed_key in all_keys, f"{removed_key!r} is not a declared credential field of {connector_type!r}"
+    creds = dict.fromkeys(all_keys, "test-value")
+    creds.pop(removed_key)
+    ci = _FakeCI(
+        id=uuid.uuid4(),
+        connector_type_id=connector_type,
+        config_json=_CONFIGS.get(connector_type, {}),
+        credentials_ciphertext=encrypt_credentials(creds),
+    )
+    backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
+    with patch.object(backend, "get_secret", return_value=json.dumps(creds)):
+        hub = ConnectorHub(secrets_backend=backend)
+        await hub.initialise([ci])
+    summary = hub.skipped.get(ci.id)
+    assert summary is not None, (
+        f"removing {removed_key!r} from {connector_type!r} credentials did not skip the connector at initialise"
+    )
+    assert summary.startswith("ValueError: Missing credential key "), (
+        f"removing {removed_key!r} from {connector_type!r} produced an unexpected skip: {summary!r}"
+    )
+    assert f"'{removed_key}'" in summary.split("Missing credential key")[1], (
+        f"skip summary for {connector_type!r} does not name the missing field {removed_key!r}: {summary!r}"
+    )
 
 
 @pytest.mark.parametrize("connector_type", _single_field_types())

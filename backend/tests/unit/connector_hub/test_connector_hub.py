@@ -34,10 +34,6 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 # ---------------------------------------------------------------------------
 
 
-def _encrypt(payload: dict[str, Any]) -> bytes:
-    return encrypt_credentials(payload)
-
-
 @dataclass
 class _FakeCI:
     """Minimal stand-in for ConnectorInstance (no DB needed)."""
@@ -45,7 +41,7 @@ class _FakeCI:
     id: uuid.UUID
     connector_type_id: str
     config_json: dict[str, Any] = field(default_factory=dict)
-    credentials_ciphertext: bytes = field(default_factory=lambda: _encrypt({}))
+    credentials_ciphertext: bytes = field(default_factory=lambda: encrypt_credentials({}))
     visibility: str = "org"
     allowed_operations: list[str] | None = None
 
@@ -87,7 +83,7 @@ async def test_initialise_creates_connector(connector_type_id, config_json, cred
         id=uuid.uuid4(),
         connector_type_id=connector_type_id,
         config_json=config_json,
-        credentials_ciphertext=_encrypt(credentials_json),
+        credentials_ciphertext=encrypt_credentials(credentials_json),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value=json.dumps(credentials_json)):
@@ -103,7 +99,7 @@ async def test_initialise_youtrack_missing_base_url_is_skipped():
         id=uuid.uuid4(),
         connector_type_id="youtrack",
         config_json={},
-        credentials_ciphertext=_encrypt({"token": "yt_perm_token_123"}),
+        credentials_ciphertext=encrypt_credentials({"token": "yt_perm_token_123"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value=json.dumps({"token": "yt_perm_token_123"})):
@@ -177,7 +173,7 @@ async def test_missing_base_path_in_config_skips():
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={},  # no base_path
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
@@ -197,7 +193,7 @@ async def test_unknown_connector_type_skips(connector_type_id):
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id=connector_type_id,
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
@@ -241,7 +237,7 @@ async def test_initialise_plugin_fallback_connector():
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="my_custom_connector",
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
@@ -377,7 +373,7 @@ async def test_initialise_decrypt_error_skips_connector():
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": "/tmp"},
-        credentials_ciphertext=_encrypt([]),  # list, not dict
+        credentials_ciphertext=encrypt_credentials([]),  # list, not dict
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="[]"):
@@ -407,7 +403,7 @@ async def test_initialise_ciphertext_fallback_uses_column():
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="monday",
-        credentials_ciphertext=_encrypt({"api_key": "monday_fallback"}),
+        credentials_ciphertext=encrypt_credentials({"api_key": "monday_fallback"}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with (
@@ -428,7 +424,7 @@ async def test_initialise_ciphertext_fallback_skip_on_bad_key():
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="monday",
-        credentials_ciphertext=_encrypt({"api_key": "monday_fallback"}),
+        credentials_ciphertext=encrypt_credentials({"api_key": "monday_fallback"}),
     )
     backend = create_secrets_backend(fernet_key=other_key, backend_name="fernet")
     with (
@@ -591,7 +587,7 @@ async def test_initialise_records_skipped_instances(tmp_path):
     bad = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="github",  # requires a 'token' credential key
-        credentials_ciphertext=_encrypt({}),  # creds lack the token key
+        credentials_ciphertext=encrypt_credentials({}),  # creds lack the token key
     )
     healthy = _FakeCI(
         id=uuid.uuid4(),
@@ -615,7 +611,7 @@ async def test_close_clears_skipped_and_healthy(tmp_path):
     bad = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="github",
-        credentials_ciphertext=_encrypt({}),  # creds lack the token key -> skipped
+        credentials_ciphertext=encrypt_credentials({}),  # creds lack the token key -> skipped
     )
     healthy = _FakeCI(
         id=uuid.uuid4(),
@@ -676,7 +672,7 @@ async def test_skip_warning_dedup_full_traceback_once_per_process(caplog):
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="github",
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
 
@@ -710,11 +706,11 @@ async def test_skip_warning_dedup_different_instance_id_logs_traceback(caplog):
         caplog.at_level(logging.WARNING, logger="modulo.core.connector_hub"),
         patch.object(backend, "get_secret", return_value="{}"),
     ):
-        ci_a = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        ci_a = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=encrypt_credentials({}))
         hub_a = ConnectorHub(secrets_backend=backend)
         await hub_a.initialise([ci_a])
 
-        ci_b = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=_encrypt({}))
+        ci_b = _FakeCI(id=uuid.uuid4(), connector_type_id="github", credentials_ciphertext=encrypt_credentials({}))
         hub_b = ConnectorHub(secrets_backend=backend)
         await hub_b.initialise([ci_b])
 
@@ -822,7 +818,7 @@ async def test_initialise_creates_shell_connector():
         id=uuid.uuid4(),
         connector_type_id="shell",
         config_json={"allowed_commands": ["echo", "ls"]},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
@@ -847,7 +843,7 @@ async def test_acl_blocks_write(tmp_path):
         id=ci_id,
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="org",
         allowed_operations=["read"],
     )
@@ -872,7 +868,7 @@ async def test_acl_allows_read(tmp_path):
         id=ci_id,
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="org",
         allowed_operations=["read"],
     )
@@ -905,7 +901,7 @@ async def test_hub_rejects_mis_typed_legacy_allowlist_entry(tmp_path):
         id=ci_id,
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="org",
         allowed_operations=["github.write"],
     )
@@ -930,7 +926,7 @@ async def test_hub_same_type_legacy_allowlist_entry_still_grants(tmp_path):
         id=ci_id,
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="org",
         allowed_operations=["filesystem.write"],
     )
@@ -950,7 +946,7 @@ async def test_initialise_shell_no_runtime_provider_creates_connector():
         id=uuid.uuid4(),
         connector_type_id="shell",
         config_json={"allowed_commands": ["echo"]},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     from modulo.connectors.base import ConnectorQuery
 
