@@ -7,6 +7,7 @@ blob fetch, and use a fake session for the DB queries.
 
 from __future__ import annotations
 
+import hashlib
 import types
 import uuid
 from typing import Any
@@ -54,6 +55,13 @@ MANIFEST = {
     "signature": {"algorithm": "ed25519", "value": "deadbeef"},
 }
 
+# Sentinel for "field is absent from the entry" in the malformed-field matrix.
+_MISSING = object()
+
+
+def _manifest_with(entry: dict[str, Any]) -> dict[str, Any]:
+    return {**MANIFEST, "entries": [entry]}
+
 
 class _FakeResult:
     def __init__(self, rows: list[Any] | None = None, scalar: Any = None) -> None:
@@ -74,6 +82,7 @@ class _FakeSession:
         self.installed_rows = installed_rows or []
         self.existing_id = existing_id
         self.added: list[Any] = []
+        self.id_query_params: list[Any] = []
         self._in_tx = False
         self.rolled_back = False
 
@@ -95,11 +104,13 @@ class _FakeSession:
             self._in_tx = False
 
     async def execute(self, stmt: Any) -> _FakeResult:
-        text = str(stmt)
-        if "LibraryPrimitive.id" in text or "library_primitives.id" in text:
-            return _FakeResult(scalar=self.existing_id)
-        if "LibraryPrimitive.slug" in text or "library_primitives.slug" in text:
+        # Discriminate on the selected columns, not the rendered SQL text.
+        names = [description["name"] for description in stmt.column_descriptions]
+        if names == ["slug", "version"]:
             return _FakeResult(rows=[(s, v) for s, v in self.installed_rows])
+        if names == ["id"]:
+            self.id_query_params = list(stmt.compile().params.values())
+            return _FakeResult(scalar=self.existing_id)
         return _FakeResult()
 
     def add(self, obj: Any) -> None:
@@ -108,6 +119,12 @@ class _FakeSession:
 
 @pytest.fixture
 def fake_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the three manifest-layer calls the community helpers make.
+
+    Patches ``get_cached_manifest``, ``is_revoked`` AND ``set_rls_org`` so the
+    browse/install paths never touch the DB or a signed manifest.
+    """
+
     async def _manifest(_session: Any) -> dict | None:
         return MANIFEST
 
@@ -143,8 +160,22 @@ def fake_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+class _FakeLibraryClient:
+    """Stand-in for ``LibraryClient`` exercising the real ``_fetch_blob`` body."""
+
+    def __init__(self, blob: bytes | None) -> None:
+        self._blob = blob
+        self.closed = False
+
+    async def fetch_blob(self, _sha256: str) -> bytes | None:
+        return self._blob
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 class TestListCommunityEntries:
-    async def test_returns_entries_with_installed_flags(self, fake_manifest: None, fake_settings: None) -> None:
+    async def test_returns_entries_with_installed_flags(self, fake_manifest: None) -> None:
         session = _FakeSession(installed_rows=[("code-reviewer", "1.0.0")])
         entries = await list_community_entries(session, ORG_ID)
         assert len(entries) == 2
@@ -159,9 +190,7 @@ class TestListCommunityEntries:
         monkeypatch.setattr(community_module, "get_cached_manifest", _none)
         assert not await list_community_entries(_FakeSession(), ORG_ID)
 
-    async def test_skips_revoked_entries(
-        self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_skips_revoked_entries(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         manifest = dict(MANIFEST)
         manifest["revoked"] = [
             {
@@ -179,21 +208,30 @@ class TestListCommunityEntries:
 
         monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
         entries = await list_community_entries(_FakeSession(), ORG_ID)
-        assert [e["id"] for e in entries] == ["entry-1"]
+        assert {e["id"] for e in entries} == {"entry-1"}
+
+    async def test_rolls_back_when_set_rls_fails(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _boom(_session: Any, _org_id: Any) -> None:
+            raise RuntimeError("rls set failed")
+
+        monkeypatch.setattr(community_module, "set_rls_org", _boom)
+
+        session = _FakeSession()
+        with pytest.raises(RuntimeError, match="rls set failed"):
+            await list_community_entries(session, ORG_ID)
+        assert session.rolled_back is True
 
 
 class TestGetCommunityEntry:
-    async def test_returns_entry(self, fake_manifest: None, fake_settings: None) -> None:
+    async def test_returns_entry(self, fake_manifest: None) -> None:
         entry = await get_community_entry(_FakeSession(), "entry-1")
         assert entry is not None
         assert entry["slug"] == "code-reviewer"
 
-    async def test_returns_none_for_unknown(self, fake_manifest: None, fake_settings: None) -> None:
+    async def test_returns_none_for_unknown(self, fake_manifest: None) -> None:
         assert await get_community_entry(_FakeSession(), "nope") is None
 
-    async def test_returns_none_when_revoked(
-        self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_returns_none_when_revoked(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _revoked(_session: Any, entry_id: str) -> bool:
             return entry_id == "entry-1"
 
@@ -219,27 +257,115 @@ class TestInstallCommunityEntry:
         assert prim.content_json == {"description": "A test agent", "name": "code-reviewer"}
         assert session.added == [prim]
 
-    async def test_raises_already_installed(self, fake_manifest: None, fake_blob: None, fake_settings: None) -> None:
+    async def test_raises_already_installed(self, fake_manifest: None) -> None:
         session = _FakeSession(existing_id=uuid.uuid4())
         with pytest.raises(ValueError, match="already installed"):
             await install_community_entry(session, ORG_ID, "entry-1")
+        # The existence probe must key on the entry's slug AND version.
+        assert "code-reviewer" in session.id_query_params
+        assert "1.0.0" in session.id_query_params
 
-    async def test_raises_entry_not_found(self, fake_manifest: None, fake_settings: None) -> None:
+    async def test_raises_entry_not_found(self, fake_manifest: None) -> None:
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "nope")
 
-    async def test_rejects_team_targeted_install(
-        self, fake_manifest: None, fake_blob: None, fake_settings: None
+    async def test_raises_unsupported_primitive_type(
+        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        async def _manifest(_session: Any) -> dict | None:
+            return _manifest_with({**ENTRY_1, "type": "bogus"})
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        with pytest.raises(ValueError, match="unsupported primitive type"):
+            await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("content_sha256", _MISSING),
+            ("slug", _MISSING),
+            ("version", _MISSING),
+            ("author", _MISSING),
+            ("slug", 123),
+            ("content_sha256", 123),
+        ],
+        ids=[
+            "missing-content_sha256",
+            "missing-slug",
+            "missing-version",
+            "missing-author",
+            "non-string-slug",
+            "non-string-content_sha256",
+        ],
+    )
+    async def test_raises_entry_not_found_for_malformed_required_fields(
+        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+    ) -> None:
+        entry = dict(ENTRY_1)
+        if value is _MISSING:
+            del entry[field]
+        else:
+            entry[field] = value
+
+        async def _manifest(_session: Any) -> dict | None:
+            return _manifest_with(entry)
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+        with pytest.raises(ValueError, match="entry not found"):
+            await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+
+    async def test_rejects_team_targeted_install(self, fake_manifest: None) -> None:
         with pytest.raises(ValueError, match="registry entries are org-owned"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1", target_team_id=uuid.uuid4())
 
-    async def test_raises_blob_fetch_failed(
-        self, fake_manifest: None, fake_settings: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_raises_blob_fetch_failed(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _blob_none(_sha256: str) -> None:
             return None
 
         monkeypatch.setattr(community_module, "_fetch_blob", _blob_none)
         with pytest.raises(ValueError, match="blob fetch failed"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+
+
+class TestFetchBlob:
+    """Exercises the real ``_fetch_blob`` body (elsewhere monkeypatched away)."""
+
+    def _install_client(self, monkeypatch: pytest.MonkeyPatch, blob: bytes | None) -> _FakeLibraryClient:
+        client = _FakeLibraryClient(blob)
+        monkeypatch.setattr(community_module, "LibraryClient", lambda **_: client)
+        monkeypatch.setattr(
+            community_module,
+            "get_settings",
+            lambda: types.SimpleNamespace(
+                modulo_library_endpoint="https://library.modulo.run",
+                modulo_library_root_public_key="",
+                modulo_library_sync_timeout_seconds=15,
+            ),
+        )
+        return client
+
+    async def test_returns_none_when_client_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._install_client(monkeypatch, None)
+        assert await community_module._fetch_blob("a" * 64) is None
+
+    async def test_returns_none_on_hash_mismatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._install_client(monkeypatch, b"different")
+        expected = hashlib.sha256(b"expected").hexdigest()
+        assert await community_module._fetch_blob(expected) is None
+
+    async def test_returns_none_on_non_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        payload = b"not json"
+        self._install_client(monkeypatch, payload)
+        assert await community_module._fetch_blob(hashlib.sha256(payload).hexdigest()) is None
+
+    async def test_returns_none_on_non_object_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        payload = b"[1,2]"
+        self._install_client(monkeypatch, payload)
+        assert await community_module._fetch_blob(hashlib.sha256(payload).hexdigest()) is None
+
+    async def test_returns_parsed_object_when_hash_matches(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        payload = b'{"name": "code-reviewer"}'
+        client = self._install_client(monkeypatch, payload)
+        result = await community_module._fetch_blob(hashlib.sha256(payload).hexdigest())
+        assert result == {"name": "code-reviewer"}
+        assert client.closed is True

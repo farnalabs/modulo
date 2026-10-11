@@ -1,7 +1,11 @@
-"""Unit tests for community-library manifest verification (FAR-363)."""
+"""Unit tests for community-library manifest verification, canonical
+serialisation, and parsing (FAR-363)."""
 
 from __future__ import annotations
 
+import json
+
+import pytest
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
 from modulo.core.library_sync.manifest import (
@@ -39,19 +43,18 @@ class TestVerifyManifest:
         del manifest["signature"]
         assert verify_manifest(manifest, public_key) is False
 
-    def test_rejects_malformed_signature_block(self, keys: tuple[str, str]) -> None:
+    @pytest.mark.parametrize(
+        "signature",
+        [
+            "not-a-dict",
+            {"algorithm": "ed25519", "value": ""},
+            {"algorithm": "ed25519", "value": "!!!not-base64!!!"},
+        ],
+        ids=["not-a-dict", "empty-value", "non-base64"],
+    )
+    def test_rejects_malformed_signature(self, keys: tuple[str, str], signature: object) -> None:
         _, public_key = keys
-        manifest = {"schema_version": "1", "signature": "not-a-dict"}
-        assert verify_manifest(manifest, public_key) is False
-
-    def test_rejects_empty_signature_value(self, keys: tuple[str, str]) -> None:
-        _, public_key = keys
-        manifest = {"schema_version": "1", "signature": {"algorithm": "ed25519", "value": ""}}
-        assert verify_manifest(manifest, public_key) is False
-
-    def test_rejects_non_base64_signature(self, keys: tuple[str, str]) -> None:
-        _, public_key = keys
-        manifest = {"schema_version": "1", "signature": {"algorithm": "ed25519", "value": "!!!not-base64!!!"}}
+        manifest = {"schema_version": "1", "signature": signature}
         assert verify_manifest(manifest, public_key) is False
 
     def test_fail_closed_without_root_key(self) -> None:
@@ -62,8 +65,9 @@ class TestVerifyManifest:
 class TestCanonicalManifestBytes:
     def test_signature_field_is_excluded(self) -> None:
         manifest = {"entries": [], "signature": {"algorithm": "ed25519", "value": "abc"}}
-        canonical = canonical_manifest_bytes(manifest)
-        assert b"signature" not in canonical
+        stripped = {"entries": []}
+        expected = json.dumps(stripped, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        assert canonical_manifest_bytes(manifest) == expected
 
     def test_is_deterministic(self) -> None:
         manifest = {"revoked": [{"id": "x"}], "entries": [{"id": "a"}], "schema_version": "1"}

@@ -69,6 +69,43 @@ class TestFetchManifest:
         assert await client.fetch_manifest() is None
 
 
+class TestSsrfRejection:
+    @respx.mock
+    async def test_fetch_manifest_and_blob_return_none_and_skip_http(
+        self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _reject(_url: str) -> None:
+            raise ValueError("blocked internal address")
+
+        monkeypatch.setattr("modulo.core.library_sync.client.validate_outbound_url_async", _reject)
+
+        manifest_route = respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json={}))
+        sha256 = hashlib.sha256(b"payload").hexdigest()
+        blob_route = respx.get(f"{ENDPOINT}/v1/blobs/{sha256}").mock(
+            return_value=httpx.Response(200, content=b"payload")
+        )
+
+        assert await client.fetch_manifest() is None
+        assert await client.fetch_blob(sha256) is None
+        assert manifest_route.call_count == 0
+        assert blob_route.call_count == 0
+
+
+class TestClientLifecycle:
+    @respx.mock
+    async def test_close_is_idempotent_and_client_is_rebuilt(
+        self, keys: tuple[str, str], client: LibraryClient
+    ) -> None:
+        private_key, _ = keys
+        manifest = _signed_manifest(private_key)
+        respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=manifest))
+
+        await client.close()
+        await client.close()
+
+        assert await client.fetch_manifest() == manifest
+
+
 class TestFetchBlob:
     @respx.mock
     async def test_returns_content_when_hash_matches(self, client: LibraryClient) -> None:
