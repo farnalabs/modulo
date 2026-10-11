@@ -349,6 +349,23 @@ describe('SchemaListView', () => {
     expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
   })
 
+  it('dismisses the folder-load failure via the shared ErrorAlert dismiss control (FAR-1655)', async () => {
+    // First get() is the FolderTree's own fetch; the second is loadFolders.
+    getMock.mockResolvedValueOnce([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    getMock.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(true)
+
+    // Dismiss clears folderError, so the alert unmounts.
+    await wrapper.find('[data-testid="error-alert-dismiss"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+  })
+
   it('surfaces a schemas-load failure as the shared ErrorAlert and Retry re-fetches (FAR-1655)', async () => {
     const { api } = await import('../lib/api/client')
     const getMockApi = api.GET as ReturnType<typeof vi.fn>
