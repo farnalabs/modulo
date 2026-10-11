@@ -2071,3 +2071,133 @@ def test_rest_invalid_config_json_on_unknown_rejects(client: TestClient) -> None
         resp = client.post("/api/v1/connectors", json=body)
     assert resp.status_code == 422
     assert "on_unknown" in resp.json()["detail"]
+
+
+class _StubVaultBackend:
+    """In-memory vault double for connector credential-reference tests (FAR-1640)."""
+
+    def __init__(self, values: dict[str, str]) -> None:
+        self._values = values
+
+    async def get_secret(self, key: str) -> str:
+        if key not in self._values:
+            raise KeyError(key)
+        return self._values[key]
+
+    async def set_secret(self, key: str, value: str) -> None:
+        return None
+
+    async def delete_secret(self, key: str) -> None:
+        return None
+
+
+def test_create_connector_resolves_secretref_credential(client: TestClient) -> None:
+    """FAR-1640: a secretref:// credential is resolved server-side before encryption."""
+    captured: list[bytes] = []
+    stub = _StubVaultBackend({"vault/gh": '{"token": "from-vault"}'})
+
+    async def fake_create(session: object, **kwargs: object) -> MagicMock:
+        captured.append(kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
+        return _make_connector(credentials_ciphertext=kwargs["credentials_ciphertext"])  # type: ignore[arg-type]
+
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", new=fake_create),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "Vault Connector",
+                "connector_type_id": "filesystem",
+                "credentials": "secretref://vault/gh",
+            },
+        )
+    assert resp.status_code == 201
+    assert captured
+    assert Fernet(_FERNET_KEY.encode()).decrypt(captured[0]).decode() == '{"token": "from-vault"}'
+
+
+def test_create_connector_missing_vault_key_fails_closed(client: TestClient) -> None:
+    """A missing vault key is a typed 422 naming the key — the connector is not created."""
+    stub = _StubVaultBackend({})
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance") as create_mock,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.post(
+            "/api/v1/connectors",
+            json={
+                "name": "Vault Connector",
+                "connector_type_id": "filesystem",
+                "credentials": "secretref://vault/missing",
+            },
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "credential_reference_error" in detail
+    assert "vault/missing" in detail
+    create_mock.assert_not_awaited()
+
+
+def test_create_connector_literal_credential_skips_the_vault(client: TestClient) -> None:
+    """A literal credential never constructs a secrets backend (no vault dependency)."""
+    with (
+        patch("modulo.api.routes.connectors.create_connector_instance", return_value=_make_connector()),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend") as backend_mock,
+    ):
+        resp = client.post("/api/v1/connectors", json=_CREATE_BODY)
+    assert resp.status_code == 201
+    backend_mock.assert_not_called()
+
+
+def test_update_connector_resolves_secretref_credential(client: TestClient) -> None:
+    """FAR-1640: PATCH secretref:// credential is resolved and stored encrypted."""
+    captured: dict[str, object] = {}
+    stub = _StubVaultBackend({"vault/gh": '{"token": "rotated"}'})
+
+    async def fake_update(session: object, connector_id: object, updates: dict[str, object]) -> MagicMock:
+        captured["updates"] = updates
+        return _make_connector()
+
+    with (
+        patch("modulo.api.routes.connectors.update_connector_instance", new=fake_update),
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": "secretref://vault/gh"},
+        )
+    assert resp.status_code == 200
+    updates = captured["updates"]
+    assert isinstance(updates, dict)
+    ciphertext = updates["credentials_ciphertext"]
+    assert isinstance(ciphertext, bytes)
+    assert Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode() == '{"token": "rotated"}'
+
+
+def test_update_connector_missing_vault_key_fails_closed(client: TestClient) -> None:
+    """FAR-1640: PATCH with an unresolvable secretref:// is a typed 422, never a write."""
+    stub = _StubVaultBackend({})
+    with (
+        patch("modulo.api.routes.connectors.update_connector_instance") as update_mock,
+        patch("modulo.api.routes.connectors.set_rls_org"),
+        patch("modulo.api.routes.connectors.set_rls_user_context"),
+        patch("modulo.api.routes.connectors.create_secrets_backend", return_value=stub),
+    ):
+        resp = client.patch(
+            f"/api/v1/connectors/{_CONNECTOR_ID}",
+            json={"credentials": "secretref://vault/missing"},
+        )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "credential_reference_error" in detail
+    assert "vault/missing" in detail
+    update_mock.assert_not_awaited()

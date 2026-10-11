@@ -60,12 +60,17 @@ def resolve_secret_refs(
     config: ApplyConfig,
     environ: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[tuple[str, str, str]]]:
-    """Resolve ``${env:VAR}`` api_key refs client-side.
+    """Resolve ``${env:VAR}`` api_key refs client-side; forward vault refs.
 
-    Returns (resolved_api_key_by_backend_name, blocked) where blocked entries
-    are (kind, name, reason) for backends whose env var is missing/empty, and
-    for secretref:// refs (no server-side resolution exists in this slice, so
-    they would be stored as non-functional literals).
+    Returns (api_key_by_backend_name, blocked) where blocked entries are
+    (kind, name, reason) for backends whose env var is missing/empty.
+
+    A ``secretref://<key>`` api_key is forwarded to the server UNCHANGED (the
+    same ``secretref://...`` string is sent as the request's ``api_key``): the
+    SERVER resolves it against the org vault at write time under the caller's
+    org context (FAR-1640) and fails the entity with a typed, key-naming error
+    if it is missing/foreign. The value never crosses the client boundary, so
+    the CLI cannot and does not resolve it locally.
     """
     env: dict[str, str] = dict(environ if environ is not None else os.environ)
     resolved: dict[str, str] = {}
@@ -73,8 +78,9 @@ def resolve_secret_refs(
     for entity in config.entities.model_backends:
         var = entity.env_ref_var()
         if var is None:
-            if entity.api_key.startswith("secretref://"):
-                blocked.append((KIND_BACKEND, entity.name, _SECRETREF_BLOCK_REASON))
+            # Literal or ``secretref://<key>`` — pass through; the server
+            # resolves the vault reference (FAR-1640).
+            resolved[entity.name] = entity.api_key
             continue
         value = env.get(var)
         if value is None:

@@ -65,10 +65,11 @@ Feature: Declarative Configuration CLI (`modulo apply`)
     When I resolve secret refs
     Then the backend "openai" is blocked mentioning "is not set"
 
-  Scenario: A secretref:// api_key is blocked pending server-side resolution
+  Scenario: A secretref:// api_key is forwarded to the server for resolution
     Given an apply config declaring the model backend "openai" with the api_key "secretref://kv/db"
     When I resolve secret refs
-    Then the backend "openai" is blocked mentioning "not supported"
+    Then the backend "openai" api_key resolves to "secretref://kv/db"
+    And nothing is blocked
 
   # -- Planning ------------------------------------------------------------
   # (backend/src/modulo/cli/apply/plan.py)
