@@ -10,7 +10,7 @@
             :data-testid="'trend-toggle-' + (w.value ?? 'all')"
             :aria-pressed="selectedWindow === w.value"
             :class="[
-              'px-3 py-1 text-xs font-medium rounded transition-colors',
+              'px-3 py-1 text-xs font-medium rounded transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               selectedWindow === w.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80',
             ]"
             @click="selectWindow(w.value)"
@@ -116,7 +116,7 @@
                 tabindex="0"
                 :aria-expanded="expandedTeam === team.id"
                 :data-testid="'dashboard-team-row-' + team.id"
-                class="border-b last:border-0 hover:bg-muted/50"
+                class="border-b last:border-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 @click="toggleTeam(team.id)"
                 @keydown.enter="toggleTeam(team.id)"
                 @keydown.space.prevent="toggleTeam(team.id)">
