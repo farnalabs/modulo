@@ -4835,8 +4835,36 @@ def _build_llm_judge_callable(
     runs inside an already-running asyncio event loop. We bridge sync -> async
     by running the async backend invoke on a dedicated event loop in a worker
     thread via ``_run_coroutine_sync``.
+
+    ``backend_id_str`` comes from ``eval_def.config["model_backend_id"]`` —
+    unvalidated free-form JSON, so a typo or stale manual edit can put any
+    string here. A malformed id does NOT raise: raising ``ValueError`` out of
+    ``run_evals_persist_before_decide``'s per-eval loop would abort every
+    sibling eval and terminalise the run via the generic error path. Instead
+    the returned judge fails THIS eval closed with a clear configuration
+    message (``passed=False``), so the block/warn decision still fires and
+    the remaining evals in the loop still run.
     """
-    backend_id = uuid.UUID(backend_id_str)
+    try:
+        backend_id = uuid.UUID(backend_id_str)
+    except (ValueError, TypeError) as exc:
+        detail = (
+            f"llm_judge eval has a malformed model_backend_id {backend_id_str!r}: "
+            f"not a valid UUID ({exc}); fix the eval definition's "
+            "config['model_backend_id']"
+        )
+        _log.error(
+            "llm_judge.malformed_model_backend_id",
+            extra={"model_backend_id": backend_id_str, "detail": detail},
+        )
+
+        def _fail_closed_judge(
+            output: dict[str, Any],
+            eval_def: EvalDefDTO,
+        ) -> dict[str, Any]:
+            return {"passed": False, "score": 0.0, "detail": detail}
+
+        return _fail_closed_judge
 
     def _judge(
         output: dict[str, Any],

@@ -312,8 +312,11 @@ async def run_evals_persist_before_decide(
             ``AsyncSession``.  When ``None``, persistence is skipped.
         node_id: Graph node id (for logging / DB row).
         resolve_llm_judge: Optional callback ``eval_def → LLMJudgeCallable | None``.
-            The executor passes ``None`` (no LLM judge); the node-runner
-            passes ``_resolve_llm_judge_callable``.
+            Both call sites pass ``_resolve_llm_judge_callable``: the
+            executor's post-node path (FAR-315) and the node-runner
+            HITL-gate path (FAR-307) — each resolves a real judge callable
+            from ``eval_def.config["model_backend_id"]`` via the
+            ModelBackendHub.
         on_eval_result: Optional per-eval callback invoked after each eval
             is computed.  Signature: ``(eval_def, result) → None``.
             Each call site passes its own callback to emit the appropriate
