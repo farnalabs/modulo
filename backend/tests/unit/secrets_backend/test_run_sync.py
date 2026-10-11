@@ -77,20 +77,26 @@ class TestRunSync:
 
     async def test_cancellation_propagates(self) -> None:
         started = threading.Event()
+        release = threading.Event()
 
         def block_until_released() -> None:
             started.set()
-            threading.Event().wait(5)
+            release.wait(5)
 
         task = asyncio.create_task(run_sync(block_until_released))
-        # Wait for the worker thread to actually be inside the callable rather
-        # than sleeping a fixed interval: a sleep races the thread pool on a
-        # loaded runner and can cancel the task before it is ever scheduled.
-        await asyncio.to_thread(started.wait, 5)
-        assert started.is_set(), "Worker thread never entered the callable"
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            # Wait for the worker thread to actually be inside the callable rather
+            # than sleeping a fixed interval: a sleep races the thread pool on a
+            # loaded runner and can cancel the task before it is ever scheduled.
+            await asyncio.to_thread(started.wait, 5)
+            assert started.is_set(), "Worker thread never entered the callable"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            # Release the abandoned worker thread (run_sync cannot cancel it) so
+            # it does not sleep out its full 5s budget and delay teardown.
+            release.set()
 
     def test_default_timeout_is_sane(self) -> None:
         # Intentional invariant: run_sync must have a non-zero default timeout so
