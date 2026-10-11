@@ -73,8 +73,9 @@ describe('LibraryPipelineWizard', () => {
   })
 
   it('renders the shared ErrorAlert with a working Retry when pipeline creation fails (FAR-1655)', async () => {
-    // createPipeline only surfaces createError when the POST throws, so the
-    // first call rejects; Retry (which re-invokes createPipeline) succeeds.
+    // A thrown transport/network failure still surfaces createError via the
+    // catch path; the openapi-fetch { data, error } resolve path is covered
+    // by the next test.
     let postCalls = 0
     vi.mocked(api.POST).mockImplementation(async () => {
       postCalls += 1
@@ -106,5 +107,48 @@ describe('LibraryPipelineWizard', () => {
     expect(postCalls).toBe(2)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Test Pipeline')
+  })
+
+  it('surfaces an openapi-fetch { data: undefined, error } failure as the ErrorAlert with working Retry (FAR-1655)', async () => {
+    // openapi-fetch resolves (never throws) on 4xx/5xx with { data, error }.
+    // createPipeline must surface that error — the view previously only set
+    // createError in the thrown-error catch, so HTTP failures silently no-oped.
+    let postCalls = 0
+    vi.mocked(api.POST).mockImplementation(async () => {
+      postCalls += 1
+      if (postCalls === 1) {
+        return { data: undefined, error: { detail: 'create backend down' } } as never
+      }
+      return { data: { id: 'new-id', name: 'Test Pipeline' }, error: undefined } as never
+    })
+
+    router.push('/library/test-id/create-pipeline')
+    await router.isReady()
+    const wrapper = mount(LibraryPipelineWizard, {
+      global: {
+        plugins: [router],
+        stubs: { OwnershipPicker: true, VueFlow: true, Background: true },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="library-wizard-create"]').trigger('click')
+    await flushPromises()
+
+    // The resolved-error path renders the ErrorAlert with a retry button...
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+    expect(wrapper.text()).toContain('create backend down')
+    // ...and result.value is NOT set on failure (no success banner/link).
+    expect(wrapper.find('[data-testid="library-wizard-view-pipeline"]').exists()).toBe(false)
+
+    // Retry re-invokes createPipeline; the second call succeeds.
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(postCalls).toBe(2)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Test Pipeline')
+    expect(wrapper.find('[data-testid="library-wizard-view-pipeline"]').exists()).toBe(true)
   })
 })

@@ -30,12 +30,15 @@
           :on-dismiss="() => { folderError = null }"
         />
 
-        <div v-if="moveError" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="schema-list-move-error">
-          <span>{{ moveError }}</span>
-          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('views.SchemaListView.cancel')" data-testid="schema-list-dismiss-move-error" @click="moveError = null">
-            <X class="h-4 w-4" aria-hidden="true" />
-          </button>
-        </div>
+        <ErrorAlert
+          v-if="moveError"
+          :message="moveError"
+          :dismiss-label="$t('common.close')"
+          :on-dismiss="() => { moveError = null }"
+          class="mb-4"
+          data-testid="schema-list-move-error"
+          role="alert"
+        />
 
         <div v-if="loading" aria-hidden="true" class="overflow-x-auto rounded-lg border">
           <table class="w-full text-left text-sm">
@@ -168,7 +171,9 @@
           <div class="mt-0.5 text-sm text-muted-foreground">{{ $t('views.SchemaListView.deprecation_description') }}</div>
         </div>
       </template>
-      <ErrorAlert v-if="deprecateError" :message="deprecateError" />
+      <!-- Retry is deliberately omitted (retryable=false): a failed deprecate is
+           retried via the dialog's Confirm button, which re-invokes deprecateSchema. -->
+      <ErrorAlert v-if="deprecateError" :message="deprecateError" :retryable="false" />
       <template #footer>
         <div class="flex gap-2 justify-end">
           <Button severity="secondary" outlined data-testid="schema-deprecate-cancel" @click="deprecateDialogOpen = false">
@@ -216,9 +221,9 @@
           <FolderOpen class="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           {{ $t('views.SchemaListView.no_folder') }}
         </button>
-        <div v-if="moveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
-          {{ moveError }}
-        </div>
+        <!-- No retry was offered on this box before the unification; the dialog's
+             Confirm button re-invokes handleMoveToFolder, so keep it non-retryable. -->
+        <ErrorAlert v-if="moveError" :message="moveError" :retryable="false" role="alert" />
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
@@ -249,7 +254,7 @@ import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FolderTree from '../components/pipelines/FolderTree.vue'
-import { ChevronRight, Folder, FolderOpen, MoreVertical, X } from '@lucide/vue'
+import { ChevronRight, Folder, FolderOpen, MoreVertical } from '@lucide/vue'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import Menu from 'primevue/menu'

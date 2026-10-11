@@ -201,6 +201,7 @@ import '@vue-flow/core/dist/theme-default.css'
 import { layoutNodes } from '../utils/graph-layout'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
+import { formatApiError } from '../lib/api/formatError'
 
 interface LibraryPrimitive {
   id: string
@@ -294,7 +295,10 @@ async function createPipeline() {
   creating.value = true
   createError.value = null
   try {
-    const { data } = await api.POST('/api/v1/libraries/{primitive_id}/create-pipeline', {
+    // openapi-fetch RESOLVES with { data, error } on 4xx/5xx — it does not
+    // throw — so the HTTP-error branch must be handled here or createError
+    // never surfaces and the view silently no-ops.
+    const { data, error } = await api.POST('/api/v1/libraries/{primitive_id}/create-pipeline', {
       params: { path: { primitive_id: primitiveId } },
       body: {
         name: pipelineName.value || undefined,
@@ -303,7 +307,11 @@ async function createPipeline() {
         visibility: ownership.value.visibility,
       },
     })
-    result.value = data as unknown as CreatePipelineResponse
+    if (error) {
+      createError.value = formatApiError(error)
+    } else {
+      result.value = data as unknown as CreatePipelineResponse
+    }
   } catch (e) {
     createError.value = e instanceof Error ? e.message : t('views.LibraryPipelineWizard.failed_to_create_pipeline')
   } finally {

@@ -76,6 +76,7 @@ vi.mock('@/composables/useApi', () => {
 })
 
 import SchemaListView from '../views/SchemaListView.vue'
+import FolderTree from '../components/pipelines/FolderTree.vue'
 
 // ErrorAlert is captured (not stubbed blind) so the message prop and the
 // retry-on-failure flows are assertable (same pattern as AdminConnectorsView).
@@ -411,9 +412,65 @@ describe('SchemaListView', () => {
       const alert = document.body.querySelector('[data-testid="error-alert"]') as HTMLElement | null
       expect(alert).not.toBeNull()
       expect(alert!.textContent).toContain('deprecate exploded')
+      // A failed deprecate is retried via the dialog's Confirm button, so the
+      // alert is explicitly non-retryable — no Retry control may render.
+      expect(alert!.querySelector('[data-testid="error-alert-retry"]')).toBeNull()
     } finally {
       patchMockApi.mockImplementation(originalPatch as (...args: unknown[]) => unknown)
     }
+  })
+
+  it('surfaces a drag-to-folder move failure as the page-level shared ErrorAlert with working dismiss (FAR-1655)', async () => {
+    patchMock.mockRejectedValueOnce(new Error('move exploded'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Drag-and-drop move goes through FolderTree's move-pipeline event.
+    wrapper.findComponent(FolderTree).vm.$emit('move-pipeline', { pipelineId: '1', folderId: 'folder-1' })
+    await flushPromises()
+
+    // The bespoke move-error <div> is gone; the shared ErrorAlert keeps the
+    // page-level testid / role="alert" semantics via attribute fallthrough.
+    const alert = wrapper.find('[data-testid="schema-list-move-error"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('move exploded')
+
+    // Dismiss clears the error (same behaviour as the old X button).
+    await wrapper.find('[data-testid="error-alert-dismiss"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="schema-list-move-error"]').exists()).toBe(false)
+  })
+
+  it('renders a move-dialog failure as the shared ErrorAlert without a retry button (FAR-1655)', async () => {
+    patchMock.mockRejectedValueOnce(new Error('move exploded'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    findMenuItem('Move to Folder')!.click()
+    await flushPromises()
+    await nextTick()
+
+    const folderBtn = document.body.querySelector('[data-testid="schema-move-folder-folder-1"]') as HTMLElement | null
+    expect(folderBtn).not.toBeNull()
+    folderBtn!.click()
+    await nextTick()
+
+    const confirmBtn = document.body.querySelector('[data-testid="schema-move-confirm"]') as HTMLElement | null
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn!.click()
+    await flushPromises()
+    await nextTick()
+
+    // The dialog stays open on failure and shows the shared ErrorAlert.
+    const dialog = document.body.querySelector('[data-testid="schema-move-dialog"]') as HTMLElement | null
+    expect(dialog).not.toBeNull()
+    expect(dialog!.textContent).toContain('move exploded')
+    // No retry was offered on this box before the unification — Confirm
+    // re-invokes handleMoveToFolder — so none may render now.
+    expect(dialog!.querySelector('[data-testid="error-alert-retry"]')).toBeNull()
   })
 
   it('sorts the mobile folder select options alphabetically when API returns unsorted folders', async () => {
