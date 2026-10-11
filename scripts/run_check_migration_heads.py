@@ -36,6 +36,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -123,6 +124,114 @@ def _collect_merge_parent_revisions(files: list[str]) -> tuple[set[str], dict[st
     return merge_parent_revisions, file_revisions
 
 
+def _print_names(names: list[str]) -> None:
+    """Print one indented bullet per migration filename to stderr."""
+    for name in names:
+        print(f"  - {name}", file=sys.stderr)
+
+
+def _check_duplicate_prefixes(
+    files: list[str], changed: list[str], non_exempt: Callable[[list[str]], list[str]]
+) -> bool:
+    """Check 1: duplicate numeric filename prefixes. Returns True on collision."""
+    by_prefix: dict[str, list[str]] = {}
+    for name in files:
+        m = _RE_PREFIX.match(name)
+        if m:
+            by_prefix.setdefault(m.group(1), []).append(name)
+    failed = False
+    for prefix, raw_names in sorted(by_prefix.items()):
+        names = non_exempt(raw_names)
+        involves_changed = any(n in changed for n in names)
+        if len(names) > 1 and involves_changed:
+            print(f"FAIL: duplicate migration number '{prefix}' used by:", file=sys.stderr)
+            _print_names(names)
+            print(
+                "  > Renumber the one you're adding to the next free sequential number and fix its down_revision.",
+                file=sys.stderr,
+            )
+            failed = True
+    return failed
+
+
+def _check_duplicate_revisions(
+    files: list[str], changed: list[str], non_exempt: Callable[[list[str]], list[str]]
+) -> bool:
+    """Check 2: duplicate revision ids and duplicate down_revision parents.
+
+    Reads file bodies from the module-level ``VERSIONS_DIR`` — the same source
+    ``_collect_merge_parent_revisions`` (which produces the ``non_exempt``
+    exemption) already reads, so the exemption and the collision scan always
+    see the same tree.
+    """
+    revisions: dict[str, list[str]] = {}
+    down_revisions: dict[str, list[str]] = {}
+    for name in files:
+        content = _read(str(Path(VERSIONS_DIR) / name))
+        m = _RE_REVISION.search(content)
+        if m:
+            revisions.setdefault(m.group(1), []).append(name)
+        d = _RE_DOWN_STRING.search(content)
+        if d:
+            down_revisions.setdefault(d.group(1), []).append(name)
+
+    failed = False
+    for rev, raw_names in sorted(revisions.items()):
+        names = non_exempt(raw_names)
+        involves_changed = any(n in changed for n in names)
+        if len(names) > 1 and involves_changed:
+            print(f"FAIL: duplicate revision id '{rev}' declared in:", file=sys.stderr)
+            _print_names(names)
+            failed = True
+
+    for down, raw_names in sorted(down_revisions.items()):
+        names = non_exempt(raw_names)
+        involves_changed = any(n in changed for n in names)
+        if len(names) > 1 and involves_changed:
+            print(
+                f"FAIL: two migrations both declare down_revision '{down}' - this is an unintended branch:",
+                file=sys.stderr,
+            )
+            _print_names(names)
+            print(
+                "  > The one you're adding needs to be rebased on top of the other (renumber + fix down_revision).",
+                file=sys.stderr,
+            )
+            failed = True
+    return failed
+
+
+def _check_multiple_heads(repo_root: str) -> None:
+    """Check 3: warn (non-fatally) when alembic reports more than one head."""
+    backend_dir = str(Path(repo_root, "backend"))
+    try:
+        result = subprocess.run(
+            ["uv", "run", "python", "-m", "alembic", "heads"],
+            cwd=backend_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        head_count = sum(1 for line in result.stdout.splitlines() if "(head)" in line or "(effective head)" in line)
+        if head_count > 1:
+            print(
+                f"WARNING: alembic reports {head_count} migration heads (expected 1):",
+                file=sys.stderr,
+            )
+            for line in result.stdout.splitlines():
+                print(f"  {line}", file=sys.stderr)
+            print(
+                "  This is a non-fatal warning - existing multi-head history is tracked separately.",
+                file=sys.stderr,
+            )
+    except Exception as exc:
+        print(
+            f"check-migration-heads: could not run 'alembic heads' to check for multiple heads (non-fatal): {exc}",
+            file=sys.stderr,
+        )
+
+
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check Alembic migration number/revision collisions.")
     parser.add_argument(
@@ -153,8 +262,6 @@ def _main(argv: list[str] | None = None) -> int:
         # checking every file so the script is still useful ad hoc.
         changed_names = files
 
-    failed = False
-
     # ---- 0. Merge-parent revisions (intentional forks) ----
     merge_parent_revisions, file_revisions = _collect_merge_parent_revisions(files)
 
@@ -162,62 +269,12 @@ def _main(argv: list[str] | None = None) -> int:
         return [n for n in names if not (n in file_revisions and file_revisions[n] in merge_parent_revisions)]
 
     # ---- 1. Duplicate numeric prefixes ----
-    by_prefix: dict[str, list[str]] = {}
-    for name in files:
-        m = _RE_PREFIX.match(name)
-        if m:
-            by_prefix.setdefault(m.group(1), []).append(name)
-    for prefix, raw_names in sorted(by_prefix.items()):
-        names = non_exempt(raw_names)
-        involves_changed = any(n in changed_names for n in names)
-        if len(names) > 1 and involves_changed:
-            print(f"FAIL: duplicate migration number '{prefix}' used by:", file=sys.stderr)
-            for name in names:
-                print(f"  - {name}", file=sys.stderr)
-            print(
-                "  > Renumber the one you're adding to the next free sequential number and fix its down_revision.",
-                file=sys.stderr,
-            )
-            failed = True
+    failed_prefixes = _check_duplicate_prefixes(files, changed_names, non_exempt)
 
     # ---- 2. Duplicate revision / down_revision strings ----
-    revisions: dict[str, list[str]] = {}
-    down_revisions: dict[str, list[str]] = {}
-    for name in files:
-        content = _read(str(Path(versions_dir) / name))
-        m = _RE_REVISION.search(content)
-        if m:
-            revisions.setdefault(m.group(1), []).append(name)
-        d = _RE_DOWN_STRING.search(content)
-        if d:
-            down_revisions.setdefault(d.group(1), []).append(name)
+    failed_revisions = _check_duplicate_revisions(files, changed_names, non_exempt)
 
-    for rev, raw_names in sorted(revisions.items()):
-        names = non_exempt(raw_names)
-        involves_changed = any(n in changed_names for n in names)
-        if len(names) > 1 and involves_changed:
-            print(f"FAIL: duplicate revision id '{rev}' declared in:", file=sys.stderr)
-            for name in names:
-                print(f"  - {name}", file=sys.stderr)
-            failed = True
-
-    for down, raw_names in sorted(down_revisions.items()):
-        names = non_exempt(raw_names)
-        involves_changed = any(n in changed_names for n in names)
-        if len(names) > 1 and involves_changed:
-            print(
-                f"FAIL: two migrations both declare down_revision '{down}' - this is an unintended branch:",
-                file=sys.stderr,
-            )
-            for name in names:
-                print(f"  - {name}", file=sys.stderr)
-            print(
-                "  > The one you're adding needs to be rebased on top of the other (renumber + fix down_revision).",
-                file=sys.stderr,
-            )
-            failed = True
-
-    if failed:
+    if failed_prefixes or failed_revisions:
         print(
             "\ncheck-migration-heads: FAILED - resolve the migration collisions above before committing.",
             file=sys.stderr,
@@ -225,33 +282,7 @@ def _main(argv: list[str] | None = None) -> int:
         return 1
 
     # ---- 3. Non-fatal: multiple alembic heads ----
-    backend_dir = str(Path(repo_root, "backend"))
-    try:
-        result = subprocess.run(
-            ["uv", "run", "python", "-m", "alembic", "heads"],
-            cwd=backend_dir,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        head_count = sum(1 for line in result.stdout.splitlines() if "(head)" in line or "(effective head)" in line)
-        if head_count > 1:
-            print(
-                f"WARNING: alembic reports {head_count} migration heads (expected 1):",
-                file=sys.stderr,
-            )
-            for line in result.stdout.splitlines():
-                print(f"  {line}", file=sys.stderr)
-            print(
-                "  This is a non-fatal warning - existing multi-head history is tracked separately.",
-                file=sys.stderr,
-            )
-    except Exception as exc:
-        print(
-            f"check-migration-heads: could not run 'alembic heads' to check for multiple heads (non-fatal): {exc}",
-            file=sys.stderr,
-        )
+    _check_multiple_heads(repo_root)
 
     print("check-migration-heads: OK - no migration number/revision collisions", file=sys.stderr)
     return 0
