@@ -9,6 +9,8 @@ Covers the acceptance criteria on the ticket:
 * disabled instances are skipped entirely.
 """
 
+import asyncio
+import json
 import uuid
 from typing import Any
 from unittest.mock import patch
@@ -311,3 +313,94 @@ async def test_sweep_acl_denial_is_not_a_health_failure(sweep, tmp_path) -> None
     (row,) = await rows()
     assert row.last_health_check_at is None
     assert row.last_health_check_error is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1651Fix3: escalated-failure redaction boundary inside _check_instance
+# ---------------------------------------------------------------------------
+
+_ESCALATED_TOKEN = "sweep1651plantedcredentialvalue"
+
+
+class _PlantedSecretsBackend:
+    """Secrets backend returning a credential-bearing creds dict."""
+
+    def __init__(self, *, session: AsyncSession, fernet_key: str | None = None) -> None:
+        pass
+
+    async def get_secret(self, name: str) -> str:
+        return json.dumps({"token": _ESCALATED_TOKEN})
+
+    async def close(self) -> None:
+        pass
+
+
+def _planted_backend_factory(*, session: AsyncSession, fernet_key: str | None = None) -> _PlantedSecretsBackend:
+    return _PlantedSecretsBackend(session=session, fernet_key=fernet_key)
+
+
+async def test_sweep_escalated_failure_redacts_with_bound_redactor(sweep, tmp_path, monkeypatch) -> None:
+    """A connector health_check that RAISES (not returns) is scrubbed through the
+    hub's bound redactor before the detail is persisted (FAR-1651Fix3)."""
+    run, seeder, rows = sweep
+    monkeypatch.setattr(health_sweep, "create_secrets_backend", _planted_backend_factory)
+
+    from modulo.connectors.filesystem import FilesystemConnector
+
+    async def _boom(self) -> Any:
+        raise RuntimeError(f"upstream echoed {_ESCALATED_TOKEN}")
+
+    monkeypatch.setattr(FilesystemConnector, "health_check", _boom)
+    await seeder([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
+
+    result = await run()
+
+    assert result["unhealthy"] == 1
+    (row,) = await rows()
+    error = row.last_health_check_error
+    assert error is not None
+    assert "RuntimeError" in error
+    assert _ESCALATED_TOKEN not in error
+    assert "***" in error
+
+
+async def test_sweep_escalated_failure_fails_closed_without_redactor(sweep, tmp_path, monkeypatch) -> None:
+    """With NO redactor bound the persisted detail degrades to the placeholder
+    (fail-closed): the exception TYPE survives, its message does not."""
+    run, seeder, rows = sweep
+
+    from modulo.connectors.filesystem import FilesystemConnector
+    from modulo.core.connector_hub import ConnectorHub
+
+    async def _boom(self) -> Any:
+        raise RuntimeError(f"upstream echoed {_ESCALATED_TOKEN}")
+
+    monkeypatch.setattr(ConnectorHub, "credential_redactor_for", lambda self, connector_id: None)
+    monkeypatch.setattr(FilesystemConnector, "health_check", _boom)
+    await seeder([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
+
+    result = await run()
+
+    assert result["unhealthy"] == 1
+    (row,) = await rows()
+    error = row.last_health_check_error
+    assert error is not None
+    assert health_sweep._FALLBACK_DETAIL in error
+    assert "RuntimeError" not in error
+    assert _ESCALATED_TOKEN not in error
+
+
+async def test_sweep_re_raises_cancelled_error_from_health_check(sweep, tmp_path, monkeypatch) -> None:
+    """A CancelledError escaping health_check keeps run-loop semantics — re-raised."""
+    run, seeder, _rows = sweep
+
+    from modulo.connectors.filesystem import FilesystemConnector
+
+    async def _cancel(self) -> Any:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(FilesystemConnector, "health_check", _cancel)
+    await seeder([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
+
+    with pytest.raises(asyncio.CancelledError):
+        await run()

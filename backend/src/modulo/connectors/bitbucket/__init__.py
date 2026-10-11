@@ -1,6 +1,5 @@
 """BitbucketConnector — async Bitbucket Cloud API connector."""
 
-import base64
 from collections.abc import Sequence
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import basic_auth_wire_secrets
 from modulo.core.ssrf import pinned_async_client_sync
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
@@ -54,31 +54,24 @@ class BitbucketConnector(ConnectorBase):
     ) -> None:
         if token:
             self._auth_header = {"Authorization": f"Bearer {token}"}
+            # Captured for credential redaction of echoed upstream detail
+            # (``ConnectorBase._credential_values``); empty for the Bearer mode.
+            self._credential: str = token
+            self._basic_secrets: tuple[str, ...] = ()
         elif username and app_password:
-            encoded = base64.b64encode(f"{username}:{app_password}".encode()).decode()
-            self._auth_header = {"Authorization": f"Basic {encoded}"}
+            # FAR-1651Fix1: the reflected ``Authorization: Basic <b64>`` header
+            # (and its decoded ``user:password`` form) do NOT contain the raw
+            # app password, so both wire forms must be redactable too. Mirrors
+            # the rest-connector precedent (``RestConnector._collect_basic_secrets``).
+            raw, encoded, header = basic_auth_wire_secrets(username, app_password)
+            self._auth_header = {"Authorization": header}
+            self._credential = app_password
+            self._basic_secrets = (raw, encoded, header)
         else:
             raise ValueError("Provide either token (OAuth 2.0) or username+app_password")
-        # Captured for credential redaction of echoed upstream detail
-        # (``ConnectorBase._credential_values``); the username is NOT a secret.
-        self._credential: str | None = token or app_password
-        # FAR-1651Fix1: kept when basic auth is configured, ``None`` for the
-        # Bearer mode. In basic mode the reflected ``Authorization: Basic <b64>``
-        # header (and its decoded ``user:password`` form) do NOT contain the
-        # raw app password, so they must be redactable too. Mirrors the
-        # rest-connector precedent (``RestConnector._collect_basic_secrets``).
-        self._basic_encoded: str | None = None
-        self._basic_raw: str | None = None
-        if self._auth_header.get("Authorization", "").startswith("Basic "):
-            self._basic_raw = f"{username}:{app_password}"
-            self._basic_encoded = base64.b64encode(self._basic_raw.encode()).decode()
 
     def _credential_values(self) -> Sequence[str]:
-        if not self._credential:
-            return ()
-        if self._basic_encoded is not None and self._basic_raw is not None:
-            return (self._credential, self._basic_raw, self._basic_encoded, f"Basic {self._basic_encoded}")
-        return (self._credential,)
+        return (self._credential, *self._basic_secrets)
 
     @property
     def connector_type(self) -> ConnectorType:
