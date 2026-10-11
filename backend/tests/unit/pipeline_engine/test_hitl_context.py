@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langgraph.graph import END
 
-from modulo.core.pipeline_engine import graph_cache
+from modulo.core.pipeline_engine import graph_cache, hitl_context
 from modulo.core.pipeline_engine.hitl_context import (
     _NAME_FIELD_MAX_CHARS,
     _TEXT_FIELD_MAX_CHARS,
@@ -331,6 +331,75 @@ class TestFailureIsolation:
                 completed_node_outputs={},
             )
         assert context is None
+
+
+class TestExtractionSeamContracts:
+    """The S3776 split's load-bearing contracts (load_review_frame seam).
+
+    Fail isolation stays ONLY in the outer ``build_hitl_review_context`` —
+    helpers may raise and the outer converts that to ``None``. And the
+    frozen-record rule: the review config is read from the run's SNAPSHOT
+    graph, never the live pipeline.
+    """
+
+    async def test_snapshot_node_walker_raise_returns_none_via_outer_guard(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A raise INSIDE the frame load (here: the snapshot graph walker
+        blowing up on a missing/malformed snapshot node) propagates out of
+        ``_load_review_frame`` and is converted to ``None`` by the OUTER
+        guard — the briefing defect never surfaces as an exception."""
+        config = {"description": "Approve the comments."}
+        graph = _edge_graph(config)
+        session = _make_session(graph)
+
+        def _boom(_graph_json: dict[str, Any], _review_id: str) -> dict[str, Any] | None:
+            msg = "source node missing from snapshot"
+            raise KeyError(msg)
+
+        with (
+            patch(
+                "modulo.core.pipeline_engine.hitl_context.get_run",
+                AsyncMock(return_value=_run_mock(uuid.uuid4())),
+            ),
+            patch("modulo.core.pipeline_engine.hitl_context.config_from_graph", _boom),
+            caplog.at_level(logging.WARNING),
+        ):
+            context = await build_hitl_review_context(
+                session,
+                run_id=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                pipeline_name="PR Reviewer",
+                completed_node_outputs={},
+            )
+        assert context is None
+        assert "hitl_review.context_capture_failed" in caplog.text
+
+    async def test_payload_reflects_snapshot_config_even_when_live_pipeline_changed(self) -> None:
+        """Frozen-record tripwire: the rendered description/condition come
+        from the run's FROZEN snapshot graph. The live pipeline definition is
+        never consulted — pinned by spying on the config resolver and
+        asserting it received EXACTLY the snapshot's graph (a live edit has
+        no path into the briefing)."""
+        snapshot_config = {"description": "v1: approve the comments.", "condition": "ready"}
+        snapshot_graph = _edge_graph(snapshot_config)
+        seen_graphs: list[dict[str, Any]] = []
+        real_config_from_graph = hitl_context.config_from_graph
+
+        def _spy(graph_json: dict[str, Any], review_id: str) -> dict[str, Any] | None:
+            seen_graphs.append(graph_json)
+            return real_config_from_graph(graph_json, review_id)
+
+        with patch("modulo.core.pipeline_engine.hitl_context.config_from_graph", _spy):
+            context = await _build(snapshot_graph)
+
+        assert context is not None
+        assert context["description"] == "v1: approve the comments."
+        assert context["condition"] == "ready"
+        # The ONLY graph the config resolver ever saw is the frozen snapshot.
+        assert seen_graphs == [snapshot_graph]
 
 
 class TestMalformedSnapshotNodes:
