@@ -580,9 +580,7 @@
                 data-testid="pipeline-editor-run-prompt"
               />
             </div>
-            <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              {{ runError }}
-            </div>
+            <ErrorAlert v-if="runError" :message="runError" :retryable="false" />
             <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text">
               {{ emptyRunWarning }}
             </div>

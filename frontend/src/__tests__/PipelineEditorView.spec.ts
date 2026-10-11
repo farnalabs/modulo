@@ -2270,6 +2270,11 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     // the run dialog should show the save failure, not close
     expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('save_broken')
+    // The run error renders via the shared ErrorAlert (FAR-1669), not a bespoke
+    // destructive <div>. retryable=false: a failed run/save-graph action is
+    // retried by the dialog's own Run button, so no in-place Retry is offered.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
