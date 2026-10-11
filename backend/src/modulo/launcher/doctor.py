@@ -1145,18 +1145,27 @@ def _probe_second_install_hint(data_dir: Path) -> str | None:
     )
 
 
-# Registration order mirrors the tuple ``_build_system_probes`` returns; the
-# exact names/order are locked by test_probe_registry_names_and_order.
-_register_probe("ambient_env_names", _probe_ambient_env_names)
-_register_probe("available_memory_bytes", _probe_available_memory_bytes)
-_register_probe("data_dir_pg_version", _probe_data_dir_pg_version)
-_register_probe("bundle_pg_version", _probe_bundle_pg_version)
-_register_probe("installed_bundle_pg_version", _probe_installed_bundle_pg_version)
-_register_probe("bundled_binaries", _probe_bundled_binaries)
-_register_probe("cloud_sync_hit", _probe_cloud_sync_hit)
-_register_probe("modulo_on_path", _probe_modulo_on_path)
-_register_probe("install_root", _probe_install_root)
-_register_probe("second_install_hint", _probe_second_install_hint)
+def _init_once_register_probes() -> None:
+    """Populate ``_PROBE_REGISTRY`` once at import.
+
+    Registration order mirrors the tuple ``_build_system_probes`` returns;
+    the exact names/order are locked by test_probe_registry_names_and_order.
+    Wrapped in an ``_init_once_*`` function so the single module-level call
+    is permitted by the module-side-effects architecture gate.
+    """
+    _register_probe("ambient_env_names", _probe_ambient_env_names)
+    _register_probe("available_memory_bytes", _probe_available_memory_bytes)
+    _register_probe("data_dir_pg_version", _probe_data_dir_pg_version)
+    _register_probe("bundle_pg_version", _probe_bundle_pg_version)
+    _register_probe("installed_bundle_pg_version", _probe_installed_bundle_pg_version)
+    _register_probe("bundled_binaries", _probe_bundled_binaries)
+    _register_probe("cloud_sync_hit", _probe_cloud_sync_hit)
+    _register_probe("modulo_on_path", _probe_modulo_on_path)
+    _register_probe("install_root", _probe_install_root)
+    _register_probe("second_install_hint", _probe_second_install_hint)
+
+
+_init_once_register_probes()
 
 
 def _build_system_probes(
