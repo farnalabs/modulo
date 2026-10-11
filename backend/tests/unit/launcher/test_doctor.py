@@ -889,8 +889,10 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
 def test_probe_registry_names_and_order(tmp_path: Path) -> None:
     """The system-probe registry's names, set and order are the contract:
     ``_build_system_probes`` keys its bound probes by these names, and
-    ``default_probes`` unpacks the returned tuple positionally."""
-    names = [name for name, _ in doctor_module._PROBE_REGISTRY]
+    ``default_probes`` unpacks the returned tuple positionally. Registration
+    is deferred out of import time, so the registry is read through the lazy
+    accessor rather than the raw global."""
+    names = [name for name, _ in doctor_module._registered_system_probes()]
     assert names == [
         "ambient_env_names",
         "available_memory_bytes",
@@ -905,3 +907,12 @@ def test_probe_registry_names_and_order(tmp_path: Path) -> None:
     ]
     built = doctor_module._build_system_probes(tmp_path)
     assert len(built) == len(names)
+
+
+def test_register_probe_rejects_duplicate_name() -> None:
+    """A duplicate probe name fails loud: ``_build_system_probes`` keys its
+    bound probes by name, so a duplicate would silently shadow its
+    predecessor."""
+    doctor_module._registered_system_probes()  # populate the lazy registry first
+    with pytest.raises(ValueError, match="duplicate system-probe name"):
+        doctor_module._register_probe("ambient_env_names", lambda _data_dir: None)

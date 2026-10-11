@@ -96,7 +96,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -1145,13 +1145,16 @@ def _probe_second_install_hint(data_dir: Path) -> str | None:
     )
 
 
-def _init_once_register_probes() -> None:
-    """Populate ``_PROBE_REGISTRY`` once at import.
+@lru_cache(maxsize=1)
+def _registered_system_probes() -> list[tuple[str, _SystemProbe]]:
+    """Populate and return ``_PROBE_REGISTRY``, once, on first use.
 
-    Registration order mirrors the tuple ``_build_system_probes`` returns;
-    the exact names/order are locked by test_probe_registry_names_and_order.
-    Wrapped in an ``_init_once_*`` function so the single module-level call
-    is permitted by the module-side-effects architecture gate.
+    Lazy by design: registration runs on the first call, not at import time,
+    so importing this module executes no code (the architecture suite forbids
+    module-level calls). ``_build_system_probes`` calls this before keying its
+    bound probes by name. Registration order mirrors the tuple
+    ``_build_system_probes`` returns; the exact names/order are locked by
+    test_probe_registry_names_and_order.
     """
     _register_probe("ambient_env_names", _probe_ambient_env_names)
     _register_probe("available_memory_bytes", _probe_available_memory_bytes)
@@ -1163,9 +1166,7 @@ def _init_once_register_probes() -> None:
     _register_probe("modulo_on_path", _probe_modulo_on_path)
     _register_probe("install_root", _probe_install_root)
     _register_probe("second_install_hint", _probe_second_install_hint)
-
-
-_init_once_register_probes()
+    return _PROBE_REGISTRY
 
 
 def _build_system_probes(
@@ -1184,13 +1185,14 @@ def _build_system_probes(
 ]:
     """Bind every registered system probe to *data_dir*.
 
-    Built from ``_PROBE_REGISTRY``; the returned tuple's order is the
-    contract ``default_probes`` unpacks positionally:
-    ambient_env_names, available_memory_bytes, data_dir_pg_version,
-    bundle_pg_version, installed_bundle_pg_version, bundled_binaries,
-    cloud_sync_hit, modulo_on_path, install_root, second_install_hint.
+    Built from ``_registered_system_probes()`` (the registry is populated
+    lazily on first use, never at import time); the returned tuple's order is
+    the contract ``default_probes`` unpacks positionally: ambient_env_names,
+    available_memory_bytes, data_dir_pg_version, bundle_pg_version,
+    installed_bundle_pg_version, bundled_binaries, cloud_sync_hit,
+    modulo_on_path, install_root, second_install_hint.
     """
-    probes = {name: partial(probe, data_dir) for name, probe in _PROBE_REGISTRY}
+    probes = {name: partial(probe, data_dir) for name, probe in _registered_system_probes()}
     return (
         probes["ambient_env_names"],
         probes["available_memory_bytes"],
