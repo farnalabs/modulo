@@ -385,6 +385,17 @@ describe('CompositeEditorView', () => {
     const alert = wrapper.find('[role="alert"]')
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('name already taken')
+    // FAR-1669: the saveAsError box is the shared ErrorAlert (role="alert"
+    // falls through to its root) carrying the message — a bespoke destructive
+    // <div> (pre-conversion markup) would fail findComponent, so this proves
+    // the conversion. In this test the page-level ErrorAlert is not rendered
+    // (pageError is null), so the only match is the dialog's.
+    const errorAlert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(errorAlert.exists()).toBe(true)
+    expect(String(errorAlert.props('message'))).toContain('name already taken')
+    // Retry = click Save again; no separate loader, so no in-place retry.
+    expect(errorAlert.props('retryable')).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.find('#compositeeditorview-field-2').exists()).toBe(true)
     expect(routerPush).not.toHaveBeenCalled()
     wrapper.unmount()
