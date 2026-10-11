@@ -1,0 +1,134 @@
+name: "Issue notify (email on new external issue)"
+
+# FAR-1681: when an EXTERNAL person opens an issue on farnalabs/modulo, email
+# the maintainer via Zoho SMTP so new external reports are not missed.
+#
+# Skip list: issues opened by dunctait, farnalabs, app/github-actions, or any
+# [bot] login are internal and do not notify. The if: short-circuits on
+# workflow_dispatch first so a manual test run never null-derefs
+# github.event.issue (which is undefined for dispatch events).
+#
+# The SMTP send is an inline stdlib python3 step (smtplib / email.mime.text),
+# deliberately NOT a marketplace action. Escape safety: the issue title, body
+# and URL reach the script ONLY via env: (the runner exports them; they are
+# never interpolated into the shell), and the script reads them from
+# os.environ. The password is never printed (exception text is scrubbed), and
+# the step exits non-zero on send failure so a broken notification is visible
+# in the Actions tab instead of silently green.
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.user.login != 'dunctait' &&
+       github.event.issue.user.login != 'farnalabs' &&
+       github.event.issue.user.login != 'app/github-actions' &&
+       !endsWith(github.event.issue.user.login, '[bot]'))
+    steps:
+      - name: Email maintainer via Zoho SMTP
+        env:
+          ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
+          ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
+          ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import smtplib
+          import sys
+          from email.mime.text import MIMEText
+          from email.utils import formatdate
+
+          HOST = "smtppro.zoho.eu"
+          PORT_STARTTLS = 587
+          PORT_SSL = 465
+          EXCERPT_LIMIT = 2000
+
+          user = os.environ["ZOHO_SMTP_USER"]
+          password = os.environ["ZOHO_SMTP_PASS"]
+          to_addr = os.environ["ISSUE_NOTIFY_EMAIL"]
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+
+          def scrub(text: str) -> str:
+              """Never let the SMTP password appear in any log output."""
+              return text.replace(password, "***") if password else text
+
+          if event_name == "workflow_dispatch":
+              run_url = (
+                  f"{os.environ.get('GITHUB_SERVER_URL', '')}"
+                  f"/{os.environ.get('GITHUB_REPOSITORY', '')}"
+                  f"/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
+              )
+              subject = "[Modulo] TEST: issue-notify workflow (manual dispatch)"
+              text = (
+                  "TEST email from the issue-notify workflow (workflow_dispatch).\n"
+                  "No issue context is included - this is only a connectivity test.\n\n"
+                  f"Repo: {os.environ.get('GITHUB_REPOSITORY', '')}\n"
+                  f"Run:  {run_url}\n"
+              )
+          else:
+              author = os.environ.get("ISSUE_AUTHOR", "")
+              title = os.environ.get("ISSUE_TITLE", "")
+              url = os.environ.get("ISSUE_URL", "")
+              body = os.environ.get("ISSUE_BODY", "") or ""
+              excerpt = body.strip()
+              if len(excerpt) > EXCERPT_LIMIT:
+                  excerpt = excerpt[:EXCERPT_LIMIT] + "\n... (truncated)"
+              subject = f"[Modulo] New issue from {author}: {title}"
+              text = (
+                  "A new issue was opened on the Modulo repository.\n\n"
+                  f"Author: {author}\n"
+                  f"Title:  {title}\n"
+                  f"URL:    {url}\n\n"
+                  "Body excerpt:\n"
+                  "-------------\n"
+                  f"{excerpt if excerpt else '(empty body)'}\n"
+              )
+
+          msg = MIMEText(text, "plain", "utf-8")
+          msg["Subject"] = subject
+          msg["From"] = user
+          msg["To"] = to_addr
+          msg["Date"] = formatdate(localtime=True)
+
+          def send_starttls() -> None:
+              with smtplib.SMTP(HOST, PORT_STARTTLS, timeout=30) as smtp:
+                  smtp.ehlo()
+                  smtp.starttls()
+                  smtp.ehlo()
+                  smtp.login(user, password)
+                  smtp.send_message(msg)
+
+          def send_ssl() -> None:
+              with smtplib.SMTP_SSL(HOST, PORT_SSL, timeout=30) as smtp:
+                  smtp.login(user, password)
+                  smtp.send_message(msg)
+
+          def try_send(fn, label: str) -> bool:
+              try:
+                  fn()
+                  print(f"Email sent via {label} ({HOST})")
+                  return True
+              except Exception as exc:  # noqa: BLE001 - report then fall back / fail
+                  detail = scrub(f"{type(exc).__name__}: {exc}")
+                  print(f"Send via {label} failed: {detail}")
+                  return False
+
+          ok = try_send(send_starttls, f"STARTTLS :{PORT_STARTTLS}")
+          if not ok:
+              ok = try_send(send_ssl, f"SSL :{PORT_SSL}")
+          sys.exit(0 if ok else 1)
+          PY
