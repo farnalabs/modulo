@@ -129,9 +129,11 @@
             </div>
           </header>
 
-          <div v-if="saveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-            {{ saveError }}
-          </div>
+          <!--
+            Save-form failure: the user fixes the form and clicks Save again;
+            an automatic Retry could double-create, so none is offered.
+          -->
+          <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
           <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
             {{ saveSuccess }}
           </div>

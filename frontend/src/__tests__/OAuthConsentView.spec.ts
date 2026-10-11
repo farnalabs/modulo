@@ -19,7 +19,10 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: (..._args: unknown[]) => mockGetAccessToken(),
 }))
 
-vi.mock('../lib/api/formatError', () => ({
+// Spread the real module so ErrorAlert's isProblemDetail (a formatError
+// import) stays available; only formatApiError is stubbed for message control.
+vi.mock('../lib/api/formatError', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api/formatError')>()),
   formatApiError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }))
 

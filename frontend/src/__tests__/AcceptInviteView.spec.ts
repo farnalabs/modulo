@@ -47,6 +47,9 @@ describe('AcceptInviteView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="accept-invite-missing-token"]').exists()).toBe(true)
     })
+    // FAR-1669: shared ErrorAlert, non-retryable — a missing token cannot be
+    // fixed by a Retry.
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
   })
 
   it('submits the token + password and shows success for a new account', async () => {

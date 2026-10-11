@@ -46,7 +46,7 @@
           <div class="h-16 animate-pulse rounded-lg bg-muted" />
           <div class="h-16 animate-pulse rounded-lg bg-muted" />
         </div>
-        <div v-else-if="connectorsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ connectorsError }}</div>
+        <ErrorAlert v-else-if="connectorsError" :message="connectorsError" :on-retry="loadConnectors" />
         <div v-else-if="connectors.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {{ $t('views.OnboardingWizard.no_connectors_found') }} <a href="/settings/connectors" data-testid="onboarding-wizard-create-connector" class="text-primary underline">{{ $t('views.OnboardingWizard.create_one') }}</a> {{ $t('views.OnboardingWizard.first_then_come_back') }}
         </div>
@@ -198,7 +198,7 @@
         <div v-if="loadingLibrary" class="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-hidden="true">
           <div v-for="n in 4" :key="n" class="h-24 animate-pulse rounded-lg bg-muted" />
         </div>
-        <div v-else-if="libraryError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">{{ libraryError }}</div>
+        <ErrorAlert v-else-if="libraryError" :message="libraryError" :on-retry="loadLibrary" />
         <div v-else-if="libraryItems.length === 0" class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {{ $t('views.OnboardingWizard.no_library_items') }}
         </div>

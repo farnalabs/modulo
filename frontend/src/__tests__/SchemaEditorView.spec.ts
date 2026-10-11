@@ -621,6 +621,11 @@ describe('SchemaEditorView', () => {
     const vm = wrapper.vm as any
     expect(vm.saveError).toBeTruthy()
     expect(vm.saveError).toContain('create_failed')
+
+    // Rendered through the shared ErrorAlert (FAR-1669); saveError covers
+    // load- and save-failures, so no Retry button is offered.
+    expect(wrapper.text()).toContain('create_failed')
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
   })
 
   it('handles version creation failure after schema is created', async () => {

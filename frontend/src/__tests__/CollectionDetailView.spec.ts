@@ -398,6 +398,14 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
+
+    // FAR-1669: the box is a shared ErrorAlert wired to re-run the install.
+    expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(1)
+    const retry = wrapper.findAll('button').find((b) => b.text() === 'Retry')
+    expect(retry).toBeDefined()
+    await retry!.trigger('click')
+    await flushPromises()
+    expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(2)
   })
 })
 
