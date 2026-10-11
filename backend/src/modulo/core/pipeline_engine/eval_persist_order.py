@@ -269,7 +269,7 @@ SessionFactory = Callable[[], Any]
 # ---------------------------------------------------------------------------
 
 
-async def _compute_eval_result(
+def _compute_eval_result(
     eval_def: EvalDefDTO,
     *,
     engine: EvalEngine,
@@ -529,7 +529,7 @@ async def run_evals_persist_before_decide(
 
     for eval_def in eval_defs:
         # --- 1. Compute (never raises EvalBlockedError) ----------------
-        eval_result = await _compute_eval_result(
+        eval_result = _compute_eval_result(
             eval_def,
             engine=engine,
             compute_run_id=compute_run_id,
