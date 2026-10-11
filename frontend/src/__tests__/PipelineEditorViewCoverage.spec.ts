@@ -904,6 +904,21 @@ describe('PipelineEditorView — coverage: script logic branches', () => {
     wrapper.unmount()
   })
 
+  // -- syncRetryPolicyFromPipeline: non-numeric max_retries --
+  it('syncRetryPolicyFromPipeline defaults max retries to 0 when it is not a number', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+
+    vm.pipeline = { retry_policy: { on: ['failure'], max_retries: 'not-a-number' } }
+    vm.syncRetryPolicyFromPipeline()
+    expect(vm.retryPolicyMode).toBe('specific')
+    expect(vm.retryPolicyMaxRetries).toBe(0)
+    wrapper.unmount()
+  })
+
   // -- syncRetryPolicyFromPipeline: schedule with undefined multiplier --
   it('syncRetryPolicyFromPipeline defaults multiplier to 2 when undefined', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
