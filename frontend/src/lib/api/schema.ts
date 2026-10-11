@@ -7101,7 +7101,8 @@ export interface paths {
          * Create Eval Definition
          * @description Create a new eval definition.
          *
-         *     Admin only. The eval definition is scoped to the caller's organisation.
+         *     Operator or admin only (FAR-735). The eval definition is scoped to the
+         *     caller's organisation.
          */
         post: operations["create_eval_definition_api_v1_evals_post"];
         delete?: never;
@@ -7338,7 +7339,7 @@ export interface paths {
         get: operations["get_eval_definition_api_v1_evals__eval_id__get"];
         /**
          * Update Eval Definition
-         * @description Update an eval definition. Admin only.
+         * @description Update an eval definition. Operator or admin only (FAR-735).
          *
          *     Reads from the ``evals`` table (chunk 3b cutover).  The update is
          *     persisted via ``create_or_update_eval`` which handles version stamping
@@ -7425,7 +7426,7 @@ export interface paths {
         put?: never;
         /**
          * Create Eval From Run
-         * @description Create an eval definition pre-populated from run output.
+         * @description Create an eval definition pre-populated from run output. Operator or admin (FAR-735).
          */
         post: operations["create_eval_from_run_api_v1_evals_from_run_post"];
         delete?: never;
@@ -10536,6 +10537,8 @@ export interface components {
             node_deadline_watchdog_fired_count?: number | null;
             /** Execution Origin */
             execution_origin?: string | null;
+            /** Benign */
+            benign?: boolean | null;
             /** Created At */
             created_at: string;
         };
@@ -16226,6 +16229,10 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /** Benign Signatures */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
@@ -16366,6 +16373,13 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Benign Signatures
+             * @description Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). Shape: [{"error_code": "<exact runs.error_code>", "error_detail_contains": "<case-insensitive substring, optional>"}]. A terminal failure whose (error_code, error_detail) matches one is classified `benign` — a distinct class excluded from analytics failure rates and error-code clusters — instead of counting as a failure. Null clears (no signatures = historical behaviour).
+             */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included). Send null to disable; omit to leave unchanged.

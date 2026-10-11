@@ -4655,15 +4655,20 @@ def _assert_pass_threshold(pass_threshold: float | None) -> dict[str, Any] | Non
     return None
 
 
-def _assert_admin_scope(action: str) -> None:
-    """Raise MCPAuthorizationError when the caller is not an org admin.
+def _assert_eval_definition_write_scope(action: str, minimum_role: str) -> None:
+    """Raise MCPAuthorizationError when the caller is below ``minimum_role``.
 
-    Eval-definition management mirrors the REST routes: admin-only. A
-    non-admin (operator/runner/viewer) caller must receive ``insufficient_scope``
-    rather than a silent success.
+    Eval-definition create/update is operator-or-admin (FAR-735): the ADR 047
+    registry already resolves ``eval.definition.create`` / ``eval.definition.update``
+    to ``operator`` for the MCP tool-scope gate, so the tool-level gate here
+    must match or an operator key would pass the scope gate and then be
+    rejected in the tool banner. Delete stays admin-only (mirrors the REST
+    ``DELETE /evals/{eval_id}`` route). A below-floor caller must receive
+    ``insufficient_scope`` rather than a silent success.
     """
-    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY["admin"]:
-        raise MCPAuthorizationError(f"Only admins can {action} eval definitions")
+    if ORG_ROLE_HIERARCHY.get(_ctx_role_val() or "", -1) < ORG_ROLE_HIERARCHY[minimum_role]:
+        role_label = "admins" if minimum_role == "admin" else "operators or admins"
+        raise MCPAuthorizationError(f"Only {role_label} can {action} eval definitions")
 
 
 def _parse_eval_ref_ids(
@@ -4753,7 +4758,7 @@ async def _create_eval_definition_impl(
     if (err := _assert_create_eval_definition_params(name, eval_type, pass_threshold)) is not None:
         return err
 
-    _assert_admin_scope("create")
+    _assert_eval_definition_write_scope("create", "operator")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()
@@ -4814,9 +4819,10 @@ async def _create_eval_definition_impl(
 
 
 @mcp.tool(
-    description="Create a new eval definition (admin only). Persists an "
+    description="Create a new eval definition (operator or admin). Persists an "
     "EvalDefinition row scoped to the caller's org and returns its details. "
-    "Requires an admin caller; non-admins receive an insufficient_scope error.",
+    "Requires an operator or admin caller; lower roles receive an "
+    "insufficient_scope error.",
 )
 @mcp_audited("eval_definition_created", "eval_definition", fail_closed=False)
 @_RETRY_DB
@@ -4918,7 +4924,7 @@ async def _update_eval_definition_impl(
     if val_err is not None:
         return val_err
 
-    _assert_admin_scope("update")
+    _assert_eval_definition_write_scope("update", "operator")
 
     org_id = _ctx_org_id_val()
 
@@ -4995,9 +5001,10 @@ async def _update_eval_definition_impl(
 
 
 @mcp.tool(
-    description="Update an eval definition (admin only). Bumps the definition "
-    "version and snapshots the pre-edit config, mirroring the REST semantics. "
-    "Requires an admin caller; non-admins receive an insufficient_scope error. "
+    description="Update an eval definition (operator or admin). Bumps the "
+    "definition version and snapshots the pre-edit config, mirroring the REST "
+    "semantics. Requires an operator or admin caller; lower roles receive an "
+    "insufficient_scope error. "
     "NOTE: because None means 'not provided' in the tool signature, nullable "
     "fields (node_id, pass_threshold, suite_id) cannot be cleared to NULL via "
     "this tool - the REST PUT route must be used to unset them.",
@@ -5075,7 +5082,7 @@ async def _delete_eval_definition_impl(eval_id: str, hard: bool) -> dict[str, An
 
     from modulo.api.routes.evals import _MSG_EVAL_DEFINITION_NOT_FOUND
 
-    _assert_admin_scope("delete")
+    _assert_eval_definition_write_scope("delete", "admin")
 
     org_id = _ctx_org_id_val()
     account_id = _ctx_user_id_val()

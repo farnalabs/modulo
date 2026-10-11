@@ -44,10 +44,15 @@ ORG = uuid.UUID("7f000000-0000-0000-0000-000000000002")
 _SENTINEL = object()
 
 
-def _instance(allowed_operations: Any, *, visibility: str = "org") -> SimpleNamespace:
+def _instance(
+    allowed_operations: Any,
+    *,
+    visibility: str = "org",
+    connector_type_id: str = "rest",
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
-        connector_type_id="rest",
+        connector_type_id=connector_type_id,
         config_json={},
         allowed_operations=allowed_operations,
         visibility=visibility,
@@ -90,6 +95,38 @@ def test_write_only_allowlist_denies_polling_read() -> None:
     """A non-empty allowlist that excludes ``read`` must raise (fail closed)."""
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
         enforce_polling_read_acl(_instance(["write"]))
+
+
+def test_same_type_qualified_entry_grants_polling_read() -> None:
+    """A stored same-type qualified entry grants its bare capability (FAR-1616).
+
+    A ``["github.read"]`` allowlist on a connector whose OWN
+    ``connector_type_id`` is ``github`` is the FAR-1594 legacy spelling of
+    ``read``. The polling gate must thread the instance's type into
+    :class:`ConnectorACL` so it makes the SAME decision as the connector hub:
+    a same-type qualified entry GRANTS ``read``. Without the threaded type the
+    qualifier is unverifiable and the entry is rejected, so this read is denied
+    at the polling gate while the hub grants it.
+    """
+    assert (
+        enforce_polling_read_acl(
+            _instance(["github.read"], connector_type_id="github"),
+        )
+        is None
+    )
+
+
+def test_mis_typed_qualified_entry_denies_polling_read() -> None:
+    """A mis-typed qualified entry grants nothing (fail closed, FAR-1616).
+
+    A ``["filesystem.read"]`` entry on a connector whose own type is ``github``
+    names a DIFFERENT surface: it must be REJECTED, exactly as the hub rejects
+    it, so the polling read is denied and no credentials are exposed.
+    """
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        enforce_polling_read_acl(
+            _instance(["filesystem.read"], connector_type_id="github"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -220,42 +257,6 @@ def test_polling_read_proceeds_for_unrestricted_and_read_granted(allowed_operati
 
     assert result["status"] == "condition_met"
     assert stub.queried_resources == ["SELECT 1"]
-
-
-# ---------------------------------------------------------------------------
-# Type-qualified legacy allowlist entries (FAR-1616 / FAR-1628)
-# ---------------------------------------------------------------------------
-
-
-def _typed_instance(connector_type_id: str, allowed_operations: Any) -> SimpleNamespace:
-    instance = _instance(allowed_operations)
-    instance.connector_type_id = connector_type_id
-    return instance
-
-
-def test_same_type_legacy_qualified_entry_grants_polling_read() -> None:
-    """A ``["github.read"]`` entry on a GITHUB-typed instance is a valid read grant.
-
-    ``ConnectorACL`` only certifies a type-qualified legacy entry when its own
-    ``connector_type_id`` argument matches the entry's qualifier (FAR-1616).
-    The hub passes the instance's type at its construction site; before
-    FAR-1628 this polling gate did NOT, so a same-type grant that every other
-    gate honours was rejected here and the poll raised
-    ``ConnectorPermissionError``. The gate must build the ACL with EXACTLY the
-    hub's arguments.
-    """
-    assert enforce_polling_read_acl(_typed_instance("github", ["github.read"])) is None
-
-
-def test_mis_typed_legacy_qualified_entry_still_denies_polling_read() -> None:
-    """A ``["github.read"]`` entry on a NON-github instance still fails closed.
-
-    Threading the surface type through must not widen the gate: a qualifier
-    naming a different type certifies nothing (FAR-1616), so the read is
-    refused exactly as an untyped construction refused it.
-    """
-    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
-        enforce_polling_read_acl(_typed_instance("rest", ["github.read"]))
 
 
 # ---------------------------------------------------------------------------

@@ -1143,9 +1143,10 @@ async def test_operator_cannot_apply_or_reject(
     operator_a: uuid.UUID,
 ):
     """An operator holds ``eval.definition.create`` (the permission gate) but is
-    NOT an admin — the apply/reject reconcile mutates ``evals`` rows,
-    so it must be gated by the same admin check the direct evals API enforces
-    (which returns 403 for a non-admin operator). Without the admin gate the
+    NOT an admin — the apply/reject reconcile mutates ``evals`` rows, so it
+    stays admin-only even after FAR-735 opened eval-definition create/update
+    to operators (the direct evals API still returns 403 for a non-admin
+    operator on the delete/reconcile surface). Without the admin gate the
     operator would get 200 here, a side-channel past the stricter API."""
     await _propose(integration_client, org_a, admin_a, _CONFIG_YAML)
 
@@ -1175,9 +1176,9 @@ async def test_operator_cannot_import(
     operator_a: uuid.UUID,
 ):
     """An operator holds ``eval.definition.create`` but is NOT an admin — the
-    import reconcile mutates ``evals`` rows, so it must be gated by the same
-    admin check the direct evals API enforces (the operator gets 403, not a
-    side channel past the stricter API)."""
+    import reconcile mutates ``evals`` rows and stays admin-only even after
+    FAR-735 opened eval-definition create/update to operators (the operator
+    gets 403, not a side channel past the stricter reconcile surface)."""
     resp = await integration_client.post(
         "/api/v1/guardrails/config/import",
         json={"config_yaml": _CONFIG_YAML},

@@ -1,7 +1,7 @@
 <template>
   <div class="page-wide">
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="() => loadBatch(batchId)" />
     <template v-else>
       <PageHeader :title="$t('views.variantBatch.title')" :subtitle="$t('views.variantBatch.subtitle')" />
 
@@ -192,7 +192,7 @@
       </router-link>
     </div>
     <LoadingSpinner v-if="comparisonsLoading" />
-    <ErrorAlert v-else-if="comparisonsError" :message="comparisonsError" />
+    <ErrorAlert v-else-if="comparisonsError" :message="comparisonsError" :on-retry="loadComparisons" />
     <template v-else>
       <div v-if="comparisons.length === 0" class="rounded-lg border bg-card p-8 text-center text-sm text-muted-foreground">
         {{ $t('views.variantBatch.noComparisons') }}
