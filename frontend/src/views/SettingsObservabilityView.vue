@@ -164,9 +164,14 @@
           </div>
         </div>
 
-        <div v-if="formError" data-testid="settings-observability-form-error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-          {{ formError }}
-        </div>
+        <!-- Save action error: no refetch loader; the Save button is the
+             retry path. -->
+        <ErrorAlert
+          v-if="formError"
+          data-testid="settings-observability-form-error"
+          :message="formError"
+          :retryable="false"
+        />
         <div v-if="formSuccess" data-testid="settings-observability-form-success" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
           {{ formSuccess }}
         </div>

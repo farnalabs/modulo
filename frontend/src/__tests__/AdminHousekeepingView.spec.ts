@@ -111,7 +111,7 @@ describe('AdminHousekeepingView — scan', () => {
     expect(wrapper.text()).toContain('scan blew up')
 
     mockGet.mockResolvedValue(scanPayload([category('stale_pipelines', [candidate('p-1', 'Recovered')])]))
-    await wrapper.find('[data-testid="hk-retry"]').trigger('click')
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="hk-error"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Recovered')

@@ -187,4 +187,33 @@ describe('SettingsObservabilityView', () => {
     expect(wrapper.find('[data-testid="settings-observability-form-success"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Settings saved successfully')
   })
+
+  it('shows the form-error ErrorAlert (no retry) when saving settings fails', async () => {
+    vi.mocked(api.PUT as unknown as () => Promise<unknown>).mockResolvedValue({
+      data: undefined,
+      error: { status: 500, detail: 'boom' },
+    })
+
+    const wrapper = mount(SettingsObservabilityView, {
+      global: {
+        plugins: [createPinia()],
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    const saveBtn = wrapper.find('[data-testid="settings-observability-save"]')
+    await saveBtn.trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    const formError = wrapper.find('[data-testid="settings-observability-form-error"]')
+    expect(formError.exists()).toBe(true)
+    expect(formError.text()).toContain('Save failed')
+    expect(formError.text()).toContain('boom')
+    // Save-action errors carry no refetch loader, so the shared alert must
+    // render without a Retry control.
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
 })

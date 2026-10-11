@@ -1551,7 +1551,7 @@ elements:
       - testid: hk-error
         type: element
         dynamic_testid: false
-      - testid: hk-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: hk-empty
@@ -2829,7 +2829,7 @@ elements:
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: feedback-inbox-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: feedback-inbox-trigger-correction

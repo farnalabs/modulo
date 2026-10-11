@@ -33,13 +33,15 @@
         </template>
       </PageHeader>
 
-      <div
+      <!-- Export/purge action errors: no refetch loader; the Export/Purge
+           buttons are the retry path. -->
+      <ErrorAlert
         v-if="exportError || purgeError"
-        class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+        class="mb-4"
         data-testid="admin-run-retention-error"
-      >
-        {{ exportError || purgeError }}
-      </div>
+        :message="exportError || purgeError || undefined"
+        :retryable="false"
+      />
       <div
         v-if="exportSuccess"
         class="mb-4 rounded-lg border border-success/50 bg-success/10 p-3 text-sm text-success"
@@ -127,9 +129,12 @@
           <div v-if="loading" class="flex justify-center py-6">
             <LoadingSpinner />
           </div>
-          <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" data-testid="admin-run-retention-error-msg">
-            {{ error }}
-          </div>
+          <ErrorAlert
+            v-else-if="error"
+            :message="error"
+            :on-retry="loadCandidates"
+            data-testid="admin-run-retention-error-msg"
+          />
           <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div class="rounded-lg border bg-muted p-4 text-center">
               <p class="text-2xl font-semibold" data-testid="admin-run-retention-total-runs">{{ totalCount }}</p>
@@ -158,9 +163,11 @@
           <div v-if="loading" class="flex justify-center py-6">
             <LoadingSpinner />
           </div>
-          <div v-else-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ error }}
-          </div>
+          <ErrorAlert
+            v-else-if="error"
+            :message="error"
+            :on-retry="loadCandidates"
+          />
             <div v-else-if="candidates.length === 0" data-testid="admin-run-retention-empty">
               <EmptyState
                 :title="$t('views.AdminRunRetentionView.no_runs_match')"
@@ -236,6 +243,7 @@ import { useI18n } from 'vue-i18n'
 import PageHeader from '../components/shared/PageHeader.vue'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import Card from 'primevue/card'
 import Select from '../components/shared/AppSelect.vue'

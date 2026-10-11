@@ -270,12 +270,13 @@
             >
               {{ formSuccess[fwd.forwarder_type] }}
             </div>
-            <div
+            <!-- Save action error: no refetch loader; the forwarder's own Save
+                 button is the retry path. -->
+            <ErrorAlert
               v-if="formErrors[fwd.forwarder_type]"
-              class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-            >
-              {{ formErrors[fwd.forwarder_type] }}
-            </div>
+              :message="formErrors[fwd.forwarder_type] ?? undefined"
+              :retryable="false"
+            />
           </div>
         </div>
       </div>

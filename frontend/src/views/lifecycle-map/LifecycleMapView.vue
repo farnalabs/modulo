@@ -318,13 +318,15 @@
         data-testid="lifecycle-map-import-payload"
         :aria-label="$t('views.LifecycleMapView.import_payload_label')"
       />
-      <div
+      <!-- Import action error: no refetch loader; the Import button is the
+           retry path. -->
+      <ErrorAlert
         v-if="importError"
         role="alert"
-        class="mt-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-      >
-        {{ importError }}
-      </div>
+        class="mt-3"
+        :message="importError"
+        :retryable="false"
+      />
       <template #footer>
         <div class="flex gap-2 justify-end">
           <Button severity="secondary" outlined size="small" @click="showImportDialog = false">

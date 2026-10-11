@@ -98,12 +98,12 @@
             <div v-if="detailLoading[record.id]" class="flex items-center justify-center py-8">
               <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
-            <template v-else-if="detailError[record.id]">
-              <div role="alert" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-                {{ detailError[record.id] }}
-                <button type="button" data-testid="feedback-inbox-retry" class="ml-2 underline" @click="loadDetail(record.id)">{{ $t('views.FeedbackInboxView.retry') }}</button>
-              </div>
-            </template>
+            <ErrorAlert
+              v-else-if="detailError[record.id]"
+              :message="detailError[record.id] ?? undefined"
+              :on-retry="() => loadDetail(record.id)"
+              role="alert"
+            />
             <template v-else-if="detailMap[record.id]">
               <div class="space-y-6">
                 <div>

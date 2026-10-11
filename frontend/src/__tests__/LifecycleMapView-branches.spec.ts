@@ -40,6 +40,14 @@ vi.mock('../lib/api/formatError', () => ({
 }))
 
 import LifecycleMapView from '../views/lifecycle-map/LifecycleMapView.vue'
+
+// Message-rendering stub: the default `ErrorAlert: true` stub drops the
+// message prop, which hides converted error boxes from text assertions.
+const ErrorAlertStub = {
+  name: 'ErrorAlert',
+  template: '<div data-testid="error-alert-stub">{{ message }}</div>',
+  props: ['message', 'onRetry', 'retryable'],
+}
 import { usePlanStore } from '../stores/planStore'
 import { useLifecycleMapsStore } from '../stores/lifecycleMaps'
 
@@ -152,7 +160,7 @@ function mountView() {
       mocks: { $router: { push: routerPushMock } },
       stubs: {
         RouterLink: { template: '<a><slot /></a>' },
-        ErrorAlert: true,
+        ErrorAlert: ErrorAlertStub,
         LifecycleMapRenderer: true,
         JourneyCard: true,
         ProvenanceBadge: true,
