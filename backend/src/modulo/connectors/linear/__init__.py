@@ -24,6 +24,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import RETRYABLE_STATUSES
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -89,9 +90,7 @@ class LinearConnector(TicketTrackerBase):
         # ``trust_env=False`` stops a proxy from re-resolving the destination
         # and defeating the pin.
         return pinned_async_client_sync(
-            _LINEAR_GRAPHQL_URL,
-            headers=self._headers(),
-            timeout=30,
+            _LINEAR_GRAPHQL_URL, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     @redacting

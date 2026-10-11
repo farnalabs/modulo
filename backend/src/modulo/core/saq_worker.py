@@ -1519,6 +1519,19 @@ RUNNER_HEALTH_PROBE_STATS_KEY = "saq:cron:stats:runner_health_probe"
 RUNNER_HEALTH_PROBE_STALE_SECONDS = 3 * 60
 RUNNER_HEALTH_PROBE_STATS_TTL_SECONDS = RUNNER_HEALTH_PROBE_STALE_SECONDS + 60
 
+# Cross-process stats key for the FAR-1108 chunk-8b decision-record
+# reconciliation sweep (same contract as the sibling sweeps: the hourly cron
+# persists its outcome — scanned count + anomaly counts — and /healthz/ready
+# reads it to detect a silently dead sweep or a never-run sweep). The sweep is
+# read-only (it never mutates a decision record), so its liveness is the only
+# signal that the corruption-detection surface is still working.
+DECISION_RECORD_RECONCILE_STATS_KEY = "saq:cron:stats:decision_record_reconcile"
+# The sweep runs hourly; a last_run_at older than 3h means at least two ticks
+# were missed -> report "stale" (advisory).
+DECISION_RECORD_RECONCILE_STALE_SECONDS = 3 * 60 * 60
+# TTL: one sweep past the stale window (same arithmetic as the sibling keys).
+DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS = DECISION_RECORD_RECONCILE_STALE_SECONDS + 60
+
 
 async def _persist_sweep_stats(key: str, stats: dict[str, Any], ttl_seconds: int) -> None:
     """Best-effort persist of a sweep's outcome dict to a Redis liveness key.
@@ -1838,6 +1851,67 @@ async def _touch_probe_cron_liveness() -> None:
         raise
     except Exception:
         _log.warning("saq_worker.runner_health_probe liveness heartbeat write failed", exc_info=True)
+
+
+async def decision_record_reconcile(_ctx: dict[str, Any]) -> dict[str, Any]:
+    """System cron — decision-record corruption detection (FAR-1108 chunk 8b).
+
+    Read-only reconciliation of ``policy_gate_decisions``: detects duplicate
+    rows (per event identity), rows missing an ``eval_result_id``, and rows
+    whose referenced ``EvalResult``/``Run`` no longer exist. It NEVER mutates
+    or deletes a decision record — decision records are audit evidence and
+    deletion is a governance action owned by the retention/purge chunk.
+
+    Liveness contract (mirrors the sibling sweeps): the outcome
+    (``last_run_at`` + ``scanned`` + anomaly counts) is persisted to the shared
+    Redis key every tick so /healthz/ready can warn when the sweep is stale or
+    missing. A sweep failure is persisted (with the error) and then RE-RAISED
+    so SAQ's ``retries=2`` engages — a silently dead detection surface must not
+    be invisible.
+
+    Cross-org: uses the system session factory (BYPASSRLS) so a single tick
+    scans every org's decision records.
+    """
+    from modulo.core.eval_engine.decision_reconcile import reconcile_decision_records
+
+    try:
+        async with _make_system_session_factory()() as session, session.begin():
+            report = await reconcile_decision_records(session)
+    except Exception as exc:
+        await _persist_sweep_stats(
+            DECISION_RECORD_RECONCILE_STATS_KEY,
+            {
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "scanned": 0,
+                "total_anomalies": 0,
+                "error": f"sweep_failed ({type(exc).__name__}: {exc})"[:200],
+            },
+            DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+        )
+        raise
+
+    stats: dict[str, Any] = {
+        "last_run_at": datetime.now(UTC).isoformat(),
+        "scanned": report.scanned,
+        "total_anomalies": report.total,
+        **{f"anomaly_{kind}": count for kind, count in report.counts_by_kind().items()},
+    }
+    if report.total:
+        _log.warning(
+            "decision_record.reconcile.anomalies",
+            extra={
+                "scanned": report.scanned,
+                "total_anomalies": report.total,
+                "counts_by_kind": report.counts_by_kind(),
+                "samples": report.to_dict()["samples"],
+            },
+        )
+    await _persist_sweep_stats(
+        DECISION_RECORD_RECONCILE_STATS_KEY,
+        stats,
+        DECISION_RECORD_RECONCILE_STATS_TTL_SECONDS,
+    )
+    return stats
 
 
 async def cost_probe(_ctx: dict[str, Any]) -> dict[str, Any]:
@@ -2282,6 +2356,7 @@ def _system_functions() -> list[Any]:
         cost_probe,
         analytics_facts_maintenance,
         journey_reconcile,
+        decision_record_reconcile,
         check_missed_fire_alerts_cron,
         library_sync,
         metrics_dump,
@@ -2528,6 +2603,22 @@ def _system_cron_jobs() -> list[CronJob[Any]]:
         # oldest-first across ticks.
         CronJob(
             journey_reconcile,
+            cron=_CRON_HOURLY,
+            unique=True,
+            timeout=300,
+            heartbeat=30,
+            retries=2,
+            ttl=300,
+        ),
+        # decision_record_reconcile: hourly (FAR-1108 chunk 8b) — read-only
+        # corruption detection over policy_gate_decisions (duplicate event
+        # rows, NULL eval_result_id rows, orphaned eval-result/run references).
+        # Hourly is ample: the write path is fail-open, so a lost decision
+        # record is rare and the detection is not latency-sensitive. unique=True
+        # so overlapping ticks cannot interleave; failures persist the error
+        # then re-raise (retries=2 engages).
+        CronJob(
+            decision_record_reconcile,
             cron=_CRON_HOURLY,
             unique=True,
             timeout=300,

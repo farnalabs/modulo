@@ -249,7 +249,7 @@ async def jit_provision_user(
         existing_membership = await get_membership_by_account_and_org(session, existing.id, org_id)
     if existing_membership is not None and existing_membership.deactivated_at is None:
         # Already a member (e.g. SCIM/admin-provisioned): never change their role.
-        account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
+        account = await _upsert_sso_identity(session, email, display_name, auth_provider, sso_subject)
         return account, org_id, existing_membership.role
 
     invitation = await get_live_for_email(session, org_id=org_id, email=email)
@@ -258,7 +258,7 @@ async def jit_provision_user(
     if unlocked and mode == "unrestricted":
         # Mode 3 is DANGEROUS and gated behind the operator-level flag; OFF
         # fails CLOSED here (falling back to member/invitation-only access).
-        unlocked = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+        unlocked = await resolve_sso_unrestricted_provisioning(org_id=org_id)
         if not unlocked:
             _log.info(
                 "sso.jit_unrestricted_flag_off",
@@ -383,7 +383,6 @@ def _sso_default_role(provider: SsoProvider, settings: Settings) -> str:
 
 async def _upsert_sso_identity(
     session: AsyncSession,
-    settings: Settings,
     email: str,
     display_name: str,
     auth_provider: str,
@@ -440,7 +439,7 @@ async def _provision_membership(
     invitation in exactly that case, so an existing live member never burns
     one.
     """
-    account = await _upsert_sso_identity(session, settings, email, display_name, auth_provider, sso_subject)
+    account = await _upsert_sso_identity(session, email, display_name, auth_provider, sso_subject)
     existing = await get_membership_by_account_and_org(session, account.id, org_id)
     if existing is not None and existing.deactivated_at is None:
         return account, existing.role, False

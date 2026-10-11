@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
@@ -38,6 +39,7 @@ class DiscordConnector(ConnectorBase):
                 "Accept": "application/json",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:

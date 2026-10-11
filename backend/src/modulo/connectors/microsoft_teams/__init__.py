@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -45,6 +46,7 @@ class MicrosoftTeamsConnector(ConnectorBase):
                 "Accept": "application/json",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:

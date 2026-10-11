@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -46,10 +47,7 @@ class AzureKeyVaultConnector(ConnectorBase):
         # DNS-rebinding window). ``trust_env=False`` stops a proxy from
         # re-resolving the destination server-side and defeating the pin.
         return pinned_async_client_sync(
-            self._base,
-            base_url=self._base,
-            headers=self._headers(),
-            timeout=30,
+            self._base, base_url=self._base, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:

@@ -5,6 +5,7 @@ from typing import Any, cast
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -55,7 +56,9 @@ class CircleCIConnector(CIRunnerBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(_CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _CIRCLECI_API, base_url=_CIRCLECI_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
+        )
 
     def _parse_run(self, raw: dict[str, Any]) -> CIRun:
         raw_id = raw.get("id")

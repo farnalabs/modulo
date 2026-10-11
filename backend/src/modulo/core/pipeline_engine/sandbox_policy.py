@@ -202,7 +202,7 @@ _AGENT_GIT_CONFIG = f"{_WORKSPACE}/.gitconfig"
 # ``[A-Za-z0-9._-]``, it holds NO credentials, and the whole guard is
 # best-effort: a hostile/pre-created marker can at worst refuse one run's
 # ``gh pr create`` (fail-closed), never read, redirect, or escalate anything.
-# The NOSONAR below documents that rationale on the flagged line (matching the
+# The suppression comment below documents that rationale on the flagged line (matching the
 # docker.py / db/bootstrap.py /tmp-literal precedent) so the rule stays
 # suppressed through review instead of re-opening as a false positive.
 _GH_PR_GUARD_MARKER_ROOT = "/tmp"  # noqa: S108  # nosec B108  # NOSONAR S5443 - documented run-scoped in-sandbox marker root (see block comment above)
@@ -1249,7 +1249,7 @@ async def harvest_gh_pr_claim_bounded(
     exec_command: Callable[[list[str]], Awaitable[Any]],
     *,
     run_scope: str | None,
-    timeout: float = 20.0,  # noqa: ASYNC109 - the dispatch's own harvest bound, not a client API timeout
+    timeout: float = 20.0,  # noqa: ASYNC109 - the dispatch's own harvest bound; not a client API timeout
 ) -> bool | None:
     """Bounded, cancellation-aware receipt harvest for a dispatch ``finally`` (FAR-1315).
 

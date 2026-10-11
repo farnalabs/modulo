@@ -290,7 +290,7 @@ applications. Built on the auth + model-backend core.
       boundary (`team: {id, name}` when `team_id` is set, so a team-bounded
       client can say so) — and NOTHING else (no redirect_uri, no secrets, no
       org internals; unknown/expired/consumed states are one undifferentiated
-      404). Migration 0295 widened the table's RLS policy with the
+      404). Migration 0296 widened the table's RLS policy with the
       NULL-context arm (the same contract `oauth_clients` already has) so the
       pre-auth read is visible to the runtime `modulo_app` role. The view
       renders each scope with the registration picker's existing i18n labels
@@ -313,7 +313,7 @@ applications. Built on the auth + model-backend core.
       (`frontend/src/views/OAuthConsentView.vue`,
       `frontend/src/__tests__/views/OAuthConsentView.spec.ts`,
       `backend/tests/unit/api/test_mcp_oauth_bdd.py`,
-      migration `0295_oauth_consent_state_preauth_rls`)
+      migration `0296_oauth_consent_state_preauth_rls`)
 - [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
       FAR-1476): the grantable scope set is the delegable `PERMISSIONS`
       registry — every key `auth.permissions.is_delegable` accepts (~158

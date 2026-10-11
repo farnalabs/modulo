@@ -4,9 +4,8 @@ Structural + model-parity contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** — the revision/down_revision pin this migration onto the
   0293_oauth_clients_team_id parent, and the migrations directory has
-  exactly one head (0295_oauth_consent_state_preauth_rls, chained through this
-  migration), so the pre-commit ``check-migration-heads`` hook can never be
-  ambushed by a renumber.
+  exactly one head (this migration), so the pre-commit ``check-migration-heads``
+  hook can never be ambushed by a renumber.
 * **Composite FK emission (mocked ``op``)** — on Postgres the upgrade swaps the
   single-column ``eval_results_eval_id_fkey`` for the composite
   ``fk_eval_results_eval_org`` over ``(eval_id, organisation_id)``; the
@@ -37,7 +36,6 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0294_eval_results_org_fk"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0293_oauth_clients_team_id"
-_HEAD_MIGRATION = "0295_oauth_consent_state_preauth_rls"
 
 _COMPOSITE_FK = "fk_eval_results_eval_org"
 _OLD_FK = "eval_results_eval_id_fkey"
@@ -79,9 +77,15 @@ class TestChain:
     def test_down_revision_is_0293_oauth_clients_team_id(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
-    def test_single_head_is_this_migration(self) -> None:
-        heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
-        assert heads == [_HEAD_MIGRATION], f"expected a single head, got {heads}"
+    def test_single_head_and_this_migration_is_an_ancestor(self) -> None:
+        # 0294 is no longer the tip once a later migration lands on top (0295,
+        # FAR-1108 chunk 8b). The invariant this test owns is that the chain
+        # still has exactly ONE head and that this migration is on it.
+        script = ScriptDirectory(str(_VERSIONS.parent))
+        heads = script.get_heads()
+        assert len(heads) == 1, f"expected a single head, got {heads}"
+        revisions = {rev.revision for rev in script.walk_revisions()}
+        assert _MIGRATION_NAME in revisions
 
     def test_no_branch_labels_or_depends_on(self) -> None:
         module = _load_migration()

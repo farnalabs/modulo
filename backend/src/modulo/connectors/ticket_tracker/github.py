@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -43,7 +44,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         # transport so the validated base_url address is pinned onto the
         # connection (never re-resolved at connect time — closes DNS rebinding).
         # The token is in the Authorization header, so no creds reach the URL.
-        return pinned_async_client_sync(self._base_url)
+        return pinned_async_client_sync(self._base_url, verify=egress_ssl_context(self))
 
     @redacting
     # Defence-in-depth: health_check catches internally today; guards against a future escape.

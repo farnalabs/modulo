@@ -158,10 +158,11 @@ _MIGRATION_PATH = (
 # 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints, and
 # 0293_oauth_clients_team_id chained onto 0292_audit_events_resource_lookup, and
 # 0294_eval_results_org_fk chained onto 0293_oauth_clients_team_id, and
-# 0295_oauth_consent_state_preauth_rls chained onto 0294_eval_results_org_fk as the chain head.
+# 0295_decision_record_event_identity chained onto 0294_eval_results_org_fk, and
+# 0296_oauth_consent_state_preauth_rls chained onto 0295_decision_record_event_identity as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0295_oauth_consent_state_preauth_rls"
+_CHAIN_HEAD_MIGRATION_NAME = "0296_oauth_consent_state_preauth_rls"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

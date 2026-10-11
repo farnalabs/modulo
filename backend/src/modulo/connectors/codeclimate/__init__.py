@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -36,6 +37,7 @@ class CodeClimateConnector(ConnectorBase):
                 "Authorization": f"Token token={self._token}",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:

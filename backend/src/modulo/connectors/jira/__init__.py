@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import (
     BASE_DELAY,
     MAX_DELAY,
@@ -251,6 +252,7 @@ class JiraConnector(ConnectorBase):
             headers=self._headers(),
             auth=self._auth,
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _attempt_request(

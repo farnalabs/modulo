@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_datetime import safe_datetime as _safe_datetime
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -83,7 +84,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         # connection (never re-resolved at connect time — closes DNS rebinding).
         # key/token are passed as query parameters per request (never headers),
         # and error redaction is preserved by the existing _redact wrappers.
-        return pinned_async_client_sync(self._base_url)
+        return pinned_async_client_sync(self._base_url, verify=egress_ssl_context(self))
 
     @redacting
     # Defence-in-depth: health_check catches internally today; guards against a future escape.

@@ -7,6 +7,7 @@ import httpx
 
 from modulo._types import _LIST_DICT_STR_ANY
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -72,7 +73,13 @@ class BuildkiteConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(_BUILDKITE_API, base_url=_BUILDKITE_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _BUILDKITE_API,
+            base_url=_BUILDKITE_API,
+            headers=self._headers(),
+            timeout=30,
+            verify=egress_ssl_context(self),
+        )
 
     def _parse_run(self, raw: dict[str, Any], org: str = "", pipeline_slug: str = "") -> CIRun:
         """Parse a build payload into a :class:`CIRun`.
