@@ -56,15 +56,18 @@
         aria-live="assertive"
         data-testid="collection-install-error"
       />
-      <div
+      <!--
+        FAR-759: upgrade is a non-idempotent POST — retryable=false; the
+        Upgrade button on the install row is the retry path.
+      -->
+      <ErrorAlert
         v-if="upgradeError"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="upgradeError"
+        :retryable="false"
         role="alert"
         aria-live="assertive"
         data-testid="collection-upgrade-error"
-      >
-        {{ upgradeError }}
-      </div>
+      />
       <!--
         FAR-1231: this warning is only actionable if it is ANNOUNCED. An
         aria-live region is announced when it is ALREADY on the page and its
