@@ -10,14 +10,22 @@ This parity test pins the three surfaces together so they cannot drift:
 
 The MCP tool-level role banner semantics (operator passes create/update,
 delete stays admin-only) are pinned behaviourally in
-``tests/unit/mcp/test_mcp_server_coverage.py::TestAssertEvalDefinitionWriteScope``.
+``tests/unit/mcp/test_mcp_server_coverage.py::TestAssertEvalDefinitionWriteScope``,
+and the REST in-handler guard (the second line of defence behind
+``require_permission``) is pinned in
+``TestRestEvalDefinitionWriteRoleGuard`` below.
 """
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
+from fastapi import HTTPException
 
 from modulo.api.main import app
+from modulo.api.routes.evals import _assert_eval_definition_write_role
+from modulo.auth.jwt import TenantPrincipal
 from modulo.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 from tests.unit.api.route_introspection import (
     get_all_apiroutes,
@@ -94,3 +102,35 @@ def test_rest_route_min_roles_match_registry_floors() -> None:
 def test_mcp_floors_match_rest_floors(tool: str, expected_permission: str) -> None:
     """The tool-scope permission and the REST route permission share one floor."""
     assert get_resolved_min_role(TOOL_SCOPE_REQUIREMENTS[tool]) == get_resolved_min_role(expected_permission)
+
+
+def _principal(org_role: str | None) -> TenantPrincipal:
+    return TenantPrincipal(
+        username="u",
+        organisation_id=uuid.uuid4(),
+        account_id=uuid.uuid4(),
+        org_role=org_role,
+    )
+
+
+class TestRestEvalDefinitionWriteRoleGuard:
+    """The in-handler REST guard is the second line of defence behind
+    ``require_permission``: a caller the registry floor could not stop (a
+    legacy role bundle, or a missing role) must still receive 403 rather than
+    reaching the write. Exercised directly because the route tests deny
+    below-floor callers at the dependency layer, before the handler runs.
+    """
+
+    def test_none_role_is_denied(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _assert_eval_definition_write_role(_principal(None), "create")
+        assert exc.value.status_code == 403
+
+    def test_below_operator_role_is_denied(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            _assert_eval_definition_write_role(_principal("runner"), "update")
+        assert exc.value.status_code == 403
+
+    @pytest.mark.parametrize("role", ["operator", "admin"])
+    def test_operator_and_admin_are_allowed(self, role: str) -> None:
+        _assert_eval_definition_write_role(_principal(role), "create")
