@@ -22,7 +22,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -196,12 +196,44 @@ class TestNodeStartedIsNotNodelessZombie:
         row = _nodeless_row(dispatch_phase=phase)
         assert ch._is_nodeless_zombie_row(row, 45) is True
 
-    def test_row_recheck_treats_missing_phase_attribute_as_pre_node(self) -> None:
-        """A legacy row source without the attribute counts as no durable
-        node-start evidence (mirrors the SQL ``dispatch_phase IS NULL`` arm)."""
+    def test_row_recheck_fails_closed_on_missing_phase_attribute(self) -> None:
+        """FAR-1649 qa finding 3: a row source that does not expose the
+        ``dispatch_phase`` column at all is NOT classified as a repairable
+        zero-node zombie — the leg fails closed exactly like the
+        ``checkpoints_absent`` leg, so a future row source that forgets the
+        column can never re-dispatch a possibly-executed run. Only a row that
+        exposes the attribute with a genuine DB NULL stays repairable (see
+        the parametrized pre-node-phase test above)."""
         row = _nodeless_row(dispatch_phase=None)
         delattr(row, "dispatch_phase")
-        assert ch._is_nodeless_zombie_row(row, 45) is True
+        assert not hasattr(row, "dispatch_phase")
+        assert ch._is_nodeless_zombie_row(row, 45) is False
+
+    async def test_missing_phase_attribute_row_never_reaches_the_nodeless_repair(self) -> None:
+        """Regression (qa finding 3) at the PRODUCTION call path: the repair
+        branch returns ``None`` (row continues down the normal path) for a row
+        source that omits ``dispatch_phase`` — no terminal-fail, no
+        re-dispatch, no summary mutation. The classification recheck above is
+        the gate both carve-out call sites run through."""
+        row = _nodeless_row(dispatch_phase=None)
+        delattr(row, "dispatch_phase")
+        summary = {"nodeless_failed": 0, "nodeless_redispatched": 0, "nodeless_capped": 0, "skipped": 0}
+
+        handled = await ch._reconcile_nodeless_repair(
+            AsyncMock(),
+            MagicMock(),
+            uuid.uuid4(),
+            row,
+            35,
+            0,
+            summary,
+            [],
+        )
+
+        assert handled is None
+        assert summary["nodeless_failed"] == 0
+        assert summary["nodeless_redispatched"] == 0
+        assert summary["skipped"] == 0
 
     def test_zero_progress_sql_shape_carries_the_phase_leg(self) -> None:
         """The shared zero-progress shape (router selection + age-gate

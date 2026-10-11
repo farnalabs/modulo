@@ -4718,8 +4718,12 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     node STARTED even though no super-step completed — the re-dispatch
     safety premise ("a nodeless zombie executed ZERO nodes") therefore does
     not hold for such a row, and this recheck excludes it exactly like the
-    SQL predicate does. A row WITHOUT the attribute (legacy row sources)
-    counts as no durable node-start evidence, mirroring the SQL
+    SQL predicate does. The leg FAILS CLOSED on a row source that does not
+    expose the attribute at all (mirroring the ``checkpoints_absent`` leg):
+    missing evidence is not zero-node evidence, so a future row source that
+    forgets the column can never re-dispatch a possibly-executed run. Only a
+    row that DOES expose the attribute with a genuine DB NULL — the known
+    pre-node state — stays repairable, mirroring the SQL
     ``dispatch_phase IS NULL`` arm.
     """
     if row.status != "running":
@@ -4728,7 +4732,12 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
         return False
     if row.started_at is None:
         return False
-    # FAR-1649: a durably-recorded first-node start is not zero-node.
+    # FAR-1649: a durably-recorded first-node start is not zero-node. A row
+    # that does not expose the column at all fails CLOSED (exactly like the
+    # checkpoints_absent leg below) — a future row source that forgets the
+    # column can never re-dispatch a possibly-executed run.
+    if not hasattr(row, "dispatch_phase"):
+        return False
     if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
         return False
     now = datetime.now(UTC)
