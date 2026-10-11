@@ -2001,6 +2001,10 @@ export interface paths {
         /**
          * Dashboard Summary
          * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
+         *
+         *     Optional ``days`` (1..90) adds a period-scoped ``{current, previous, delta_pct}``
+         *     block per metric (FAR-92); ignored — the legacy all-time shape is preserved —
+         *     when the ``analytics_page`` feature flag is off.
          */
         get: operations["dashboard_summary_api_v1_dashboard_summary_get"];
         put?: never;
