@@ -22,7 +22,7 @@ overrides:
   # openapi-typescript upgrades to @redocly/openapi-core 2.x (js-yaml ^5.2.2).
   "@redocly/openapi-core>js-yaml": "4.3.2"
   "postcss>nanoid": "^6.0.0"
-  rollup: "4.64.0"
+  rollup: "4.64.2"
   "@tanstack/query-core": "5.104.1"
   "@tanstack/vue-query": "5.104.1"
 minimumReleaseAgeExclude:
@@ -183,3 +183,4 @@ minimumReleaseAgeExclude:
   - 'vue-router@5.4.0'
   - '@lucide/vue@1.53.0'
   - '@lucide/vue@1.54.0'
+  - '@lucide/vue@1.55.0'
