@@ -1172,6 +1172,20 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > read-time `enforce_polling_team_scope` defence-in-depth on the polling fire
 > path) in both the manifest registry and `triggers/trigger-engine.md`, with the
 > matching code and test citations. `_ORPHANED_BDD_FEATURES` stays empty.
+>
+> **Closed this walk (2026-10-11):** closed the stale "no production call
+> site" half of `feat-core-evidence-store`'s predicate-language Known Gap
+> (`core/evidence-store.md`), left behind by FAR-1293 (PR #1612) – the
+> evidence store's first production write path. The guardrail/eval persist
+> seam (`db/crud/run.py::_persist_guardrail_eval_results`) appends one
+> `eval_guardrail_<eval_id>` fact per guardrail decision through the single
+> `append_evidence()` write path (`core/eval_engine/evidence_layer.py`) with
+> fail-closed key-namespace authorisation, so the store is no longer
+> write-dormant. Tracked as a ticked behaviour with the `db/crud/run.py` +
+> `test_evidence_first_producer.py` citations; the gap now scopes the
+> deferral to production READS (`fetch()` / `map_run_evidence_to_evidence`)
+> and the parked predicate/`decide` (§4). `_ORPHANED_BDD_FEATURES` stays
+> empty.
 
 ### Admin
 - [feat-product-analytics](admin/product-analytics.md) => PRD N/A
