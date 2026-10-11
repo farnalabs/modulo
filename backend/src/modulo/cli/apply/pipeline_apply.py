@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from modulo.cli.apply.drift import policy_gate_changes
 from modulo.cli.apply.executor import ApplyHttpError, _failure_message, _find
 from modulo.cli.apply.models import (
     ApplyEntityResolutionError,
@@ -169,6 +170,47 @@ def resolve_owner_ids(
     return resolved[0], resolved[1]
 
 
+def resolve_policy_gate_evals(
+    entity: PipelineEntity,
+    current_entities: dict[str, Any],
+) -> str | None:
+    """Validate declared node policy gates against the fetched eval map (FAR-1109).
+
+    Returns ``None`` when every declared ``policy_gate.eval_id`` resolves to an
+    eval in the target org, else a block reason. Apply never auto-creates evals,
+    so a missing ``eval_id`` is a hard block. A gate whose eval belongs to a
+    DIFFERENT existing pipeline is a plan-time fast-fail (the server binding
+    validator remains the authority; this is an early, actionable signal).
+    A soft-deleted eval is absent from the map (the ``/evals`` list route
+    filters them), so it blocks the same way as a missing one.
+    """
+    nodes = entity.graph.nodes if entity.graph is not None else []
+    gates = [(node, node.policy_gate) for node in nodes if node.policy_gate is not None]
+    if not gates:
+        return None
+    evals_error = current_entities.get("evals_error")
+    if evals_error:
+        return f"cannot resolve policy_gate eval references: {evals_error}"
+    evals = current_entities.get("evals") or {}
+    current = (current_entities.get(KIND_PIPELINE) or {}).get(entity.name) or {}
+    current_pipeline_id = current.get("id")
+    for node, gate in gates:
+        eval_row = evals.get(str(gate.eval_id))
+        if eval_row is None:
+            return (
+                f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} "
+                "which does not exist in this organisation (apply never creates evals)"
+            )
+        if current_pipeline_id is not None:
+            eval_pipeline_id = eval_row.get("pipeline_id")
+            if eval_pipeline_id is not None and str(eval_pipeline_id) != str(current_pipeline_id):
+                return (
+                    f"policy_gate on node {node.id!s} references eval {gate.eval_id!s} "
+                    f"which belongs to a different pipeline ({eval_pipeline_id!s})"
+                )
+    return None
+
+
 def build_desired_views(
     entity_set: EntitySet,
     current_entities: dict[str, dict[str, dict[str, Any]]],
@@ -231,6 +273,10 @@ def build_desired_views(
             continue
         except ValueError as exc:
             blocked.append((KIND_PIPELINE, entity.name, f"invalid pipeline graph: {exc}"))
+            continue
+        gate_error = resolve_policy_gate_evals(entity, current_entities)
+        if gate_error is not None:
+            blocked.append((KIND_PIPELINE, entity.name, gate_error))
             continue
         try:
             business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
@@ -362,6 +408,9 @@ def apply_pipelines(
                     if entity.manages_run_enabled:
                         executor._post(f"/pipelines/{pipeline_id}/pause")
                     graph_differs = entity.graph is not None
+                    # A just-created pipeline has no fetched prior graph, so
+                    # every declared gate is an "added" change.
+                    current_graph = _EMPTY_GRAPH
                 else:
                     current = current_pipelines[entity.name]
                     pipeline_id = str(current["id"])
@@ -442,6 +491,17 @@ def apply_pipelines(
                 # environment_profile_id, so the bind rides the follow-up PATCH.
                 if status == "updated" or entity.graph is not None or entity.manages_environment_profile:
                     executor._patch(f"/pipelines/{pipeline_id}", patch_payload)
+                # FAR-1109: record node-attached policy-gate changes as a
+                # DISTINCT change class (gate added / changed / removed on a
+                # named node with its action) — never buried in a generic
+                # "graph updated". Only recorded AFTER the graph write
+                # succeeded, so the report never claims a gate change that was
+                # not persisted. The CLI never writes gate rows directly; the
+                # graph replace is the single write surface (removal is by
+                # omission, which the server translates into a soft-delete —
+                # never a hard-delete).
+                for change in policy_gate_changes(graph, current_graph):
+                    report.setdefault("gate_changes", []).append({"pipeline": entity.name, **change})
                 # FAR-1530: converge a declared run_enabled (only ever false)
                 # by POSTing the dedicated /pause route AFTER the field PATCH —
                 # pause is idempotent server-side (first cause owns the
@@ -472,4 +532,5 @@ __all__ = [
     "normalize_current_graph",
     "resolve_graph",
     "resolve_owner_ids",
+    "resolve_policy_gate_evals",
 ]

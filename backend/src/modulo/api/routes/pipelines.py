@@ -1,8 +1,19 @@
 """Pipeline CRUD REST API.
 
 Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
-replace_pipeline_graph. No advisory lock is deployed; the row lock on the
-pipeline row serialises concurrent graph writes within a serialisable transaction.
+replace_pipeline_graph. No advisory lock is deployed for the graph row itself;
+the row lock on the pipeline row serialises concurrent graph writes within a
+serialisable transaction.
+
+FAR-1109: the graph write ALSO translates each node's declared ``policy_gate``
+block into the ``policy_gates`` row lifecycle. That translation lives in the
+shared write transaction itself
+(``modulo.db.crud.pipeline.replace_pipeline_graph`` ->
+``reconcile_graph_policy_gates``), so EVERY graph writer — these REST routes,
+the MCP ``update_pipeline_graph`` tool, node conversions, snapshot rollback,
+onboarding and the demo seed — translates. The row operations acquire the
+per-eval advisory lock shared with the FAR-1106 authoring routes so the
+declarative and in-product surfaces serialise against each other.
 """
 
 from __future__ import annotations
@@ -1265,6 +1276,39 @@ class CapabilityScope(BaseModel):
     )
 
 
+class PipelineGraphPolicyGate(BaseModel):
+    """Node-attached policy-gate configuration (FAR-1109).
+
+    Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+    config can carry the gate as part of the graph write. ``action`` is the
+    gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+    ``eval_id`` references the eval bound to this node (the CLI never
+    auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+    time).
+
+    The node model previously had no field for this block, so Pydantic's
+    default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+    before the graph write — leaving declarative gate config permanently inert
+    (the plan always reported "unchanged" and the write never carried the
+    gate). Declaring the field means the validated node dict retains the block
+    and ``replace_pipeline_graph`` persists it verbatim in
+    ``pipeline.graph_nodes_json``, and the read path round-trips it.
+    """
+
+    # NOTE (FAR-1109): retention alone does NOT enforce. This docstring is part
+    # of the generated OpenAPI schema, so the enforcement note lives here as a
+    # plain comment (and in the module docstring above) rather than in the
+    # docstring — keeping frontend/src/lib/api/schema.ts fresh. The runtime
+    # engine resolves gating only from ``policy_gates`` rows joined to evals, so
+    # the shared graph-write transaction ALSO translates each declared block into
+    # the gate-row lifecycle (create / update / soft-delete) via
+    # ``db.crud.pipeline.reconcile_graph_policy_gates`` — a stored block with no
+    # row governs nothing.
+
+    action: Literal["warn", "block"]
+    eval_id: uuid.UUID
+
+
 class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     id: uuid.UUID
     node_type: Literal["agent", "manual", "composite", "sandbox_agent", "router", "hitl", "join", "dispatch"] = "agent"
@@ -1422,6 +1466,16 @@ class PipelineGraphNode(StdoutRetentionValidatorMixin, BaseModel):
         "claim_expiry_min, "
         "human_only, eval_before_interrupt, required_team_id, overdue_threshold_minutes, eval_condition, "
         "condition). Compiles to the existing synthetic-gate path. Required for node_type='hitl'.",
+    )
+    # FAR-1109: node-attached policy-gate configuration (declarative
+    # config-as-code surface). Declared here so the REST + MCP graph contracts
+    # do NOT silently drop the block on save — a dropped declarative field
+    # would create permanent plan drift in ``modulo apply`` and the write would
+    # never carry the gate. Absent = no gate declared on this node.
+    policy_gate: PipelineGraphPolicyGate | None = Field(
+        default=None,
+        description="Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. "
+        "Absent means no gate is declared on this node.",
     )
     # FAR-402 P3 / FAR-417: scatter (fan-out). A property on an agent /
     # sandbox_agent / composite node (NOT a new node_type). When set, the node

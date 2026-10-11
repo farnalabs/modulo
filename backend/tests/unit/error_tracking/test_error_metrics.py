@@ -353,14 +353,6 @@ class TestInitAlertCounter:
             unit="1",
         )
 
-    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter):
-            metrics_mod._init_alert_counter()
-        assert metrics_mod._error_alerts_total is None
-        assert "metrics.alert_counter_failed" in caplog.text
-
 
 # =========================================================================
 # Lazy-init exception paths — every counter init leaves its handle unset and
@@ -692,44 +684,6 @@ class TestRecordConnectorUnknown:
         # A tracing failure is swallowed (best-effort) and the plain counter
         # record still runs.
         record.assert_called_once_with("loki", "n2")
-
-
-# =========================================================================
-# exception-path coverage for exc_info=True additions (PR #97)
-# =========================================================================
-
-
-class TestInitSuppressedCounterException:
-    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
-        metrics_mod._alerts_suppressed_total = None
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter):
-            metrics_mod._init_suppressed_counter()
-        assert metrics_mod._alerts_suppressed_total is None
-        assert "metrics.suppressed_counter_failed" in caplog.text
-
-
-class TestInitDeliveryFailedCounterException:
-    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
-        metrics_mod._alert_delivery_failed_total = None
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter):
-            metrics_mod._init_delivery_failed_counter()
-        assert metrics_mod._alert_delivery_failed_total is None
-        assert "metrics.delivery_failed_counter_failed" in caplog.text
-
-
-class TestInitConnectorUnknownCounterException:
-    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
-        metrics_mod._connector_unknown_total = None
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter):
-            metrics_mod._init_connector_unknown_counter()
-        assert metrics_mod._connector_unknown_total is None
-        assert "metrics.connector_unknown_counter_failed" in caplog.text
 
 
 class TestCreateRuntimeInstrumentException:

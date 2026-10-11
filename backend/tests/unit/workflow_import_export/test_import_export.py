@@ -40,6 +40,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import yaml
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 import modulo.core.workflow_import_export as mod
@@ -1672,6 +1673,28 @@ async def test_materialize_does_not_warn_on_manual_node_with_schema(monkeypatch:
     result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
 
     assert not any("manual node without an output schema" in w for w in result["warnings"])
+
+
+async def test_materialize_rejects_declared_policy_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1109: a bundle whose graph declares a policy_gate block fails loudly.
+
+    Import persists ``graph_nodes_json`` directly and does not translate a
+    declared block into a PolicyGate row, so the block must be rejected rather
+    than stored with no governing row (silent non-enforcement).
+    """
+    _patch_crud(monkeypatch)
+    gate_node = {
+        "id": str(uuid.uuid4()),
+        "node_type": "agent",
+        "policy_gate": {"eval_id": str(uuid.uuid4()), "action": "block"},
+    }
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [gate_node]
+
+    with pytest.raises(HTTPException) as exc:
+        await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+    assert exc.value.status_code == 422
+    assert "Pipeline import" in exc.value.detail
 
 
 async def test_materialize_rewires_connector_binding_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

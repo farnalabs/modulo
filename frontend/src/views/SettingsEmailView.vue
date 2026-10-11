@@ -97,12 +97,9 @@
         >
           {{ successMessage }}
         </div>
-        <div
-          v-if="errorMessage"
-          class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-        >
-          {{ errorMessage }}
-        </div>
+        <!-- Save/send action error: no refetch loader, the form's own submit
+             button is the retry path. -->
+        <ErrorAlert v-if="errorMessage" :message="errorMessage" :retryable="false" />
       </div>
     </FeatureGate>
   </div>

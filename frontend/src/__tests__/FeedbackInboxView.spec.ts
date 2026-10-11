@@ -171,7 +171,7 @@ describe('FeedbackInboxView', () => {
 
     mockDetailError = undefined
     mockDetail = { ...record(), rejected_output: { ok: true } }
-    const retry = wrapper.find('[data-testid="feedback-inbox-retry"]')
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
     expect(retry.exists()).toBe(true)
     await retry.trigger('click')
     await flushPromises()
