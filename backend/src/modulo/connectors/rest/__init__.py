@@ -790,7 +790,13 @@ class RestConnector(ConnectorBase):
             request = await self._build_health_request()
             client = self._client()
             resp, _body_text = await self._send(client, request)
-            return HealthResult(ok=True, detail=f"HTTP {resp.status_code}: {self._redact(str(request.url))}")
+            # FAR-1651Fix5: the URL is echoed into the detail, and credentials
+            # may be carried as query params (apply_auth) — redact the URL and
+            # status-prefixed detail through the credential redactor before it
+            # leaves the connector.
+            return HealthResult(
+                ok=resp.status_code < 400, detail=self._redact(f"HTTP {resp.status_code}: {request.url}")
+            )
         except asyncio.CancelledError:
             raise
         except (ValueError, httpx.HTTPError) as exc:
@@ -1343,6 +1349,10 @@ class RestConnector(ConnectorBase):
         else:
             secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
 
+    def _credential_values(self) -> Sequence[str]:
+        """Expose the same credential set :meth:`_redact` strips (FAR-1651)."""
+        return tuple(self._secret_values())
+
     def _redact(self, text: str) -> str:
         """Strip credential values from *text* so error detail never echoes secrets.
 
@@ -1880,8 +1890,13 @@ class RestConnector(ConnectorBase):
     def _status_detail(self, resp: httpx.Response, request: RestRequest, body_text: str) -> str:
         location = resp.headers.get("location", "")
         location_part = f" (location: {location})" if location else ""
-        body = self._redact(body_text[:200])
-        return f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body}"
+        # Redact the FULL detail string (URL, location header and body — any of
+        # which can carry the credential) BEFORE truncating (FAR-1651):
+        # truncating first can split a credential in half, leaving a fragment
+        # the redactor cannot match.
+        return self._redact(
+            f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body_text}"
+        )[:200]
 
     @staticmethod
     def _parse_json_body(body_text: str, content_type: str) -> Any:
