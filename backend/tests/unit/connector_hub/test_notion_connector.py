@@ -343,6 +343,56 @@ async def test_query_pages_request_body_byte_identical(connector):
 
 
 # ---------------------------------------------------------------------------
+# query — optional pagination arms (falsy limit, blocks cursor)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_query_databases_zero_limit_omits_page_size(connector):
+    """A falsy limit omits page_size so the server default applies (the q.limit==0 arm)."""
+    respx.post(f"{_BASE}/search").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="databases", limit=0))
+    expected = {"filter": {"value": "database", "property": "object"}}
+    assert respx.calls[0].request.content == _json_body_bytes(expected)
+
+
+@respx.mock
+async def test_query_pages_zero_limit_omits_page_size(connector):
+    """A falsy limit on a database query omits page_size (the q.limit==0 arm)."""
+    respx.post(f"{_BASE}/databases/db1/query").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="pages", filters={"database_id": "db1"}, limit=0))
+    assert respx.calls[0].request.content == _json_body_bytes({})
+
+
+@respx.mock
+async def test_query_blocks_with_cursor_and_zero_limit(connector):
+    """Blocks pagination forwards the cursor and omits page_size for a falsy limit."""
+    respx.get(f"{_BASE}/blocks/block_id_1/children").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(
+        ConnectorQuery(resource="blocks", filters={"block_id": "block_id_1"}, cursor="cursor_prev", limit=0),
+    )
+    params = respx.calls[0].request.url.params
+    assert params["start_cursor"] == "cursor_prev"
+    assert "page_size" not in params
+
+
+@respx.mock
+async def test_query_users_zero_limit_omits_page_size(connector):
+    """A falsy limit on the users listing omits page_size (the q.limit==0 arm)."""
+    respx.get(f"{_BASE}/users").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None}),
+    )
+    await connector.query(ConnectorQuery(resource="users", limit=0))
+    assert "page_size" not in respx.calls[0].request.url.params
+
+
+# ---------------------------------------------------------------------------
 # write — create page
 # ---------------------------------------------------------------------------
 
