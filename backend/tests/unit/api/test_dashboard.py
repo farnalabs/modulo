@@ -1,5 +1,6 @@
 """Unit tests for /api/v1/dashboard/summary and /api/v1/dashboard/trends."""
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator
 from datetime import UTC, date, datetime, timedelta
@@ -16,11 +17,14 @@ from modulo.api.dependencies import _get_engine, get_db_session, get_plan_contex
 from modulo.api.main import app
 from modulo.api.routes.dashboard import (
     _compute_period_metrics,
+    _dashboard_cache_key,
     _facts_status_counts,
     _facts_window,
+    _get_cached_dashboard,
     _load_config_warnings,
     _load_daily_trend,
     _load_trend_run_and_spend,
+    _set_cached_dashboard,
 )
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
@@ -400,6 +404,33 @@ def unauth_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def flag_off_client() -> Generator[TestClient, None, None]:
+    """Authenticated client whose plan reports ``analytics_page`` disabled (FAR-92)."""
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
+        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
+    )
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = False
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
 class TestDashboardSummary:
     """GET /api/v1/dashboard/summary"""
 
@@ -668,6 +699,13 @@ class TestDashboardSummaryPeriod:
         assert response.status_code == 200
         assert "period" not in response.json()
 
+    def test_days_ignored_when_analytics_flag_off(self, flag_off_client: TestClient) -> None:
+        # FAR-92: with `analytics_page` disabled the endpoint keeps the legacy
+        # all-time shape — `days` is ignored and no `period` block is returned.
+        response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
+        assert response.status_code == 200
+        assert "period" not in response.json()
+
     def test_delta_pct_null_when_previous_zero(self, period_client: Callable[..., TestClient]) -> None:
         client = period_client(
             current_facts={"total": 12, "active_pipelines": 2, "tokens": 1200, "avg_duration_ms": 150.0, "complete": 9},
@@ -731,6 +769,60 @@ class TestDashboardSummaryPeriod:
         assert metrics["spend"]["current"] == 15.5
         assert metrics["spend"]["previous"] == 10.0
         assert metrics["spend"]["delta_pct"] == 55.0
+
+
+class _FakeRedis:
+    """Minimal async Redis double capturing the key/value of get/setex calls."""
+
+    def __init__(self, get_value: str | None = None) -> None:
+        self._get_value = get_value
+        self.set_calls: list[tuple[str, int, str]] = []
+        self.closed = False
+
+    async def get(self, _key: str) -> str | None:
+        return self._get_value
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        self.set_calls.append((key, ttl, value))
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class TestDashboardCacheKeyScoping:
+    """FAR-92 — the summary cache key is scoped by the ``analytics_page`` flag.
+
+    These call the cache helpers directly (rather than through the endpoint):
+    the module-level autouse fixture stubs ``_get_cached_dashboard`` /
+    ``_set_cached_dashboard`` for request tests, so the flag-scoped key
+    construction would otherwise never execute.
+    """
+
+    def test_key_is_flag_scoped_with_and_without_days(self) -> None:
+        assert _dashboard_cache_key("org", 7, True) == "dashboard:summary:org:7:1"
+        assert _dashboard_cache_key("org", 7, False) == "dashboard:summary:org:7:0"
+        assert _dashboard_cache_key("org", None, True) == "dashboard:summary:org:1"
+        assert _dashboard_cache_key("org", None, False) == "dashboard:summary:org:0"
+
+    async def test_get_cached_dashboard_reads_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeRedis(get_value=json.dumps({"total_runs": 3}))
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        result = await _get_cached_dashboard("org", 7, False)
+        assert result == {"total_runs": 3}
+        assert fake.closed is True
+
+    async def test_set_cached_dashboard_writes_flag_scoped_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = _FakeRedis()
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        await _set_cached_dashboard("org", {"total_runs": 3}, 7, False)
+        assert fake.set_calls == [("dashboard:summary:org:7:0", 60, json.dumps({"total_runs": 3}, default=str))]
+        assert fake.closed is True
 
 
 class TestDashboardTrends:
