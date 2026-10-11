@@ -138,18 +138,7 @@ async def _dispatch_email(
             )
         except Exception as exc:
             _log.exception("alert.email_smtp_password_decrypt_failed")
-            # FAR-1673: never fall back to the raw stored value when that value
-            # is ciphertext. A token-shaped stored password means decryption was
-            # needed and failed (bad key, corrupt token, missing transaction) —
-            # the ciphertext must NOT become the SMTP password, so the delivery
-            # fails with a typed error instead. A non-token value is the legacy
-            # plaintext path: there is nothing to decrypt, and it is used as-is
-            # exactly as before.
-            if _is_encrypted_token(stored_raw):
-                raise SmtpPasswordDecryptError(
-                    "stored SMTP password could not be decrypted; refusing to use the ciphertext as the password"
-                ) from exc
-            stored_smtp_password = stored_raw
+            stored_smtp_password = _plaintext_password_or_raise(stored_raw, exc)
 
         effective_settings = settings.model_copy(
             update={
@@ -251,6 +240,28 @@ async def _dispatch_email(
         raise
     except Exception:
         _log.exception("alert.email_dispatch_error", extra={"rule": alert.rule_name})
+
+
+def _plaintext_password_or_raise(stored_raw: str, exc: Exception) -> str:
+    """Resolve a password after a decrypt failure without ever using ciphertext.
+
+    FAR-1673: a token-shaped stored value means decryption was needed and
+    failed (bad key, corrupt token, missing transaction) — the raw value IS the
+    ciphertext, so using it as the SMTP password would hand an undecrypted
+    secret to the relay while failing invisibly up to the SMTP dialog. Fail
+    closed with :class:`SmtpPasswordDecryptError` instead. A non-token value is
+    the legacy plaintext path: there is nothing to decrypt, so it is used
+    as-is exactly as before.
+
+    Called with the caught decrypt ``exc`` so the typed error chains from the
+    real cause. Keeping this branch out of :func:`_dispatch_email` also holds
+    that function's cognitive complexity well below the Sonar limit.
+    """
+    if _is_encrypted_token(stored_raw):
+        raise SmtpPasswordDecryptError(
+            "stored SMTP password could not be decrypted; refusing to use the ciphertext as the password"
+        ) from exc
+    return stored_raw
 
 
 async def _dispatch_webhook(

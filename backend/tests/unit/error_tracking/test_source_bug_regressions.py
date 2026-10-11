@@ -17,6 +17,7 @@ collaborators are the SMTP sender, the settings object and the DB session.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -220,6 +221,29 @@ class TestSmtpPasswordDecryptFailure:
         send.assert_called_once()
         assert send.call_args.args[0].smtp_password == legacy
 
+    async def test_plaintext_password_is_used_when_the_scoped_decrypt_guard_fails(self) -> None:
+        """A plaintext value survives a scoped-decrypt guard failure.
+
+        ``decode_stored_secret_scoped`` raises BEFORE decrypting when the
+        session has no active transaction / RLS scope. The stored value here is
+        legacy plaintext, so there is nothing to decrypt: the dispatcher must
+        still send it as-is. The typed fatal error is reserved for a
+        token-shaped value (FAR-1673), so a non-token value must not be routed
+        into the ciphertext refusal.
+        """
+        legacy = "legacy-plaintext-password"
+        session = _dispatch_session(stored_password=legacy)
+        session.in_transaction = MagicMock(return_value=False)
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=_Settings()),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+        ):
+            await dispatch_alert(_ORG_ID, _alert(), session)
+
+        send.assert_called_once()
+        assert send.call_args.args[0].smtp_password == legacy
+
 
 class TestMissedFireRedisConstruction:
     """FAR-1674: a malformed redis_url must degrade to fail-open, not escape."""
@@ -271,3 +295,27 @@ class TestMissedFireRedisConstruction:
         assert emitted == 0
         redis_cls.from_url.assert_called_once()
         redis_client.aclose.assert_awaited_once()
+
+    async def test_redis_close_cancellation_is_not_swallowed(self) -> None:
+        """A ``CancelledError`` during the guarded close propagates.
+
+        The finally block closes the client and must re-raise cancellation so
+        the caller's cancelled task stays cancelled — a swallowed
+        ``CancelledError`` breaks task cancellation. The plain close-failure
+        path (log-only) is covered separately; this pins the re-raise arm.
+        """
+        settings = MagicMock()
+        settings.redis_url = "redis://localhost:6379/0"
+        aengine = MagicMock()
+        aengine.connect.side_effect = RuntimeError("engine boom")
+        redis_client = AsyncMock()
+        redis_client.aclose.side_effect = asyncio.CancelledError()
+        redis_cls = MagicMock()
+        redis_cls.from_url.return_value = redis_client
+
+        with (
+            patch.object(et, "get_settings", return_value=settings),
+            patch.object(et, "AsyncRedis", redis_cls),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await et.check_missed_fire_alerts(aengine, org_id=_ORG_ID)
