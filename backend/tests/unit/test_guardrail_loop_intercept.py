@@ -74,6 +74,31 @@ def _event(tool_name: str = "git push", args: dict | None = None, direction: str
     }
 
 
+# Tests that assert a guardrail ACTION ("block"/"warn"/"redact") or a
+# non-timed-out "pass" drive the real evaluation, which round-trips detection
+# through the event loop's default executor under a per-call latency budget.
+# LoopInterceptConfig's default 250 ms budget is a real-time production guard;
+# on a loaded parallel CI runner (pytest-xdist + coverage instrumentation, 2
+# vCPUs) the executor round trip can exceed it, and interception then FAILS
+# OPEN by design (action "pass", bridge_failed True) — flaking the assertion
+# (observed on main @de473003e: `assert 'pass' == 'block'`). These tests pin the
+# maximum budget so scheduling jitter can never outrun it. The timeout/fail-open
+# contract has its own dedicated test
+# (test_latency_budget_timeout_allows_call_and_audits) that sets a tight budget
+# deliberately.
+_TEST_LATENCY_BUDGET_MS = 5000
+
+
+def _cfg(**overrides) -> LoopInterceptConfig:
+    """LoopInterceptConfig with a wall-clock-independent latency budget.
+
+    Use for any test that asserts a specific evaluation outcome; see
+    ``_TEST_LATENCY_BUDGET_MS``.
+    """
+    overrides.setdefault("latency_budget_ms", _TEST_LATENCY_BUDGET_MS)
+    return LoopInterceptConfig(**overrides)
+
+
 # ---------------------------------------------------------------------------
 # Config validation
 # ---------------------------------------------------------------------------
@@ -168,7 +193,7 @@ def test_serialize_tool_event_non_dict_args():
 
 
 async def test_block_before_refuses_call():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is True
@@ -178,7 +203,7 @@ async def test_block_before_refuses_call():
 
 
 async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
-    cfg = LoopInterceptConfig(block_on_guardrail=False)
+    cfg = _cfg(block_on_guardrail=False)
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     assert outcome.blocked is False
@@ -187,7 +212,7 @@ async def test_block_before_with_block_on_guardrail_false_records_not_refuses():
 
 
 async def test_block_after_records_not_refuses():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     event = _event(direction="after", summary=f"pushed with {_SECRET}")
     outcome, audit = await run_loop_interception(
         EvalEngine(), [_guardrail(name="block-token", field="args.url")], event, config=cfg
@@ -198,7 +223,7 @@ async def test_block_after_records_not_refuses():
 
 
 async def test_warn_records_and_proceeds():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(
         EvalEngine(), [_guardrail(name="warn-token", action="warn")], _event(), config=cfg
     )
@@ -211,7 +236,7 @@ async def test_warn_records_and_proceeds():
 
 
 async def test_redact_masks_args_before_execution():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.TRANSFORM)
     gr = _guardrail(name="redact-url", action="redact", redaction=[policy.model_dump()])
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -223,7 +248,7 @@ async def test_redact_masks_args_before_execution():
 
 
 async def test_block_mode_redaction_policy_blocks_before():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.BLOCK)
     gr = _guardrail(name="redact-block", action="redact", redaction=[policy.model_dump()])
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -309,7 +334,7 @@ async def test_detection_mechanism_error_fails_open(monkeypatch):
 
 
 async def test_audit_payloads_never_carry_raw_values():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [_guardrail(name="block-token")], _event(), config=cfg)
     assert outcome.action == "block"
     for record in audit:
@@ -325,7 +350,7 @@ async def test_audit_payloads_never_carry_raw_values():
 
 
 async def test_redact_audit_payload_summary_only():
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     policy = FieldRedactionPolicy(path="args.url", mode=FieldRedactionMode.TRANSFORM)
     gr = _guardrail(name="redact-url", action="redact", redaction=[policy.model_dump()])
     _, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
@@ -345,7 +370,7 @@ async def test_callback_server_block_round_trip():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [_guardrail(name="block-token")],
-        LoopInterceptConfig(),
+        _cfg(),
     )
     port = await server.start()
     try:
@@ -369,7 +394,7 @@ async def test_callback_server_redact_round_trip():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [gr],
-        LoopInterceptConfig(),
+        _cfg(),
     )
     port = await server.start()
     try:
@@ -396,7 +421,7 @@ async def test_callback_server_invokes_audit_sink():
     server = li.LoopInterceptCallbackServer(
         EvalEngine(),
         [_guardrail(name="block-token")],
-        LoopInterceptConfig(),
+        _cfg(),
         audit_sink=_sink,
     )
     port = await server.start()
@@ -773,7 +798,7 @@ async def test_pass_when_no_guardrail_fires():
     """A tool call that matches patterns but no guardrail fires returns pass."""
     # Use a guardrail that won't match the event
     gr = _guardrail(name="non-match", pattern=r"zzz_nomatch")
-    cfg = LoopInterceptConfig()
+    cfg = _cfg()
     outcome, audit = await run_loop_interception(EvalEngine(), [gr], _event(), config=cfg)
     assert outcome.action == "pass"
     assert audit == []

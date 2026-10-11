@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1021,6 +1022,96 @@ class TestDumpDateRange:
                 "secret",
             )
         assert result == [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)]
+
+    @pytest.mark.asyncio
+    async def test_raising_close_logged_and_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A ``close()`` that raises never escapes ``_dump_date_range``.
+
+        The teardown sits in ``finally`` AFTER the body, so without its own
+        guard a raising ``close()`` would discard the returned date list on
+        both the success path and the failed-POST ``break`` path.
+        """
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._build_payload",
+                new_callable=AsyncMock,
+                return_value={"schema_version": 1},
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.VendorClient",
+            ) as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.post_batch = AsyncMock(return_value=(True, 200, None))
+            mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+            mock_client_cls.return_value = mock_client
+
+            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+                result = await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 10),
+                    "https://vendor.example.com",
+                    "secret",
+                )
+
+            assert result == [date(2026, 8, 10)]
+            mock_client.close.assert_awaited_once()
+            assert "product_analytics.dump_client_close_failed" in caplog.messages
+
+            # Failure path (failed POST -> early break): the date list still returns.
+            caplog.clear()
+            mock_client.post_batch = AsyncMock(return_value=(False, 500, "vendor error"))
+
+            with caplog.at_level(logging.ERROR, logger="modulo.core.product_analytics.metrics_dump"):
+                failed = await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 11),
+                    "https://vendor.example.com",
+                    "secret",
+                )
+
+            assert not failed
+            assert "product_analytics.dump_client_close_failed" in caplog.messages
+
+    @pytest.mark.asyncio
+    async def test_raising_close_does_not_displace_body_exception(self) -> None:
+        """Body exception + failing teardown: the BODY's error wins.
+
+        Without the teardown guard the ``finally``'s exception replaces the
+        propagating ``RuntimeError`` from ``_build_payload``, masking the real
+        failure with the teardown's own message.
+        """
+        factory = _FakeSessionFactory()
+        orgs = [{"id": "org-1", "level_changed_at": None}]
+        with (
+            patch(
+                "modulo.core.product_analytics.metrics_dump._build_payload",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("payload boom"),
+            ),
+            patch(
+                "modulo.core.product_analytics.metrics_dump.VendorClient",
+            ) as mock_client_cls,
+        ):
+            mock_client = AsyncMock()
+            mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="payload boom"):
+                await _dump_date_range(
+                    factory,
+                    orgs,
+                    date(2026, 8, 10),
+                    date(2026, 8, 10),
+                    "https://vendor.example.com",
+                    "secret",
+                )
 
 
 # --- _build_payload ---

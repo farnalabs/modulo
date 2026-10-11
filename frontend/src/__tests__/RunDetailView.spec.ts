@@ -172,6 +172,7 @@ vi.mock('vue-router', () => {
 })
 
 import RunDetailView from '../views/RunDetailView.vue'
+import { api } from '../lib/api/client'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -279,6 +280,46 @@ describe('RunDetailView', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="run-detail-deadline-triage"]').exists()).toBe(false)
     wrapper.unmount()
+  })
+
+  it('offers Retry on the page-level load error and re-fetches on click (FAR-1655)', async () => {
+    // The run fetcher's inner GETs swallow rejections (`.catch(() => ({ data:
+    // null }))`), so a rejected promise never surfaces as `error` — a
+    // synchronous throw does (it escapes the per-GET catch into the fetcher's
+    // own try/catch). Fail the first load that way, then recover on Retry.
+    const getMock = vi.mocked(api.GET as unknown as (url: string) => unknown)
+    const originalGet = getMock.getMockImplementation()
+    let failRunFetch = true
+    getMock.mockImplementation((url: string) => {
+      if (url === '/api/v1/runs/{run_id}' && failRunFetch) {
+        throw new Error('run backend down')
+      }
+      return (originalGet as (u: string) => unknown)(url)
+    })
+
+    try {
+      router.push('/runs/test-run-id')
+      await router.isReady()
+      const wrapper = createWrapper()
+      await nextTick()
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('run backend down')
+      const retry = wrapper.find('[data-testid="error-alert-retry"]')
+      expect(retry.exists()).toBe(true)
+
+      failRunFetch = false
+      await retry.trigger('click')
+      await nextTick()
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('run backend down')
+      expect(wrapper.text()).toContain('Run Detail')
+      wrapper.unmount()
+    } finally {
+      getMock.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
   })
 
   it('renders the superseded status badge for a coalesced-supersede run', async () => {

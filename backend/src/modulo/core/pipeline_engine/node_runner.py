@@ -4427,6 +4427,326 @@ def _finalize_node_result(
     return result
 
 
+def _community_gated_stub(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """FAR-764 community-execution gate (ADR 032 D2): the block stub.
+
+    Community-sourced agents that have not been granted by the operator are
+    restricted to read-only / no-tool scope. The gated agent set is seeded
+    into state by the executor at run start. A gated node returns a stub
+    artifact instead of invoking the model - the agent cannot execute until
+    the operator grants access. Returns ``None`` when no gate applies.
+    """
+    gated = state.get("_community_gated_agents") or set()
+    # Compare the canonicalised UUID form, not the raw snapshot string - a
+    # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+    # id would otherwise slip past the gate and fail it open.
+    if agent_id is not None and str(agent_id) in gated:
+        return {
+            "artifacts": [
+                {
+                    "node_id": node_id,
+                    "status": "blocked",
+                    "reason": "community_sourced_not_granted",
+                }
+            ]
+        }
+    return None
+
+
+def _missing_backend_stub(*, node_id: str, agent_id: uuid.UUID | None) -> dict[str, Any]:
+    """FAR-1115: no ``model_backend_id`` - raise (agent node) or stub (plain).
+
+    An agent node (model-backed by intent) whose agent resolves to no
+    model_backend_id is a misconfiguration - not a legitimate stub. Surface a
+    clear, actionable error naming both the node and the agent so the
+    operator can fix the config immediately. Connector-binding / manual nodes
+    without agent_id keep the original stub behavior (byte-identical).
+    """
+    if agent_id is not None:
+        raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
+    return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+
+
+async def _dispatch_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+    max_input_length: int | None,
+) -> tuple[dict[str, Any] | None, str, str, Any]:
+    """Node-start gates and stub dispatch (FAR-215 / FAR-764 / FAR-1115).
+
+    Runs the mid-run conformance gate, the community-execution gate and the
+    missing-model-backend branch, resolving the FAR-332/342 run overrides on
+    the way.  Returns ``(stub, model_backend_id_str, prompt_template,
+    raw_input)``:
+
+    - *stub* is not ``None`` -> return it from the node without invoking the
+      model (community-gate block, or the connector/manual stub for a node
+      with no backend); the other elements are placeholders.
+    - *stub* is ``None`` -> the agent path proceeds with the resolved backend
+      id, prompt template, and the PRE-truncation ``raw_input`` (the same
+      value the original inline body captured before truncating).
+
+    Raises :class:`NodeMissingModelBackendError` when an agent node's agent
+    resolves to no model backend (FAR-1115) - a misconfiguration, never a
+    silent stub.
+    """
+    # FAR-215: mid-run capability re-check at node start. If a bound
+    # block-action guardrail's conformance claim is absent/unknown against
+    # the live manifest, the node is blocked and routed to HITL - the gate
+    # raises a LangGraph interrupt, so control never reaches the node body.
+    await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
+
+    # FAR-764: community execution gate (ADR 032 D2) - one-line stub branch.
+    gated_stub = _community_gated_stub(state, node_id=node_id, agent_id=agent_id)
+    if gated_stub is not None:
+        return gated_stub, "", "", ""
+
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    raw_input = run_context.get("input", {})
+
+    # Truncate input if max_input_length is configured for this agent.
+    # ORDER IS LOAD-BEARING: the truncation happens BEFORE the stub branch
+    # below, so even a node that never reaches the model leaves the
+    # truncated input in state (pinned by
+    # test_node_runner_truncates_input_in_state).
+    if max_input_length is not None and isinstance(raw_input, str):
+        run_context["input"] = truncate_input(raw_input, max_input_length)
+
+    # Get agent data from node_def (embedded at snapshot creation).
+    prompt_template = node_def.get("prompt_template") or ""
+    model_backend_id_str = node_def.get("model_backend_id")
+
+    # FAR-332: a model_backend_id run_context override (fired by the variant
+    # comparison / A/B test views) takes precedence over the snapshot-embedded
+    # node_def backend, so every variant can run on a different model backend.
+    # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
+    # key, seeded by the executor from the run's frozen variant config - never
+    # read from ``run_context["input"]``, where a bare top-level
+    # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
+    # input is DATA and could silently reroute model routing.
+    #
+    # FAR-342: a prompt_templates override (resolved from the variant's
+    # prompt_version picker at run creation) likewise takes precedence over
+    # the snapshot-embedded node_def prompt, so every variant renders with
+    # its own prompt version. The override is a PER-AGENT map, so each node
+    # reads ONLY the template for its own agent - one agent's template never
+    # clobbers another's in a multi-agent snapshot. When the node's agent is
+    # absent from the map, fall back to the node_def prompt. Because the
+    # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
+    # run that carries ``_run_overrides`` as caller input never reaches this
+    # boundary (FAR-342 injection surface closed).
+    model_backend_id_str, prompt_template = _resolve_node_run_overrides(
+        run_context,
+        agent_id,
+        model_backend_id_str=model_backend_id_str,
+        prompt_template=prompt_template,
+    )
+
+    # If no model_backend_id, fall back to stub behavior
+    # (connector_binding nodes, manual nodes routed through wrong path, etc.).
+    # FAR-1115 lives in ``_missing_backend_stub``: raise for a misconfigured
+    # agent node, byte-identical stub otherwise.
+    if not model_backend_id_str:
+        return _missing_backend_stub(node_id=node_id, agent_id=agent_id), "", "", ""
+    return None, model_backend_id_str, prompt_template, raw_input
+
+
+def _build_repair_invoke(model_backend_id_str: str) -> Any:
+    """Build the strict-mode repair re-invoke callable for an agent node.
+
+    FIX B (FAR-899): the standard agent path has access to the
+    ModelBackendHub and can re-invoke the same backend with the repair
+    prompt. ``run_repair_loop`` calls this SYNCHRONOUSLY while the node
+    coroutine is already on the event loop, so bridge to the async backend
+    with ``_run_coroutine_sync`` (the same worker-loop bridge the LLM-judge
+    callable uses). An async repair fn here would hand ``json.loads`` an
+    un-awaited coroutine and crash the node instead of repairing it.
+
+    The backend id is parsed safely - non-UUID backend ids (mock/stub/aliased
+    backends, common in unit tests and some real graphs) must not crash the
+    node: when the id cannot be resolved to a UUID this returns ``None``,
+    skipping the repair invoke entirely so the node takes the existing
+    documented hard-fail path (strict-mode validation failures are terminal).
+    """
+    from modulo.core.pipeline_engine.decorator import get_model_backend_hub
+
+    hub = get_model_backend_hub()
+    backend_id = _parse_uuid_opt(model_backend_id_str)
+    if backend_id is None:
+        return None
+
+    def _std_repair_invoke(prompt: str) -> str:
+        """Re-invoke the same model backend with the repair prompt."""
+        if hub is None:
+            raise RuntimeError("ModelBackendHub not available for repair invoke")
+        resp = _run_coroutine_sync(_invoke_backend(hub, backend_id, [HumanMessage(content=prompt)]))
+        return resp.content if hasattr(resp, "content") else str(resp)
+
+    return _std_repair_invoke
+
+
+async def _stamp_schema_enforcement(
+    record: Any,
+    *,
+    node_id: str,
+    state: dict[str, Any],
+) -> None:
+    """Persist a FAR-902 schema-enforcement record before terminalization.
+
+    D3 ordering: the record rides on the result (success arm) or on the
+    ``OutputSchemaValidationError`` (terminal-failure arm) and is written
+    UNCHANGED to ``run_node_outputs`` via the conformance-context session
+    factory BEFORE the node result returns / the exception propagates.
+    Persistence is best-effort - any error is logged and swallowed by
+    ``_persist_enforcement_record_best_effort`` (``CancelledError`` still
+    propagates). A ``None`` record is a no-op inside that helper.
+    """
+    ctx = get_conformance_ctx()
+    session_factory = ctx[0] if ctx is not None else None
+    org_id = ctx[1] if ctx is not None else None
+    run_id = state.get("_run_id")
+    await _persist_enforcement_record_best_effort(
+        record,
+        session_factory=session_factory,
+        run_id=run_id,
+        org_id=org_id,
+        node_id=node_id,
+        attempt_key=(f"run:{run_id}:node:{node_id}:agent" if run_id is not None else None),
+    )
+
+
+async def _run_agent_node(
+    node_def: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    model_backend_id_str: str,
+    prompt_template: str,
+    raw_input: Any,
+    dag_ancestor_ids: frozenset[str] | None,
+) -> dict[str, Any]:
+    """Render, invoke, validate and finalize an agent (model-backed) node.
+
+    The agent path after ``_dispatch_node`` handed over a resolved backend:
+    scope the run_context view (FAR-418), inject declared work-item refs
+    (FAR-794/795), render the prompt (FAR-332/342), invoke the model backend
+    (FAR-898/899/900), validate the output, and carry the FAR-902
+    schema-enforcement record off to retention BEFORE the node result is
+    returned (D3 ordering) - the record never leaks into node telemetry.
+    """
+    run_context: dict[str, Any] = state.get("run_context") or {}
+    output_schema_json = node_def.get("output_schema_json")
+
+    # FAR-418: context_scope - the agent's run_context VIEW (the keys fed to
+    # the prompt template) is allowlist-gated to the node's need-to-know set.
+    # The machinery reads (run_overrides, autonomy) still use the full
+    # run_context so internal control keys are never starved.
+    _node_cap = node_def.get("capability_scope") or {}
+    scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
+    # FAR-418 (MAJOR-3 fix): the need-to-know boundary must also bind the
+    # ``state.run_context`` view. ``state`` otherwise carries the full,
+    # unscoped run_context, so a template could read gated keys via
+    # ``{{ state.run_context.<key> }}`` and defeat the boundary. Pass a
+    # shallow copy with the scoped run_context in place - the live state dict
+    # is never mutated.
+    scoped_state = dict(state)
+    scoped_state["run_context"] = scoped_run_context
+    # FAR-794 slice 2b: declare-and-inject the run's refs when
+    # THIS node's input schema declares ``work_item_refs`` - read-only at
+    # node start, never failing the node (a read failure yields [], not a
+    # raise), and capped deterministically by the unified refs cap.
+    # FAR-795: the injection is now the FULL set - create-time refs plus
+    # the refs emitted by this node's DAG ancestors (folded from the
+    # accumulated artifacts; skipped/failed attempts contribute per
+    # status), deduped and capped over the union by the pure collector.
+    # ``dag_ancestor_ids`` is frozen at compile time from graph_json
+    # (graph_cache); a None (unthreaded caller) degrades to create-time
+    # refs only, never to a raise.
+    node_work_item_refs = (
+        _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
+        if _node_declares_work_item_refs(node_def)
+        else None
+    )
+    rendered_prompt, routing_mode = _render_agent_prompt(
+        state=scoped_state,
+        run_context=scoped_run_context,
+        raw_input=raw_input,
+        prompt_template=prompt_template,
+        node_def=node_def,
+        work_item_refs=node_work_item_refs,
+    )
+
+    # FAR-900: resolve the schema_profile for rendering before dispatch.
+    _node_schema_profile = _resolve_schema_profile(node_def)
+    # FAR-902: track whether the provider actually used native structured output.
+    _native_output_flag: list[bool] = [False]
+    output_data = await _invoke_node_model(
+        rendered_prompt,
+        model_backend_id_str,
+        node_id,
+        output_schema_json=output_schema_json,
+        schema_profile=_node_schema_profile,
+        _native_output_flag=_native_output_flag,
+    )
+
+    # FAR-899: schema validator mode - resolved from the effective-setting
+    # store (org.settings_json -> system_config -> env var -> "lenient").
+    # FIX E: single helper replaces 3 copy-pasted blocks.
+    _ctx = get_conformance_ctx()
+    _sf = _ctx[0] if _ctx is not None else None
+    _schema_validator_mode = await _resolve_schema_validator_mode(
+        state,
+        session_factory=_sf,
+        node_id=node_id,
+    )
+
+    # FIX B: create a repair invoke callable so the repair loop is reachable
+    # (rationale lives in ``_build_repair_invoke``).
+    _repair_fn = _build_repair_invoke(model_backend_id_str)
+
+    try:
+        _node_result = _finalize_node_result(
+            node_id,
+            output_data,
+            output_schema_json,
+            routing_mode,
+            mode=_schema_validator_mode,
+            schema_id=node_def.get("output_schema_id", "unknown"),
+            schema_version=node_def.get("output_schema_version", 0),
+            _repair_invoke_fn=_repair_fn,
+            resolved_profile=_node_schema_profile or "verbatim",
+            native_output=_native_output_flag[0],
+        )
+    except OutputSchemaValidationError as _schema_exc:
+        # FAR-902 (D3): persist the terminal-failure enforcement record
+        # BEFORE the node is terminalized, then re-raise unchanged.
+        await _stamp_schema_enforcement(
+            getattr(_schema_exc, "enforcement_record", None),
+            node_id=node_id,
+            state=state,
+        )
+        raise
+
+    # FAR-902: persist the enforcement record BEFORE terminalization.
+    # The record was built by _finalize_node_result and carried on the
+    # result dict under ``_schema_enforcement_record``.  Persist it via
+    # the conformance-context session_factory and remove it from the
+    # result so it never leaks into node telemetry (D3 ordering).
+    _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
+    if _enforcement_rec is not None:
+        await _stamp_schema_enforcement(_enforcement_rec, node_id=node_id, state=state)
+
+    return _node_result
+
+
 def make_node_fn(
     node_def: dict[str, Any],
     *,
@@ -4451,240 +4771,38 @@ def make_node_fn(
 
     When *token_budget* is set, per-node token budget is enforced at the
     executor level via ``node_token_budgets`` during ``_stream_graph()``.
+    The closure is a thin orchestrator: ``_dispatch_node`` runs the node-start
+    gates and stub branches (FAR-215/764/1115, truncation, FAR-332/342
+    overrides), while ``_run_agent_node`` scopes, renders, invokes,
+    validates and carries the FAR-902 enforcement record to retention.
     """
     node_id: str = str(node_def["id"])
 
     @cancellable_node(timeout=timeout, role=role)
     async def _node(state: dict[str, Any]) -> dict[str, Any]:
-        # FAR-215: mid-run capability re-check at node start. If a bound
-        # block-action guardrail's conformance claim is absent/unknown against
-        # the live manifest, the node is blocked and routed to HITL — the gate
-        # raises a LangGraph interrupt, so control never reaches the node body.
-        agent_id_raw = node_def.get("agent_id")
-        agent_id = _parse_uuid_opt(agent_id_raw)
-        await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
-
-        # FAR-764: community execution gate (ADR 032 D2).  Community-sourced
-        # agents that have not been granted by the operator are restricted to
-        # read-only / no-tool scope.  The gated agent set is seeded into state
-        # by the executor at run start.  A gated node returns a stub artifact
-        # instead of invoking the model — the agent cannot execute until the
-        # operator grants access.
-        gated = state.get("_community_gated_agents") or set()
-        # Compare the canonicalised UUID form, not the raw snapshot string — a
-        # non-canonical rendering (uppercase / brace / no-dash) of the same agent
-        # id would otherwise slip past the gate and fail it open.
-        if agent_id is not None and str(agent_id) in gated:
-            return {
-                "artifacts": [
-                    {
-                        "node_id": node_id,
-                        "status": "blocked",
-                        "reason": "community_sourced_not_granted",
-                    }
-                ]
-            }
-
-        run_context: dict[str, Any] = state.get("run_context") or {}
-        raw_input = run_context.get("input", {})
-
-        # Truncate input if max_input_length is configured for this agent.
-        if max_input_length is not None and isinstance(raw_input, str):
-            run_context["input"] = truncate_input(raw_input, max_input_length)
-
-        # Get agent data from node_def (embedded at snapshot creation).
-        prompt_template = node_def.get("prompt_template") or ""
-        model_backend_id_str = node_def.get("model_backend_id")
-        output_schema_json = node_def.get("output_schema_json")
-
-        # FAR-332: a model_backend_id run_context override (fired by the variant
-        # comparison / A/B test views) takes precedence over the snapshot-embedded
-        # node_def backend, so every variant can run on a different model backend.
-        # The override is namespaced under the reserved TOP-LEVEL ``_run_overrides``
-        # key, seeded by the executor from the run's frozen variant config — never
-        # read from ``run_context["input"]``, where a bare top-level
-        # ``model_backend_id`` (or a crafted ``_run_overrides``) in user-supplied
-        # input is DATA and could silently reroute model routing.
-        #
-        # FAR-342: a prompt_templates override (resolved from the variant's
-        # prompt_version picker at run creation) likewise takes precedence over
-        # the snapshot-embedded node_def prompt, so every variant renders with
-        # its own prompt version. The override is a PER-AGENT map, so each node
-        # reads ONLY the template for its own agent — one agent's template never
-        # clobbers another's in a multi-agent snapshot. When the node's agent is
-        # absent from the map, fall back to the node_def prompt. Because the
-        # executor only ever seeds this from ``variant_config_snapshot``, a NORMAL
-        # run that carries ``_run_overrides`` as caller input never reaches this
-        # boundary (FAR-342 injection surface closed).
-        model_backend_id_str, prompt_template = _resolve_node_run_overrides(
-            run_context,
-            agent_id,
+        # Thin orchestrator (S3776 structural split): the node-start gates,
+        # stub branches, truncation and run overrides live in
+        # ``_dispatch_node``; the agent path (scope, render, invoke,
+        # validate, FAR-902 enforcement carry) lives in ``_run_agent_node``.
+        agent_id = _parse_uuid_opt(node_def.get("agent_id"))
+        stub, model_backend_id_str, prompt_template, raw_input = await _dispatch_node(
+            node_def,
+            state,
+            node_id=node_id,
+            agent_id=agent_id,
+            max_input_length=max_input_length,
+        )
+        if stub is not None:
+            return stub
+        return await _run_agent_node(
+            node_def,
+            state,
+            node_id=node_id,
             model_backend_id_str=model_backend_id_str,
             prompt_template=prompt_template,
-        )
-
-        # If no model_backend_id, fall back to stub behavior
-        # (connector_binding nodes, manual nodes routed through wrong path, etc.).
-        if not model_backend_id_str:
-            # FAR-1115: an agent node (model-backed by intent) whose agent
-            # resolves to no model_backend_id is a misconfiguration — not a
-            # legitimate stub.  Surface a clear, actionable error naming both
-            # the node and the agent so the operator can fix the config
-            # immediately.  Connector-binding / manual nodes without agent_id
-            # keep the original stub behavior (byte-identical).
-            if agent_id is not None:
-                raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
-            return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
-
-        # FAR-418: context_scope — the agent's run_context VIEW (the keys fed to
-        # the prompt template) is allowlist-gated to the node's need-to-know set.
-        # The machinery reads (run_overrides, autonomy) still use the full
-        # run_context so internal control keys are never starved.
-        _node_cap = node_def.get("capability_scope") or {}
-        scoped_run_context = filter_run_context_scope(run_context, _node_cap.get("context_scope"))
-        # FAR-418 (MAJOR-3 fix): the need-to-know boundary must also bind the
-        # ``state.run_context`` view. ``state`` otherwise carries the full,
-        # unscoped run_context, so a template could read gated keys via
-        # ``{{ state.run_context.<key> }}`` and defeat the boundary. Pass a
-        # shallow copy with the scoped run_context in place — the live state dict
-        # is never mutated.
-        scoped_state = dict(state)
-        scoped_state["run_context"] = scoped_run_context
-        # FAR-794 slice 2b: declare-and-inject the run's refs when
-        # THIS node's input schema declares ``work_item_refs`` — read-only at
-        # node start, never failing the node (a read failure yields [], not a
-        # raise), and capped deterministically by the unified refs cap.
-        # FAR-795: the injection is now the FULL set — create-time refs plus
-        # the refs emitted by this node's DAG ancestors (folded from the
-        # accumulated artifacts; skipped/failed attempts contribute per
-        # status), deduped and capped over the union by the pure collector.
-        # ``dag_ancestor_ids`` is frozen at compile time from graph_json
-        # (graph_cache); a None (unthreaded caller) degrades to create-time
-        # refs only, never to a raise.
-        node_work_item_refs = (
-            _node_ancestor_injected_work_item_refs(node_id, run_context, state, dag_ancestor_ids)
-            if _node_declares_work_item_refs(node_def)
-            else None
-        )
-        rendered_prompt, routing_mode = _render_agent_prompt(
-            state=scoped_state,
-            run_context=scoped_run_context,
             raw_input=raw_input,
-            prompt_template=prompt_template,
-            node_def=node_def,
-            work_item_refs=node_work_item_refs,
+            dag_ancestor_ids=dag_ancestor_ids,
         )
-
-        # FAR-900: resolve the schema_profile for rendering before dispatch.
-        _node_schema_profile = _resolve_schema_profile(node_def)
-        # FAR-902: track whether the provider actually used native structured output.
-        _native_output_flag: list[bool] = [False]
-        output_data = await _invoke_node_model(
-            rendered_prompt,
-            model_backend_id_str,
-            node_id,
-            output_schema_json=output_schema_json,
-            schema_profile=_node_schema_profile,
-            _native_output_flag=_native_output_flag,
-        )
-
-        # FAR-899: schema validator mode — resolved from the effective-setting
-        # store (org.settings_json → system_config → env var → "lenient").
-        # FIX E: single helper replaces 3 copy-pasted blocks.
-        _ctx = get_conformance_ctx()
-        _sf = _ctx[0] if _ctx is not None else None
-        _schema_validator_mode = await _resolve_schema_validator_mode(
-            state,
-            session_factory=_sf,
-            node_id=node_id,
-        )
-
-        # FIX B: create a repair invoke callable so the repair loop is reachable.
-        # The standard agent path has access to the ModelBackendHub and can
-        # re-invoke the same backend with the repair prompt. ``run_repair_loop``
-        # calls this SYNCHRONOUSLY while the node coroutine is already on the
-        # event loop, so bridge to the async backend with ``_run_coroutine_sync``
-        # (the same worker-loop bridge the LLM-judge callable uses). An async
-        # repair fn here would hand ``json.loads`` an un-awaited coroutine and
-        # crash the node instead of repairing it.
-        from modulo.core.pipeline_engine.decorator import get_model_backend_hub
-
-        _repair_hub = get_model_backend_hub()
-        # FAR-899 repair: parse the backend id safely — non-UUID backend ids
-        # (mock/stub/aliased backends, common in unit tests and some real
-        # graphs) must not crash the node.  When the id cannot be resolved
-        # to a UUID, skip the repair invoke entirely and let the node take
-        # the existing documented hard-fail path.
-        _repair_backend_id = _parse_uuid_opt(model_backend_id_str)
-
-        if _repair_backend_id is not None:
-
-            def _std_repair_invoke(prompt: str) -> str:
-                """Re-invoke the same model backend with the repair prompt."""
-                if _repair_hub is None:
-                    raise RuntimeError("ModelBackendHub not available for repair invoke")
-                _resp = _run_coroutine_sync(
-                    _invoke_backend(_repair_hub, _repair_backend_id, [HumanMessage(content=prompt)])
-                )
-                return _resp.content if hasattr(_resp, "content") else str(_resp)
-
-            _repair_fn: Any = _std_repair_invoke
-        else:
-            # Non-UUID backend id → repair invoke unavailable; strict-mode
-            # validation failures are terminal (the documented hard-fail path).
-            _repair_fn = None
-
-        try:
-            _node_result = _finalize_node_result(
-                node_id,
-                output_data,
-                output_schema_json,
-                routing_mode,
-                mode=_schema_validator_mode,
-                schema_id=node_def.get("output_schema_id", "unknown"),
-                schema_version=node_def.get("output_schema_version", 0),
-                _repair_invoke_fn=_repair_fn,
-                resolved_profile=_node_schema_profile or "verbatim",
-                native_output=_native_output_flag[0],
-            )
-        except OutputSchemaValidationError as _schema_exc:
-            # FAR-902 (D3): persist the terminal-failure enforcement record
-            # BEFORE the node is terminalized, then re-raise unchanged.
-            _ef_ctx = get_conformance_ctx()
-            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
-            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
-            _ef_run_id = state.get("_run_id")
-            await _persist_enforcement_record_best_effort(
-                getattr(_schema_exc, "enforcement_record", None),
-                session_factory=_ef_sf,
-                run_id=_ef_run_id,
-                org_id=_ef_org,
-                node_id=node_id,
-                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
-            )
-            raise
-
-        # FAR-902: persist the enforcement record BEFORE terminalization.
-        # The record was built by _finalize_node_result and carried on the
-        # result dict under ``_schema_enforcement_record``.  Persist it via
-        # the conformance-context session_factory and remove it from the
-        # result so it never leaks into node telemetry (D3 ordering).
-        _enforcement_rec = _node_result.pop("_schema_enforcement_record", None)
-        if _enforcement_rec is not None:
-            _ef_ctx = get_conformance_ctx()
-            _ef_sf = _ef_ctx[0] if _ef_ctx is not None else None
-            _ef_org = _ef_ctx[1] if _ef_ctx is not None else None
-            _ef_run_id = state.get("_run_id")
-            await _persist_enforcement_record_best_effort(
-                _enforcement_rec,
-                session_factory=_ef_sf,
-                run_id=_ef_run_id,
-                org_id=_ef_org,
-                node_id=node_id,
-                attempt_key=(f"run:{_ef_run_id}:node:{node_id}:agent" if _ef_run_id is not None else None),
-            )
-
-        return _node_result
 
     _node.__name__ = f"node_{node_id}"
     return _node

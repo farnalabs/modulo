@@ -3942,6 +3942,9 @@ export default {
     },
     "shared": {
     },
+    "ErrorAlert": {
+      "retry": "Retry"
+    },
     "OwnershipPicker": {
       "everyone_in_the_org": "Everyone in the org",
       "select_ownership": "Select ownership...",

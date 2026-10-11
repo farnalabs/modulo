@@ -22,7 +22,7 @@
       </section>
     </div>
 
-    <ErrorAlert v-else-if="connectorsError" :message="connectorsError" />
+    <ErrorAlert v-else-if="connectorsError" :message="connectorsError" :on-retry="loadConnectors" />
 
     <template v-else>
       <section class="rounded-lg border bg-card p-6 shadow-sm">

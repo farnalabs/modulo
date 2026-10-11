@@ -170,18 +170,27 @@ def fake_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 class _FakeLibraryClient:
     """Stand-in for ``LibraryClient`` exercising the real ``_fetch_blob`` body."""
 
-    def __init__(self, blob: bytes | None, close_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        blob: bytes | None,
+        *,
+        fetch_error: Exception | None = None,
+        close_error: Exception | None = None,
+    ) -> None:
         self._blob = blob
-        self.close_error = close_error
+        self._fetch_error = fetch_error
+        self._close_error = close_error
         self.closed = False
 
     async def fetch_blob(self, _sha256: str) -> bytes | None:
+        if self._fetch_error is not None:
+            raise self._fetch_error
         return self._blob
 
     async def close(self) -> None:
         self.closed = True
-        if self.close_error is not None:
-            raise self.close_error
+        if self._close_error is not None:
+            raise self._close_error
 
 
 class TestInstalledRegistryKeys:
@@ -459,9 +468,14 @@ class TestFetchBlob:
     """Exercises the real ``_fetch_blob`` body (elsewhere monkeypatched away)."""
 
     def _install_client(
-        self, monkeypatch: pytest.MonkeyPatch, blob: bytes | None, close_error: Exception | None = None
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        blob: bytes | None,
+        *,
+        fetch_error: Exception | None = None,
+        close_error: Exception | None = None,
     ) -> _FakeLibraryClient:
-        client = _FakeLibraryClient(blob, close_error)
+        client = _FakeLibraryClient(blob, fetch_error=fetch_error, close_error=close_error)
         monkeypatch.setattr(community_module, "LibraryClient", lambda **_: client)
         monkeypatch.setattr(
             community_module,
@@ -505,6 +519,55 @@ class TestFetchBlob:
         result = await community_module._fetch_blob(hashlib.sha256(payload).hexdigest())
         assert result == {"name": "code-reviewer"}
         assert client.closed is True
+
+    async def test_raising_close_is_logged_and_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``close()`` that raises never escapes ``_fetch_blob``.
+
+        The teardown sits in ``finally`` AFTER the ``except ValueError`` arm,
+        so without its own guard a raising ``close()`` would replace the
+        body's return on BOTH paths: the parsed-content return (success) and
+        the ``None`` degrade (ValueError). Proves both returns survive and
+        the teardown failure is logged.
+        """
+        payload = b'{"name": "code-reviewer"}'
+        client = self._install_client(monkeypatch, payload, close_error=RuntimeError("teardown failed"))
+        sha = hashlib.sha256(payload).hexdigest()
+
+        with caplog.at_level(logging.ERROR, logger=community_module.logger.name):
+            content = await community_module._fetch_blob(sha)
+
+        assert content == {"name": "code-reviewer"}
+        assert client.closed is True
+        assert "community.install.client_close_failed" in caplog.messages
+
+        # Failure path: the ValueError degrade still returns None.
+        failing = self._install_client(monkeypatch, b"not json", close_error=RuntimeError("teardown failed"))
+        not_json_sha = hashlib.sha256(b"not json").hexdigest()
+
+        with caplog.at_level(logging.ERROR, logger=community_module.logger.name):
+            degraded = await community_module._fetch_blob(not_json_sha)
+
+        assert degraded is None
+        assert failing.closed is True
+
+    async def test_raising_close_does_not_displace_body_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Body exception + failing teardown: the BODY's error wins.
+
+        Without the teardown guard the ``finally``'s exception replaces the
+        propagating ``RuntimeError`` from ``fetch_blob``, masking the real
+        failure with the teardown's own message.
+        """
+        self._install_client(
+            monkeypatch,
+            None,
+            fetch_error=RuntimeError("blob boom"),
+            close_error=RuntimeError("teardown failed"),
+        )
+
+        with pytest.raises(RuntimeError, match="blob boom"):
+            await community_module._fetch_blob("a" * 64)
 
     async def test_raising_close_never_propagates(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

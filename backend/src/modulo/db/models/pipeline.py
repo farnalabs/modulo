@@ -172,6 +172,18 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # Shape: {"mode": "tail"|"full", "max_bytes": <positive int>} or None
     # (no pipeline override — inherit from org ceiling only).
     stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # FAR-707: explicit per-pipeline BENIGN run-outcome signatures. A terminal
+    # run whose (error_code, error_detail) matches one is classified ``benign``
+    # — a distinct terminal class excluded from analytics failure rates and
+    # failure-reason clusters — instead of countable ``no_delivery``.
+    # Shape (JSON list; NULL = no signatures = historical behaviour):
+    #   [{"error_code": "<exact runs.error_code>",            # REQUIRED
+    #     "error_detail_contains": "<case-insensitive substring>"}]  # optional
+    # Validated/matched by ``core.pipeline_engine.classify.normalize_benign_signatures``
+    # / ``matches_benign_signature``; malformed entries are IGNORED at read
+    # time (fail-open to the old counting — a broken config never marks a real
+    # failure benign). Migration 0296.
+    benign_signatures: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,
