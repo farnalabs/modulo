@@ -165,6 +165,26 @@ describe('SettingsTeamsView', () => {
     wrapper.unmount()
   })
 
+  it('offers Retry on a failed teams load and re-fetches on click (FAR-1655)', async () => {
+    mockListError = { detail: 'teams_500' }
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('teams_500')
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    // Retry clears the error channel and re-runs loadTeams — recover now.
+    mockListError = undefined
+    mockTeams = [team()]
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Engineering')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('creates a team end-to-end and refreshes the list', async () => {
     mockTeams = []
     postResult = { data: { id: 't9', name: 'Support' }, error: undefined }

@@ -77,12 +77,23 @@ vi.mock('@/composables/useApi', () => {
 
 import SchemaListView from '../views/SchemaListView.vue'
 
+// ErrorAlert is captured (not stubbed blind) so the message prop and the
+// retry-on-failure flows are assertable (same pattern as AdminConnectorsView).
+const capturingErrorAlert = {
+  props: ['message', 'onRetry', 'onDismiss', 'dismissLabel'],
+  emits: ['on-dismiss'],
+  template:
+    '<div data-testid="error-alert"><span data-testid="error-alert-message">{{ message }}</span>' +
+    '<button v-if="onRetry" type="button" data-testid="error-alert-retry" @click="onRetry()">Retry</button>' +
+    '<button v-if="onDismiss && dismissLabel" type="button" data-testid="error-alert-dismiss" @click="onDismiss()">{{ dismissLabel }}</button></div>',
+}
+
 function mountView() {
   return mount(SchemaListView, {
     global: {
       stubs: {
         LoadingSpinner: true,
-        ErrorAlert: true,
+        ErrorAlert: capturingErrorAlert,
       },
     },
   })
@@ -309,6 +320,100 @@ describe('SchemaListView', () => {
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('Failed to load folders')
+  })
+
+  it('surfaces a folder-load failure as the shared ErrorAlert with a working Retry (FAR-1655)', async () => {
+    // First get() is the FolderTree's own fetch; the second is loadFolders.
+    getMock.mockResolvedValueOnce([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    getMock.mockRejectedValueOnce(new Error('boom'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const alert = wrapper.find('[data-testid="error-alert"]')
+    expect(alert.exists()).toBe(true)
+    expect(alert.text()).toContain('Failed to load folders')
+    expect(alert.text()).toContain('boom')
+
+    // Retry re-invokes loadFolders — the folder fetch succeeds this time.
+    getMock.mockResolvedValue([
+      { id: 'folder-1', organisation_id: 'org-1', name: 'Analytics', parent_id: null, sort_order: 0 },
+    ])
+    const getCallCountBefore = getMock.mock.calls.length
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+    expect(getMock.mock.calls.length).toBeGreaterThan(getCallCountBefore)
+    // loadFolders clears folderError on entry, so the alert unmounts.
+    expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+  })
+
+  it('surfaces a schemas-load failure as the shared ErrorAlert and Retry re-fetches (FAR-1655)', async () => {
+    const { api } = await import('../lib/api/client')
+    const getMockApi = api.GET as ReturnType<typeof vi.fn>
+    const originalGet = getMockApi.getMockImplementation()
+    getMockApi.mockImplementation((url: string) => {
+      if (url === '/api/v1/schemas') {
+        return Promise.resolve({ data: undefined, error: { detail: 'schemas backend down' } })
+      }
+      return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+    })
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+
+      const alert = wrapper.find('[data-testid="error-alert"]')
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('schemas backend down')
+
+      getMockApi.mockImplementation((url: string) => {
+        if (url === '/api/v1/schemas') {
+          return Promise.resolve({
+            data: { items: [{ id: '1', organisation_id: 'org-1', name: 'Recovered', description: null, abstract_name: null, folder_id: null, created_by: 'u', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', deprecated: false, deprecated_at: null }], total: 1, page: 1, page_size: 100 },
+            error: undefined,
+          })
+        }
+        return Promise.resolve({ data: { items: [], total: 0, page: 1, page_size: 100 }, error: undefined })
+      })
+      await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.text()).toContain('Recovered')
+      expect(wrapper.find('[data-testid="error-alert"]').exists()).toBe(false)
+    } finally {
+      getMockApi.mockImplementation(originalGet as (...args: unknown[]) => unknown)
+    }
+  })
+
+  it('renders a deprecate-dialog failure as the shared ErrorAlert (FAR-1655)', async () => {
+    const { api } = await import('../lib/api/client')
+    const patchMockApi = api.PATCH as ReturnType<typeof vi.fn>
+    const originalPatch = patchMockApi.getMockImplementation()
+    patchMockApi.mockResolvedValue({ data: null, error: { detail: 'deprecate exploded' } })
+    try {
+      const wrapper = mountView()
+      await flushPromises()
+
+      await wrapper.find('[data-testid="schema-row-1"] [data-testid="schema-action-menu"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+      findMenuItem('Deprecate')!.click()
+      await flushPromises()
+      await nextTick()
+
+      const confirmBtn = document.body.querySelector('[data-testid="schema-deprecate-confirm"]') as HTMLElement | null
+      expect(confirmBtn).not.toBeNull()
+      confirmBtn!.click()
+      await flushPromises()
+      await nextTick()
+
+      // The bespoke error <div> is gone; the shared ErrorAlert renders it.
+      const alert = document.body.querySelector('[data-testid="error-alert"]') as HTMLElement | null
+      expect(alert).not.toBeNull()
+      expect(alert!.textContent).toContain('deprecate exploded')
+    } finally {
+      patchMockApi.mockImplementation(originalPatch as (...args: unknown[]) => unknown)
+    }
   })
 
   it('sorts the mobile folder select options alphabetically when API returns unsorted folders', async () => {

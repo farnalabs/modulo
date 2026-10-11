@@ -22,9 +22,13 @@
       />
 
       <div class="flex-1 min-w-0">
-        <div v-if="folderError" class="mb-4 px-4 py-2 text-xs text-destructive">
-          {{ $t('views.SchemaListView.failed_to_load_folders') }} {{ folderError }}
-        </div>
+        <ErrorAlert
+          v-if="folderError"
+          :message="`${$t('views.SchemaListView.failed_to_load_folders')} ${folderError}`"
+          :on-retry="loadFolders"
+          :dismiss-label="$t('common.close')"
+          :on-dismiss="() => { folderError = null }"
+        />
 
         <div v-if="moveError" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="schema-list-move-error">
           <span>{{ moveError }}</span>
@@ -54,7 +58,7 @@
           </table>
         </div>
 
-        <ErrorAlert v-else-if="error" :message="error" />
+        <ErrorAlert v-else-if="error" :message="error" :on-retry="loadSchemas" />
 
         <template v-else>
           <!-- Mobile folder filter — the FolderTree is hidden below md -->
@@ -164,9 +168,7 @@
           <div class="mt-0.5 text-sm text-muted-foreground">{{ $t('views.SchemaListView.deprecation_description') }}</div>
         </div>
       </template>
-      <div v-if="deprecateError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ deprecateError }}
-      </div>
+      <ErrorAlert v-if="deprecateError" :message="deprecateError" />
       <template #footer>
         <div class="flex gap-2 justify-end">
           <Button severity="secondary" outlined data-testid="schema-deprecate-cancel" @click="deprecateDialogOpen = false">

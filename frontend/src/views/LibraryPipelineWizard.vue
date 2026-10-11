@@ -175,12 +175,7 @@
           </p>
         </div>
 
-        <div
-          v-if="createError"
-          class="mt-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
-        >
-          {{ createError }}
-        </div>
+        <ErrorAlert v-if="createError" :message="createError" :on-retry="createPipeline" class="mt-6" />
       </div>
     </main>
   </div>
