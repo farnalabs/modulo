@@ -451,6 +451,50 @@ def _mark_retry_exhausted(result: dict[str, Any], last_resp_or_exc: httpx.Respon
         _mark_failed(result, error="max_retries_exceeded")
 
 
+def _handle_delivery_response(
+    resp: httpx.Response,
+    result: dict[str, Any],
+    url: str,
+    attempt: int,
+) -> bool:
+    """Classify *resp* for the retry loop, returning True when the loop must stop.
+
+    A success or a non-transient response (neither 429 nor 5xx) is terminal: the
+    outcome is recorded on ``result`` and the caller breaks out of the loop. A
+    429 or 5xx is transient — the warning is logged and the caller retries.
+    """
+    if resp.is_success:
+        result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
+        return True
+    if resp.status_code == 429:
+        _log.warning(
+            "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
+            url,
+            _parse_retry_after(resp),
+            attempt + 1,
+            _REPORT_MAX_RETRIES,
+        )
+        return False
+    if resp.status_code >= 500:
+        _log.warning(
+            "Delivery to %s returned %d, retrying (attempt %d/%d)",
+            url,
+            resp.status_code,
+            attempt + 1,
+            _REPORT_MAX_RETRIES,
+        )
+        return False
+    _mark_failed(result, status_code=resp.status_code, error=resp.text[:200])
+    return True
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Delay before the next attempt: the 429 ``Retry-After``, else capped backoff."""
+    if resp.status_code == 429:
+        return _parse_retry_after(resp)
+    return _backoff_seconds(attempt)
+
+
 async def _deliver_one_url(
     client: httpx.AsyncClient,
     url: str,
@@ -481,27 +525,7 @@ async def _deliver_one_url(
             else:
                 resp = await client.post(url, json=body, headers=headers)
             last_resp_or_exc = resp
-            if resp.is_success:
-                result.update({"status": "delivered", "status_code": resp.status_code, "error": None})
-                break
-            if resp.status_code == 429:
-                _log.warning(
-                    "Delivery to %s rate-limited (429), retrying after %.0fs (attempt %d/%d)",
-                    url,
-                    _parse_retry_after(resp),
-                    attempt + 1,
-                    _REPORT_MAX_RETRIES,
-                )
-            elif resp.status_code >= 500:
-                _log.warning(
-                    "Delivery to %s returned %d, retrying (attempt %d/%d)",
-                    url,
-                    resp.status_code,
-                    attempt + 1,
-                    _REPORT_MAX_RETRIES,
-                )
-            else:
-                _mark_failed(result, status_code=resp.status_code, error=resp.text[:200])
+            if _handle_delivery_response(resp, result, url, attempt):
                 break
         except (httpx.RequestError, TypeError) as exc:
             _log.warning(
@@ -521,7 +545,7 @@ async def _deliver_one_url(
         # Transient response (429 / 5xx): sleep before the next attempt. The
         # 429 honours Retry-After; both paths still sleep on the FINAL attempt
         # so the observed request cadence is unchanged (the loop then ends).
-        await asyncio.sleep(_parse_retry_after(resp) if resp.status_code == 429 else _backoff_seconds(attempt))
+        await asyncio.sleep(_retry_delay(resp, attempt))
     else:
         _mark_retry_exhausted(result, last_resp_or_exc)
     return result
