@@ -358,11 +358,12 @@ class TestGetErrorEventsByGroup:
         group_mock.fingerprint = "test-fingerprint"
         group_result = MagicMock()
         group_result.scalar_one_or_none.return_value = group_mock
+        events = [MagicMock(spec=ErrorEvent), MagicMock(spec=ErrorEvent)]
         events_result = MagicMock()
-        events_result.scalars.return_value.all.return_value = []
+        events_result.scalars.return_value.all.return_value = events
         session.execute.side_effect = [group_result, events_result]
         result = await get_error_events_by_group(session=session, org_id=_ORG_ID, group_id=uuid.uuid4())
-        assert result == []
+        assert result == events
 
 
 class TestUpdateErrorGroup:
@@ -497,16 +498,6 @@ class TestUpdateErrorGroup:
 
 
 class TestAppendOnly:
-    def test_insert_not_blocked(self) -> None:
-        event = ErrorEvent(
-            organisation_id=_ORG_ID,
-            fingerprint="abc",
-            level="error",
-            message="test",
-            source="backend",
-        )
-        assert event.fingerprint == "abc"
-
     def test_update_listener_blocks(self) -> None:
         """The registered before_update guard actually raises AppendOnlyViolationError."""
         from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker

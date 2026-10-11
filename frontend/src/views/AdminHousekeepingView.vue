@@ -15,16 +15,12 @@
         <LoadingSpinner />
       </div>
 
-      <div
+      <ErrorAlert
         v-else-if="error"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4"
+        :message="error"
+        :on-retry="scan"
         data-testid="hk-error"
-      >
-        <p class="text-sm text-destructive">{{ error }}</p>
-        <Button severity="secondary" outlined size="small" class="mt-2" @click="scan" data-testid="hk-retry">
-          {{ $t('views.AdminHousekeepingView.retry') }}
-        </Button>
-      </div>
+      />
 
       <EmptyState
         v-else-if="categories.length === 0"
@@ -200,6 +196,7 @@ import Dialog from 'primevue/dialog'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 interface CandidateItem {
   id: string

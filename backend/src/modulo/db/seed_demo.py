@@ -883,6 +883,15 @@ async def _get_or_create_pipeline(
     ``graph_nodes_json`` to the current spec without touching identity
     fields.  The write is a no-op when the row already matches.
     """
+    from modulo.db.crud.pipeline import reject_declared_policy_gates
+
+    # FAR-1109: this direct create/converge writes ``graph_nodes_json`` without
+    # running the graph-write policy-gate translation (the edge convergence
+    # below replaces the graph through ``replace_pipeline_graph``, but only when
+    # the edges differ). The seed's trusted fixture graphs declare no gate; the
+    # guard keeps that structural if that ever changes.
+    reject_declared_policy_gates(graph_nodes, surface="Demo pipeline seed")
+
     result = await session.execute(select(Pipeline).where(Pipeline.organisation_id == org.id, Pipeline.name == name))
     pipeline = result.scalar_one_or_none()
     if pipeline is None:

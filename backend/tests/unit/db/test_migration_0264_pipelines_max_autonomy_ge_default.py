@@ -39,7 +39,9 @@ Lenses:
     0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints, and
     0293_oauth_clients_team_id chains onto 0292_audit_events_resource_lookup, and
     0294_eval_results_org_fk chains onto 0293_oauth_clients_team_id, and
-    0296_benign_run_outcomes chains onto 0295_decision_record_event_identity as the
+    0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
+    0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
+    0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes as the
     single linear head (0259's test documents the run-up through 0288).
 * **Structure (mocked ``op``)** - upgrade emits THREE statements IN ORDER: the
   existence-gated ``ADD ... NOT VALID`` FIRST (so its ACCESS EXCLUSIVE is taken
@@ -75,7 +77,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0264_pipelines_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0263_evidence_layer"
-_HEAD_MIGRATION = "0296_benign_run_outcomes"
+_HEAD_MIGRATION = "0297_autonomy_gating_s1"
 _CONSTRAINT = "ck_pipelines_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - a

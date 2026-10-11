@@ -295,6 +295,9 @@ class AnalyticsExportItem(BaseModel):
     # must be provenance-typed like every other run read surface. Nullable:
     # pre-column rows and runs Modulo executed itself read NULL.
     execution_origin: str | None = None
+    # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
+    # under (from run.autonomy_level_applied; NULL when none).
+    autonomy_level: str | None = None
     # FAR-707: the run's terminal classification was a business-expected
     # (``benign``) outcome — nullable, since pre-column rows and benign
     # signatures that didn't exist at write time read NULL, treated as "not

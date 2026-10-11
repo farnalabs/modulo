@@ -123,7 +123,12 @@ from modulo.core.pipeline_engine.output_filter import OutputRejectedError
 from modulo.core.pipeline_engine.port_resolver import compute_port_topology_hash
 from modulo.core.pipeline_engine.runaway_protection import RunawayGuard, RunawayRunError
 from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, CompensationFailedError
-from modulo.core.run_context.autonomy import PIPELINE_MAX_AUTONOMY_KEY
+from modulo.core.run_context.autonomy import (
+    PIPELINE_EARNED_AT_START_KEY,
+    PIPELINE_MAX_AUTONOMY_KEY,
+    AutonomyLevel,
+    autonomy_level_rank,
+)
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
@@ -1891,6 +1896,22 @@ def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
     """
     result = gate_payload.get("subject_leaf_key")
     return result if isinstance(result, str) else None
+
+
+def _clamp_to_ceiling(base_level: AutonomyLevel, ceiling: str | None) -> str:
+    """Clamp ``base_level`` to a raw ceiling string, by rank (FAR-1175).
+
+    Levels are not lexicographic, so the clamp compares ``autonomy_level_rank``.
+    An absent or unparseable ceiling imposes no constraint — the base wins.
+    """
+    if isinstance(ceiling, str) and ceiling:
+        try:
+            ceiling_level = AutonomyLevel(ceiling)
+        except ValueError:
+            ceiling_level = None
+        if ceiling_level is not None and autonomy_level_rank(ceiling_level) < autonomy_level_rank(base_level):
+            return ceiling_level.value
+    return base_level.value
 
 
 class PipelineExecutor:
@@ -3709,6 +3730,70 @@ class PipelineExecutor:
             )
             return None, False
 
+    async def _read_live_earned_for_pin(self, pipeline_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
+        """Read the pipeline's live ``earned_autonomy_level`` for the run-start pin.
+
+        Failure-isolated (FAR-1175): any read error degrades to ``None`` so a
+        transient DB failure can never seed a PIN of ``None`` — the caller then
+        falls back to the pinned default. Cancellation still propagates.
+        """
+        try:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            async with self._session_factory() as session, session.begin():
+                from modulo.db.rls import set_rls_org
+
+                await set_rls_org(session, org_id)
+                pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+                if pipeline is not None:
+                    earned = getattr(pipeline, "earned_autonomy_level", None)
+                    if isinstance(earned, str) and earned:
+                        return earned
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.executor.earned_autonomy_read_failed",
+                extra={"run_pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+        return None
+
+    async def _resolve_earned_at_start(
+        self,
+        pipeline_id: uuid.UUID,
+        org_id: uuid.UUID,
+        snapshot: Any,
+    ) -> str | None:
+        """Pin the earned autonomy level for a run at its first execution (FAR-1175).
+
+        Returns the level the run will use as its in-flight *earned* base,
+        clamped to the pipeline ceiling:
+
+        * the live ``earned_autonomy_level`` from the pipeline row when set,
+        * else the snapshot's ``default_autonomy_level``,
+        * clamped to ``max_autonomy_level`` (falling back to the default as the
+          ceiling, mirroring runtime resolution).
+
+        Failure-isolated: any read error degrades to the pinned default so a
+        transient DB failure can never seed a PIN of ``None`` (which would let a
+        later live promotion loosen the run). Returns ``None`` only when no
+        default is available either.
+        """
+        default_level = getattr(snapshot, "default_autonomy_level", None)
+        ceiling = getattr(snapshot, "max_autonomy_level", None)
+        earned_live = await self._read_live_earned_for_pin(pipeline_id, org_id)
+
+        base = earned_live or (default_level if isinstance(default_level, str) and default_level else None)
+        if base is None:
+            return None
+        # Clamp to the ceiling using the rank map (levels are not lexicographic).
+        try:
+            base_level = AutonomyLevel(base)
+        except ValueError:
+            return None
+        return _clamp_to_ceiling(base_level, ceiling)
+
     async def resume(
         self,
         *,
@@ -5316,6 +5401,9 @@ class PipelineExecutor:
         )
 
         initial_state = _seed_state(snapshot, input_payload, variant_config_snapshot)
+        earned_pin = await self._resolve_earned_at_start(scope.pipeline_id, scope.org_id, snapshot)
+        if earned_pin is not None:
+            initial_state["run_context"][PIPELINE_EARNED_AT_START_KEY] = earned_pin
         initial_state.update(
             {
                 "_run_id": scope.run_id,
@@ -5326,6 +5414,13 @@ class PipelineExecutor:
                 # guardrail binding) find it at gate/dispatch time. The state
                 # key was READ in those paths but never written before this.
                 "_pipeline_id": scope.pipeline_id,
+                # FAR-1175 S1: pin the EARNED autonomy level at run start so
+                # an in-flight run resolves min(pinned-at-start, live earned) —
+                # a demotion bites at the next gate, a promotion never loosens
+                # an in-flight run (ADR 043 §3). Read from the live pipeline row
+                # (falling back to the pinned default and clamped to the
+                # ceiling) on the FIRST execution; the value persists in the run
+                # checkpoint so a resume does not re-pin a promoted level.
                 "_claim_lease": self._claim_token,
                 # FAR-764: community-gated agent IDs seeded into state so
                 # node functions can enforce default-deny without DB access.

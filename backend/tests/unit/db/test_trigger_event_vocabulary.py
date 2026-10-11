@@ -157,10 +157,12 @@ _MIGRATION_PATH = (
 # 0291_invitations_lookup_constraints chained onto 0290_scheduled_reports_due_scan, and
 # 0292_audit_events_resource_lookup chained onto 0291_invitations_lookup_constraints, and
 # 0293_oauth_clients_team_id chained onto 0292_audit_events_resource_lookup, and
-# 0296_benign_run_outcomes chained onto 0295_decision_record_event_identity as the chain head.
+# 0295_decision_record_event_identity chained onto 0294_eval_results_org_fk, and
+# 0296_benign_run_outcomes chained onto 0295_decision_record_event_identity, and
+# 0297_autonomy_gating_s1 chained onto 0296_benign_run_outcomes as the chain head.
 # (_MIGRATION_NAME above stays pinned to 0255 — that is the constraint-owning
 # migration under test, not the head.)
-_CHAIN_HEAD_MIGRATION_NAME = "0296_benign_run_outcomes"
+_CHAIN_HEAD_MIGRATION_NAME = "0297_autonomy_gating_s1"
 _CHECK_CONSTRAINT_NAME = "ck_trigger_events_validation_result"
 
 

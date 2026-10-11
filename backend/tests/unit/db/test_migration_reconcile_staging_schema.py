@@ -125,8 +125,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0291_invitations_lookup_constraints chains off 0290_scheduled_reports_due_scan, and
 # 0292_audit_events_resource_lookup chains off 0291_invitations_lookup_constraints, and
 # 0293_oauth_clients_team_id chains off 0292_audit_events_resource_lookup, and
-# 0296_benign_run_outcomes chains off 0295_decision_record_event_identity as the chain head.
-_CHAIN_HEAD_MIGRATION = "0296_benign_run_outcomes"
+# 0295_decision_record_event_identity chains off 0294_eval_results_org_fk, and
+# 0296_benign_run_outcomes chains off 0295_decision_record_event_identity, and
+# 0297_autonomy_gating_s1 chains off 0296_benign_run_outcomes as the chain head.
+_CHAIN_HEAD_MIGRATION = "0297_autonomy_gating_s1"
 
 
 def _source(name: str) -> str:

@@ -2001,6 +2001,10 @@ export interface paths {
         /**
          * Dashboard Summary
          * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
+         *
+         *     Optional ``days`` (1..90) adds a period-scoped ``{current, previous, delta_pct}``
+         *     block per metric (FAR-92); ignored — the legacy all-time shape is preserved —
+         *     when the ``analytics_page`` feature flag is off.
          */
         get: operations["dashboard_summary_api_v1_dashboard_summary_get"];
         put?: never;
@@ -2505,6 +2509,56 @@ export interface paths {
         head?: never;
         /** Replace Pipeline Graph Endpoint */
         patch: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch"];
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/autonomy/demote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Demote Pipeline Autonomy
+         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         *
+         *     Demotion adds human review, so it is always safe: an admin or the pipeline's
+         *     owner may lower the earned level at any time. Takes effect at the run's next
+         *     HITL gate (in-flight runs included) when ``autonomy_gating`` is on. Records
+         *     a ``pipeline.autonomy_demoted`` audit event.
+         */
+        post: operations["demote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_demote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/autonomy/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Pipeline Autonomy
+         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         *
+         *     Promotion is never automatic: an admin or the pipeline's owner approves it,
+         *     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
+         *     runs created after the approval — in-flight runs keep the lower level (ADR
+         *     043 §3). Records a ``pipeline.autonomy_promotion_decided`` audit event.
+         */
+        post: operations["promote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/pipelines/{pipeline_id}/restore": {
@@ -10537,6 +10591,8 @@ export interface components {
             node_deadline_watchdog_fired_count?: number | null;
             /** Execution Origin */
             execution_origin?: string | null;
+            /** Autonomy Level */
+            autonomy_level?: string | null;
             /** Benign */
             benign?: boolean | null;
             /** Created At */
@@ -10839,6 +10895,43 @@ export interface components {
             suggestion: string;
             /** Connector Type */
             connector_type?: string | null;
+        };
+        /**
+         * AutonomyChangeRequest
+         * @description Body for a manual autonomy demote/promote.
+         */
+        AutonomyChangeRequest: {
+            /**
+             * Level
+             * @description Target autonomy level (canonical value).
+             */
+            level: string;
+            /**
+             * Reason
+             * @description Why the level is being changed — recorded on the audit event.
+             */
+            reason?: string | null;
+        };
+        /**
+         * AutonomyChangeResponse
+         * @description Result of a manual autonomy demote/promote.
+         */
+        AutonomyChangeResponse: {
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Previous Level */
+            previous_level: string;
+            /** Earned Autonomy Level */
+            earned_autonomy_level: string;
+            /** Max Autonomy Level */
+            max_autonomy_level?: string | null;
+            /** Event Type */
+            event_type: string;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /** AvailableProviderInfo */
         AvailableProviderInfo: {
@@ -16052,6 +16145,8 @@ export interface components {
             hitl_config?: {
                 [key: string]: unknown;
             } | null;
+            /** @description Node-attached policy gate: {action: 'warn'|'block', eval_id: <uuid>}. Absent means no gate is declared on this node. */
+            policy_gate?: components["schemas"]["PipelineGraphPolicyGate"] | null;
             fan_out?: components["schemas"]["FanOutConfig"] | null;
             /** Collect */
             collect?: components["schemas"]["JoinCollectSpec"][] | null;
@@ -16104,6 +16199,37 @@ export interface components {
              * @description dispatch nodes only: seconds to wait for a terminal substrate status when await_completion is true (> 0, <= 3600; default 300 when unset). Expiry raises the terminal dispatch.wait_timeout error — never retried, because a retry would fire a second job on the customer's substrate. Keep it below the node's timeout_seconds so this error (not the node deadline) is what fires.
              */
             wait_timeout?: number | null;
+        };
+        /**
+         * PipelineGraphPolicyGate
+         * @description Node-attached policy-gate configuration (FAR-1109).
+         *
+         *     Declared on a :class:`PipelineGraphNode` so a declarative ``modulo apply``
+         *     config can carry the gate as part of the graph write. ``action`` is the
+         *     gate's configured action (the ``policy_gates.action`` CHECK vocabulary);
+         *     ``eval_id`` references the eval bound to this node (the CLI never
+         *     auto-creates evals, so an unresolved ``eval_id`` blocks the entity at plan
+         *     time).
+         *
+         *     The node model previously had no field for this block, so Pydantic's
+         *     default ``extra="ignore"`` silently DROPPED it — before the drift hash and
+         *     before the graph write — leaving declarative gate config permanently inert
+         *     (the plan always reported "unchanged" and the write never carried the
+         *     gate). Declaring the field means the validated node dict retains the block
+         *     and ``replace_pipeline_graph`` persists it verbatim in
+         *     ``pipeline.graph_nodes_json``, and the read path round-trips it.
+         */
+        PipelineGraphPolicyGate: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "warn" | "block";
+            /**
+             * Eval Id
+             * Format: uuid
+             */
+            eval_id: string;
         };
         /** PipelineGraphResponse */
         PipelineGraphResponse: {
@@ -16207,6 +16333,10 @@ export interface components {
             default_autonomy_level?: string | null;
             /** Max Autonomy Level */
             max_autonomy_level?: string | null;
+            /** Earned Autonomy Level */
+            earned_autonomy_level?: string | null;
+            /** Earned Autonomy Updated At */
+            earned_autonomy_updated_at?: string | null;
             /** Max Duration Seconds */
             max_duration_seconds?: number | null;
             /**
@@ -17704,6 +17834,10 @@ export interface components {
             } | null;
             /** Workspace Inputs */
             workspace_inputs?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Deadline Triage */
+            deadline_triage?: {
                 [key: string]: unknown;
             }[] | null;
         };
@@ -25826,6 +25960,94 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PipelineGraphResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    demote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_demote_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutonomyChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyChangeResponse"];
+                };
+            };
+            /** @description Not an admin or the pipeline owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_promote_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutonomyChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyChangeResponse"];
+                };
+            };
+            /** @description Not an admin or the pipeline owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -29,6 +29,9 @@ _EXPECTED_TOOLS = frozenset(
         "bind_connector_to_node",
         "set_pipeline_circuit_breaker",
         "set_pipeline_owners",
+        # FAR-1175: manual autonomy demote/promote.
+        "demote_pipeline_autonomy",
+        "promote_pipeline_autonomy",
         "update_pipeline",
         "trigger_pipeline",
         "get_run_status",
@@ -101,6 +104,20 @@ _EXPECTED_TOOLS = frozenset(
         "update_parameter_set",
         "delete_parameter_set",
         "restore_parameter_set",
+        # FAR-696: governance-entity read/list tools.
+        "list_teams",
+        "list_users",
+        "list_feature_flags",
+        "get_audit_log",
+        "list_notification_deliveries",
+        "list_lifecycle_maps",
+        "get_lifecycle_map",
+        "list_plugins",
+        "list_sso_providers",
+        "list_eval_suites",
+        "get_eval_suite",
+        "get_schema_versions",
+        "get_pipeline_diff",
     }
 )
 
