@@ -10536,6 +10536,8 @@ export interface components {
             node_deadline_watchdog_fired_count?: number | null;
             /** Execution Origin */
             execution_origin?: string | null;
+            /** Benign */
+            benign?: boolean | null;
             /** Created At */
             created_at: string;
         };

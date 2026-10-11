@@ -295,6 +295,12 @@ class AnalyticsExportItem(BaseModel):
     # must be provenance-typed like every other run read surface. Nullable:
     # pre-column rows and runs Modulo executed itself read NULL.
     execution_origin: str | None = None
+    # FAR-707: the run's terminal classification was a business-expected
+    # (``benign``) outcome — nullable, since pre-column rows and benign
+    # signatures that didn't exist at write time read NULL, treated as "not
+    # benign". Carried so the raw-facts export reproduces the failure-rate
+    # figures the analytics surfaces report (which exclude benign rows).
+    benign: bool | None = None
     created_at: str
 
 
