@@ -146,7 +146,12 @@ async def _check_instance(
             return _bound_detail(_FALLBACK_DETAIL)
     if result.ok:
         return ""
-    detail = redactor.redact(result.detail) if redactor is not None else result.detail
+    # Fail CLOSED (FAR-1651Fix3): with no redactor bound we cannot scrub the
+    # connector's own detail, so persist the placeholder rather than echo it
+    # unredacted. This mirrors the escalated-exception arm above; unreachable
+    # today (the hub binds the redactor before building a connector), but the
+    # persistence boundary must not fall open if that ever changes.
+    detail = redactor.redact(result.detail) if redactor is not None else _FALLBACK_DETAIL
     return _bound_detail(detail or _FALLBACK_DETAIL)
 
 

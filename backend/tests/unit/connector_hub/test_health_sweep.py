@@ -390,6 +390,33 @@ async def test_sweep_escalated_failure_fails_closed_without_redactor(sweep, tmp_
     assert _ESCALATED_TOKEN not in error
 
 
+async def test_sweep_unhealthy_result_fails_closed_without_redactor(sweep, tmp_path, monkeypatch) -> None:
+    """A connector that RETURNS a not-ok HealthResult (rather than raising) with
+    NO redactor bound also degrades to the placeholder: the persistence
+    boundary never echoes the connector's own detail unredacted (FAR-1651Fix3)."""
+    run, seeder, rows = sweep
+
+    from modulo.connectors.base import HealthResult
+    from modulo.connectors.filesystem import FilesystemConnector
+    from modulo.core.connector_hub import ConnectorHub
+
+    async def _unhealthy(self) -> Any:
+        return HealthResult(ok=False, detail=f"upstream echoed {_ESCALATED_TOKEN}")
+
+    monkeypatch.setattr(ConnectorHub, "credential_redactor_for", lambda self, connector_id: None)
+    monkeypatch.setattr(FilesystemConnector, "health_check", _unhealthy)
+    await seeder([_instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)})])
+
+    result = await run()
+
+    assert result["unhealthy"] == 1
+    (row,) = await rows()
+    error = row.last_health_check_error
+    assert error is not None
+    assert health_sweep._FALLBACK_DETAIL in error
+    assert _ESCALATED_TOKEN not in error
+
+
 async def test_sweep_re_raises_cancelled_error_from_health_check(sweep, tmp_path, monkeypatch) -> None:
     """A CancelledError escaping health_check keeps run-loop semantics — re-raised."""
     run, seeder, _rows = sweep
