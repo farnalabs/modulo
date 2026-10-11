@@ -19,9 +19,12 @@ import pytest
 from modulo.core.cost_controller.finalize import (
     FinalizeMetricSink,
     _emit_duplicate_terminal,
+    _emit_finalize_deferred,
     _emit_limit_refused,
     _fallback_finalize,
+    _handle_ledger_write_failure,
     _ledger_block,
+    _LedgerEscapeContext,
     _MergedSets,
     _record_ledger_with_retry,
 )
@@ -706,3 +709,204 @@ def test_emit_duplicate_terminal_defers_with_sink_and_emits_inline_without() -> 
     with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as inline:
         _emit_duplicate_terminal(None)
         inline.assert_called_once_with()
+
+
+def test_metric_sink_buffers_finalize_deferred_until_flush() -> None:
+    """``finalize_deferred`` queues on the sink and only emits on ``flush`` — a
+    rolled-back write-failure attempt must not count a deferred finalisation."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+        sink.finalize_deferred("write_failure", "team-a")
+        deferred.assert_not_called()
+
+        sink.flush()
+        deferred.assert_called_once_with(reason="write_failure", team="team-a")
+
+
+def test_emit_finalize_deferred_defers_with_sink_and_emits_inline_without() -> None:
+    """``_emit_finalize_deferred`` buffers when a retry-owning sink is present and
+    emits inline when it is not (the cancel path / any caller without a retry)."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+        _emit_finalize_deferred("write_failure", "team-a", sink)
+        deferred.assert_not_called()
+
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline:
+        _emit_finalize_deferred("write_failure", "team-a", None)
+        inline.assert_called_once_with(reason="write_failure", team="team-a")
+
+
+async def test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_without() -> None:
+    """``_handle_ledger_write_failure`` routes its ``finalize_deferred`` counter
+    through the sink when one is supplied (retry-owning caller) and emits inline
+    — exactly as before — when the sink is ``None`` (the no-retry path)."""
+    ctx = _LedgerEscapeContext(
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        status="complete",
+        finalize_fields={},
+        session_factory=None,
+        claim_token=None,
+    )
+    session = MagicMock()
+
+    with (
+        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()) as reduced_escape,
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+    ):
+        sink = FinalizeMetricSink()
+        await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=sink)
+        deferred.assert_not_called()
+        sink.flush()
+        deferred.assert_called_once_with(reason="write_failure", team="none")
+        reduced_escape.assert_awaited_once()
+
+    with (
+        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline,
+    ):
+        await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=None)
+        inline.assert_called_once_with(reason="write_failure", team="none")
+
+
+# ---------------------------------------------------------------------------
+# FAR-1642 — pin the sink WIRE at the REAL ``_ledger_block`` call sites
+# ---------------------------------------------------------------------------
+#
+# The tests above exercise the handlers / the sink DIRECTLY, and the executor
+# tests fake ``finalize_cost`` — so none of them would notice a regression that
+# drops ``metric_sink=metric_sink`` at a call site INSIDE ``_ledger_block`` or
+# its handlers (the wire would silently fall back to inline emission). Each test
+# below drives the REAL ``_ledger_block`` with a sink and asserts the emission
+# is BUFFERED on the PASSED sink (never inline) and only fires on ``flush``.
+# Drop the corresponding ``metric_sink=metric_sink`` and the inline emission
+# makes the ``assert_not_called`` fail.
+
+
+async def test_ledger_block_threads_sink_to_ceiling_limit_refused() -> None:
+    """A ceiling refusal on the real path must buffer ``limit_refused`` into the
+    PASSED sink (pins the ``_apply_spend_ceiling_gate(..., metric_sink=...)`` wire)."""
+    run = _make_run()
+    org = _make_org(max_run_cost_cents=100)  # $1.00 per-run cap
+    session = _session_for(run, org)
+    sink = FinalizeMetricSink()
+
+    with patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused:
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("2.00"),  # $2.00 run > $1.00 cap
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+            metric_sink=sink,
+        )
+        # Buffered on the PASSED sink — the wire was not cut.
+        limit_refused.assert_not_called()
+        sink.flush()
+        limit_refused.assert_called_once_with("spend_ceiling")
+
+
+async def test_ledger_block_threads_sink_to_daily_limit_refused() -> None:
+    """A daily-limit refusal must buffer ``limit_refused`` into the PASSED sink
+    (pins the ``_handle_limit_refused(..., metric_sink=...)`` wire)."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    session = _session_for(run, org)
+    sink = FinalizeMetricSink()
+
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(return_value=(False, "daily_limit_exceeded: team")),
+        ),
+        patch("modulo.core.cost_controller.finalize.record_limit_refused") as limit_refused,
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+            metric_sink=sink,
+        )
+        limit_refused.assert_not_called()
+        sink.flush()
+        limit_refused.assert_called_once_with("none")
+
+
+async def test_ledger_block_threads_sink_to_duplicate_terminal() -> None:
+    """A duplicate-terminal guard firing must buffer ``duplicate_terminal`` into
+    the PASSED sink (pins the direct ``_emit_duplicate_terminal(metric_sink)`` wire)."""
+    run = _make_run()
+    run.ledger_written = True  # the duplicate guard's trigger
+    org = _make_org()
+    session = _session_for(run, org)
+    sink = FinalizeMetricSink()
+
+    with (
+        patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as duplicate,
+        patch(
+            "modulo.core.cost_controller.finalize._record_duplicate_terminal_event",
+            new=AsyncMock(),
+        ),
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("1.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+            metric_sink=sink,
+        )
+        duplicate.assert_not_called()
+        sink.flush()
+        duplicate.assert_called_once_with()
+
+
+async def test_ledger_block_threads_sink_to_finalize_deferred_on_write_failure() -> None:
+    """A non-lock ledger write failure must buffer ``finalize_deferred`` into the
+    PASSED sink (pins the ``_handle_ledger_write_failure(..., metric_sink=...)``
+    wire)."""
+    run = _make_run()
+    org = _make_org(spend_ceiling_cents=10_000, org_cumulative_spend_cents=500)
+    session = _session_for(run, org)
+    sink = FinalizeMetricSink()
+
+    with (
+        patch(
+            "modulo.core.cost_controller.finalize.check_and_record_spend",
+            new=AsyncMock(side_effect=RuntimeError("ledger boom")),
+        ),
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+    ):
+        await _ledger_block(
+            session,
+            run_id=run.id,
+            org_id=org.id,
+            status="complete",
+            total=Decimal("3.00"),
+            owner_team_id=None,
+            run_date=date(2026, 6, 24),
+            finalize_fields={},
+            session_factory=None,
+            claim_token=None,
+            metric_sink=sink,
+        )
+        deferred.assert_not_called()
+        sink.flush()
+        deferred.assert_called_once_with(reason="write_failure", team="none")
