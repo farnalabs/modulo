@@ -853,9 +853,13 @@ async def test_cancelled_node_retains_delivery_done_and_reraises():
     assert "delivery sentinel observed" in marker["summary"]
 
 
-async def test_cancelled_node_without_sentinel_writes_nothing():
-    """FAR-228: a cancelled node WITHOUT delivery_sentinel never writes a
-    retention marker on cancellation (non-opt-in pays zero on the cancel path)."""
+async def test_cancelled_node_without_sentinel_retains_triage_marker():
+    """FAR-704 (supersedes the FAR-228 zero-write assumption): a cancelled node
+    WITHOUT delivery_sentinel still retains a TRIAGE marker on the cancel path —
+    the marker carries ``deadline_triage`` and NO ``delivery_done`` (nothing was
+    delivered). This is the only post-hoc record of a node-deadline watchdog
+    kill, where the dispatch is cancelled before output.json is read and no node
+    envelope reaches the Agent Return Contract columns."""
     log_content = f"email sent\n{_SENTINEL}\n"
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content=log_content)
     handle = MagicMock()
@@ -875,7 +879,11 @@ async def test_cancelled_node_without_sentinel_writes_nothing():
     ):
         await fn(_run_state())
 
-    assert row.raw_output_markers is None
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+    assert marker.get("delivery_done") is not True, "no sentinel observed -> no delivery_done"
+    assert marker["status"] == "failed"
+    assert "triage evidence retained" in marker["summary"]
 
 
 async def test_cancelled_during_provisioning_reraises_cleanly():
@@ -1123,7 +1131,9 @@ async def test_cancelled_node_unreadable_log_fail_open_reraises():
     """FAR-228 fail-open on the drain side: when the sandbox log is unreadable at
     cancellation time (get_info raises), the guarded final drain fails silently
     (log + return) and the CancelledError STILL propagates — an unreadable log
-    never blocks cancellation and never fabricates a delivery marker."""
+    never blocks cancellation and never fabricates a delivery marker. FAR-704:
+    the always-written triage marker is still persisted (deadline_triage=True),
+    but it carries NO ``delivery_done`` since no sentinel was observed."""
     sandbox = _make_sandbox_mock(output_json='{"summary": "done"}', log_content="ignored")
     handle = MagicMock()
     handle.wait = AsyncMock(side_effect=asyncio.CancelledError())
@@ -1146,7 +1156,9 @@ async def test_cancelled_node_unreadable_log_fail_open_reraises():
     ):
         await fn(_run_state())
 
-    assert row.raw_output_markers is None, "unreadable log -> no sentinel observed -> no delivery marker"
+    marker = _single_marker(row)
+    assert marker["deadline_triage"] is True
+    assert marker.get("delivery_done") is not True, "unreadable log -> no sentinel observed -> no delivery_done"
 
 
 async def test_guard_a_inert_when_multi_node():
