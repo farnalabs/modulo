@@ -2587,9 +2587,9 @@ class GraphValidator:
             # entries are reduced to the canonical bare-capability vocabulary
             # by the SHARED helper with the instance's own connector type
             # threaded through, and the REQUESTED op is canonicalised too, so
-            # graph-save time grants exactly what ConnectorACL grants at
-            # runtime (same-type legacy entries grant; mis-typed ones fail
-            # closed).
+            # graph-save time grants exactly what a ConnectorACL built with
+            # the same connector type grants at runtime (same-type legacy
+            # entries grant; mis-typed ones fail closed).
             raw_allowed: object = instance.allowed_operations
             if not unrestricted_allowed_operations(raw_allowed):
                 if isinstance(raw_allowed, list):
@@ -2597,8 +2597,8 @@ class GraphValidator:
                     # canonical bare-capability vocabulary with the SHARED
                     # helper, threading the instance's OWN connector type — a
                     # stored same-type legacy entry (``github.read``) grants
-                    # ``read`` here exactly as ConnectorACL and the guardrail
-                    # conformance reader grant it; a mis-typed entry
+                    # ``read`` here exactly as the hub's ConnectorACL and the
+                    # guardrail conformance reader grant it; a mis-typed entry
                     # (``github.read`` on a filesystem connector) grants
                     # nothing (fail closed).
                     allowed_ops: set[str] = canonical_capability_set(
@@ -2616,11 +2616,17 @@ class GraphValidator:
                     allowed_ops = set()
                 # Mirror ConnectorACL.check: canonicalise the REQUESTED
                 # operation too, so a stored legacy spelling grants the required
-                # op on exactly the terms the runtime ACL grants it.
+                # op on exactly the terms the runtime ACL grants it. A
+                # non-string required op is not a capability in any spelling —
+                # report it MISSING (fail closed) rather than raising, and
+                # short-circuit before the set-membership test so an unhashable
+                # value cannot raise either.
                 missing = [
                     op
                     for op in required_ops
-                    if op not in allowed_ops and (canonical_capability(op) or op) not in allowed_ops
+                    if not (
+                        isinstance(op, str) and (op in allowed_ops or (canonical_capability(op) or op) in allowed_ops)
+                    )
                 ]
                 if missing:
                     result.error(

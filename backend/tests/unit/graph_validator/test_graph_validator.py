@@ -438,6 +438,34 @@ async def test_connector_mis_typed_qualified_entry_fails_closed():
     assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
 
 
+async def test_connector_unverifiable_type_rejects_qualified_entry():
+    """FAR-1616 fail-closed: a type-qualified stored entry is unverifiable when
+    the connector has no usable type id, so it grants nothing and a required
+    ``read`` is reported missing — a naive type-blind canonicalisation that
+    dropped the qualifier would wrongly grant it."""
+    cid = uuid.uuid4()
+    instance = _connector_instance(
+        cid,
+        status="active",
+        allowed_operations=["github.read"],
+        connector_type_id="",
+    )
+    snap = _snapshot(
+        graph_json=_SINGLE_NODE,
+        connector_bindings=[
+            {
+                "node_id": "a",
+                "connector_instance_id": str(cid),
+                "required_operations": ["read"],
+            }
+        ],
+    )
+    session = _session_returning([instance])
+    result = await GraphValidator().validate(snap, session)
+    assert not result.is_valid
+    assert any(i.code == "CONNECTOR_MISSING_OPERATIONS" for i in result.issues)
+
+
 async def test_connector_empty_allowlist_is_unrestricted():
     """FAR-1564: an unset (``[]``) allowlist means unrestricted, so a binding
     with required operations must NOT raise CONNECTOR_MISSING_OPERATIONS."""
