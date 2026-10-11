@@ -141,7 +141,9 @@ async def test_docker_close_client_exception_logged() -> None:
 
 
 async def test_e2b_create_workspace_passes_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Non-empty workspace_metadata maps to the E2B sandbox ``metadata`` kwarg."""
+    """Non-empty workspace_metadata maps to the E2B sandbox ``metadata`` kwarg,
+    and (FAR-1275) the provider's reserved identity keys ride alongside it."""
+    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-meta")
     provider = E2BRuntimeProvider(api_key="test-key")
 
     sandbox = SimpleNamespace(
@@ -166,7 +168,12 @@ async def test_e2b_create_workspace_passes_metadata(monkeypatch: pytest.MonkeyPa
     ref = await provider.create_workspace(spec)
 
     assert ref == "sb1"
-    assert calls[0]["metadata"] == {"org": "acme", "run": "42"}
+    # The operator's own keys flow through unchanged...
+    assert calls[0]["metadata"]["org"] == "acme"
+    assert calls[0]["metadata"]["run"] == "42"
+    # ...and the reserved identity keys are stamped by the provider itself.
+    assert calls[0]["metadata"]["modulo.machine.id"] == "deployment-meta"
+    assert calls[0]["metadata"]["modulo.created_at"]
 
 
 async def test_e2b_close_destroy_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:

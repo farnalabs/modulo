@@ -1,6 +1,6 @@
-"""Generic Evidence layer — fetch, authorisation, and RunEvidence fold-in (FAR-966 chunk 7).
+"""Generic Evidence layer — fetch, authorisation, append, and RunEvidence fold-in.
 
-This module provides three capabilities for the generic Evidence layer:
+This module provides four capabilities for the generic Evidence layer:
 
 - **Subject-scoped fetch** (§6): ``fetch()`` queries the evidence table
   for the most recent row per distinct key for a given subject, scoped by
@@ -9,6 +9,9 @@ This module provides three capabilities for the generic Evidence layer:
   enforces key-namespace ownership via the ``KEY_NAMESPACE_OWNERSHIP`` map.
   The CHECK constraint on ``producer_type`` (§3.1) is authoritative for the
   valid producer-type vocabulary; this map is application-level only.
+- **Append-only write path** (§5): ``append_evidence()`` is the store's ONE
+  production write path — every producer routes through it so authorisation
+  is structurally unavoidable (FAR-1293).
 - **RunEvidence fold-in mapping** (§3.2): ``map_run_evidence_to_evidence()``
   translates existing ``RunEvidence`` tri-state rows into the generic
   Evidence format.
@@ -16,14 +19,18 @@ This module provides three capabilities for the generic Evidence layer:
 **Deferred:** predicate language, ``decide`` function, compatibility adapter
 (§4 — parked unit).
 
-**Dormancy declaration:** nothing writes evidence in production until the
-guardrail-mapping chunk (chunk 8), except the run-evidence fold-in if it
-migrates existing writes.
+**First producer (FAR-1293):** the store is no longer dormant — the
+guardrail/eval persist seam (``db/crud/run.py::_persist_guardrail_eval_results``)
+appends one fact per guardrail eval decision (key ``eval_guardrail_<eval_id>``,
+producer ``eval``, subject ``run``) through :func:`append_evidence`, so every
+write is authorised by :func:`assert_write_authorisation` before any row is
+added to the session.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -70,6 +77,55 @@ def assert_write_authorisation(producer_type: str, key: str) -> None:
         raise EvidenceWriteAuthorisationError(
             f"Producer '{producer_type}' is not authorised to write key '{key}'. Allowed prefixes: {allowed}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §5 — Append-only write path (the store's single production producer seam)
+# ---------------------------------------------------------------------------
+
+
+def append_evidence(
+    db: AsyncSession,
+    *,
+    organisation_id: UUID,
+    key: str,
+    subject_type: str,
+    subject_id: str,
+    value: Any,
+    producer_type: str,
+    producer_id: UUID | None = None,
+) -> Evidence:
+    """Append one evidence fact — the store's ONLY write path (FAR-1293).
+
+    Every production producer calls this instead of constructing an
+    ``Evidence`` row directly, so :func:`assert_write_authorisation` is
+    structurally unavoidable: it runs FIRST and raises
+    ``EvidenceWriteAuthorisationError`` before anything is added to the
+    session, meaning a producer writing a key outside its owned namespace
+    fails CLOSED with no partial write.
+
+    The row is added to *db* but not flushed — it persists when the caller's
+    transaction flushes, exactly like every other row written on that path.
+    The table is append-only: this layer exposes no update or delete.
+
+    Raises
+    ------
+    EvidenceWriteAuthorisationError
+        *producer_type* is not a known producer, or *key* falls outside the
+        namespace *producer_type* owns in ``KEY_NAMESPACE_OWNERSHIP``.
+    """
+    assert_write_authorisation(producer_type, key)
+    row = Evidence(
+        organisation_id=organisation_id,
+        key=key,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        value=value,
+        producer_type=producer_type,
+        producer_id=producer_id,
+    )
+    db.add(row)
+    return row
 
 
 # ---------------------------------------------------------------------------

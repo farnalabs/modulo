@@ -145,12 +145,23 @@ async def test_create_workspace_carries_selected_allowlist_in_metadata(
     assert json.loads(kwargs["metadata"]["resource_limits"]) == {"memory_mb": 512}
 
 
-async def test_create_workspace_omits_metadata_when_spec_carries_none(
+async def test_create_workspace_stamps_identity_metadata_when_spec_carries_none(
     mock_sandbox_cls: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Parity with the legacy ``metadata=_metadata or None``: an empty
-    ``workspace_metadata`` sends no metadata kwarg at all."""
+    """FAR-1275: even an empty ``workspace_metadata`` sends the provider's
+    OWN reserved identity keys — the identity-scoped enumeration filters on
+    ``modulo.machine.id``, and the sweep's grace age on
+    ``modulo.created_at``, so both must be present on EVERY sandbox. The
+    spec's own keys stay absent (the legacy
+    ``metadata=_metadata or None`` parity holds for THEM)."""
+    monkeypatch.setenv("MODULO_RUNNER_MACHINE_ID", "deployment-egress")
     provider = E2BRuntimeProvider(api_key="sk-test")
     await provider.create_workspace(_spec(egress_policy="deny_all"))
 
-    assert "metadata" not in mock_sandbox_cls.create.await_args.kwargs
+    metadata = mock_sandbox_cls.create.await_args.kwargs["metadata"]
+    assert metadata["modulo.machine.id"] == "deployment-egress"
+    assert int(metadata["modulo.created_at"]) > 0
+    # No operator keys were supplied, so none are present.
+    assert "egress_allowlist" not in metadata
+    assert "resource_limits" not in metadata

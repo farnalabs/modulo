@@ -689,6 +689,36 @@ def test_restore_fresh_target_over_populated_db_is_not_exempt(tmp_path: Path) ->
     assert "ALREADY CONTAINS" in result.output
 
 
+def test_restore_replace_cluster_on_populated_db_with_fresh_data_dir_proceeds(tmp_path: Path) -> None:
+    """The non-refusal arm of the fresh-target guard: with --replace-cluster the
+    populated-DB-behind-a-fresh-data-dir restore PROCEEDS and emits the loud
+    REPLACING transcript instead of raising."""
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
+    data_dir = tmp_path / "fresh-data"
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._db_has_modulo_tables", return_value=True))
+        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir), "--replace-cluster"]
+        result = CliRunner().invoke(cli, args, input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "REPLACING an existing POPULATED database" in result.output
+
+
+def test_restore_data_dir_without_launcher_files_skips_adoption(tmp_path: Path) -> None:
+    """An archive carrying no launcher artefacts adopts nothing: the data-dir
+    restore returns without printing an "Adopted launcher artefacts" line."""
+    archive = _make_archive(tmp_path, MANIFEST_VERSION, None, launcher_files=False)
+    data_dir = tmp_path / "fresh-data"
+    with contextlib.ExitStack() as stack:
+        _enter_restore_patches(stack, lock=MagicMock())
+        stack.enter_context(patch("modulo.cli.backup._check_collation_versions_sync"))
+        args = ["restore", str(archive), "--yes", "--data-dir", str(data_dir)]
+        result = CliRunner().invoke(cli, args, input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "Adopted launcher artefacts" not in result.output
+
+
 def test_restore_refuses_schema_downgrade(tmp_path: Path) -> None:
     archive = _make_archive(tmp_path, MANIFEST_VERSION, None)
     archive_manifest = json.loads((archive / "backup-info.json").read_text(encoding="utf-8"))

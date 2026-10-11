@@ -13,7 +13,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret_scoped
+from modulo.auth.secret_storage import _is_encrypted_token, decode_stored_secret_scoped
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.error_tracking.metrics import record_alert_delivery_failed
 from modulo.core.ssrf import pinned_async_client
@@ -36,6 +36,18 @@ LEVEL_EMOJI = {
 }
 
 
+class SmtpPasswordDecryptError(Exception):
+    """The stored SMTP password could not be decrypted (FAR-1673).
+
+    Email delivery FAILS with this typed error instead of falling back to the
+    raw stored value. When that value is an encrypted token it IS the
+    ciphertext: using it as the SMTP password would authenticate the relay
+    session with a garbage credential while the failure stays invisible up to
+    the SMTP dialog, and it hands an undecrypted secret to an external host.
+    A legacy plaintext value has nothing to decrypt and is never routed here.
+    """
+
+
 async def dispatch_alert(
     org_id: uuid.UUID,
     alert: TriggeredAlert,
@@ -45,8 +57,11 @@ async def dispatch_alert(
     """Dispatch a single alert to its configured action type.
 
     This function is intentionally top-level (not a method on a class) so
-    callers can swap it in tests.  It swallows all exceptions so that a
-    single failing dispatch doesn't crash the alert evaluation loop.
+    callers can swap it in tests.  Each action handler swallows its own
+    failures so that a single failing dispatch doesn't crash the alert
+    evaluation loop — except :class:`SmtpPasswordDecryptError` (FAR-1673),
+    which means no usable SMTP credential exists, so the delivery failed and
+    the typed error is propagated for the caller to record.
     """
     sample_message = error_group.sample_event.message if error_group and error_group.sample_event else ""
     admin_url = f"/admin/errors/{alert.error_group_id}"
@@ -116,13 +131,14 @@ async def _dispatch_email(
             _log.warning("alert.email_disabled_no_smtp_host", extra={"rule": alert.rule_name, "org_id": str(org_id)})
             return
 
-        stored_smtp_password = email_cfg.get("smtp_password", settings.smtp_password)
+        stored_raw = email_cfg.get("smtp_password", settings.smtp_password)
         try:
             stored_smtp_password = await decode_stored_secret_scoped(
-                session, stored_smtp_password, settings.fernet_key, org_id=org_id
+                session, stored_raw, settings.fernet_key, org_id=org_id
             )
-        except Exception:
+        except Exception as exc:
             _log.exception("alert.email_smtp_password_decrypt_failed")
+            stored_smtp_password = _plaintext_password_or_raise(stored_raw, exc)
 
         effective_settings = settings.model_copy(
             update={
@@ -216,8 +232,36 @@ async def _dispatch_email(
                 "alert.email_send_failed",
                 extra={"rule": alert.rule_name, "error": str(exc)},
             )
+    except SmtpPasswordDecryptError:
+        # FAR-1673: an undecryptable stored password is a FAILED delivery, not a
+        # best-effort one. Let the typed error escape so the alert loop records
+        # ``record_alert_delivery_failed`` and the run log carries the real cause
+        # — never re-wrap it into the generic "logged, not raised" swallow below.
+        raise
     except Exception:
         _log.exception("alert.email_dispatch_error", extra={"rule": alert.rule_name})
+
+
+def _plaintext_password_or_raise(stored_raw: str, exc: Exception) -> str:
+    """Resolve a password after a decrypt failure without ever using ciphertext.
+
+    FAR-1673: a token-shaped stored value means decryption was needed and
+    failed (bad key, corrupt token, missing transaction) — the raw value IS the
+    ciphertext, so using it as the SMTP password would hand an undecrypted
+    secret to the relay while failing invisibly up to the SMTP dialog. Fail
+    closed with :class:`SmtpPasswordDecryptError` instead. A non-token value is
+    the legacy plaintext path: there is nothing to decrypt, so it is used
+    as-is exactly as before.
+
+    Called with the caught decrypt ``exc`` so the typed error chains from the
+    real cause. Keeping this branch out of :func:`_dispatch_email` also holds
+    that function's cognitive complexity well below the Sonar limit.
+    """
+    if _is_encrypted_token(stored_raw):
+        raise SmtpPasswordDecryptError(
+            "stored SMTP password could not be decrypted; refusing to use the ciphertext as the password"
+        ) from exc
+    return stored_raw
 
 
 async def _dispatch_webhook(
