@@ -40,6 +40,7 @@ jobs:
           ZOHO_SMTP_USER: ${{ secrets.ZOHO_SMTP_USER }}
           ZOHO_SMTP_PASS: ${{ secrets.ZOHO_SMTP_PASS }}
           ISSUE_NOTIFY_EMAIL: ${{ secrets.ISSUE_NOTIFY_EMAIL }}
+          ISSUE_NOTIFY_FROM: ${{ secrets.ISSUE_NOTIFY_FROM }}
           ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_URL: ${{ github.event.issue.html_url }}
@@ -60,6 +61,10 @@ jobs:
           user = os.environ["ZOHO_SMTP_USER"]
           password = os.environ["ZOHO_SMTP_PASS"]
           to_addr = os.environ["ISSUE_NOTIFY_EMAIL"]
+          # From-address: allow a dedicated secret when ZOHO_SMTP_USER is a
+          # login-style username rather than a full email address; fall back to
+          # the SMTP user so the default single-secret setup keeps working.
+          from_addr = os.environ.get("ISSUE_NOTIFY_FROM") or user
           event_name = os.environ.get("GITHUB_EVENT_NAME", "")
 
           def scrub(text: str) -> str:
@@ -100,7 +105,7 @@ jobs:
 
           msg = MIMEText(text, "plain", "utf-8")
           msg["Subject"] = subject
-          msg["From"] = user
+          msg["From"] = from_addr
           msg["To"] = to_addr
           msg["Date"] = formatdate(localtime=True)
 
@@ -117,18 +122,29 @@ jobs:
                   smtp.login(user, password)
                   smtp.send_message(msg)
 
-          def try_send(fn, label: str) -> bool:
+          def try_send(fn, label: str) -> str:
+              """Return "ok" on success, "auth" on an auth failure, else "error"."""
               try:
                   fn()
                   print(f"Email sent via {label} ({HOST})")
-                  return True
+                  return "ok"
+              except smtplib.SMTPAuthenticationError as exc:
+                  # The credentials just failed authentication, so retrying the
+                  # SSL fallback would present identical credentials and fail
+                  # identically - do not bother.
+                  detail = scrub(f"{type(exc).__name__}: {exc}")
+                  print(
+                      f"Send via {label} failed (authentication): {detail}"
+                      " - not retrying via the fallback port"
+                  )
+                  return "auth"
               except Exception as exc:  # noqa: BLE001 - report then fall back / fail
                   detail = scrub(f"{type(exc).__name__}: {exc}")
                   print(f"Send via {label} failed: {detail}")
-                  return False
+                  return "error"
 
-          ok = try_send(send_starttls, f"STARTTLS :{PORT_STARTTLS}")
-          if not ok:
-              ok = try_send(send_ssl, f"SSL :{PORT_SSL}")
-          sys.exit(0 if ok else 1)
+          result = try_send(send_starttls, f"STARTTLS :{PORT_STARTTLS}")
+          if result == "error":
+              result = try_send(send_ssl, f"SSL :{PORT_SSL}")
+          sys.exit(0 if result == "ok" else 1)
           PY
