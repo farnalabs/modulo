@@ -21,8 +21,10 @@ from modulo.db.models.base import Base, TimestampMixin
 # ``sso_subject``, ``password_hash`` and ``last_login`` are all NULL. That is
 # the structural reason no login path can reach one — a service row has no
 # email to look up, no password to verify and no SSO subject to match. The
-# two CHECK constraints below make the remaining two human-only privileges
-# (system admin, break-glass) impossible for a service row at the DB level.
+# CHECK constraints below make that invariant structural (``email`` /
+# ``password_hash`` / ``sso_subject`` must be NULL on a service row) and make
+# the remaining two human-only privileges (system admin, break-glass)
+# impossible for a service row at the DB level.
 # ---------------------------------------------------------------------------
 KIND_HUMAN = "human"
 KIND_SERVICE = "service"
@@ -47,6 +49,15 @@ class Account(Base, TimestampMixin):
         CheckConstraint(
             "kind = 'human' OR (NOT is_system_admin AND NOT is_break_glass)",
             name="ck_accounts_service_privilege",
+        ),
+        # A service principal carries NO human-shaped identity (ADR 056/058).
+        # Enforced in the database, not only by the code that creates rows: a
+        # service row with an email, password hash or SSO subject would be
+        # reachable by a login/invite/SSO/SCIM lookup, so the invariant is a
+        # CHECK — the structural reason no login path can reach a service row.
+        CheckConstraint(
+            "kind = 'human' OR (email IS NULL AND password_hash IS NULL AND sso_subject IS NULL)",
+            name="ck_accounts_service_identity",
         ),
     )
 

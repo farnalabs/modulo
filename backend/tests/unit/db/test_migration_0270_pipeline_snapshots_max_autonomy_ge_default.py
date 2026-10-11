@@ -37,7 +37,7 @@ Lenses:
     0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
     0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
     0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes, and
-    0298_accounts_kind chains onto 0297_autonomy_gating_s1 as the
+    0299_accounts_service_identity chains onto 0298_accounts_kind as the
     single linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -80,7 +80,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0298_accounts_kind"
+_HEAD_MIGRATION = "0299_accounts_service_identity"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264

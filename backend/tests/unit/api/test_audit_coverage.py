@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
-from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.auth.jwt import CLIENT_KIND_PROGRAMMATIC, AuthenticatedPrincipal, TenantPrincipal
 from modulo.core import audit_coverage
 from modulo.core.audit_coverage import audit_session, audited, audited_system, bind_audit_actor_source, bind_audit_org
 from modulo.settings import Settings, get_settings
@@ -62,6 +62,31 @@ def _make_principal() -> TenantPrincipal:
         account_id=_USER_ID,
         org_role="admin",
         is_system_admin=False,
+    )
+
+
+def _make_api_key_principal() -> TenantPrincipal:
+    """An org API-key (``mk_``) principal: a machine credential (FAR-1385)."""
+    return TenantPrincipal(
+        username="org-key",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+        is_system_admin=False,
+        via_api_key=True,
+        client_kind=CLIENT_KIND_PROGRAMMATIC,
+    )
+
+
+def _make_programmatic_jwt_principal() -> TenantPrincipal:
+    """A non-browser JWT: programmatic client class, no API-key marker."""
+    return TenantPrincipal(
+        username="automation",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+        is_system_admin=False,
+        client_kind=CLIENT_KIND_PROGRAMMATIC,
     )
 
 
@@ -217,13 +242,14 @@ def test_fail_open_logs_a_real_append_failure_from_the_shared_helper(
     assert f"audit_coverage.{_CREATE_EVENT}.append_failed" in messages, messages
 
 
-def _mini_client() -> TestClient:
+def _mini_client(principal: TenantPrincipal | None = None) -> TestClient:
     """One-route-per-case app built on the real wrapper (no handle_db_errors in between)."""
     api = FastAPI()
     audit_session_mock = _make_mock_session()
+    resolved_principal = principal if principal is not None else _make_principal()
 
     async def override_principal() -> TenantPrincipal:
-        return _make_principal()
+        return resolved_principal
 
     async def override_audit_session() -> AsyncGenerator[AsyncMock, None]:
         yield audit_session_mock
@@ -619,31 +645,83 @@ async def test_audited_system_dependency_rethrows_cancellation_at_yield() -> Non
 
 
 def test_bind_principal_kind_publishes_the_known_kinds() -> None:
+    """An explicit bind is authoritative over the credential-derived value."""
     request = _bare_request()
     audit_coverage.bind_principal_kind(request, "service")
-    assert audit_coverage._resolve_principal_kind(request) == "service"
+    assert audit_coverage._resolve_principal_kind(request, _make_principal()) == "service"
     audit_coverage.bind_principal_kind(request, "human")
-    assert audit_coverage._resolve_principal_kind(request) == "human"
+    assert audit_coverage._resolve_principal_kind(request, _make_principal()) == "human"
 
 
 def test_bind_principal_kind_ignores_an_unknown_kind(caplog: pytest.LogCaptureFixture) -> None:
-    """A typo must never poison the trail: the stamp keeps its honest default."""
+    """A typo must never poison the trail: the stamp falls back to the credential."""
     request = _bare_request()
     audit_coverage.bind_principal_kind(request, "robot")
-    assert audit_coverage._resolve_principal_kind(request) == "human"
+    assert audit_coverage._resolve_principal_kind(request, _make_principal()) == "human"
     assert any("invalid_principal_kind" in record.getMessage() for record in caplog.records)
 
 
-def test_resolve_principal_kind_defaults_to_human_when_unset() -> None:
-    assert audit_coverage._resolve_principal_kind(_bare_request()) == "human"
+def test_resolve_principal_kind_is_human_for_a_browser_jwt_principal() -> None:
+    """A browser-JWT credential is the one honest ``human`` in this slice."""
+    assert audit_coverage._resolve_principal_kind(_bare_request(), _make_principal()) == "human"
 
 
-def test_coarse_payload_carries_principal_kind() -> None:
+def test_resolve_principal_kind_is_none_for_an_api_key_principal() -> None:
+    """M-1 prove-the-fix: a machine credential must NOT be stamped human."""
+    assert audit_coverage._resolve_principal_kind(_bare_request(), _make_api_key_principal()) is None
+
+
+def test_resolve_principal_kind_is_none_for_a_programmatic_jwt_principal() -> None:
+    """A non-browser client class is a machine credential too."""
+    assert audit_coverage._resolve_principal_kind(_bare_request(), _make_programmatic_jwt_principal()) is None
+
+
+def test_coarse_payload_carries_the_bound_principal_kind() -> None:
     request = _bare_request()
     audit_coverage.bind_principal_kind(request, "service")
-    payload = audit_coverage._coarse_payload(request, "success")
+    payload = audit_coverage._coarse_payload(request, "success", _make_principal())
     assert payload["principal_kind"] == "service"
     assert payload["outcome"] == "success"
+
+
+def test_coarse_payload_is_human_for_a_browser_jwt_principal() -> None:
+    payload = audit_coverage._coarse_payload(_bare_request(), "success", _make_principal())
+    assert payload["principal_kind"] == "human"
+
+
+def test_coarse_payload_omits_the_kind_for_an_api_key_principal() -> None:
+    """M-1 prove-the-fix: no false ``human`` stamp on a machine credential."""
+    payload = audit_coverage._coarse_payload(_bare_request(), "success", _make_api_key_principal())
+    assert "principal_kind" not in payload
+    assert payload["outcome"] == "success"
+
+
+def test_coarse_payload_omits_the_kind_for_a_programmatic_jwt_principal() -> None:
+    payload = audit_coverage._coarse_payload(_bare_request(), "success", _make_programmatic_jwt_principal())
+    assert "principal_kind" not in payload
+
+
+def test_audited_route_stamps_human_for_a_browser_jwt_credential() -> None:
+    """M-1 end-to-end: the real dependency stamps a browser credential human."""
+    client = _mini_client(_make_principal())
+    captured = AsyncMock()
+    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+        resp = client.post("/loose")
+    assert resp.status_code == 200, resp.text
+    assert captured.call_count == 1
+    assert captured.call_args.kwargs["payload"]["principal_kind"] == "human"
+
+
+def test_audited_route_omits_principal_kind_for_an_api_key_credential() -> None:
+    """M-1 end-to-end prove-the-fix: an ``mk_`` credential is never stamped human."""
+    client = _mini_client(_make_api_key_principal())
+    captured = AsyncMock()
+    with patch("modulo.core.audit_coverage.append_audit_event_isolated", new=captured):
+        resp = client.post("/loose")
+    assert resp.status_code == 200, resp.text
+    assert captured.call_count == 1
+    payload = captured.call_args.kwargs["payload"]
+    assert "principal_kind" not in payload, payload
 
 
 def test_system_payload_does_not_fabricate_a_principal_kind() -> None:

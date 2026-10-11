@@ -75,6 +75,17 @@ def test_account_service_privilege_check_forbids_admin_and_break_glass() -> None
     assert "is_break_glass" in sql
 
 
+def test_account_service_identity_check_forbids_human_shaped_columns() -> None:
+    """m-2: the NULL-identity invariant is structural, not just documentation."""
+    checks = {c.name: str(c.sqltext) for c in Base.metadata.tables["accounts"].constraints if hasattr(c, "sqltext")}
+    assert "ck_accounts_service_identity" in checks
+    sql = checks["ck_accounts_service_identity"]
+    assert "kind = 'human'" in sql
+    assert "email IS NULL" in sql
+    assert "password_hash IS NULL" in sql
+    assert "sso_subject IS NULL" in sql
+
+
 def test_account_human_shaped_identity_columns_are_nullable() -> None:
     """A service row carries no synthetic identity — pin the nullable shape."""
     cols = Base.metadata.tables["accounts"].c
