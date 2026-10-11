@@ -445,33 +445,64 @@ class TestPagination:
         assert exc_info.value.status_code == 500
 
 
-class TestRefBlocking:
+_SECRETREF_CONFIG_TEXT = (
+    "api_version: modulo.dev/v1\n"
+    "entities:\n"
+    "  model_backends:\n"
+    "    - name: openai\n"
+    "      display_name: OpenAI\n"
+    "      provider: openai\n"
+    "      model_id: gpt-x\n"
+    "      api_key: secretref://vault/openai-key\n"
+)
+
+
+class TestRefForwarding:
     @respx.mock
-    def test_secretref_blocked_at_plan_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SK", "resolved-secret")
+    def test_secretref_forwarded_to_server(self) -> None:
+        """FAR-1640: the vault ref is forwarded verbatim; the SERVER resolves it.
+
+        The CLI cannot read the vault, so it must neither resolve the value
+        locally nor block the entity — it sends the ``secretref://`` token as
+        the request's ``api_key`` and lets the server resolve it.
+        """
         routes = _mock_current([], [])
-        config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  model_backends:\n"
-            "    - name: openai\n"
-            "      display_name: OpenAI\n"
-            "      provider: openai\n"
-            "      model_id: gpt-x\n"
-            "      api_key: secretref://vault/openai-key\n"
-        )
-        config = parse_apply_documents(config_text)
+        config = parse_apply_documents(_SECRETREF_CONFIG_TEXT)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             report = executor.run(config, dry_run=False)
-        blocked = [e for e in report["blocked"] if e["name"] == "openai"]
-        assert len(blocked) == 1
-        assert blocked[0]["reason"] == (
-            "secretref resolution not supported yet (server-side resolution lands in a later slice)"
+        assert not [e for e in report["blocked"] if e["name"] == "openai"]
+        assert routes["backends_post"].call_count == 1
+        sent = json.loads(routes["backends_post"].calls[0].request.content)
+        assert sent["api_key"] == "secretref://vault/openai-key"
+        assert any(entry["name"] == "openai" for entry in report["created"])
+
+    @respx.mock
+    def test_missing_vault_key_surfaces_server_typed_error(self) -> None:
+        """A server 422 (missing vault key) reaches report['failed'] naming the key."""
+        routes = _mock_current([], [])
+        routes["backends_post"].mock(
+            return_value=httpx.Response(
+                422,
+                json={
+                    "detail": [
+                        {
+                            "type": "credential_reference_error",
+                            "loc": ["body", "credential_ref"],
+                            "msg": "vault key 'vault/openai-key': vault key not found in this organisation",
+                        }
+                    ]
+                },
+            )
         )
+        config = parse_apply_documents(_SECRETREF_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        failed = [entry for entry in report["failed"] if entry["name"] == "openai"]
+        assert len(failed) == 1
+        assert "vault/openai-key" in failed[0]["error"]
         assert not report["created"]
-        assert not report["failed"]
-        assert routes["backends_post"].call_count == 0
 
     def test_empty_env_value_distinct_reason(self) -> None:
         config = parse_apply_documents(CONFIG_TEXT)
