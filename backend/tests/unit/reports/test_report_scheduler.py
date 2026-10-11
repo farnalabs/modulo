@@ -17,6 +17,7 @@ from httpx import Response
 
 from modulo.core.reports.scheduler import (
     _REPORT_HTTP_TIMEOUT,
+    _SIGNATURE_HEADER,
     _coerce_timeout,
     _deliver_slack_webhook,
     _deliver_to_urls,
@@ -25,6 +26,8 @@ from modulo.core.reports.scheduler import (
     _fire_scheduled_report,
     _get_engine,
     _parse_retry_after,
+    _serialize_json_body,
+    _sign_payload,
     _webhook_url_error,
     compute_next_send,
     get_deliverer,
@@ -841,6 +844,48 @@ class TestDeliverToUrls:
         assert results[0]["status"] == "failed"
         assert results[0]["status_code"] is None
         assert results[0]["error"] == "max_retries_exceeded"
+
+    async def test_signed_retry_reuses_one_precomputed_signature(self) -> None:
+        """The body is signed ONCE: every retry attempt carries the identical
+        signature header over the identical bytes, so a recipient sees a
+        byte-stable payload no matter how many attempts it takes."""
+        url = "https://hooks.example.com/x"
+        secret = "s3cr3t"
+        body = {"a": 1}
+        client = make_http_client(
+            [make_http_response(is_success=False, status_code=500), make_http_response(status_code=200)]
+        )
+
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),
+            patched_http_client(client),
+        ):
+            results = await _deliver_to_urls([url], body, signing_secret=secret)
+
+        assert results[0]["status"] == "delivered"
+        expected_signature = _sign_payload(secret, _serialize_json_body(body))
+        assert client.post.await_count == 2
+        for call in client.post.await_args_list:
+            assert call.kwargs["headers"][_SIGNATURE_HEADER] == expected_signature
+            assert call.kwargs["content"] == _serialize_json_body(body)
+
+    async def test_exhausted_5xx_retry_count_is_unchanged(self) -> None:
+        """Pin the retry budget: a persistent 5xx produces exactly
+        ``_REPORT_MAX_RETRIES`` requests and the same number of backoff
+        sleeps — a structural refactor must not alter either count."""
+        url = "https://hooks.example.com/x"
+        client = make_http_client([make_http_response(is_success=False, status_code=503)] * 8)
+
+        with (
+            patch("modulo.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
+            patched_http_client(client),
+        ):
+            results = await _deliver_to_urls([url], {"a": 1})
+
+        assert results[0]["status"] == "failed"
+        assert results[0]["status_code"] == 503
+        assert client.post.await_count == 3
+        assert sleep.await_count == 3
 
 
 # ---------------------------------------------------------------------------
