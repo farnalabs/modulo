@@ -801,6 +801,68 @@ def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
     assert "MODULO_BRIDGE_EVENT" not in out
 
 
+def test_wrap_command_after_event_notifies_and_continues(monkeypatch, capsys):
+    """An 'after' event is reported via ``notify_after`` (never ``decide_before``)
+    and the child continues — the event line is never echoed to stdout."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = (
+        b'MODULO_BRIDGE_EVENT: {"tool_name": "git push", "args": {"url": "x"}, '
+        b'"direction": "after", "result_summary": "pushed ok"}'
+    )
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    decided: list[tuple[str, dict]] = []
+    notified: list[tuple[str, dict, str]] = []
+
+    def _record_decide(self, tool, args):
+        decided.append((tool, args))
+        return True, None, "pass"
+
+    def _record_after(self, tool, args, summary):
+        notified.append((tool, args, summary))
+        return {}
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+    monkeypatch.setattr(sb.BridgeClient, "notify_after", _record_after)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert decided == []
+    assert notified == [("git push", {"url": "x"}, "pushed ok")]
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
+def test_wrap_command_non_dict_event_is_ignored(monkeypatch, capsys):
+    """A well-formed JSON event that is not an object (e.g. a list) is treated
+    as no event: nothing is forwarded or echoed, the child continues."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b"MODULO_BRIDGE_EVENT: [1, 2, 3]"
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    decided: list[tuple[str, dict]] = []
+
+    def _record_decide(self, tool, args):
+        decided.append((tool, args))
+        return True, None, "pass"
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert decided == []
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
 def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
