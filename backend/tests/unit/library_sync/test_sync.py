@@ -225,6 +225,17 @@ class TestCachedManifest:
         state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
         assert await get_cached_manifest(_FakeSession(existing=state)) == manifest
 
+    async def test_reuses_active_transaction(self) -> None:
+        """``_read_state`` must not re-enter ``begin`` when a txn is already open."""
+        manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}
+        state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
+        session = _FakeSession(existing=state)
+        session._active_tx = True
+
+        assert await get_cached_manifest(session) == manifest
+        # Still the same caller-owned transaction (no re-begin, no close).
+        assert session._active_tx is True
+
     async def test_fail_open_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _explode(_session: object) -> LibrarySyncState:
             raise RuntimeError("db down")
@@ -251,4 +262,11 @@ class TestIsRevoked:
         assert await is_revoked(self._state_with_manifest(manifest), "agent-2") is False
 
     async def test_false_when_no_manifest(self) -> None:
+        assert await is_revoked(_FakeSession(), "agent-1") is False
+
+    async def test_false_when_manifest_read_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _explode(_session: object) -> dict | None:
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(sync_module, "get_cached_manifest", _explode)
         assert await is_revoked(_FakeSession(), "agent-1") is False

@@ -68,6 +68,11 @@ class TestFetchManifest:
         respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=[manifest]))
         assert await client.fetch_manifest() is None
 
+    @respx.mock
+    async def test_returns_none_on_malformed_json(self, client: LibraryClient) -> None:
+        respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, content=b"not json"))
+        assert await client.fetch_manifest() is None
+
 
 class TestSsrfRejection:
     @respx.mock
@@ -100,10 +105,21 @@ class TestClientLifecycle:
         manifest = _signed_manifest(private_key)
         respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=manifest))
 
-        await client.close()
-        await client.close()
-
+        # Materialise the underlying httpx client so ``close()`` has a real
+        # client to release — otherwise both close calls would be no-ops.
         assert await client.fetch_manifest() == manifest
+        first = client._http_client
+        assert first is not None
+
+        # close() twice: idempotent, never raises, and releases the client.
+        await client.close()
+        await client.close()
+        assert client._http_client is None
+
+        # A subsequent fetch rebuilds a *new* underlying client.
+        assert await client.fetch_manifest() == manifest
+        assert client._http_client is not None
+        assert client._http_client is not first
 
 
 class TestFetchBlob:

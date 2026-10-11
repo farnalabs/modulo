@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import InvalidRequestError
 
 from modulo.core.library_service import community as community_module
 from modulo.core.library_service.community import (
@@ -104,14 +105,19 @@ class _FakeSession:
             self._in_tx = False
 
     async def execute(self, stmt: Any) -> _FakeResult:
-        # Discriminate on the selected columns, not the rendered SQL text.
-        names = [description["name"] for description in stmt.column_descriptions]
-        if names == ["slug", "version"]:
+        # Mirror the real session's ``autobegin=False`` shape: every helper
+        # opens a transaction via ``_enter_org_context`` before executing.
+        if not self._in_tx:
+            raise InvalidRequestError("execute() called outside a transaction")
+        # Discriminate on the selected columns, not the rendered SQL text, and
+        # do not depend on column order.
+        names = {description["name"] for description in stmt.column_descriptions}
+        if names == {"slug", "version"}:
             return _FakeResult(rows=[(s, v) for s, v in self.installed_rows])
-        if names == ["id"]:
+        if names == {"id"}:
             self.id_query_params = list(stmt.compile().params.values())
             return _FakeResult(scalar=self.existing_id)
-        return _FakeResult()
+        raise AssertionError(f"unexpected query columns: {sorted(names)}")
 
     def add(self, obj: Any) -> None:
         self.added.append(obj)
@@ -221,6 +227,18 @@ class TestListCommunityEntries:
             await list_community_entries(session, ORG_ID)
         assert session.rolled_back is True
 
+    async def test_reuses_active_transaction_without_committing(self, fake_manifest: None) -> None:
+        """A caller-owned transaction is reused, never committed by the callee."""
+        session = _FakeSession(installed_rows=[("code-reviewer", "1.0.0")])
+        session._in_tx = True
+
+        entries = await list_community_entries(session, ORG_ID)
+
+        assert len(entries) == 2
+        # began=False in ``_installed_registry_keys`` must skip the commit and
+        # leave the caller's transaction open.
+        assert session._in_tx is True
+
 
 class TestGetCommunityEntry:
     async def test_returns_entry(self, fake_manifest: None) -> None:
@@ -236,6 +254,13 @@ class TestGetCommunityEntry:
             return entry_id == "entry-1"
 
         monkeypatch.setattr(community_module, "is_revoked", _revoked)
+        assert await get_community_entry(_FakeSession(), "entry-1") is None
+
+    async def test_returns_none_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _none(_session: Any) -> None:
+            return None
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _none)
         assert await get_community_entry(_FakeSession(), "entry-1") is None
 
 
@@ -254,6 +279,8 @@ class TestInstallCommunityEntry:
         assert prim.review_count is None
         assert prim.visibility == "org"
         assert prim.organisation_id == ORG_ID
+        # Registry rows must stay org-owned: ``owner_team_id`` is NULL.
+        assert prim.owner_team_id is None
         assert prim.content_json == {"description": "A test agent", "name": "code-reviewer"}
         assert session.added == [prim]
 
@@ -261,13 +288,31 @@ class TestInstallCommunityEntry:
         session = _FakeSession(existing_id=uuid.uuid4())
         with pytest.raises(ValueError, match="already installed"):
             await install_community_entry(session, ORG_ID, "entry-1")
-        # The existence probe must key on the entry's slug AND version.
+        # The existence probe must key on the entry's slug AND version, scoped
+        # to the installing org.
+        assert ORG_ID in session.id_query_params
         assert "code-reviewer" in session.id_query_params
         assert "1.0.0" in session.id_query_params
 
     async def test_raises_entry_not_found(self, fake_manifest: None) -> None:
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "nope")
+
+    async def test_raises_revoked_entry(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _revoked(_session: Any, entry_id: str) -> bool:
+            return entry_id == "entry-1"
+
+        monkeypatch.setattr(community_module, "is_revoked", _revoked)
+        with pytest.raises(ValueError, match="entry not found"):
+            await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+
+    async def test_raises_entry_not_found_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _none(_session: Any) -> None:
+            return None
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _none)
+        with pytest.raises(ValueError, match="entry not found"):
+            await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
     async def test_raises_unsupported_primitive_type(
         self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
@@ -323,8 +368,30 @@ class TestInstallCommunityEntry:
             return None
 
         monkeypatch.setattr(community_module, "_fetch_blob", _blob_none)
+        session = _FakeSession()
         with pytest.raises(ValueError, match="blob fetch failed"):
-            await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
+            await install_community_entry(session, ORG_ID, "entry-1")
+        # ``_enter_org_context`` opened the txn (began=True), so the failure path
+        # owns the rollback and must have executed it.
+        assert session.rolled_back is True
+
+    async def test_caller_owned_transaction_is_never_rolled_back(
+        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _blob_none(_sha256: str) -> None:
+            return None
+
+        monkeypatch.setattr(community_module, "_fetch_blob", _blob_none)
+        session = _FakeSession()
+        session._in_tx = True
+
+        with pytest.raises(ValueError, match="blob fetch failed"):
+            await install_community_entry(session, ORG_ID, "entry-1")
+
+        # began=False in ``_enter_org_context``: the caller's transaction is
+        # reused and left open — the callee must not roll it back.
+        assert session.rolled_back is False
+        assert session._in_tx is True
 
 
 class TestFetchBlob:
@@ -345,11 +412,17 @@ class TestFetchBlob:
         return client
 
     async def test_returns_none_when_client_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._install_client(monkeypatch, None)
+        client = self._install_client(monkeypatch, None)
         assert await community_module._fetch_blob("a" * 64) is None
+        # The ``finally: await client.close()`` must run on the failure path too.
+        assert client.closed is True
 
     async def test_returns_none_on_hash_mismatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._install_client(monkeypatch, b"different")
+        # Valid JSON whose sha256 does NOT match the requested hash: only the
+        # hash guard can produce None (were it removed, the object would parse
+        # and be returned).
+        payload = b'{"name": "x"}'
+        self._install_client(monkeypatch, payload)
         expected = hashlib.sha256(b"expected").hexdigest()
         assert await community_module._fetch_blob(expected) is None
 
