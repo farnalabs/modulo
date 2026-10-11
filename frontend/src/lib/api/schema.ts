@@ -7101,7 +7101,8 @@ export interface paths {
          * Create Eval Definition
          * @description Create a new eval definition.
          *
-         *     Admin only. The eval definition is scoped to the caller's organisation.
+         *     Operator or admin only (FAR-735). The eval definition is scoped to the
+         *     caller's organisation.
          */
         post: operations["create_eval_definition_api_v1_evals_post"];
         delete?: never;
@@ -7338,7 +7339,7 @@ export interface paths {
         get: operations["get_eval_definition_api_v1_evals__eval_id__get"];
         /**
          * Update Eval Definition
-         * @description Update an eval definition. Admin only.
+         * @description Update an eval definition. Operator or admin only (FAR-735).
          *
          *     Reads from the ``evals`` table (chunk 3b cutover).  The update is
          *     persisted via ``create_or_update_eval`` which handles version stamping
@@ -7425,7 +7426,7 @@ export interface paths {
         put?: never;
         /**
          * Create Eval From Run
-         * @description Create an eval definition pre-populated from run output.
+         * @description Create an eval definition pre-populated from run output. Operator or admin (FAR-735).
          */
         post: operations["create_eval_from_run_api_v1_evals_from_run_post"];
         delete?: never;
