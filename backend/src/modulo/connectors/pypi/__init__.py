@@ -10,6 +10,7 @@ from typing import Any, cast
 import defusedxml.xmlrpc
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -38,10 +39,7 @@ class PyPIConnector(ConnectorBase):
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return pinned_async_client_sync(
-            _API_BASE,
-            base_url=_API_BASE,
-            headers=headers,
-            timeout=30,
+            _API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:
@@ -111,9 +109,7 @@ class PyPIConnector(ConnectorBase):
         xml_body = xmlrpc.client.dumps((spec, operator), "search")
 
         async with pinned_async_client_sync(
-            _API_BASE,
-            base_url=_API_BASE,
-            timeout=30,
+            _API_BASE, base_url=_API_BASE, timeout=30, verify=egress_ssl_context(self)
         ) as c:
             resp = await c.post("/", content=xml_body, headers={"Content-Type": "text/xml"})
             resp.raise_for_status()

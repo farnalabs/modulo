@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -158,6 +159,7 @@ class JenkinsConnector(ConnectorBase):
             base_url=self._base_url,
             headers=self._auth_header(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _fetch_crumb(self, client: httpx.AsyncClient) -> dict[str, str]:

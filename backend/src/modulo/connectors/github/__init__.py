@@ -12,6 +12,7 @@ from typing import Any, NoReturn, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import (
     MAX_DELAY,
     MAX_RETRIES,
@@ -563,6 +564,7 @@ class GitHubConnector(ConnectorBase):
             base_url=self._base_url,
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     @staticmethod
