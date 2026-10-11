@@ -17,7 +17,7 @@ from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.core.email_service import EmailSendingError, send_email
 from modulo.core.error_tracking.metrics import record_alert_delivery_failed
 from modulo.core.ssrf import pinned_async_client
-from modulo.db.models.account import Account
+from modulo.db.models.account import KIND_HUMAN, Account
 from modulo.db.models.error_group import ErrorGroup
 from modulo.db.models.org_membership import OrgMembership
 from modulo.settings import get_settings
@@ -160,7 +160,13 @@ async def _dispatch_email(
         account_ids = [m.account_id for m in memberships]
 
         account_result = await session.execute(
-            select(Account).where(Account.id.in_(account_ids), Account.active.is_(True))
+            select(Account).where(
+                Account.id.in_(account_ids),
+                Account.active.is_(True),
+                # FAR-1385: service principals have no human identity and must
+                # never receive a human operator alert email.
+                Account.kind == KIND_HUMAN,
+            )
         )
         admin_accounts = list(account_result.scalars().all())
 
@@ -168,7 +174,7 @@ async def _dispatch_email(
             _log.warning("alert.email_no_active_admins", extra={"org_id": str(org_id), "rule": alert.rule_name})
             return
 
-        to_emails = [a.email for a in admin_accounts]
+        to_emails = [a.email for a in admin_accounts if a.email]
 
         subject = f"[Modulo Alert] {alert.level}: {alert.rule_name}"
 

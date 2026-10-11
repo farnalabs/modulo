@@ -169,6 +169,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from modulo.core.principals import KIND_HUMAN, KIND_SERVICE
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ __all__ = [
     "audited_system",
     "bind_audit_actor_source",
     "bind_audit_org",
+    "bind_principal_kind",
 ]
 
 #: How the request finished, as recorded in the coarse default payload:
@@ -301,18 +303,48 @@ async def _emit(
         )
 
 
+def bind_principal_kind(request: Request, kind: str) -> None:
+    """Publish the acting principal's ``kind`` for the audit stamp (FAR-1385).
+
+    The audit stamp records ``principal.kind`` (ADR 058) so the audit viewer can
+    distinguish a human actor from a service principal. The principal resolver
+    stamps it here once the kind is known; slice 2 (the service-account mint
+    surface) is what first makes a non-``human`` value reachable. Until then the
+    honest default — every principal that can authenticate is human — is applied
+    by :func:`_coarse_payload`. Only the two known kinds are accepted so a typo
+    cannot poison the trail.
+    """
+    if kind not in (KIND_HUMAN, KIND_SERVICE):
+        _log.warning("audit_coverage.invalid_principal_kind", extra={"kind": kind})
+        return
+    request.state.principal_kind = kind
+
+
+def _resolve_principal_kind(request: Request) -> str:
+    """The acting principal's kind, defaulting to ``human`` (see bind helper)."""
+    raw = getattr(request.state, "principal_kind", None)
+    if isinstance(raw, str) and raw in (KIND_HUMAN, KIND_SERVICE):
+        return raw
+    # No resolver stamped a kind: every principal that can authenticate in
+    # slice 1 is human, so ``human`` is the honest default (never fabricated —
+    # a service principal cannot reach a repository-backed mutation yet).
+    return KIND_HUMAN
+
+
 def _coarse_payload(request: Request, outcome: AuditOutcome) -> dict[str, Any]:
     """Default payload: enough to tell what was called and how it finished.
 
     Deliberately coarse and identical for every annotated route: the resource
     id and the changed fields are not derivable from the request here. A route
     that needs that detail still calls ``append_audit_event_isolated`` itself
-    for its own, richer event.
+    for its own, richer event. ``principal_kind`` (ADR 058) is the one identity
+    fact every event carries, so the audit viewer can filter human vs service.
     """
     return {
         "http_method": request.method,
         "path": request.url.path,
         "outcome": outcome,
+        "principal_kind": _resolve_principal_kind(request),
     }
 
 
@@ -460,8 +492,17 @@ def _resolve_actor_source(request: Request, default: str) -> str:
 
 
 def _system_payload(request: Request, outcome: AuditOutcome, actor_source: str) -> dict[str, Any]:
-    """Coarse payload plus the honest provenance markers for a system event."""
-    payload = _coarse_payload(request, outcome)
+    """Coarse payload plus the honest provenance markers for a system event.
+
+    Deliberately does NOT carry ``principal_kind``: there is no principal on an
+    actor-less event, and inventing one would be dishonest provenance (FAR-1385
+    stamps the kind only where a real principal acted).
+    """
+    payload: dict[str, Any] = {
+        "http_method": request.method,
+        "path": request.url.path,
+        "outcome": outcome,
+    }
     payload["actor"] = SYSTEM_ACTOR
     payload["actor_source"] = actor_source
     return payload

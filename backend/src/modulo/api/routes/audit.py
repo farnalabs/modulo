@@ -45,6 +45,7 @@ _SCAN_NDJSON_MEDIA_TYPE = "application/x-ndjson"
 _DESC_ACTOR_USER_ID = "Filter by actor user ID"
 _DESC_START_DATE = "Filter by start date (ISO 8601)"
 _DESC_END_DATE = "Filter by end date (ISO 8601)"
+_DESC_PRINCIPAL_KIND = "Filter by acting principal kind (human/service)"
 
 
 _log = logging.getLogger(__name__)
@@ -71,13 +72,14 @@ async def list_audit_events_endpoint(
     ),
     from_date: datetime | None = Query(None, alias="from_date", description=_DESC_START_DATE),
     to_date: datetime | None = Query(None, alias="to_date", description=_DESC_END_DATE),
+    principal_kind: str | None = Query(None, pattern="^(human|service)$", description=_DESC_PRINCIPAL_KIND),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
     """List audit events with cursor pagination and filters.
 
     Supports filtering by event_type (action_type), user_id (actor_user_id),
-    entity_type (resource_type), from_date, to_date.
+    entity_type (resource_type), from_date, to_date, principal_kind.
     """
     actor_uid = None
     if actor_user_id:
@@ -101,6 +103,7 @@ async def list_audit_events_endpoint(
                 resource_type=resource_type,
                 from_date=from_date,
                 to_date=to_date,
+                principal_kind=principal_kind,
             )
     except ProgrammingError:
         _log.exception("audit.list_audit_events_endpoint")
@@ -212,6 +215,7 @@ async def export_chain_endpoint(
     resource_type: str | None = Query(None, max_length=64, alias="entity_type", description="Filter by resource type"),
     from_date: datetime | None = Query(None, description=_DESC_START_DATE),
     to_date: datetime | None = Query(None, description=_DESC_END_DATE),
+    principal_kind: str | None = Query(None, pattern="^(human|service)$", description=_DESC_PRINCIPAL_KIND),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> dict[str, object]:
@@ -238,6 +242,7 @@ async def export_chain_endpoint(
                 resource_type=resource_type,
                 from_date=from_date,
                 to_date=to_date,
+                principal_kind=principal_kind,
             )
     except ProgrammingError:
         _log.exception("audit.export_chain_endpoint")
@@ -312,6 +317,7 @@ async def scan_chain_endpoint(
     resource_type: str | None = Query(None, max_length=64, alias="entity_type", description="Filter by resource type"),
     from_date: datetime | None = Query(None, description=_DESC_START_DATE),
     to_date: datetime | None = Query(None, description=_DESC_END_DATE),
+    principal_kind: str | None = Query(None, pattern="^(human|service)$", description=_DESC_PRINCIPAL_KIND),
     settings: Settings = Depends(get_settings),
     principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
 ) -> Response:
@@ -344,6 +350,7 @@ async def scan_chain_endpoint(
             resource_type=resource_type,
             from_date=from_date,
             to_date=to_date,
+            principal_kind=principal_kind,
             page_size=SCAN_KEYSET_PAGE_SIZE,
         )
         # Prime the generator so the RLS write and the first keyset page surface

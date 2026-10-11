@@ -207,6 +207,26 @@ def test_login_unknown_user(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_login_rejects_service_principal(client: TestClient) -> None:
+    """FAR-1385: a service principal can never authenticate through login.
+
+    Even with a (hypothetical) matching password, the row is refused
+    byte-identically to a wrong password — no login path reaches it.
+    """
+    mock_user = _make_mock_user()
+    mock_user.kind = "service"
+    with (
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+    ):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "svc@example.com", "password": "testpass"},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Incorrect email or password"
+
+
 def test_me_returns_username(client: TestClient) -> None:
     mock_user = _make_mock_user()
     mock_user.created_at = datetime.now(UTC)

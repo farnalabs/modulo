@@ -964,7 +964,7 @@ async def _resolve_author_email(session: AsyncSession, pipeline: Pipeline) -> st
         acct_result = await session.execute(select(Account).where(Account.id == pipeline.account_id))
         creator = acct_result.scalar_one_or_none()
         if creator:
-            author = creator.email
+            author = creator.email or author
     except Exception:
         logger.warning("Could not resolve creator email for v2 bundle export", exc_info=True)
     return author

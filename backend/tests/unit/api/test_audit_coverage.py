@@ -153,7 +153,12 @@ def test_successful_mutation_emits_exactly_one_audit_event(client: TestClient, a
     assert principal.account_id == _USER_ID
     assert kwargs["event_type"] == _CREATE_EVENT
     assert kwargs["resource_type"] == "parameter_schema"
-    assert kwargs["payload"] == {"http_method": "POST", "path": _CREATE_PATH, "outcome": "success"}
+    assert kwargs["payload"] == {
+        "http_method": "POST",
+        "path": _CREATE_PATH,
+        "outcome": "success",
+        "principal_kind": "human",
+    }
     assert kwargs["log_key"] == f"audit_coverage.{_CREATE_EVENT}.append_failed"
     # The business write completes BEFORE the audit append runs.
     assert order == ["handler", "audit"]
@@ -606,3 +611,43 @@ async def test_audited_system_dependency_rethrows_cancellation_at_yield() -> Non
     assert await gen.asend(None) is None
     with pytest.raises(asyncio.CancelledError):
         await gen.athrow(asyncio.CancelledError())
+
+
+# ---------------------------------------------------------------------------
+# FAR-1385 — the audit stamp carries ``principal.kind``.
+# ---------------------------------------------------------------------------
+
+
+def test_bind_principal_kind_publishes_the_known_kinds() -> None:
+    request = _bare_request()
+    audit_coverage.bind_principal_kind(request, "service")
+    assert audit_coverage._resolve_principal_kind(request) == "service"
+    audit_coverage.bind_principal_kind(request, "human")
+    assert audit_coverage._resolve_principal_kind(request) == "human"
+
+
+def test_bind_principal_kind_ignores_an_unknown_kind(caplog: pytest.LogCaptureFixture) -> None:
+    """A typo must never poison the trail: the stamp keeps its honest default."""
+    request = _bare_request()
+    audit_coverage.bind_principal_kind(request, "robot")
+    assert audit_coverage._resolve_principal_kind(request) == "human"
+    assert any("invalid_principal_kind" in record.getMessage() for record in caplog.records)
+
+
+def test_resolve_principal_kind_defaults_to_human_when_unset() -> None:
+    assert audit_coverage._resolve_principal_kind(_bare_request()) == "human"
+
+
+def test_coarse_payload_carries_principal_kind() -> None:
+    request = _bare_request()
+    audit_coverage.bind_principal_kind(request, "service")
+    payload = audit_coverage._coarse_payload(request, "success")
+    assert payload["principal_kind"] == "service"
+    assert payload["outcome"] == "success"
+
+
+def test_system_payload_does_not_fabricate_a_principal_kind() -> None:
+    """An actor-less event has no principal — the stamp must not invent one."""
+    payload = audit_coverage._system_payload(_bare_request(), "success", "unauthenticated")
+    assert "principal_kind" not in payload
+    assert payload["actor"] == "system"

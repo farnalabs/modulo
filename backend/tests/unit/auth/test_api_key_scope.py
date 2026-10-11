@@ -259,3 +259,23 @@ class TestScopeColumnModel:
 
         found = await validate_api_key(session, token, uuid.uuid4())
         assert found is key
+
+
+class TestScopeCoexistsWithPrincipalKind:
+    """FAR-1385 coexistence pin: adding ``Account.kind`` does not touch the
+    FAR-620 ``scope`` axis.
+
+    ``scope`` stays a NOT NULL, IMMUTABLE, load-bearing column for the ``.self``
+    MCP tools; the principal kind is an orthogonal classification on the owner
+    account and must not be derived from — or folded into — the key scope.
+    """
+
+    def test_scope_remains_a_stored_column_not_derived_from_kind(self) -> None:
+        assert "scope" in OrgApiKey.__table__.c
+        assert "kind" not in OrgApiKey.__table__.c
+
+    def test_scope_vocabulary_is_unchanged(self) -> None:
+        checks = {c.name: str(c.sqltext) for c in OrgApiKey.__table__.constraints if hasattr(c, "sqltext")}
+        assert "ck_org_api_keys_scope" in checks
+        assert "org" in checks["ck_org_api_keys_scope"]
+        assert "user" in checks["ck_org_api_keys_scope"]

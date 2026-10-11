@@ -30,6 +30,7 @@ from modulo.core.assistant.context_source_service import (
 )
 from modulo.core.audit_coverage import audited
 from modulo.core.hitl_email_alerts import normalize_hitl_email_prefs
+from modulo.core.principals import is_service_account
 from modulo.db.crud.account import (
     AccountNotFoundError,
     get_account_by_id,
@@ -37,11 +38,24 @@ from modulo.db.crud.account import (
     update_account_preferences,
 )
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
+from modulo.db.models.account import Account
 from modulo.db.models.assistant_skill import AssistantSkill
 from modulo.db.rls import set_rls_org
 
 _CODE_ROUTES_ME = "routes.me"
 _MSG_ACCOUNT_NOT_FOUND = "Account not found"
+
+
+def _require_human_account(account: Account | None) -> Account:
+    """Refuse a missing OR service-principal account on a human-only /me route.
+
+    FAR-1385: a service principal has no human identity, so every ``/me``
+    surface is unreachable for it. Answered byte-identically to a missing
+    account so nothing is revealed.
+    """
+    if account is None or is_service_account(account):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    return account
 
 
 logger = logging.getLogger(__name__)
@@ -74,8 +88,7 @@ async def get_user_settings(
             detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
         ) from None
 
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    account = _require_human_account(account)
     return account.preferences
 
 
@@ -101,8 +114,7 @@ async def update_user_settings(
                 detail=MSG_THIS_FEATURE_NOT_AVAILABLE,
             ) from None
 
-        if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+        account = _require_human_account(account)
         return account.preferences
     prefs: dict[str, object] = {}
     if req.theme is not None:
@@ -173,8 +185,7 @@ async def get_hitl_email_preferences(
     async with session.begin():
         account = await get_account_by_id(session, current_user.account_id)
 
-    if account is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+    account = _require_human_account(account)
     return _hitl_email_pref_payload(account.preferences)
 
 
@@ -252,8 +263,7 @@ async def change_password(
             # it was minted under. Scoping to the current org would silently leave
             # cross-org / NULL-org families live (a token-invalidation gap).
             account = await get_account_by_id(session, current_user.account_id)
-            if account is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_ACCOUNT_NOT_FOUND)
+            account = _require_human_account(account)
 
             if not account.password_hash or not verify_password(req.current_password, account.password_hash):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")

@@ -45,6 +45,7 @@ from modulo.auth.ws_token import create_ws_token
 from modulo.core.audit_coverage import audited, audited_system, bind_audit_org
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.demo import DEMO_ORG_ROLE, DEMO_ORG_SLUG, demo_login_config
+from modulo.core.principals import is_service_account
 from modulo.core.rate_limiter import AuthRateLimiter
 from modulo.db.crud.account import (
     create_account,
@@ -158,6 +159,9 @@ class WsTokenResponse(BaseModel):
 
 class MeResponse(BaseModel):
     id: str
+    #: Always a value on a reachable /me call: a service principal is 404'd
+    #: before this response is built (FAR-1385), so the contract stays a
+    #: required string and the OpenAPI surface is unchanged.
     email: str
     display_name: str
     org_role: str
@@ -304,9 +308,14 @@ async def _authenticate_credentials(
     limiter: AuthRateLimiter | None,
     ip: str,
 ) -> Account:
-    """Resolve and verify an account, recording a rate-limit failure on denial."""
+    """Resolve and verify an account, recording a rate-limit failure on denial.
+
+    A service principal is refused byte-identically to a wrong password
+    (FAR-1385): it has no password and must never be admitted through the human
+    login path, and the denial must not reveal that the row exists.
+    """
     account = await get_account_by_email(session, email)
-    if not account or not authenticate_db_user(password, account):
+    if not account or is_service_account(account) or not authenticate_db_user(password, account):
         if limiter is not None:
             await limiter.record_failure(ip)
         raise HTTPException(
@@ -649,7 +658,7 @@ async def demo_login(
         # users out of /login; the demo abuse cap is the per-IP
         # RateLimitMiddleware rule (10/hour).
         account = await get_account_by_email(session, email)
-        if account is None or not authenticate_db_user(password, account):
+        if account is None or is_service_account(account) or not authenticate_db_user(password, account):
             _log.warning(
                 "auth.demo_login_credential_mismatch",
                 extra={"account_id": str(account.id) if account is not None else None, "configured_user": email},
@@ -762,6 +771,12 @@ async def _resolve_invite_account(
     """
     account = await get_account_by_email(session, invitation.email)
     existing_account = False
+
+    if account is not None and is_service_account(account):
+        # FAR-1385: a service principal can never be enrolled through an invite
+        # (it has no human identity). Refuse with the same generic 400 as every
+        # other invalid invitation so nothing is revealed.
+        await _reject_invitation(limiter, ip)
 
     if account is None:
         # (a) brand-new member
@@ -1483,6 +1498,10 @@ async def me(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
     if account is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+    if is_service_account(account):
+        # FAR-1385: a service principal has no human identity, so /me is
+        # unreachable for it — answered byte-identically to a missing account.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
     # ADR 047: return the LIVE org role (not the claim) so the frontend stops
