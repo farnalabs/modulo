@@ -10,6 +10,7 @@ per code.
 """
 
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -46,6 +47,7 @@ from modulo.launcher.doctor import (
     check_tls_expiry,
     run_doctor,
 )
+from modulo.launcher.entry import PGDATA_DIRNAME
 from modulo.launcher.secrets_file import LauncherSecrets, _parse
 from modulo.launcher.state import LauncherState, load_state, save_state
 
@@ -916,3 +918,141 @@ def test_register_probe_rejects_duplicate_name() -> None:
     doctor_module._registered_system_probes()  # populate the lazy registry first
     with pytest.raises(ValueError, match="duplicate system-probe name"):
         doctor_module._register_probe("ambient_env_names", lambda _data_dir: None)
+
+
+# ---------------------------------------------------------------------------
+# Extracted module-level system probes (S3776 data-driven registry)
+#
+# The complexity refactor lifted each system probe out of ``_build_system_probes``
+# into a module-level function with a uniform ``(data_dir, ...)`` signature. The
+# check-level tests inject stub probes, so these exercise the real
+# implementations — including their honest-``None`` failure arms — directly.
+# ---------------------------------------------------------------------------
+
+
+class _StubCompletedProcess:
+    """Minimal stand-in for the only attribute ``_probe_bundle_pg_version`` reads."""
+
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
+def _force_psutil_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the probe's ``import psutil`` raise, exercising the /proc path."""
+    monkeypatch.setitem(sys.modules, "psutil", None)
+
+
+def test_probe_available_memory_reads_proc_meminfo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """psutil absent -> MemAvailable is parsed from /proc/meminfo (kB -> bytes)."""
+    _force_psutil_unavailable(monkeypatch)
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal: 1000 kB\nMemAvailable: 2048 kB\n", encoding="ascii")
+    monkeypatch.setattr(doctor_module, "Path", lambda _arg: meminfo)
+    assert doctor_module._probe_available_memory_bytes(tmp_path) == 2048 * 1024
+
+
+def test_probe_available_memory_no_memavailable_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """psutil absent and /proc/meminfo has no MemAvailable line -> honest None."""
+    _force_psutil_unavailable(monkeypatch)
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal: 1000 kB\n", encoding="ascii")
+    monkeypatch.setattr(doctor_module, "Path", lambda _arg: meminfo)
+    assert doctor_module._probe_available_memory_bytes(tmp_path) is None
+
+
+def test_probe_available_memory_unreadable_proc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """psutil absent and /proc unreadable -> honest None, never a crash."""
+    _force_psutil_unavailable(monkeypatch)
+    monkeypatch.setattr(doctor_module, "Path", lambda _arg: tmp_path / "missing-meminfo")
+    assert doctor_module._probe_available_memory_bytes(tmp_path) is None
+
+
+def test_probe_data_dir_pg_version_read_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A present-but-unreadable PG_VERSION -> honest None, not a crash."""
+    pgdata = tmp_path / PGDATA_DIRNAME
+    pgdata.mkdir()
+    (pgdata / "PG_VERSION").write_text("16\n", encoding="ascii")
+
+    def _raise_oserror(self: Path, **_kwargs: object) -> str:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", _raise_oserror)
+    assert doctor_module._probe_data_dir_pg_version(tmp_path) is None
+
+
+def _stub_bundle_bin_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Create a bundled ``postgres`` binary and point resolve_bin_dir at it."""
+    (tmp_path / "postgres").write_text("", encoding="ascii")
+    (tmp_path / "postgres.exe").write_text("", encoding="ascii")
+    import modulo.launcher.entry as entry_module
+
+    monkeypatch.setattr(entry_module, "resolve_bin_dir", lambda *_a, **_k: tmp_path)
+
+
+def test_probe_bundle_pg_version_parses_dotted_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The bundled postgres --version output yields its dotted version token."""
+    _stub_bundle_bin_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_a, **_k: _StubCompletedProcess("postgres (PostgreSQL) 16.4 (Ubuntu 22.04.3 LTS)"),
+    )
+    assert doctor_module._probe_bundle_pg_version(tmp_path) == "16.4"
+
+
+def test_probe_bundle_pg_version_no_version_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Version output carrying no dotted token -> honest None."""
+    _stub_bundle_bin_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: _StubCompletedProcess("postgres (PostgreSQL)"))
+    assert doctor_module._probe_bundle_pg_version(tmp_path) is None
+
+
+def test_probe_bundle_pg_version_run_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The bundled postgres failing to execute -> honest None."""
+    _stub_bundle_bin_dir(monkeypatch, tmp_path)
+
+    def _raise_oserror(*_a: object, **_k: object) -> object:
+        raise OSError("cannot execute")
+
+    monkeypatch.setattr(subprocess, "run", _raise_oserror)
+    assert doctor_module._probe_bundle_pg_version(tmp_path) is None
+
+
+def test_probe_installed_bundle_pg_version_reads_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A string ``installed_bundle_pg_version`` in the manifest's extra dict is returned."""
+    import modulo.launcher.supervisor as supervisor_module
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "_read_manifest_fields",
+        lambda _path: {"extra": {"installed_bundle_pg_version": "16.4"}},
+    )
+    assert doctor_module._probe_installed_bundle_pg_version(tmp_path) == "16.4"
+
+
+def test_probe_installed_bundle_pg_version_non_string(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A non-string version field -> honest None."""
+    import modulo.launcher.supervisor as supervisor_module
+
+    monkeypatch.setattr(
+        supervisor_module,
+        "_read_manifest_fields",
+        lambda _path: {"extra": {"installed_bundle_pg_version": 164}},
+    )
+    assert doctor_module._probe_installed_bundle_pg_version(tmp_path) is None
+
+
+def test_probe_second_install_hint_none_when_no_siblings(tmp_path: Path) -> None:
+    """No state.json/secrets.json sibling install -> honest None."""
+    lone = tmp_path / "only-install"
+    lone.mkdir()
+    assert doctor_module._probe_second_install_hint(lone) is None
+
+
+def test_probe_cloud_sync_hit_exhausts_ancestor_walk(tmp_path: Path) -> None:
+    """A tree deeper than the 5-level walk with no markers -> honest None."""
+    deep = tmp_path
+    for name in ("a", "b", "c", "d", "e"):
+        deep = deep / name
+    deep.mkdir(parents=True)
+    assert doctor_module._probe_cloud_sync_hit(tmp_path, deep) is None
