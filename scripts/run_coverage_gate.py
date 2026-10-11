@@ -2009,7 +2009,37 @@ def _write_summary(results: list[GateResult]) -> None:
             print(f"::error::{msg}")
 
 
-def main() -> int:
+@dataclass(frozen=True)
+class Args:
+    """Parsed command-line arguments for the coverage gate."""
+
+    compare_branch: str
+    fail_under: int
+    branch_fail_under: int
+    python_report: Path | None
+    js_report: Path | None
+    js_src_root: str
+    allow_missing_reports: bool
+    allow_missing_js_report: bool
+
+
+@dataclass(frozen=True)
+class CoverageNumbers:
+    """Project-wide coverage for one language: line and branch percentages.
+
+    ``branch_pct`` is ``None`` when the report carries no branch records at
+    all (no branch data to measure), distinct from ``0.0`` (branch records
+    exist but none are covered).  ``language`` labels the metric for the
+    per-language BREACH messages.
+    """
+
+    language: str
+    line_pct: float
+    branch_pct: float | None
+
+
+def _parse_args(argv: list[str]) -> Args:
+    """Parse the command-line arguments (argparse only)."""
     parser = argparse.ArgumentParser(
         description="Changed-lines coverage gate using diff-cover.",
     )
@@ -2066,48 +2096,135 @@ def main() -> int:
             "deliberately produced no coverage because the PR touched no frontend path."
         ),
     )
-    args = parser.parse_args()
+    parsed = parser.parse_args(argv)
+    return Args(
+        compare_branch=parsed.compare_branch,
+        fail_under=parsed.fail_under,
+        branch_fail_under=parsed.branch_fail_under,
+        python_report=parsed.python_report,
+        js_report=parsed.js_report,
+        js_src_root=parsed.js_src_root,
+        allow_missing_reports=parsed.allow_missing_reports,
+        allow_missing_js_report=parsed.allow_missing_js_report,
+    )
 
-    # Resolve default report paths relative to the repo root
+
+def _resolve_reports(args: Args) -> tuple[Path | None, Path | None]:
+    """Resolve the Python Cobertura and JavaScript LCOV report paths.
+
+    An explicit ``--*-report`` value (sanitised) wins; otherwise the default
+    repo-relative report is used when it exists, else ``None`` (the gate then
+    fails closed for a missing report unless allow-missing is set).
+    """
     default_python = REPO_ROOT / "backend" / "coverage.xml"
     default_js = REPO_ROOT / "frontend" / "coverage" / "lcov.info"
 
     if args.python_report is not None:
-        python_report = Path(_sanitize_path(str(args.python_report), "python-report"))
+        python_report: Path | None = Path(_sanitize_path(str(args.python_report), "python-report"))
     elif default_python.exists():
         python_report = default_python
     else:
         python_report = None
 
     if args.js_report is not None:
-        js_report = Path(_sanitize_path(str(args.js_report), "js-report"))
+        js_report: Path | None = Path(_sanitize_path(str(args.js_report), "js-report"))
     elif default_js.exists():
         js_report = default_js
     else:
         js_report = None
 
-    # Normalise the LCOV report so diff-cover can match its paths (see
-    # _normalize_js_report).  The temp file, if any, is cleaned up below.
-    #
-    # Keep the ORIGINAL report path: the project-wide floor is computed after
-    # the finally block has unlinked the normalised temp copy, so it must read
-    # the raw report (which still exists) rather than ``js_report``.  In CI the
-    # vitest LCOV always uses relative ``SF:`` paths, so ``_normalize_js_report``
-    # always returns a temp file and ``js_report`` always points at the deleted
-    # copy — reading it would silently skip the JavaScript project-wide floor on
-    # every run.
-    raw_js_report = js_report
-    normalised_js_report: Path | None = None
+    return python_report, js_report
+
+
+def _load_python_coverage(report: str) -> CoverageNumbers | None:
+    """Load project-wide line and branch coverage from a Cobertura XML report.
+
+    Returns ``None`` when the report cannot be parsed, so the caller skips the
+    Python floor (matching the pre-refactor behaviour).
+    """
+    metrics = _compute_project_wide_metrics_cobertura(Path(report))
+    if metrics is None:
+        return None
+    line_pct, branch_pct = metrics
+    return CoverageNumbers(language="Python", line_pct=line_pct, branch_pct=branch_pct)
+
+
+def _load_js_coverage(report: str) -> CoverageNumbers | None:
+    """Load project-wide line and branch coverage from an LCOV report.
+
+    Returns ``None`` when the report cannot be read, so the caller skips the
+    JavaScript floor.  The project-wide metric reads the whole report and is
+    independent of any source root.
+    """
+    metrics = _compute_project_wide_metrics_lcov(Path(report))
+    if metrics is None:
+        return None
+    line_pct, branch_pct = metrics
+    return CoverageNumbers(language="JavaScript", line_pct=line_pct, branch_pct=branch_pct)
+
+
+def _enforce(got: CoverageNumbers) -> int:
+    """Evaluate one language's project-wide coverage against the floors.
+
+    Prints the language's metric line and any BREACH lines; returns 1 when a
+    floor is breached or branch data is absent, else 0.  The floors are
+    module-level ratchet constants, not CLI values.
+    """
+    branch_display = f"{got.branch_pct:.1f}%" if got.branch_pct is not None else "n/a (no branch data)"
+    print(f"  {got.language} project-wide: line {got.line_pct:.1f}%, branch {branch_display}")
+    failed = False
+    if got.line_pct < MIN_PROJECT_LINE_COVERAGE:
+        failed = True
+        print(
+            f"  BREACH: {got.language} line {got.line_pct:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
+            "fix coverage (floors are a ratchet and must not be lowered)"
+        )
+    if got.branch_pct is None:
+        failed = True
+        if got.language == "Python":
+            print(
+                "  BREACH: Python branch data missing from Cobertura report "
+                "(no branches-covered/branches-valid attributes, condition-coverage "
+                "attributes, or <condition> elements) — branch coverage cannot be enforced"
+            )
+        else:
+            print(
+                "  BREACH: JavaScript branch data missing from LCOV report "
+                "(no BRDA records) — branch coverage cannot be enforced"
+            )
+    elif got.branch_pct < MIN_PROJECT_BRANCH_COVERAGE:
+        failed = True
+        print(
+            f"  BREACH: {got.language} branch {got.branch_pct:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
+            "fix coverage (floors are a ratchet and must not be lowered)"
+        )
+    return 1 if failed else 0
+
+
+def _evaluate_changed_lines(
+    args: Args,
+    python_report: Path | None,
+    js_report: Path | None,
+) -> list[GateResult]:
+    """Evaluate the changed-lines gate (line + branch) for both languages.
+
+    Normalises the LCOV report so diff-cover can match its paths (see
+    :func:`_normalize_js_report`), owns the normalised temp copy, and deletes
+    it before returning.  ``js_report`` stays the RAW path on the caller's
+    side, so the project-wide floor (which runs after this returns and after
+    the temp copy is unlinked) reads the original report rather than the
+    deleted normalised copy — otherwise the JavaScript floor would silently
+    skip on every CI run.
+    """
     js_src_root = _sanitize_path(args.js_src_root, "js-src-root")
+    normalised_js_report: Path | None = None
     if js_report is not None and js_report.exists():
-        normalised = _normalize_js_report(js_report, js_src_root)
-        if normalised is not None:
-            normalised_js_report = normalised
-            js_report = normalised
+        normalised_js_report = _normalize_js_report(js_report, js_src_root)
+    effective_js_report = normalised_js_report if normalised_js_report is not None else js_report
 
     results: list[GateResult] = []
     try:
-        for language, report in (("Python", python_report), ("JavaScript", js_report)):
+        for language, report in (("Python", python_report), ("JavaScript", effective_js_report)):
             results.append(
                 evaluate(
                     language,
@@ -2124,87 +2241,58 @@ def main() -> int:
         if normalised_js_report is not None:
             with contextlib.suppress(OSError):
                 normalised_js_report.unlink()
+    return results
 
-    # --- Branch coverage summary ---
-    any_branch_failed = any(r.branch_passed is False for r in results)
 
-    # --- Project-wide floor check (the ratchet) ---
-    # Floors are a ratchet: raise as coverage improves, never lower.
-    # Lowering requires an explicit, justified commit message.
-    project_floor_failed = False
-    project_metrics: list[str] = []
-    if python_report is not None and python_report.exists():
-        py_metrics = _compute_project_wide_metrics_cobertura(python_report)
-        if py_metrics is not None:
-            pl, pb = py_metrics
-            branch_display = f"{pb:.1f}%" if pb is not None else "n/a (no branch data)"
-            project_metrics.append(f"  Python project-wide: line {pl:.1f}%, branch {branch_display}")
-            if pl < MIN_PROJECT_LINE_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: Python line {pl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-            # Branch data must be present.  A report with no branch data at all
-            # is indistinguishable from one whose branch data was dropped — fail
-            # closed with its own distinct reason, not a floor breach.
-            if pb is None:
-                project_floor_failed = True
-                project_metrics.append(
-                    "  BREACH: Python branch data missing from Cobertura report "
-                    "(no branches-covered/branches-valid attributes, condition-coverage "
-                    "attributes, or <condition> elements) — branch coverage cannot be enforced"
-                )
-            elif pb < MIN_PROJECT_BRANCH_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: Python branch {pb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-    if raw_js_report is not None and raw_js_report.exists():
-        js_metrics = _compute_project_wide_metrics_lcov(raw_js_report)
-        if js_metrics is not None:
-            jl, jb = js_metrics
-            branch_display = f"{jb:.1f}%" if jb is not None else "n/a (no branch data)"
-            project_metrics.append(f"  JavaScript project-wide: line {jl:.1f}%, branch {branch_display}")
-            if jl < MIN_PROJECT_LINE_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: JavaScript line {jl:.1f}% < floor {MIN_PROJECT_LINE_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-            if jb is None:
-                project_floor_failed = True
-                project_metrics.append(
-                    "  BREACH: JavaScript branch data missing from LCOV report "
-                    "(no BRDA records) — branch coverage cannot be enforced"
-                )
-            elif jb < MIN_PROJECT_BRANCH_COVERAGE:
-                project_floor_failed = True
-                project_metrics.append(
-                    f"  BREACH: JavaScript branch {jb:.1f}% < floor {MIN_PROJECT_BRANCH_COVERAGE}% — "
-                    "fix coverage (floors are a ratchet and must not be lowered)"
-                )
-
-    # --- Summary ---
+def _print_changed_lines_summary(results: list[GateResult]) -> None:
+    """Print the per-language changed-lines summary block."""
     print("\n=== Coverage Gate Summary ===")
-    for r in results:
-        print(f"  {r.summary()}")
+    for result in results:
+        print(f"  {result.summary()}")
     print()
 
-    if project_metrics:
-        print("=== Project-wide Coverage Floor (ratchet) ===")
-        for line in project_metrics:
-            print(line)
-        print(
-            f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
-            f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
-        )
-        print("  Raise floors as coverage improves; never lower without justification.")
-        print()
 
-    all_skipped = all(r.skipped for r in results)
-    any_line_failed = any(not r.skipped and not r.passed for r in results)
+def _check_project_floors(python_report: Path | None, js_report: Path | None) -> bool:
+    """Evaluate the project-wide coverage floors (the ratchet).
+
+    Loads each language's project-wide numbers, prints the floor section (via
+    :func:`_enforce`), and returns True when any floor is breached or a
+    language carries no branch data.  Floors are a ratchet: raise as coverage
+    improves, never lower; lowering requires an explicit justified commit.
+
+    Only languages whose report parses contribute a metric — a missing or
+    unparseable report is skipped (matching the pre-refactor behaviour), never
+    treated as a floor breach.
+    """
+    python_numbers: CoverageNumbers | None = None
+    if python_report is not None and python_report.exists():
+        python_numbers = _load_python_coverage(str(python_report))
+    js_numbers: CoverageNumbers | None = None
+    if js_report is not None and js_report.exists():
+        js_numbers = _load_js_coverage(str(js_report))
+
+    present = [numbers for numbers in (python_numbers, js_numbers) if numbers is not None]
+    if not present:
+        return False
+
+    print("=== Project-wide Coverage Floor (ratchet) ===")
+    failure = False
+    for numbers in present:
+        failure |= _enforce(numbers) == 1
+    print(
+        f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
+        f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
+    )
+    print("  Raise floors as coverage improves; never lower without justification.")
+    print()
+    return failure
+
+
+def _exit_code(results: list[GateResult], project_floor_failed: bool) -> int:
+    """Decide the process exit code and print the final verdict."""
+    all_skipped = all(result.skipped for result in results)
+    any_line_failed = any(not result.skipped and not result.passed for result in results)
+    any_branch_failed = any(result.branch_passed is False for result in results)
 
     if all_skipped and not project_floor_failed:
         print("No coverage data to check — gate passed (all languages skipped).")
@@ -2226,6 +2314,19 @@ def main() -> int:
     print("PASSED: all languages met the coverage thresholds.")
     _write_summary(results)
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Orchestrate the coverage gate: parse, resolve/load, enforce, exit."""
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+
+    python_report, js_report = _resolve_reports(args)
+    results = _evaluate_changed_lines(args, python_report, js_report)
+
+    _print_changed_lines_summary(results)
+    project_floor_failed = _check_project_floors(python_report, js_report)
+
+    return _exit_code(results, project_floor_failed)
 
 
 if __name__ == "__main__":
