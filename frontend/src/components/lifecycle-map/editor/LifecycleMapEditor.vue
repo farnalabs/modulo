@@ -295,6 +295,10 @@ function edgeToBackend(edge: any): LifecycleEdge {
 }
 
 async function loadData() {
+  // Clear any previous page error before re-fetching, so a successful Retry
+  // (or a mapId switch) actually renders the editor instead of leaving the
+  // stale error alert on screen. Failures below re-set it.
+  pageError.value = null
   try {
     const [mapData, pipelinesData] = await Promise.all([
       get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),

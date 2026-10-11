@@ -11,6 +11,7 @@ vi.mock('../lib/api/auth', () => ({
 
 import LifecycleMapEditor from '../components/lifecycle-map/editor/LifecycleMapEditor.vue'
 import VersionHistoryDropdown from '../components/lifecycle-map/editor/VersionHistoryDropdown.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
 import { useApi } from '../composables/useApi'
 
@@ -418,6 +419,88 @@ describe('LifecycleMapEditor interactions', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Failed to load lifecycle map')
+  })
+
+  it('renders the shared ErrorAlert with a Retry control when the load fails', async () => {
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(versions)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        return Promise.resolve(null)
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Failed to load lifecycle map')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(true)
+    // The editor (canvas) must not render while the page error is shown.
+    expect(wrapper.find('[data-testid="vue-flow-stub"]').exists()).toBe(false)
+  })
+
+  it('clears the page error on a successful Retry and renders the editor', async () => {
+    // The first map fetch fails (404 -> null), so the error alert is shown.
+    // Retry must re-fetch, CLEAR pageError and render the editor — before the
+    // fix, loadData never reset pageError, so Retry was a no-op and the alert
+    // stayed on screen forever.
+    let mapFetches = 0
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(versions)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        mapFetches += 1
+        if (mapFetches === 1) return Promise.resolve(null)
+        return Promise.resolve({ id: 'map-1', name: 'Launch Flow' })
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+
+    expect(wrapper.findComponent(ErrorAlert).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="vue-flow-stub"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="error-alert-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(mapFetches).toBe(2)
+    expect(wrapper.findComponent(ErrorAlert).exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Failed to load lifecycle map')
+    expect(wrapper.find('[data-testid="vue-flow-stub"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Launch Flow')
+  })
+
+  it('clears a stale page error when mapId changes after a failed load', async () => {
+    // The watch(() => props.mapId) path calls loadData, so the entry reset of
+    // pageError must clear the previous map's error too.
+    vi.mocked(useApi).mockReturnValueOnce({
+      get: vi.fn((url: string) => {
+        if (url.endsWith('/versions')) return Promise.resolve(versions)
+        if (url.includes('/pipelines')) return Promise.resolve({ items: [] })
+        if (url.includes('/lifecycle-maps/map-1')) return Promise.resolve(null)
+        return Promise.resolve({ id: 'map-2', name: 'Second Map' })
+      }),
+      post: postMock,
+      put: putMock,
+    } as unknown as ReturnType<typeof useApi>)
+
+    const wrapper = mountEditor()
+    await flushPromises()
+    expect(wrapper.findComponent(ErrorAlert).exists()).toBe(true)
+
+    await wrapper.setProps({ mapId: 'map-2' })
+    await flushPromises()
+
+    expect(wrapper.findComponent(ErrorAlert).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="vue-flow-stub"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Second Map')
   })
 
   it('renders empty canvas when version list is empty', async () => {
