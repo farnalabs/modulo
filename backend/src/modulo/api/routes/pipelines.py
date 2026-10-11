@@ -1203,13 +1203,17 @@ class PipelineGraphPolicyGate(BaseModel):
     gate). Declaring the field means the validated node dict retains the block
     and ``replace_pipeline_graph`` persists it verbatim in
     ``pipeline.graph_nodes_json``, and the read path round-trips it.
-
-    Retention alone does NOT enforce: the runtime engine resolves gating only
-    from ``policy_gates`` rows joined to evals. The graph-write normalisation
-    therefore also TRANSLATES each declared block into the gate-row lifecycle
-    (create / update / soft-delete) via :func:`_reconcile_graph_policy_gates`;
-    a stored block with no row governs nothing.
     """
+
+    # NOTE (FAR-1109): retention alone does NOT enforce. This docstring is part
+    # of the generated OpenAPI schema, so the enforcement note lives here as a
+    # plain comment (and in the module docstring above) rather than in the
+    # docstring — keeping frontend/src/lib/api/schema.ts fresh. The runtime
+    # engine resolves gating only from ``policy_gates`` rows joined to evals, so
+    # the graph-write path ALSO translates each declared block into the gate-row
+    # lifecycle (create / update / soft-delete) via
+    # ``_reconcile_graph_policy_gates`` — a stored block with no row governs
+    # nothing.
 
     action: Literal["warn", "block"]
     eval_id: uuid.UUID
