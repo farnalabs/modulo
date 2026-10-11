@@ -242,6 +242,11 @@ describe('RunDetailView', () => {
   it('renders deadline-kill triage evidence when the run detail carries it (FAR-704)', async () => {
     mockRunStatus = 'failed'
     mockErrorCode = 'node_deadline_exceeded'
+    // Three entries exercise every template branch arm: the full entry takes
+    // each v-if truthy arm; the node_id-only entry with delivery_done=true
+    // takes the falsy arms and the delivery-done badge; the final entry has
+    // neither attempt_key nor node_id, so the :key falls through the whole
+    // `??` chain to String(entryIndex).
     mockDeadlineTriage = [
       {
         node_id: 'n1',
@@ -251,6 +256,13 @@ describe('RunDetailView', () => {
         raw_output_tail: 'partial agent output',
         stdout_length: 20,
         stderr_length: 0,
+        delivery_done: false,
+      },
+      {
+        node_id: 'n2',
+        delivery_done: true,
+      },
+      {
         delivery_done: false,
       },
     ]
@@ -264,8 +276,9 @@ describe('RunDetailView', () => {
     expect(panel.text()).toContain('n1')
     expect(panel.text()).toContain('node-deadline watchdog')
     expect(panel.text()).toContain('agent.log: e2b endAt reached')
-    const entry = wrapper.find('[data-testid="run-detail-deadline-triage-entry"]')
-    expect(entry.exists()).toBe(true)
+    const entries = wrapper.findAll('[data-testid="run-detail-deadline-triage-entry"]')
+    expect(entries).toHaveLength(3)
+    expect(panel.text()).toContain('delivery observed before kill')
     wrapper.unmount()
   })
 

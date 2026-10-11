@@ -3361,6 +3361,40 @@ async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker
     assert not marker["sandbox_log_tail"]
 
 
+async def test_sandbox_cancellation_log_tail_fetch_cancelled_still_persists_marker():
+    """FAR-704: a nested cancellation during the log-tail probe is swallowed so
+    the triage marker is still persisted, then the original cancellation
+    re-raises — exercising the dedicated ``asyncio.CancelledError`` arm (the
+    sibling test covers the generic ``Exception`` arm)."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=5))
+    sandbox.files.read = AsyncMock(return_value="hello")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(side_effect=asyncio.CancelledError)),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    # The cancelled probe degrades to an empty tail, never a fabricated one.
+    assert not marker["sandbox_log_tail"]
+    assert marker["no_output_reason"]
+
+
 async def test_sandbox_success_delivery_marker_persist_reraises_cancellation():
     fn = make_sandbox_agent_fn(_sandbox_node_def(delivery_sentinel="ALL DONE"))
     cmd_result = MagicMock()
