@@ -14,10 +14,12 @@ import uuid
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from langchain_core.messages import AIMessage
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Interrupt
 
+import modulo.core.pipeline_engine.llm_judge as llm_judge
 from modulo.core.eval_engine import EvalDefinition, EvalType
 
 
@@ -172,5 +174,113 @@ def test_no_model_backend_id_falls_back_to_zero_and_fires_gate() -> None:
         _base_state(),
         [eval_def],
     )
+
+    assert interrupted is True
+
+
+# ---------------------------------------------------------------------------
+# FAR-1652: the shared judge resolver bounds a hung model backend
+# ---------------------------------------------------------------------------
+
+
+class _HangingBackend:
+    """Fake model backend whose invoke() never answers (a hung provider)."""
+
+    async def invoke(self, messages: list[Any], **kwargs: Any) -> AIMessage:
+        # Never reached in a passing run: the invoke bound
+        # (BACKEND_INVOKE_TIMEOUT_SECONDS) cancels this coroutine. Without
+        # that bound it sleeps for the full hour and wedges the bridge
+        # pool's single worker thread.
+        await asyncio.sleep(3600)
+        return AIMessage(content="unreachable")
+
+
+class _HangingHub:
+    """Fake ModelBackendHub returning a backend that never answers."""
+
+    def __init__(self) -> None:
+        self._backend = _HangingBackend()
+
+    async def get(self, backend_id: uuid.UUID, **kwargs: Any) -> _HangingBackend:
+        return self._backend
+
+
+def _shrink_timeout_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests fast: 0.2s invoke bound, 2s bridge backstop."""
+    monkeypatch.setattr(llm_judge, "BACKEND_INVOKE_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(llm_judge, "SYNC_BRIDGE_TIMEOUT_SECONDS", 2.0)
+
+
+def test_hung_judge_times_out_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A judge whose backend never answers fails THIS eval closed (score 0.0).
+
+    FAR-1652: ``future.result()`` had no timeout, so a hung judge blocked the
+    pipeline event loop indefinitely. With the bound the call returns a
+    fail-closed result instead - an unjudged output must not pass a gate.
+
+    Discriminating: without the bound this call blocks in the judge until the
+    pytest-timeout guard kills the test.
+    """
+    _shrink_timeout_bounds(monkeypatch)
+    eval_def = _make_eval_def(
+        "judge-quality",
+        config={"field": "content", "model_backend_id": str(uuid.uuid4())},
+    )
+    judge = llm_judge.build_llm_judge_callable(_HangingHub(), str(uuid.uuid4()))
+
+    result = judge({"content": "some agent output"}, eval_def)
+
+    assert result["passed"] is False
+    assert result["score"] == 0.0
+    assert "timed out" in result["detail"]
+
+
+def test_hung_judge_releases_the_bridge_for_the_next_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hung invoke is CANCELLED, so the max_workers=1 bridge stays usable.
+
+    A caller-side ``future.result(timeout=...)`` alone would time out the
+    CALLER while the worker thread stayed stuck inside the hung coroutine -
+    every later judge call would then fail closed too. The inner
+    ``asyncio.wait_for`` bound is what frees the thread; this proves it by
+    judging successfully with a healthy backend straight after a timeout.
+    """
+    _shrink_timeout_bounds(monkeypatch)
+    eval_def = _make_eval_def(
+        "judge-quality",
+        config={"field": "content", "model_backend_id": str(uuid.uuid4())},
+    )
+    hung_judge = llm_judge.build_llm_judge_callable(_HangingHub(), str(uuid.uuid4()))
+    healthy_judge = llm_judge.build_llm_judge_callable(
+        _FakeHub(_judge_payload(0.9)),
+        str(uuid.uuid4()),
+    )
+
+    first = hung_judge({"content": "some agent output"}, eval_def)
+    second = healthy_judge({"content": "some agent output"}, eval_def)
+
+    assert first["passed"] is False
+    assert second["passed"] is True
+    assert second["score"] == pytest.approx(0.9)
+
+
+def test_hung_judge_fires_the_gate_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end through ``make_hitl_review_fn``: a hung judge scores 0.0 and
+    the ``lt`` gate fires, instead of the run hanging on the judge call."""
+    _shrink_timeout_bounds(monkeypatch)
+    eval_def = _make_eval_def(
+        "judge-quality",
+        config={"field": "content", "model_backend_id": str(uuid.uuid4())},
+    )
+    hub = _HangingHub()
+
+    with patch(
+        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        return_value=hub,
+    ):
+        interrupted = _run_gate_fn(
+            _gate_config("judge-quality"),
+            _base_state(),
+            [eval_def],
+        )
 
     assert interrupted is True
