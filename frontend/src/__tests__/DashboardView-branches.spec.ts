@@ -40,7 +40,9 @@ const mockSummaryData = {
 
 const mockFlagData = {
   license: { tier: 'community', has_license_key: false, is_valid: false },
-  flags: [],
+  // FAR-92: the rolling-window toggle is gated on analytics_page — on by
+  // default here so the toggle tests see it.
+  flags: [{ name: 'analytics_page', currently_active: true }],
   would_activate: [],
 }
 
