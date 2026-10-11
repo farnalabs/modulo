@@ -1346,6 +1346,8 @@ describe('PipelineEditorView — run dialog', () => {
 
     // the rename error renders inside the teleported dialog
     expect(document.body.textContent).toContain('name_taken')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1422,6 +1424,8 @@ describe('PipelineEditorView — run dialog', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('delete_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1848,6 +1852,8 @@ describe('PipelineEditorView — edge properties panel', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('edge_rejected')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2036,6 +2042,8 @@ describe('PipelineEditorView — dialogs', () => {
     await nextTick()
     // the conversion error renders inside the teleported picker dialog
     expect(document.body.textContent).toContain('agent_missing')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2099,6 +2107,8 @@ describe('PipelineEditorView — dialogs', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('revert_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2167,6 +2177,8 @@ describe('PipelineEditorView — dialogs', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('composite_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 })
@@ -2210,6 +2222,8 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     __loadMock.mockClear()
     await retryBtn!.trigger('click')
     expect(__loadMock).toHaveBeenCalledTimes(1)
+    // The full-page alert stays at the default density — compact is opt-in.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(false)
     wrapper.unmount()
   })
 

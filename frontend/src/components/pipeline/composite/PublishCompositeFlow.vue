@@ -289,7 +289,7 @@ function goToLibrary() {
 
       <!-- Error -->
       <!-- retry = click Publish again; no separate loader -->
-      <ErrorAlert v-if="error && !success" :message="error" :retryable="false" class="mt-4" />
+      <ErrorAlert v-if="error && !success" :message="error" :retryable="false" class="mt-4" :compact="true" />
 
       <!-- Navigation -->
       <div v-if="!success" class="mt-6 flex justify-between">

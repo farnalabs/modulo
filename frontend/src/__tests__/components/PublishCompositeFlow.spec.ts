@@ -117,6 +117,8 @@ describe('PublishCompositeFlow', () => {
     expect(String(alert.props('message'))).toContain('name already taken')
     // Retry = click Next again; no separate loader, so no in-place retry.
     expect(alert.props('retryable')).toBe(false)
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Name & Description')
   })
@@ -174,6 +176,8 @@ describe('PublishCompositeFlow', () => {
     expect(String(alert.props('message'))).toContain('version conflict')
     // Retry = click Publish again; no separate loader, so no in-place retry.
     expect(alert.props('retryable')).toBe(false)
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Published!')
     expect(wrapper.emitted('published')).toBeUndefined()

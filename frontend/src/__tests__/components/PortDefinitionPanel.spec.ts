@@ -99,6 +99,8 @@ describe('PortDefinitionPanel', () => {
     expect(String(alert.props('message'))).toContain('Name and label are required')
     // Validation errors are corrected in the form — no in-place retry.
     expect(alert.props('retryable')).toBe(false)
+    // Dense form context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.emitted('update:ports')).toBeUndefined()
   })

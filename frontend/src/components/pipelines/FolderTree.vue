@@ -127,7 +127,7 @@
         </div>
 
         <!-- retry = click Save again; no separate loader -->
-        <ErrorAlert v-if="createError" :message="createError" :retryable="false" />
+        <ErrorAlert v-if="createError" :message="createError" :retryable="false" :compact="true" />
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
@@ -148,7 +148,7 @@
           <InputText id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" class="w-full" @keyup.enter="handleRename" />
         </div>
         <!-- retry = click Save again; no separate loader -->
-        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" :compact="true" />
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
@@ -165,7 +165,7 @@
       </template>
       <p class="text-sm text-muted-foreground">{{ deleteConfirmMessage }}</p>
       <!-- retry = click Delete again; no separate loader -->
-      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" />
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" :compact="true" />
       <template #footer>
         <div class="flex gap-2 justify-end">
           <Button severity="secondary" outlined @click="showDeleteConfirm = false">{{ $t('common.cancel') }}</Button>

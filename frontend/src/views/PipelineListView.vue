@@ -52,6 +52,7 @@
           :retryable="false"
           :on-dismiss="() => (moveError = null)"
           :dismiss-label="$t('common.close')"
+          :dismiss-icon="true"
           class="mb-4"
           role="alert"
           data-testid="pipeline-list-move-error"
@@ -295,7 +296,7 @@
             </button>
           </div>
           <!-- retry = click Save again; no separate loader -->
-          <ErrorAlert v-if="moveError" :message="moveError" :retryable="false" class="mt-4" />
+          <ErrorAlert v-if="moveError" :message="moveError" :retryable="false" class="mt-4" :compact="true" />
           <div class="mt-4 flex justify-end gap-2">
             <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" data-testid="pipeline-list-move-cancel" @click="closeMoveToFolder">
               {{ $t('common.cancel') }}
@@ -329,7 +330,7 @@
               />
             </div>
             <!-- retry = click Save again; no separate loader -->
-            <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
+            <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" :compact="true" />
             <div class="flex justify-end gap-2">
               <button
                 type="button"
@@ -361,7 +362,7 @@
             {{ $t('views.PipelineListView.delete_confirm') }}
           </p>
           <!-- retry = click Delete again; no separate loader -->
-          <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" />
+          <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
           <div class="flex justify-end gap-2">
             <button
               type="button"

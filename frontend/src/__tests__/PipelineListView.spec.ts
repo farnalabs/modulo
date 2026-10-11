@@ -255,8 +255,13 @@ describe('PipelineListView', () => {
     expect(banner.text()).toContain('Move failed')
 
     // The banner's dismiss control clears the move error and hides the banner.
+    // The top-level banner uses the icon-only dismiss (dismissIcon): the
+    // accessible name comes from aria-label, not a visible text label.
     const closeButton = banner.find('[data-testid="error-alert-dismiss"]')
     expect(closeButton.exists()).toBe(true)
+    expect(closeButton.attributes('aria-label')).toBe('Close')
+    expect(closeButton.text()).toBe('')
+    expect(closeButton.find('svg').exists()).toBe(true)
     await closeButton.trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
@@ -1103,6 +1108,8 @@ describe('PipelineListView', () => {
     const alert = dialog.findComponent({ name: 'ErrorAlert' })
     expect(alert.exists()).toBe(true)
     expect(String(alert.props('message'))).toContain('Move failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1131,6 +1138,8 @@ describe('PipelineListView', () => {
     const alert = dialog.findComponent({ name: 'ErrorAlert' })
     expect(alert.exists()).toBe(true)
     expect(String(alert.props('message'))).toContain('Rename failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1161,6 +1170,8 @@ describe('PipelineListView', () => {
     const alert = dialog.findComponent({ name: 'ErrorAlert' })
     expect(alert.exists()).toBe(true)
     expect(String(alert.props('message'))).toContain('Delete failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
     wrapper.unmount()
   })
 })

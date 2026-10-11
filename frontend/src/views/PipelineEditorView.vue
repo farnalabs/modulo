@@ -1282,7 +1282,7 @@
             </button>
           </div>
           <!-- retry = click Save Edge again; no separate loader -->
-          <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" />
+          <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" :compact="true" />
         </div>
       </aside>
     </template>
@@ -1345,7 +1345,7 @@
             <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
           <!-- retry = click Convert again; no separate loader -->
-          <ErrorAlert v-if="convertError" :message="convertError" :retryable="false" />
+          <ErrorAlert v-if="convertError" :message="convertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1382,7 +1382,7 @@
 </Select>
         </div>
         <!-- retry = click Revert again; no separate loader -->
-        <ErrorAlert v-if="revertError" :message="revertError" :retryable="false" />
+        <ErrorAlert v-if="revertError" :message="revertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1434,7 +1434,7 @@
           </div>
         </div>
         <!-- retry = click Save again; no separate loader -->
-        <ErrorAlert v-if="saveAsError" :message="saveAsError" :retryable="false" />
+        <ErrorAlert v-if="saveAsError" :message="saveAsError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1457,7 +1457,7 @@
           />
         </div>
         <!-- retry = click Save again; no separate loader -->
-        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1471,7 +1471,7 @@
         {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
       </p>
       <!-- retry = click Delete again; no separate loader -->
-      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" />
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
     </FormDialog>
 
     <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />

@@ -335,7 +335,7 @@ async function detectPlaceholders() {
         </div>
 
         <!-- validation error shown while editing; corrected by editing the form, no loader to retry -->
-        <ErrorAlert v-if="formError" :message="formError" :retryable="false" />
+        <ErrorAlert v-if="formError" :message="formError" :retryable="false" :compact="true" />
 
         <div class="flex justify-end gap-2">
           <button type="button"
