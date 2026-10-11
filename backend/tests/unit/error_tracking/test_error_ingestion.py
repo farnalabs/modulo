@@ -87,23 +87,34 @@ class TestFingerprint:
 class TestFingerprintNormalization:
     svc = ErrorIngestionService()
 
-    @pytest.mark.parametrize(
-        ("desc", "stacktrace", "expected_len"),
-        [
-            pytest.param("top_5_frames_only", "\n".join(f"line {i}" for i in range(20)), 64, id="top_5_frames_only"),
-            pytest.param(
-                "file_paths_stripped",
-                '  File "/app/deploy/path/main.py", line 42, in handler\n    result = do_work()',
-                64,
-                id="file_paths_stripped",
-            ),
-            pytest.param("none_stacktrace", None, 64, id="none_stacktrace"),
-            pytest.param("empty_stacktrace", "", 64, id="empty_stacktrace"),
-        ],
-    )
-    def test_normalization(self, desc: str, stacktrace: str | None, expected_len: int) -> None:
-        fp = self.svc.fingerprint(message="x", stacktrace=stacktrace, source="x")
-        assert len(fp) == expected_len
+    def test_top_five_frames_only(self) -> None:
+        # Two stacks identical in their first 5 lines but differing after line 5
+        # must yield the SAME fingerprint (normalisation keeps only the top 5).
+        head = "\n".join(f"frame {i}" for i in range(5))
+        stack_a = head + "\n" + "tail A"
+        stack_b = head + "\n" + "totally different tail B"
+        fa = self.svc.fingerprint(message="x", stacktrace=stack_a, source="x")
+        fb = self.svc.fingerprint(message="x", stacktrace=stack_b, source="x")
+        assert fa == fb
+        # Changing a line WITHIN the top 5 changes the fingerprint.
+        stack_c = "\n".join(["frame 0", "frame X", "frame 2", "frame 3", "frame 4", "tail A"])
+        fc = self.svc.fingerprint(message="x", stacktrace=stack_c, source="x")
+        assert fc != fa
+
+    def test_file_paths_are_stripped(self) -> None:
+        # The File "…", line N, prefix is stripped, so identical code with a
+        # different absolute path yields the same fingerprint.
+        a = '  File "/app/deploy/main.py", line 42, in handler\n    result = do_work()'
+        b = '  File "/home/dev/other/main.py", line 99, in handler\n    result = do_work()'
+        fa = self.svc.fingerprint(message="x", stacktrace=a, source="x")
+        fb = self.svc.fingerprint(message="x", stacktrace=b, source="x")
+        assert fa == fb
+
+    def test_none_and_empty_stacktrace_are_equivalent(self) -> None:
+        none_fp = self.svc.fingerprint(message="x", stacktrace=None, source="x")
+        empty_fp = self.svc.fingerprint(message="x", stacktrace="", source="x")
+        assert none_fp == empty_fp
+        assert len(none_fp) == 64
 
 
 # =========================================================================
