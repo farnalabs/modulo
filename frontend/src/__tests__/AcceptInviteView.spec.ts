@@ -19,6 +19,7 @@ vi.mock('../composables/useApi', () => ({
 }))
 
 import AcceptInviteView from '../views/AcceptInviteView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('AcceptInviteView', () => {
   beforeEach(() => {
@@ -47,9 +48,17 @@ describe('AcceptInviteView', () => {
     await vi.waitFor(() => {
       expect(wrapper.find('[data-testid="accept-invite-missing-token"]').exists()).toBe(true)
     })
-    // FAR-1669: shared ErrorAlert, non-retryable — a missing token cannot be
-    // fixed by a Retry.
-    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(0)
+    // FAR-1669 prove-the-fix: the missing-token box must be the SHARED
+    // ErrorAlert — the old bespoke div also had no Retry, so a retry-count
+    // assertion alone passed against the pre-conversion code. A reverted
+    // conversion fails findComponent; dropping `:retryable="false"` fails
+    // the prop assertion.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.text()).toContain('This invitation link is incomplete')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('submits the token + password and shows success for a new account', async () => {

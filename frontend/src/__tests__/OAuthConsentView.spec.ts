@@ -30,6 +30,7 @@ const origFetch = globalThis.fetch
 let fetchMock: ReturnType<typeof vi.fn>
 
 import OAuthConsentView from '../views/OAuthConsentView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('OAuthConsentView', () => {
   beforeEach(async () => {
@@ -242,6 +243,16 @@ describe('OAuthConsentView', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('Invalid state')
+
+    // FAR-1669 prove-the-fix: the approval-failure box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div also showed the message, so
+    // findComponent is what fails on a revert. No Retry (`:retryable="false"`):
+    // the in-place Approve button below is the retry path.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('message')).toBe('Invalid state')
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('approve shows error on network exception', async () => {

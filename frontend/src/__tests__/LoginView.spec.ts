@@ -14,6 +14,7 @@ vi.mock('../lib/mustChangePassword', () => ({
 }))
 
 import LoginView from '../views/LoginView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('LoginView - login-context integration', () => {
   beforeEach(() => {
@@ -180,6 +181,73 @@ describe('LoginView - login-context integration', () => {
       // Falls through to basic login form (email + password) — no org slug entry
       expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
     })
+  })
+
+  it('surfaces a failed login through the shared ErrorAlert with assertive aria-live (FAR-1669)', async () => {
+    // Keyed by URL so the login failure is deterministic regardless of how the
+    // fire-and-forget SSO discovery request interleaves with the submit.
+    vi.spyOn(global, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/v1/auth/login')) {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          statusText: 'Unauthorized',
+          json: () => Promise.resolve({ detail: 'Invalid credentials' }),
+        } as Response)
+      }
+      if (url.includes('/api/v1/auth/login-context')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            multi_org: false,
+            org: { slug: 'acme', name: 'Acme Corp' },
+          }),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ oidc: [], saml: false }),
+      } as Response)
+    })
+
+    // The login mutation rejects by design (401). Vue's dev-mode error path
+    // rethrows an event-handler rejection from inside its own `.catch`, which
+    // Node reports as an unhandled rejection and fails the run — install a
+    // scoped errorHandler on THIS mount so the rejection stays handled. The
+    // rendered error state comes from tanstack's own mutation store and is
+    // unaffected by the handler.
+    const wrapper = mount(LoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+        config: { errorHandler: () => {} },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="login-email"]').setValue('user@test.com')
+    await wrapper.find('[data-testid="login-password"]').setValue('wrong')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Invalid credentials')
+    })
+
+    // FAR-1669 prove-the-fix: the login-failure box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div satisfies a text-only
+    // assertion, so findComponent is what fails on a revert. The a11y
+    // contract (role + assertive live region) rides through as fallthrough
+    // attributes, and no Retry is offered: the user corrects credentials.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('renders the login form within ONE timeout budget when login-context hangs', async () => {
