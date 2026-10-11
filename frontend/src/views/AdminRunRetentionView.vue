@@ -39,7 +39,7 @@
         v-if="exportError || purgeError"
         class="mb-4"
         data-testid="admin-run-retention-error"
-        :message="exportError || purgeError || undefined"
+        :message="actionError"
         :retryable="false"
       />
       <div
@@ -313,6 +313,10 @@ const purging = ref(false)
 const purgeError = ref<string | null>(null)
 const purgeResult = ref<PurgeResponse | null>(null)
 const showPurgeConfirm = ref(false)
+
+// Export and purge are mutually exclusive actions, so at most one error is set
+// at a time; surface whichever is present.
+const actionError = computed(() => exportError.value || purgeError.value)
 
 const pipelineOptions = computed(() => pipelines.value.map(p => ({ value: p.id, label: p.name })))
 // Statuses added to RUN_STATUS without a STATUS_LABEL_KEY entry fall back to a

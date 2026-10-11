@@ -29,7 +29,7 @@ import { computed } from 'vue'
 import { isProblemDetail, type ProblemDetail } from '../../lib/api/formatError'
 
 const props = withDefaults(defineProps<{
-  message?: string | ProblemDetail
+  message?: string | ProblemDetail | null
   onRetry?: () => void
   retryable?: boolean
   onDismiss?: () => void

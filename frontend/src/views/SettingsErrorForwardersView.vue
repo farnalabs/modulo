@@ -274,7 +274,7 @@
                  button is the retry path. -->
             <ErrorAlert
               v-if="formErrors[fwd.forwarder_type]"
-              :message="formErrors[fwd.forwarder_type] ?? undefined"
+              :message="formErrors[fwd.forwarder_type]"
               :retryable="false"
             />
           </div>
