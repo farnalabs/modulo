@@ -1,12 +1,15 @@
-"""FAR-1649 qa iteration 1 — integration: node-STARTED rows are never re-dispatched.
+"""FAR-1649 qa iteration 1+2 — integration: node-STARTED rows are never re-EXECUTED.
 
-Drives the REAL ``dispatcher_reconcile`` tick (real Postgres + real Redis) with
-a ``dispatch_phase='first_node_dispatched'`` run whose heartbeat is stale and
-whose SAQ job is gone — the exact production shape (2026-10-10 outage) where
-the generic stale-heartbeat branch used to re-dispatch the run as
-``execute_run`` and re-execute the started node. The run must NOT be
-re-dispatched; the NULL-phase control with the identical shape MUST be, proving
-the exclusion discriminates on the phase.
+Drives the REAL ``dispatcher_reconcile`` tick (real Postgres + real Redis)
+with a ``dispatch_phase='first_node_dispatched'`` run. Iteration 1 covered the
+running + stale-heartbeat shape (the 2026-10-10 outage, where the generic
+stale-heartbeat branch used to re-dispatch the run as ``execute_run`` and
+re-execute the started node). Iteration 2 additionally covers the ``pending``
+re-dispatch leg: a fenced pending-reset keeps ``dispatcher``/``dispatched_at``,
+so a node-STARTED row reset to pending used to be re-selected and
+re-dispatched as ``execute_run`` too. In every case the run must NOT be
+re-dispatched; the NULL-phase controls with the identical shapes MUST be,
+proving the exclusions discriminate on the phase.
 """
 
 from __future__ import annotations
@@ -32,8 +35,9 @@ async def _seed_node_phase_run(
     account_id: uuid.UUID,
     *,
     dispatch_phase: str | None,
+    status: str = "running",
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """A running SAQ run, stale heartbeat, no SAQ job, given durable phase."""
+    """A SAQ run (default running), stale heartbeat, no SAQ job, given phase."""
     pipeline_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
     run_id = uuid.uuid4()
@@ -69,7 +73,7 @@ async def _seed_node_phase_run(
                     "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, "
                     "status, input_hash, langgraph_thread_id, run_number, dispatcher, claim_count, "
                     "heartbeat_at, dispatched_at, saq_job_id, claim_token, started_at, dispatch_phase) "
-                    "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', 'running', 'hash', :thread, :rn, 'saq', 1, "
+                    "VALUES (:id, :oid, :pid, :sid, :uid, 'manual', :status, 'hash', :thread, :rn, 'saq', 1, "
                     "now() - interval '30 minutes', now() - interval '35 minutes', "
                     ":job_id, 'token-a', now() - interval '60 minutes', :phase)"
                 ),
@@ -83,6 +87,7 @@ async def _seed_node_phase_run(
                     "rn": run_number,
                     "job_id": f"saq:job:runs:run:{run_id}",
                     "phase": dispatch_phase,
+                    "status": status,
                 },
             )
         return run_id, pipeline_id
@@ -145,3 +150,39 @@ async def test_control_null_phase_stale_run_is_redispatched(
     assert await _job_exists(saq_settings_env, run_id)
     status, _claim_token = await _run_row_state(db_engine, run_id)
     assert status == "running"
+
+
+async def test_pending_node_started_run_is_not_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """FAR-1649 qa iteration 2 (finding 1): a node-STARTED run RESET to
+    pending (the fenced pending-reset keeps ``dispatcher``/``dispatched_at``)
+    is NOT re-dispatched as ``execute_run`` by the reenqueue-window leg —
+    no job appears, the row stays pending."""
+    run_id, _ = await _seed_node_phase_run(
+        db_engine,
+        test_org,
+        test_user,
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+        status="pending",
+    )
+
+    await ch.dispatcher_reconcile()
+
+    assert not await _job_exists(saq_settings_env, run_id)
+    status, claim_token = await _run_row_state(db_engine, run_id)
+    assert status == "pending"
+    assert claim_token == "token-a"
+
+
+async def test_control_pending_null_phase_run_is_redispatched(
+    saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
+) -> None:
+    """The control: the IDENTICAL pending row with no durable phase IS
+    re-dispatched (as ``execute_run``) by the reenqueue-window leg — the
+    pending-leg exclusion discriminates on the phase alone."""
+    run_id, _ = await _seed_node_phase_run(db_engine, test_org, test_user, dispatch_phase=None, status="pending")
+
+    await ch.dispatcher_reconcile()
+
+    assert await _job_exists(saq_settings_env, run_id)

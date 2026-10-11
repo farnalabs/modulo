@@ -1378,14 +1378,15 @@ async def test_slot_sweep_never_resets_node_started_stale_run(
     db_engine: AsyncEngine,
     migrated_db_url: str,
 ) -> None:
-    """FAR-1649 qa iteration 1 (finding 1, path B): the heartbeat-stale slot
-    sweep must NEVER reset a durably node-STARTED run to ``pending``.
+    """FAR-1649 qa iteration 2 (finding 5, retry arm): the heartbeat-stale
+    slot sweep must NEVER RESET a durably node-STARTED run to ``pending``.
 
     The reset clears ``dispatched_at``, which admits the row to the reconcile
-    ``capacity_deferred`` leg and re-dispatches it — RE-EXECUTING the started
-    node. The sweep's UPDATE therefore excludes ``first_node_dispatched``
-    rows; the NULL-phase control with the identical shape is still reset
-    (retry) as before — the exclusion discriminates on the phase alone."""
+    re-dispatch legs and re-dispatches it — RE-EXECUTING the started node.
+    The sweep's UPDATE therefore excludes ``first_node_dispatched`` rows from
+    the retry arm (claim_count within budget); the NULL-phase control with
+    the identical shape is still reset (retry) as before — the exclusion
+    discriminates on the phase alone."""
     from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
     from modulo.core.run_admission import reconcile_pipeline_slots
 
@@ -1423,6 +1424,42 @@ async def test_slot_sweep_never_resets_node_started_stale_run(
     # pending for re-dispatch, exactly as before the exclusion.
     status, _code = await _run_state(db_engine, org_id, control)
     assert status == "pending"
+
+
+async def test_slot_sweep_terminal_fails_over_budget_node_started_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1649 qa iteration 2 (finding 5, terminal arm): an OVER-BUDGET
+    (claim_count > HEARTBEAT_STALE_RETRY_BUDGET) node-STARTED run IS
+    terminal-failed by the sweep — terminal-fail re-executes nothing, and
+    excluding it from this arm too would only delay the pipeline-slot release
+    until the age gate collects the same row ~105 min later."""
+    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+    from modulo.core.run_admission import reconcile_pipeline_slots
+    from modulo.settings import get_settings
+
+    over_budget = get_settings().heartbeat_stale_retry_budget + 1
+    org_id, user_id = await _seed_org_account(db_engine, "SweepNodePhaseOverOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeSweepPhaseOver", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    node_started = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=over_budget,
+        heartbeat_at=datetime.now(UTC) - timedelta(minutes=45),
+        started_at=datetime.now(UTC) - timedelta(hours=2),
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+
+    await reconcile_pipeline_slots(db_engine)
+
+    # Terminal-failed with the sweep's code — the slot is released promptly.
+    status, code = await _run_state(db_engine, org_id, node_started)
+    assert status == "failed"
+    assert code == "heartbeat_stale"
 
 
 async def test_mid_graph_wedge_spares_recently_started_run(

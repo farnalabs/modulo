@@ -56,6 +56,7 @@ from modulo.core.audit_logger.labels import (
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -6582,9 +6583,14 @@ class PipelineExecutor:
             if not state.first_node_signalled:
                 state.first_node_signalled = True
                 # FAR-893: update phase tracker so the watchdog logs the transition.
+                # FAR-1649: bind the shared constant (dependency-free leaf
+                # ``dispatch_phases``) so the write site and every
+                # reconcile/age-gate predicate share ONE definition — a
+                # bare literal here could desynchronise from the
+                # ``:first_node_phase`` bind params silently.
                 _tracker = self._dispatch_phase_tracker
                 if _tracker is not None:
-                    _tracker.enter_phase("first_node_dispatched")
+                    _tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
                 if self.on_first_progress is not None:
                     self.on_first_progress()
             # FAR-369 absolute node-deadline watchdog: signal per-node

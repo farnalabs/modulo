@@ -452,9 +452,11 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "deduped": 0,
     "nodeless_redispatched": 0,
     "nodeless_capped": 0,
-    # FAR-1649: node-started rows held back from re-dispatch this tick (the
-    # row-level guard in _reconcile_one_row). Read through .get() like every
-    # other additive counter here.
+    # FAR-1649: node-started rows held back from re-dispatch by the
+    # row-level belt in _reconcile_one_row (defence-in-depth — the SQL legs
+    # exclude the class, so production should see 0; a non-zero value is a
+    # race/regression alarm). Read through .get() like every other additive
+    # counter here.
     "node_started_deferred": 0,
     # The terminalizer counters below (and their healthz aliases) are seeded
     # from the registry (FAR-720) just after the registry is defined — see
@@ -5239,6 +5241,14 @@ def _build_re_dispatch_predicate(
             Run.status == "pending",
             Run.dispatcher == "saq",
             Run.dispatched_at < func_now_minus(reenqueue_window),
+            # FAR-1649 qa iteration 2 (finding 1): a durably node-STARTED run
+            # reset to ``pending`` — the fenced pending-reset
+            # (``executor._fenced_pending_reset``) sets status='pending' but
+            # does NOT clear ``dispatcher``/``dispatched_at`` — must not be
+            # selected here either: this leg re-dispatches as ``execute_run``,
+            # re-executing the started node. A NULL phase = no durable
+            # node-start evidence (legacy rows) and stays recoverable.
+            or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
         ),
         and_(
             Run.status == "running",
@@ -5253,13 +5263,18 @@ def _build_re_dispatch_predicate(
             # detail now carries the phase). A NULL phase = no durable
             # node-start evidence (legacy rows) and stays recoverable.
             #
-            # Finding 2 (fleet cap): with this exclusion the node-started class
-            # is out of EVERY re-dispatch leg — it enqueues ZERO rows per tick
-            # (the mass-wedge flood the old nodeless-cap of 50/tick used to
-            # bound), so no per-tick cap is needed for it; its terminalisation
-            # drains through the age gate's own per-tick ``max_rows`` cap. The
-            # D8 marker sweep composes this SAME predicate (parity by
-            # construction), so its recoverability verdict moves in lockstep.
+            # Finding 2 (fleet cap): with this exclusion (and the pending-leg
+            # exclusion above) the node-started class is out of EVERY
+            # ``execute_run`` re-dispatch leg — it enqueues ZERO re-execution
+            # jobs per tick (the mass-wedge flood the old nodeless-cap of
+            # 50/tick used to bound), so no per-tick cap is needed for it; its
+            # terminalisation drains through the age gate's own per-tick
+            # ``max_rows`` cap. The ONE remaining leg that can enqueue such a
+            # row is the F6a gated-recovery leg below — and that enqueues
+            # ``resume_run`` only (checkpoint resume, no re-execution; see its
+            # comment). The D8 marker sweep composes this SAME predicate
+            # (parity by construction), so its recoverability verdict moves in
+            # lockstep.
             or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
@@ -5268,6 +5283,20 @@ def _build_re_dispatch_predicate(
         # whose gate decision committed AFTER the park swept it is
         # self-healed through the same reconcile→resume path instead of
         # being stranded forever.
+        #
+        # FAR-1649 qa iteration 2 (finding 2): this leg deliberately carries NO
+        # ``first_node_dispatched`` exclusion, because the phase exclusion here
+        # would break EVERY gated run: the phase is never advanced past
+        # ``first_node_dispatched``, so a run parked at a HITL gate (or a
+        # half-resumed one whose resume job was lost) routinely carries that
+        # exact phase. What makes this safe is the JOB TYPE, not the phase:
+        # these statuses re-dispatch as ``resume_run`` (see
+        # ``_reconcile_job_type``), which resumes from the run's last LangGraph
+        # checkpoint — completed super-steps are NOT re-executed — and only
+        # after the per-row committed-decision guard
+        # (``_resolve_hitl_resume_or_skip``) proves a human decision exists.
+        # The class is therefore out of every re-EXECUTION (execute_run) leg;
+        # this leg can enqueue it but never re-executes it.
         and_(
             Run.status.in_(("awaiting_human", "claimed", "hitl_parked")),
             Run.dispatcher == "saq",
@@ -7173,10 +7202,15 @@ def _dispatcher_summary() -> dict[str, Any]:
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
-        # FAR-1649: running rows whose durable phase proves a node STARTED that
-        # this tick deliberately did NOT re-dispatch (re-execution unsafe) —
-        # held back for the watchdogs / age gate. Additive .get() contract like
-        # every other counter here.
+        # FAR-1649: running/pending rows whose durable phase proves a node
+        # STARTED that the row-level belt held back from ``execute_run``
+        # re-dispatch (re-execution unsafe). Additive .get() contract like
+        # every other counter here. Truthfulness (qa iteration 2, finding 4):
+        # in production this should stay 0 — the SQL selection legs exclude
+        # the class, so the scan never returns such a row; a non-zero value
+        # means the belt caught a SELECT→loop phase race or a future leg that
+        # forgot the exclusion (defence-in-depth alarm, not a routine
+        # per-tick signal).
         "node_started_deferred": 0,
         "streak_scanned": 0,
         "streak_deactivated": 0,
@@ -8403,16 +8437,26 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
-    # FAR-1649 qa finding 1 — row-level belt for the SQL exclusion (the scan's
-    # predicate can only reach this row via another branch, or via a phase that
-    # transitioned between SELECT and now). A durably node-STARTED running row
-    # is never re-dispatched here: ``execute_run`` would re-execute the started
-    # node. It stays ``running`` so the age gate collects it truthfully
-    # (``run.no_progress`` + the phase in its detail). Counted separately
-    # (``node_started_deferred``) so the held-back class is visible per tick —
-    # see the predicate comment on the per-tick bound: this class enqueues
-    # zero rows per tick, so the mass-wedge flood bound holds.
-    if row.status == "running" and getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+    # FAR-1649 qa iteration 2 — row-level belt for the SQL exclusions (the
+    # scan's predicate can only reach this row via another branch, or via a
+    # phase that transitioned between SELECT and now). A durably node-STARTED
+    # ``running``/``pending`` row is never re-dispatched here as
+    # ``execute_run``: re-execution could duplicate the started node's side
+    # effects. ``running`` rows stay running so the age gate collects them
+    # truthfully (``run.no_progress`` + the phase in its detail); ``pending``
+    # rows (e.g. a fenced pending-reset that kept dispatcher/dispatched_at)
+    # are held for the same reason.
+    #
+    # Truthfulness note (qa iteration 2, finding 4): in production this belt
+    # should never fire — every selection leg that dispatches ``execute_run``
+    # now excludes the class in SQL, so the scan never returns such a row.
+    # It is a defence-in-depth row guard (race window + future-leg
+    # regression), NOT a production-observed signal; ``node_started_deferred``
+    # counts belt hits only, so a non-zero production value is itself a
+    # regression alarm. The production-visible signal for the started-but-
+    # dying class remains the age gate's ``run.no_progress`` detail, which
+    # carries ``dispatch_phase=``.
+    if row.status in ("running", "pending") and getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
         summary["node_started_deferred"] += 1
         _log.warning(
             "dispatcher_reconcile.node_started_not_redispatched run=%s org=%s "

@@ -1,16 +1,24 @@
-"""FAR-1649 qa iteration 1: a node-STARTED run is never re-dispatched.
+"""FAR-1649 qa iteration 1+2: a node-STARTED run is never re-EXECUTED.
 
 The durable ``first_node_dispatched`` phase (FAR-1422) proves a node STARTED
-even though no super-step ever completed — so re-dispatching such a row (the
-``execute_run`` job re-executes the started node) can duplicate side effects.
-Before this fix, once the nodeless selection legs excluded the class it fell
-through to the generic stale-heartbeat re-dispatch branch and was re-dispatched
-uncapped (the old nodeless branch capped the flood at
-``NODELESS_REDISPATCH_MAX_PER_TICK``; the general branch has no cap). These
-tests drive a ``first_node_dispatched`` row with a stale heartbeat / no SAQ job
-through the REAL reconcile tick (``dispatcher_reconcile``) and assert it is
-NOT re-dispatched — plus the control (NULL phase) that proves the harness
-discriminates, and the mass-wedge bound (60 such rows enqueue ZERO jobs).
+even though no super-step ever completed — so re-dispatching such a row as
+``execute_run`` can duplicate side effects. Iteration 1 excluded the class from
+the nodeless branches and the generic stale-heartbeat re-dispatch branch. This
+file (iteration 2) additionally covers:
+
+* the ``pending`` re-dispatch leg (a fenced pending-reset keeps
+  ``dispatcher``/``dispatched_at`` — the row must not be re-selected) and the
+  widened row belt (``running``+``pending``);
+* the F6a gated-recovery leg, which deliberately ADMITS the class but only as
+  ``resume_run`` (checkpoint resume, never re-execution);
+* the executor write site binding the shared ``PHASE_FIRST_NODE_DISPATCHED``
+  constant instead of a bare literal;
+* the slot-sweep UPDATE carrying the node-started exclusion on the RETRY arm
+  only (the over-budget terminal-fail arm still releases the slot).
+
+These tests drive a ``first_node_dispatched`` row through the REAL reconcile
+tick (``dispatcher_reconcile``) and assert the correct job-type outcome — plus
+the controls (NULL phase) that prove the harness discriminates.
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -264,10 +273,12 @@ class TestNodeStartedRowIsNeverRedispatched:
 
     async def test_mass_node_started_burst_enqueues_zero(self, monkeypatch: Any) -> None:
         """Finding 2 (lost fleet cap): a mass worker wedge leaves a burst of
-        node-STARTED stale rows eligible in the SAME tick. The class is now
-        out of EVERY re-dispatch leg, so the burst enqueues ZERO jobs — the
-        flood bound the old nodeless cap (50/tick) provided holds a fortiori
-        (0 <= 50), and every held-back row is counted."""
+        node-STARTED stale rows eligible in the SAME tick. The class is out of
+        every ``execute_run`` re-dispatch leg (the F6a leg matches only
+        awaiting_human/claimed/hitl_parked, never ``running``), so the burst
+        enqueues ZERO jobs — the flood bound the old nodeless cap (50/tick)
+        provided holds a fortiori (0 <= 50), and every held-back row is
+        counted."""
         burst = 60  # above the former NODELESS_REDISPATCH_MAX_PER_TICK=50
         rows = [_run_row(uuid.uuid4(), dispatch_phase=PHASE_FIRST_NODE_DISPATCHED) for _ in range(burst)]
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, rows)
@@ -336,3 +347,201 @@ class TestNodelessChokepointTruthfulForNodeStartedRow:
         event_message = ingest.await_args.kwargs["message"]
         assert "node-started" in event_message
         assert "no node was ever dispatched" not in event_message
+
+
+class TestPendingRedispatchLegExcludesNodeStarted:
+    """FAR-1649 qa iteration 2 (finding 1): the ``pending`` re-dispatch leg.
+
+    ``executor._fenced_pending_reset`` resets a running row to ``pending``
+    WITHOUT clearing ``dispatcher``/``dispatched_at``. A node-STARTED row so
+    reset used to match the ``pending + dispatcher='saq' + dispatched_at
+    < reenqueue_window`` leg and be re-dispatched as ``execute_run`` —
+    re-executing the started node. The leg now carries the same phase
+    exclusion the stale-heartbeat leg has, and the row belt covers
+    ``pending`` too.
+    """
+
+    def test_pending_leg_predicate_excludes_node_started_phase(self) -> None:
+        """The SQL pending leg binds the shared phase constant (selection
+        half): a node-STARTED pending row is never even selected by the
+        reenqueue-window leg."""
+        import sqlalchemy as sa
+
+        from modulo.db.models.run import Run
+
+        predicate = ch._build_re_dispatch_predicate(
+            reenqueue_window=600,
+            stale_window=600,
+            capacity_redispatch_seconds=120,
+        )
+        compiled = sa.select(Run.id).where(predicate).compile()
+        sql = str(compiled)
+        # Two legs now exclude the class (pending reenqueue + running stale
+        # heartbeat); F6a deliberately adds none (resume-only leg).
+        assert sql.count("dispatch_phase IS NULL") == 2
+        phase_params = [v for v in dict(compiled.params).values() if v == PHASE_FIRST_NODE_DISPATCHED]
+        assert len(phase_params) == 2
+
+    async def test_pending_node_started_row_is_not_redispatched(self, monkeypatch: Any) -> None:
+        """A pending + dispatcher='saq' + old-dispatched_at row whose phase
+        proves a node STARTED is held back by the row belt (execute_run would
+        re-execute the started node) — no enqueue, counted deferred."""
+        run_id = uuid.uuid4()
+        row = _run_row(run_id, status="pending", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_not_awaited()
+        assert summary["repaired"] == 0
+        assert summary["node_started_deferred"] == 1
+
+    async def test_control_null_phase_pending_row_is_redispatched(self, monkeypatch: Any) -> None:
+        """The control: the SAME pending row with no durable phase still takes
+        the reenqueue-window re-dispatch as ``execute_run`` — the guard
+        discriminates on the phase."""
+        row = _run_row(uuid.uuid4(), status="pending", dispatch_phase=None)
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        assert summary["repaired"] == 1
+        assert summary["node_started_deferred"] == 0
+
+
+class TestF6aGatedRecoveryResumesNodeStartedNeverReexecutes:
+    """FAR-1649 qa iteration 2 (finding 2): the F6a leg may ADMIT a
+    node-STARTED row, but only as ``resume_run``.
+
+    The phase never advances past ``first_node_dispatched``, so a run parked
+    at a HITL gate routinely carries that phase — a phase exclusion here would
+    strand every gated run. What makes it safe is the job type: F6a statuses
+    re-dispatch as ``resume_run`` (checkpoint resume, no re-execution) and
+    only after the committed-decision guard. These tests pin that contract:
+    a first_node_dispatched F6a row is enqueued as ``resume_run``, never
+    ``execute_run``.
+    """
+
+    async def test_node_started_awaiting_human_row_is_resumed_not_reexecuted(self, monkeypatch: Any) -> None:
+        """A first_node_dispatched awaiting_human row with a committed gate
+        decision is re-dispatched as ``resume_run`` — resumed from the
+        checkpoint, never re-executed as ``execute_run``."""
+        run_id = uuid.uuid4()
+        row = _run_row(run_id, status="awaiting_human", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
+        assert summary["repaired"] == 1
+        # The belt is a re-EXECUTION guard: it must not hold back a resume.
+        assert summary["node_started_deferred"] == 0
+
+    async def test_node_started_hitl_parked_row_is_resumed_not_reexecuted(self, monkeypatch: Any) -> None:
+        """Same contract for ``hitl_parked`` (qa F1 park recovery)."""
+        run_id = uuid.uuid4()
+        row = _run_row(run_id, status="hitl_parked", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "resume_run"
+        assert summary["node_started_deferred"] == 0
+
+    def test_f6a_leg_carries_no_phase_exclusion(self) -> None:
+        """The F6a leg deliberately has NO phase exclusion — pin the design so
+        a future \"consistency\" edit that adds one (and strands every gated
+        run) fails here first."""
+        import sqlalchemy as sa
+
+        from modulo.db.models.run import Run
+
+        predicate = ch._build_re_dispatch_predicate(
+            reenqueue_window=600,
+            stale_window=600,
+            capacity_redispatch_seconds=120,
+        )
+        compiled = sa.select(Run.id).where(predicate).compile()
+        sql = str(compiled)
+        # Exactly two phase-exclusion legs (pending + running), never three.
+        assert sql.count("dispatch_phase IS NULL") == 2
+        # The F6a statuses are bound as one list param (awaiting_human among
+        # them), proving the leg is present while carrying no third phase
+        # exclusion.
+        bound_groups = [v for v in dict(compiled.params).values() if isinstance(v, list)]
+        assert any("awaiting_human" in group for group in bound_groups)
+
+
+class TestExecutorWriteSiteSharesPhaseConstant:
+    """FAR-1649 qa iteration 2 (finding 3): one definition, no bare literal."""
+
+    def test_executor_imports_and_uses_the_shared_constant(self) -> None:
+        """The executor write site binds ``PHASE_FIRST_NODE_DISPATCHED`` from
+        the dependency-free ``dispatch_phases`` leaf — the same object the
+        predicates bind — and no bare ``"first_node_dispatched"`` literal
+        remains in the executor module."""
+        from modulo.core.pipeline_engine import executor
+
+        assert executor.PHASE_FIRST_NODE_DISPATCHED is PHASE_FIRST_NODE_DISPATCHED
+        source = Path(executor.__file__).read_text(encoding="utf-8")
+        assert 'enter_phase("first_node_dispatched")' not in source
+        assert "enter_phase(PHASE_FIRST_NODE_DISPATCHED)" in source
+
+
+class TestSlotSweepExcludesNodeStartedFromRetryOnly:
+    """FAR-1649 qa iteration 2 (finding 5): the slot sweep's UPDATE excludes
+    a node-STARTED row from the RETRY-RESET arm only. The over-budget
+    terminal-fail arm still collects it (terminal-fail re-executes nothing)
+    so the pipeline slot is released promptly instead of ~105 min later via
+    the age gate.
+    """
+
+    async def test_slot_sweep_sql_excludes_node_started_from_retry_arm_only(self) -> None:
+        """The emitted UPDATE carries the claim_count OR-arm: over-budget
+        rows bypass the phase exclusion entirely."""
+        import modulo.core.run_admission as ra
+
+        statements: list[str] = []
+
+        class _Result:
+            def __init__(self, rows: list[Any]) -> None:
+                self._rows = rows
+
+            def all(self) -> list[Any]:
+                return self._rows
+
+        class _Conn:
+            def get_bind(self) -> Any:
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+            async def __aenter__(self) -> Self:
+                return self
+
+            async def __aexit__(self, *args: object) -> bool:
+                return False
+
+            def begin(self) -> Self:
+                return self
+
+            async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> _Result:
+                statements.append(str(stmt))
+                if "SELECT id FROM organisations" in str(stmt):
+                    return _Result([(ORG,)])
+                return _Result([])
+
+        class _Engine:
+            def connect(self) -> _Conn:
+                return _Conn()
+
+        with patch.object(
+            ra,
+            "get_settings",
+            return_value=SimpleNamespace(slot_reconcile_stale_seconds=1800, heartbeat_stale_retry_budget=3),
+        ):
+            result = await ra.reconcile_pipeline_slots(_Engine())  # type: ignore[arg-type]
+
+        assert result["released"] == 0
+        assert result["retried"] == 0
+        release_stmts = [s for s in statements if "status = 'running'" in s]
+        assert len(release_stmts) == 1
+        sql = release_stmts[0]
+        # The exclusion is OR'd with the over-budget arm, not AND'd onto the
+        # whole WHERE: over-budget rows are terminal-failed regardless of phase.
+        assert "claim_count > :retry_budget" in sql
+        assert "dispatch_phase <> :first_node_phase" in sql
