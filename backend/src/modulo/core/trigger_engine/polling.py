@@ -123,9 +123,17 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
     ``read``, while every other ACL call site in the product denies it.
 
     The check itself is delegated to :class:`ConnectorACL` so the polling path
-    makes EXACTLY the same decision as the rest of the product (FAR-1564):
-    ``None``/``[]`` are UNRESTRICTED and pass, a non-empty list must list
-    ``read``, and a malformed value is restricted to nothing (fail closed).
+    makes EXACTLY the same decision as the rest of the product (FAR-1564,
+    FAR-1583): ``None``/``[]`` are UNRESTRICTED and pass, a non-empty list must
+    list ``read``, and a malformed value is restricted to nothing (fail
+    closed). The instance's OWN ``connector_type_id`` is threaded in (FAR-1616)
+    exactly as the connector hub's construction site passes it, so a
+    TYPE-QUALIFIED allowlist entry (``github.read``) grants its bare capability
+    only when the qualifier names this connector's own type — and a
+    MIS-TYPED entry (``github.read`` on a ``filesystem`` connector) is
+    REJECTED, fail closed. Without the threaded type the qualifier is
+    unverifiable, so a same-type qualified entry would be DENIED here while the
+    hub GRANTS it — the divergence this gate exists to prevent.
 
     Polling is a system-level operation with no caller visibility scope, so an
     absent/garbage ``visibility`` is normalised to ``org`` rather than raising
@@ -143,6 +151,7 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
     ConnectorACL(
         visibility=visibility,
         allowed_operations=getattr(connector_instance, "allowed_operations", None),
+        connector_type_id=getattr(connector_instance, "connector_type_id", None),
     ).check("read")
 
 
