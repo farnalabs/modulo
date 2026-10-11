@@ -355,6 +355,62 @@ def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClie
     assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
+def test_receive_webhook_hmac_secret_decrypt_failure_falls_back_to_raw_secret(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """HMAC-secret decrypt failure falls back to the RAW stored secret with the
+    exception LOGGED (never silent): the stored value may itself be the
+    plaintext secret, so a delivery signed against it must still verify — and
+    the decrypt failure must be visible in the logs either way."""
+    import logging as _logging
+
+    stored_secret = "stored-plaintext-secret"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": stored_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(stored_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch(
+                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
+                new=AsyncMock(side_effect=ValueError("fernet decode failed")),
+            ),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            with caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"):
+                resp = client.post(
+                    f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Modulo-Timestamp": str(ts),
+                        "X-Modulo-Webhook-Secret": signature,
+                    },
+                )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # The fallback (raw) secret verified the signature → accepted, not 401.
+    assert resp.status_code == 202, resp.text
+    # The decrypt failure was LOGGED, not swallowed silently.
+    assert "webhooks.hmac_secret_decrypt_failed" in caplog.text
+
+
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
     """Paused org: 202 {"status": "paused"} with NO run_id, engine never called."""
     with (
