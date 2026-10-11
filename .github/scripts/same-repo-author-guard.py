@@ -37,6 +37,40 @@ from pathlib import Path
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"})
 
 
+def _resolve_head(pr: dict, base_repo: str) -> tuple[str, str]:
+    """Return (head_full_name, error_reason); error_reason is '' on success.
+
+    Also cross-checks the payload's own base against the caller's repository so
+    a mis-targeted payload can never grant a pass on a foreign PR.
+    """
+    head_repo = (pr.get("head") or {}).get("repo") or {}
+    head_full = head_repo.get("full_name")
+    if not head_full:
+        # head.repo is null when the fork has been deleted, and absent on a
+        # malformed payload - either way the PR head cannot be verified.
+        return "", "could not resolve PR head repository - fail closed"
+    payload_base = ((pr.get("base") or {}).get("repo") or {}).get("full_name")
+    if payload_base and payload_base.lower() != base_repo.lower():
+        return (
+            "",
+            f"payload base repo ({payload_base}) does not match caller base repo ({base_repo}) - fail closed",
+        )
+    return head_full, ""
+
+
+def _resolve_association(pr: dict) -> tuple[str, str]:
+    """Return (association, error_reason); error_reason is '' on success."""
+    association = pr.get("author_association")
+    if not association or not isinstance(association, str):
+        return "", "author_association missing - fail closed"
+    if association not in TRUSTED_ASSOCIATIONS:
+        return (
+            "",
+            f"author_association '{association}' is not a trusted same-repo association - fail closed",
+        )
+    return association, ""
+
+
 def decide(pr: dict, base_repo: str) -> tuple[str, str]:
     """Return (verdict, reason). verdict is ``'ok'`` or ``'external'``."""
     if not base_repo or not isinstance(base_repo, str):
@@ -44,36 +78,18 @@ def decide(pr: dict, base_repo: str) -> tuple[str, str]:
     if not isinstance(pr, dict):
         return "external", "PR payload is not a JSON object - fail closed"
 
-    head_repo = (pr.get("head") or {}).get("repo") or {}
-    head_full = head_repo.get("full_name")
-    if not head_full:
-        # head.repo is null when the fork has been deleted, and absent on a
-        # malformed payload - either way the PR head cannot be verified.
-        return "external", "could not resolve PR head repository - fail closed"
-
-    # Cross-check the payload's own base against the caller's repository so a
-    # mis-targeted payload can never grant a pass on a foreign PR.
-    payload_base = ((pr.get("base") or {}).get("repo") or {}).get("full_name")
-    if payload_base and payload_base.lower() != base_repo.lower():
-        return (
-            "external",
-            f"payload base repo ({payload_base}) does not match caller base repo ({base_repo}) - fail closed",
-        )
-
+    head_full, head_err = _resolve_head(pr, base_repo)
+    if head_err:
+        return "external", head_err
     if head_full.lower() != base_repo.lower():
         return (
             "external",
             f"PR head is from {head_full}, not {base_repo} (fork / external contributor) - fail closed",
         )
 
-    association = pr.get("author_association")
-    if not association or not isinstance(association, str):
-        return "external", "author_association missing - fail closed"
-    if association not in TRUSTED_ASSOCIATIONS:
-        return (
-            "external",
-            f"author_association '{association}' is not a trusted same-repo association - fail closed",
-        )
+    association, association_err = _resolve_association(pr)
+    if association_err:
+        return "external", association_err
 
     author = (pr.get("user") or {}).get("login") or "?"
     return "ok", f"same-repo author '{author}' (association={association}, head={head_full})"
@@ -86,8 +102,12 @@ def main(argv: list[str]) -> int:
             flush=True,
         )
         return 2
+    # ``argv[1]`` is a CLI argument supplied by the calling workflow
+    # (.github/workflows/merge-queue.yml and pr-review.yml pass a ``gh api``
+    # output path); it is never user- or model-supplied, so this S8707 taint
+    # flow is a false positive.
     try:
-        with Path(argv[1]).open(encoding="utf-8") as fh:
+        with Path(argv[1]).open(encoding="utf-8") as fh:  # NOSONAR pythonsecurity:S8707
             pr = json.load(fh)
     except Exception as exc:  # fail closed on any I/O or JSON error
         print(f"external|error loading PR payload: {exc} - fail closed", flush=True)

@@ -195,6 +195,13 @@ _EXCLUDE_PATTERNS: list[str] = [
     "backend/tools/**",
     "scripts/**",
     "frontend/scripts/**",
+    # CI/ops helper modules under ``.github/scripts/**`` are the same class as
+    # the ``scripts/**`` and ``backend/scripts/**`` exclusions: the CI coverage
+    # scan runs ``pytest --cov=src/modulo`` (see scripts/coverage-thresholds.sh),
+    # so it never instruments them. Their unit tests run and pass (regression
+    # protection), but no line-coverage data for them reaches coverage.xml, so
+    # every changed line would otherwise register as "0% unmeasured".
+    ".github/scripts/**",
     "docs/api/examples/**",
     # Auto-generated code: ``frontend/src/lib/api/schema.ts`` is emitted by
     # openapi-typescript (scripts/run_generate_api_types.py) and carries no
