@@ -96,6 +96,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1002,6 +1003,162 @@ def _build_database_probes(
     return _probe_postgres, _probe_role_violations, _probe_redis, _probe_migrations_at_head
 
 
+# ---------------------------------------------------------------------------
+# System probes — data-driven registry
+# ---------------------------------------------------------------------------
+#
+# Every system probe is a module-level function whose FIRST argument is the
+# doctor's data dir (bound once by ``_build_system_probes``; probes that do
+# not read it name it ``_data_dir`` — the uniform signature is what lets the
+# registry bind them all identically). The remaining parameters, if any, are
+# supplied at call time by the check (e.g. ``cloud_sync_hit(root)``).
+
+# A registered system probe: data dir first, any call-time arguments after.
+_SystemProbe = Callable[..., Any]
+
+# (name, probe) pairs, in registration order — append, never reorder or
+# rename: ``_build_system_probes`` keys its bound probes by these names and
+# its return tuple (the shape ``default_probes`` unpacks) must name each one.
+_PROBE_REGISTRY: list[tuple[str, _SystemProbe]] = []
+
+
+def _register_probe(name: str, probe: _SystemProbe) -> None:
+    """Register *probe* under *name* in ``_PROBE_REGISTRY``.
+
+    Fails loud on a duplicate name: ``_build_system_probes`` keys bound
+    probes by name, so a duplicate would silently shadow its predecessor.
+    """
+    if any(existing == name for existing, _ in _PROBE_REGISTRY):
+        raise ValueError(f"duplicate system-probe name: {name!r}")
+    _PROBE_REGISTRY.append((name, probe))
+
+
+def _probe_ambient_env_names(_data_dir: Path) -> list[str]:
+    from modulo.launcher.env_safety import AMBIENT_SERVICE_URL_VARS, _is_scrubbed
+
+    source = dict(os.environ)
+    hostile = {name for name in source if _is_scrubbed(name)}
+    hostile.update(name for name in AMBIENT_SERVICE_URL_VARS if source.get(name))
+    return sorted(name for name in hostile if source.get(name))
+
+
+def _probe_available_memory_bytes(_data_dir: Path) -> int | None:
+    try:
+        import psutil  # type: ignore[import-untyped]
+
+        return int(psutil.virtual_memory().available)
+    except Exception as exc:  # psutil unavailable: fall through to /proc (honest None)
+        _log.warning("doctor.memory_psutil_unavailable reason=%r", exc)
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except Exception:
+        return None
+    return None
+
+
+def _probe_data_dir_pg_version(data_dir: Path) -> str | None:
+    version_path = data_dir / PGDATA_DIRNAME / "PG_VERSION"
+    try:
+        return version_path.read_text(encoding="ascii").strip() if version_path.is_file() else None
+    except OSError:
+        return None
+
+
+def _probe_bundle_pg_version(_data_dir: Path) -> str | None:
+    from modulo.launcher.entry import resolve_bin_dir
+
+    binary = resolve_bin_dir() / ("postgres.exe" if sys.platform == "win32" else "postgres")
+    if not binary.is_file():
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603 — argv fully pinned
+            [str(binary), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # "postgres (PostgreSQL) 16.4 (Ubuntu ...)" -> "16.4"
+    for token in result.stdout.split():
+        if token and token[0].isdigit() and "." in token:
+            return token
+    return None
+
+
+def _probe_installed_bundle_pg_version(data_dir: Path) -> str | None:
+    from modulo.launcher.supervisor import RUNTIME_FILENAME, _read_manifest_fields
+
+    extra = _read_manifest_fields(data_dir / RUNTIME_FILENAME).get("extra")
+    if not isinstance(extra, dict):
+        return None
+    version = extra.get("installed_bundle_pg_version")
+    return version if isinstance(version, str) else None
+
+
+def _probe_bundled_binaries(_data_dir: Path) -> list[Path]:
+    from modulo.launcher.entry import resolve_bin_dir
+
+    bin_dir = resolve_bin_dir()
+    names = ("initdb", "postgres", "pg_isready", "redis-server", "redis-cli")
+    suffix = ".exe" if sys.platform == "win32" else ""
+    return [bin_dir / f"{name}{suffix}" for name in names if (bin_dir / f"{name}{suffix}").is_file()]
+
+
+def _probe_cloud_sync_hit(_data_dir: Path, root: Path) -> str | None:
+    current = root
+    for _depth in range(5):
+        for marker in CLOUD_SYNC_VENDOR_MARKERS:
+            if marker in current.name.lower():
+                return f"{current} (matched cloud-sync marker {marker!r})"
+        if current.parent == current:
+            break
+        current = current.parent
+    return None
+
+
+def _probe_modulo_on_path(_data_dir: Path) -> str | None:
+    return shutil.which("modulo")
+
+
+def _probe_install_root(_data_dir: Path) -> str | None:
+    return str(Path(sys.executable).parent)
+
+
+def _probe_second_install_hint(data_dir: Path) -> str | None:
+    siblings = [
+        sibling
+        for sibling in data_dir.parent.iterdir()
+        if sibling.is_dir()
+        and sibling != data_dir
+        and (sibling / "state.json").is_file()
+        and (sibling / _SECRETS_FILENAME).is_file()
+    ]
+    if not siblings:
+        return None
+    return (
+        f"a second native install lives at {siblings[0]} — two launcher data dirs can shadow each "
+        "other's state; confirm which install you are operating"
+    )
+
+
+# Registration order mirrors the tuple ``_build_system_probes`` returns; the
+# exact names/order are locked by test_probe_registry_names_and_order.
+_register_probe("ambient_env_names", _probe_ambient_env_names)
+_register_probe("available_memory_bytes", _probe_available_memory_bytes)
+_register_probe("data_dir_pg_version", _probe_data_dir_pg_version)
+_register_probe("bundle_pg_version", _probe_bundle_pg_version)
+_register_probe("installed_bundle_pg_version", _probe_installed_bundle_pg_version)
+_register_probe("bundled_binaries", _probe_bundled_binaries)
+_register_probe("cloud_sync_hit", _probe_cloud_sync_hit)
+_register_probe("modulo_on_path", _probe_modulo_on_path)
+_register_probe("install_root", _probe_install_root)
+_register_probe("second_install_hint", _probe_second_install_hint)
+
+
 def _build_system_probes(
     data_dir: Path,
 ) -> tuple[
@@ -1016,132 +1173,26 @@ def _build_system_probes(
     Callable[[], str | None],
     Callable[[], str | None],
 ]:
-    """Return system/environment/memory/version probe callables.
+    """Bind every registered system probe to *data_dir*.
 
-    Tuple order: ambient_env_names, available_memory_bytes, data_dir_pg_version,
+    Built from ``_PROBE_REGISTRY``; the returned tuple's order is the
+    contract ``default_probes`` unpacks positionally:
+    ambient_env_names, available_memory_bytes, data_dir_pg_version,
     bundle_pg_version, installed_bundle_pg_version, bundled_binaries,
-    cloud_sync_hit, modulo_on_path, install_root, second_install_hint,
-    degraded_reason.
+    cloud_sync_hit, modulo_on_path, install_root, second_install_hint.
     """
-
-    def _probe_ambient_env_names() -> list[str]:
-        from modulo.launcher.env_safety import AMBIENT_SERVICE_URL_VARS, _is_scrubbed
-
-        source = dict(os.environ)
-        hostile = {name for name in source if _is_scrubbed(name)}
-        hostile.update(name for name in AMBIENT_SERVICE_URL_VARS if source.get(name))
-        return sorted(name for name in hostile if source.get(name))
-
-    def _probe_available_memory_bytes() -> int | None:
-        try:
-            import psutil  # type: ignore[import-untyped]
-
-            return int(psutil.virtual_memory().available)
-        except Exception as exc:  # psutil unavailable: fall through to /proc (honest None)
-            _log.warning("doctor.memory_psutil_unavailable reason=%r", exc)
-        try:
-            for line in Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-        except Exception:
-            return None
-        return None
-
-    def _probe_data_dir_pg_version() -> str | None:
-        version_path = data_dir / PGDATA_DIRNAME / "PG_VERSION"
-        try:
-            return version_path.read_text(encoding="ascii").strip() if version_path.is_file() else None
-        except OSError:
-            return None
-
-    def _probe_bundle_pg_version() -> str | None:
-        from modulo.launcher.entry import resolve_bin_dir
-
-        binary = resolve_bin_dir() / ("postgres.exe" if sys.platform == "win32" else "postgres")
-        if not binary.is_file():
-            return None
-        try:
-            result = subprocess.run(  # noqa: S603 — argv fully pinned
-                [str(binary), "--version"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        # "postgres (PostgreSQL) 16.4 (Ubuntu ...)" -> "16.4"
-        for token in result.stdout.split():
-            if token and token[0].isdigit() and "." in token:
-                return token
-        return None
-
-    def _probe_installed_bundle_pg_version() -> str | None:
-        from modulo.launcher.supervisor import RUNTIME_FILENAME, _read_manifest_fields
-
-        extra = _read_manifest_fields(data_dir / RUNTIME_FILENAME).get("extra")
-        if not isinstance(extra, dict):
-            return None
-        version = extra.get("installed_bundle_pg_version")
-        return version if isinstance(version, str) else None
-
-    def _probe_bundled_binaries() -> list[Path]:
-        from modulo.launcher.entry import resolve_bin_dir
-
-        bin_dir = resolve_bin_dir()
-        names = ("initdb", "postgres", "pg_isready", "redis-server", "redis-cli")
-        suffix = ".exe" if sys.platform == "win32" else ""
-        return [bin_dir / f"{name}{suffix}" for name in names if (bin_dir / f"{name}{suffix}").is_file()]
-
-    def _probe_cloud_sync_hit(root: Path) -> str | None:
-        current = root
-        for _depth in range(5):
-            for marker in CLOUD_SYNC_VENDOR_MARKERS:
-                if marker in current.name.lower():
-                    return f"{current} (matched cloud-sync marker {marker!r})"
-            if current.parent == current:
-                break
-            current = current.parent
-        return None
-
-    def _probe_modulo_on_path() -> str | None:
-        return shutil.which("modulo")
-
-    def _probe_install_root() -> str | None:
-        return str(Path(sys.executable).parent)
-
-    def _probe_second_install_hint() -> str | None:
-        siblings = [
-            sibling
-            for sibling in data_dir.parent.iterdir()
-            if sibling.is_dir()
-            and sibling != data_dir
-            and (sibling / "state.json").is_file()
-            and (sibling / _SECRETS_FILENAME).is_file()
-        ]
-        if not siblings:
-            return None
-        return (
-            f"a second native install lives at {siblings[0]} — two launcher data dirs can shadow each "
-            "other's state; confirm which install you are operating"
-        )
-
-    def _probe_degraded_reason() -> str | None:
-        from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason
-
-        return read_degraded_reason(data_dir / RUNTIME_FILENAME)
-
+    probes = {name: partial(probe, data_dir) for name, probe in _PROBE_REGISTRY}
     return (
-        _probe_ambient_env_names,
-        _probe_available_memory_bytes,
-        _probe_data_dir_pg_version,
-        _probe_bundle_pg_version,
-        _probe_installed_bundle_pg_version,
-        _probe_bundled_binaries,
-        _probe_cloud_sync_hit,
-        _probe_modulo_on_path,
-        _probe_install_root,
-        _probe_second_install_hint,
+        probes["ambient_env_names"],
+        probes["available_memory_bytes"],
+        probes["data_dir_pg_version"],
+        probes["bundle_pg_version"],
+        probes["installed_bundle_pg_version"],
+        probes["bundled_binaries"],
+        probes["cloud_sync_hit"],
+        probes["modulo_on_path"],
+        probes["install_root"],
+        probes["second_install_hint"],
     )
 
 

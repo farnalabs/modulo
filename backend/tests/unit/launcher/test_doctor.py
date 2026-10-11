@@ -884,3 +884,24 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
     args, kwargs = create_engine.call_args
     assert args[0] == "postgresql+asyncpg://u:p@h/db"
     assert kwargs["connect_args"]["ssl"] == "require"
+
+
+def test_probe_registry_names_and_order(tmp_path: Path) -> None:
+    """The system-probe registry's names, set and order are the contract:
+    ``_build_system_probes`` keys its bound probes by these names, and
+    ``default_probes`` unpacks the returned tuple positionally."""
+    names = [name for name, _ in doctor_module._PROBE_REGISTRY]
+    assert names == [
+        "ambient_env_names",
+        "available_memory_bytes",
+        "data_dir_pg_version",
+        "bundle_pg_version",
+        "installed_bundle_pg_version",
+        "bundled_binaries",
+        "cloud_sync_hit",
+        "modulo_on_path",
+        "install_root",
+        "second_install_hint",
+    ]
+    built = doctor_module._build_system_probes(tmp_path)
+    assert len(built) == len(names)
