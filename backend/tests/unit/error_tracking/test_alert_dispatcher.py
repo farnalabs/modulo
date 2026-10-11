@@ -13,7 +13,6 @@ from typing import Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking.alert_dispatcher import (
     _build_summary,
@@ -23,8 +22,8 @@ from modulo.core.error_tracking.alert_dispatcher import (
     dispatch_alert,
     dispatch_alert_resolved,
 )
-from modulo.core.error_tracking.alerting import TriggeredAlert
 from modulo.db.models.organisation import Organisation
+from tests.unit.error_tracking._factories import make_alert, make_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -81,26 +80,6 @@ class _FakeClientError:
         raise __import__("httpx").RequestError("boom")
 
 
-def _alert(**overrides: object) -> TriggeredAlert:
-    fields: dict[str, object] = {
-        "rule_id": uuid.uuid4(),
-        "rule_name": "Test Rule",
-        "action_type": "webhook",
-        "webhook_url": "https://example.com/hook",
-        "error_group_id": _GROUP_ID,
-        "fingerprint": "fp123",
-        "level": "error",
-        "count": 3,
-        "environment": "staging",
-    }
-    fields.update(overrides)
-    return TriggeredAlert(**fields)
-
-
-def _session() -> AsyncMock:
-    return AsyncMock(spec=AsyncSession)
-
-
 class _MockSettings:
     def __init__(
         self,
@@ -140,7 +119,7 @@ class TestEscapeHtml:
 
 class TestBuildSummary:
     def test_builds_summary(self) -> None:
-        summary = _build_summary(_alert(), "something went wrong")
+        summary = _build_summary(make_alert(), "something went wrong")
         assert "[error]" in summary
         assert "Test Rule" in summary
         assert "count=3" in summary
@@ -148,18 +127,19 @@ class TestBuildSummary:
 
 class TestDispatchRouting:
     async def test_unknown_action_type_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        alert = _alert(action_type="sms", webhook_url=None)
+        alert = make_alert(action_type="sms", webhook_url=None)
         with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
-            await dispatch_alert(_ORG_ID, alert, _session())
+            await dispatch_alert(_ORG_ID, alert, make_session())
         assert any("alert.unknown_action_type" in rec.message for rec in caplog.records)
+        assert any(getattr(rec, "action_type", None) == "sms" for rec in caplog.records)
 
     async def test_in_app_creates_delivery_log(self) -> None:
-        session = _session()
+        session = make_session()
         error_group = MagicMock()
         error_group.sample_event = MagicMock()
         error_group.sample_event.message = "boom"
 
-        await dispatch_alert(_ORG_ID, _alert(action_type="in_app"), session, error_group)
+        await dispatch_alert(_ORG_ID, make_alert(action_type="in_app"), session, error_group)
 
         assert session.add.call_count == 1
         entry = session.add.call_args.args[0]
@@ -174,14 +154,28 @@ class TestDispatchEmail:
         self,
         *,
         smtp_host: str = "smtp.org.example.com",
+        smtp_port: int | None = None,
+        email_from: str | None = None,
         memberships: list[MagicMock] | None = None,
         accounts: list[MagicMock] | None = None,
-    ) -> AsyncMock:
-        session = _session()
-        org = MagicMock(spec=Organisation)
-        org.settings_json = {"email": {"smtp_host": smtp_host}}
+    ) -> tuple[AsyncMock, MagicMock]:
+        """Session whose ``get(Organisation, ...)`` returns a fake org and whose
+        two ``execute`` calls (memberships, then active accounts) drain the queues.
 
-        def _get(model: object, org_id: object) -> MagicMock:
+        The returned org is the object wired into the session; tests use it to
+        tweak SMTP settings directly when needed.
+        """
+        email_config: dict[str, object] = {"smtp_host": smtp_host}
+        if smtp_port is not None:
+            email_config["smtp_port"] = smtp_port
+        if email_from is not None:
+            email_config["email_from"] = email_from
+        org = MagicMock(spec=Organisation)
+        org.settings_json = {"email": email_config}
+
+        session = make_session()
+
+        def _get(model: object, org_id: object) -> MagicMock | None:
             if model is Organisation and org_id == _ORG_ID:
                 return org
             return None
@@ -197,7 +191,7 @@ class TestDispatchEmail:
                 _make_result(accounts or []),
             ]
         )
-        return session
+        return session, org
 
     def _admin_membership(self, account_id: uuid.UUID) -> MagicMock:
         m = MagicMock()
@@ -215,7 +209,9 @@ class TestDispatchEmail:
 
     async def test_email_success_sends_to_active_admins(self) -> None:
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
+            smtp_port=465,
+            email_from="org@example.com",
             memberships=[self._admin_membership(account_id)],
             accounts=[self._account(account_id)],
         )
@@ -226,11 +222,13 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
             patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         send.assert_called_once()
         sent_settings = send.call_args.args[0]
         assert sent_settings.smtp_host == "smtp.org.example.com"
+        assert sent_settings.smtp_port == 465
+        assert sent_settings.email_from == "org@example.com"
         assert send.call_args.args[1] == ["admin@example.com"]
         assert "[Modulo Alert] error: Test Rule" in send.call_args.args[2]
         assert "View in Modulo" in send.call_args.args[3]
@@ -238,7 +236,7 @@ class TestDispatchEmail:
 
     async def test_email_org_missing_uses_global_settings(self) -> None:
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
             accounts=[self._account(account_id)],
         )
@@ -250,13 +248,13 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
             patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         send.assert_called_once()
         assert send.call_args.args[0].smtp_host == "global.example.com"
 
     async def test_email_no_smtp_host_logs_disabled(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = self._session_with_org(smtp_host="")
+        session, _ = self._session_with_org(smtp_host="")
         settings = _MockSettings(smtp_host="")
 
         with (
@@ -264,13 +262,13 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         send.assert_not_called()
         assert any("alert.email_disabled_no_smtp_host" in rec.message for rec in caplog.records)
 
     async def test_email_no_admins_logs(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = self._session_with_org(memberships=[])
+        session, _ = self._session_with_org(memberships=[])
         settings = _MockSettings(smtp_host="smtp.example.com")
 
         with (
@@ -278,14 +276,14 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         send.assert_not_called()
         assert any("alert.email_no_admins" in rec.message for rec in caplog.records)
 
     async def test_email_no_active_admins_logs(self, caplog: pytest.LogCaptureFixture) -> None:
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
             accounts=[],
         )
@@ -296,14 +294,15 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.send_email") as send,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         send.assert_not_called()
         assert any("alert.email_no_active_admins" in rec.message for rec in caplog.records)
 
     async def test_email_send_error_records_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        alert = make_alert(action_type="email")
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
             accounts=[self._account(account_id)],
         )
@@ -321,14 +320,14 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, alert, session)
 
-        failed.assert_called_once()
+        failed.assert_called_once_with(str(alert.rule_id), "email")
         assert any("alert.email_send_failed" in rec.message for rec in caplog.records)
 
     async def test_email_send_false_noop(self, caplog: pytest.LogCaptureFixture) -> None:
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
             accounts=[self._account(account_id)],
         )
@@ -341,7 +340,7 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("INFO", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         # A False return from send_email is not a delivery failure: nothing is
         # recorded, no failure warning is raised, and the send is just skipped.
@@ -351,7 +350,7 @@ class TestDispatchEmail:
 
     async def test_email_unexpected_error_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
         account_id = uuid.uuid4()
-        session = self._session_with_org(
+        session, _ = self._session_with_org(
             memberships=[self._admin_membership(account_id)],
             accounts=[self._account(account_id)],
         )
@@ -363,7 +362,52 @@ class TestDispatchEmail:
             patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
             caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await dispatch_alert(_ORG_ID, _alert(action_type="email"), session)
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
+
+        assert any("alert.email_dispatch_error" in rec.message for rec in caplog.records)
+
+    async def test_email_org_present_without_email_config_falls_back(self) -> None:
+        """An org that exists but has no ``email`` settings block falls back to
+        the global Settings SMTP host — distinct from the org=None path in
+        ``test_email_org_missing_uses_global_settings``."""
+        session = make_session()
+        org = MagicMock(spec=Organisation)
+        org.settings_json = {}
+        session.get = AsyncMock(return_value=org)
+
+        def _make_result(rows: list[MagicMock]) -> MagicMock:
+            return MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rows))))
+
+        session.execute = AsyncMock(
+            side_effect=[
+                _make_result([self._admin_membership(uuid.uuid4())]),
+                _make_result([self._account(uuid.uuid4())]),
+            ]
+        )
+        settings = _MockSettings(smtp_host="global.example.com")
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            patch("modulo.core.error_tracking.alert_dispatcher.send_email", return_value=True) as send,
+            patch("modulo.core.error_tracking.alert_dispatcher.asyncio.to_thread", side_effect=_run_sync),
+        ):
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
+
+        send.assert_called_once()
+        assert send.call_args.args[0].smtp_host == "global.example.com"
+
+    async def test_email_org_db_error_is_logged_not_raised(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A DB failure while resolving the org must be swallowed with
+        ``alert.email_dispatch_error`` — never propagate into evaluate()."""
+        session = make_session()
+        session.get = AsyncMock(side_effect=RuntimeError("db connection lost"))
+        settings = _MockSettings()
+
+        with (
+            patch("modulo.core.error_tracking.alert_dispatcher.get_settings", return_value=settings),
+            caplog.at_level("ERROR", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await dispatch_alert(_ORG_ID, make_alert(action_type="email"), session)
 
         assert any("alert.email_dispatch_error" in rec.message for rec in caplog.records)
 
@@ -371,12 +415,12 @@ class TestDispatchEmail:
 class TestDispatchWebhook:
     async def test_webhook_no_url_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"):
-            await _dispatch_webhook(_alert(webhook_url=None), "", "/admin/errors/x")
+            await _dispatch_webhook(make_alert(webhook_url=None), "", "/admin/errors/x")
         assert any("alert.webhook_no_url" in rec.message for rec in caplog.records)
 
     async def test_webhook_success_posts_contract_payload(self) -> None:
         run_group_id = uuid.uuid4()
-        alert = _alert(
+        alert = make_alert(
             level="critical",
             signal="agent.failed",
             elevation_signal="agent.failed",
@@ -401,7 +445,7 @@ class TestDispatchWebhook:
         assert body["message"] == "Agent failed"
 
     async def test_webhook_slack_url_formats_payload(self) -> None:
-        alert = _alert(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", level="critical")
+        alert = make_alert(webhook_url="https://hooks.slack.com/services/T00/B00/xxx", level="critical")
         client = _FakeClient()
         with _patch_pinned(return_value=client):
             await _dispatch_webhook(alert, "DB down", "/admin/errors/x")
@@ -414,6 +458,7 @@ class TestDispatchWebhook:
         assert "DB down" in body["text"]
 
     async def test_webhook_http_error_records_failure(self, caplog: pytest.LogCaptureFixture) -> None:
+        alert = make_alert()
         client = _FakeClient()
         client.responses = [_FakeResponseFail()]
         with (
@@ -421,10 +466,22 @@ class TestDispatchWebhook:
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await _dispatch_webhook(_alert(), "", "/admin/errors/x")
+            await _dispatch_webhook(alert, "", "/admin/errors/x")
 
-        failed.assert_called_once()
+        failed.assert_called_once_with(str(alert.rule_id), "webhook")
         assert any("alert.webhook_http_error" in rec.message for rec in caplog.records)
+
+    async def test_dispatch_alert_swallows_request_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The dispatch_alert entry point must swallow a webhook request error
+        (alert.webhook_request_failed) — never propagate into evaluate()."""
+        alert = make_alert()
+        with (
+            _patch_pinned(return_value=_FakeClientError()),
+            caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
+        ):
+            await dispatch_alert(_ORG_ID, alert, make_session())
+
+        assert any("alert.webhook_request_failed" in rec.message for rec in caplog.records)
 
     async def test_webhook_request_error_records_failure(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
@@ -432,7 +489,7 @@ class TestDispatchWebhook:
             patch("modulo.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
-            await _dispatch_webhook(_alert(), "", "/admin/errors/x")
+            await _dispatch_webhook(make_alert(), "", "/admin/errors/x")
 
         failed.assert_called_once()
         assert any("alert.webhook_request_failed" in rec.message for rec in caplog.records)
@@ -447,7 +504,7 @@ class TestDispatchWebhook:
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),
         ):
             await _dispatch_webhook(
-                _alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x"
+                make_alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x"
             )
 
         failed.assert_called_once()
@@ -456,7 +513,7 @@ class TestDispatchWebhook:
 
 class TestDispatchAlertResolved:
     async def test_resolved_without_webhook_records_in_app(self) -> None:
-        session = _session()
+        session = make_session()
         await dispatch_alert_resolved(
             _ORG_ID,
             group_id=_GROUP_ID,
@@ -472,7 +529,7 @@ class TestDispatchAlertResolved:
         assert entry.last_error == "agent.failed resolved: recovered"
 
     async def test_resolved_with_webhook_posts_payload(self) -> None:
-        session = _session()
+        session = make_session()
         client = _FakeClient()
         with _patch_pinned(return_value=client):
             await dispatch_alert_resolved(
@@ -495,7 +552,7 @@ class TestDispatchAlertResolved:
         assert body["reason"] == "recovered"
 
     async def test_resolved_webhook_http_error_logs(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = _session()
+        session = make_session()
         client = _FakeClient()
         client.responses = [_FakeResponseFail()]
         with (
@@ -525,14 +582,14 @@ class TestDispatchAlertResolved:
                 group_id=_GROUP_ID,
                 signal="agent.failed",
                 reason="recovered",
-                session=_session(),
+                session=make_session(),
                 webhook_url="http://127.0.0.1:8080/hook",
             )
 
         assert any("alert.resolved_webhook_url_rejected" in rec.message for rec in caplog.records)
 
     async def test_resolved_webhook_request_error_logs(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = _session()
+        session = make_session()
         with (
             _patch_pinned(return_value=_FakeClientError()),
             caplog.at_level("WARNING", logger="modulo.core.error_tracking.alert_dispatcher"),

@@ -315,12 +315,11 @@ class TestErrorDatabaseErrors:
                 with (
                     patch(f"{_EP}.get_error_group", AsyncMock(return_value=mock_group)),
                     patch(mock_target, mock_type(side_effect=error)),
+                    TestClient(app) as client,
                 ):
-                    client = TestClient(app)
                     resp = request_builder(client)
             else:
-                with patch(mock_target, mock_type(side_effect=error), create=True):
-                    client = TestClient(app)
+                with patch(mock_target, mock_type(side_effect=error), create=True), TestClient(app) as client:
                     resp = request_builder(client)
         finally:
             if hmac_patch:

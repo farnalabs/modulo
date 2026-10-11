@@ -90,24 +90,24 @@ class TestIngestFoldsBreadcrumbs:
                 }
             ]
         }
-        client = TestClient(_make_ingest_app())
-        with (
-            patch("modulo.api.routes.errors._key_store") as ks,
-            patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
-        ):
-            ks.verify_hmac = AsyncMock(return_value=True)
-            ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
-            resp = client.post(
-                "/api/v1/errors/ingest",
-                json=body,
-                headers={"X-Modulo-Error-Token": "test"},
-            )
-        assert resp.status_code == 201
-        (_, _, events), _ = ingest.call_args
-        assert "breadcrumbs" not in events[0]
-        assert events[0]["context_json"]["breadcrumbs"] == _BREADCRUMBS
-        assert events[0]["context_json"]["url"] == "/api/x"
-        assert events[0]["context_json"]["user_id"] == "u1"
+        with TestClient(_make_ingest_app()) as client:
+            with (
+                patch("modulo.api.routes.errors._key_store") as ks,
+                patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
+            ):
+                ks.verify_hmac = AsyncMock(return_value=True)
+                ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
+                resp = client.post(
+                    "/api/v1/errors/ingest",
+                    json=body,
+                    headers={"X-Modulo-Error-Token": "test"},
+                )
+            assert resp.status_code == 201
+            (_, _, events), _ = ingest.call_args
+            assert "breadcrumbs" not in events[0]
+            assert events[0]["context_json"]["breadcrumbs"] == _BREADCRUMBS
+            assert events[0]["context_json"]["url"] == "/api/x"
+            assert events[0]["context_json"]["user_id"] == "u1"
 
     def test_authenticated_ingest_no_breadcrumbs_leaves_context_untouched(self):
         body = {
@@ -120,21 +120,21 @@ class TestIngestFoldsBreadcrumbs:
                 }
             ]
         }
-        client = TestClient(_make_ingest_app())
-        with (
-            patch("modulo.api.routes.errors._key_store") as ks,
-            patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
-        ):
-            ks.verify_hmac = AsyncMock(return_value=True)
-            ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
-            resp = client.post(
-                "/api/v1/errors/ingest",
-                json=body,
-                headers={"X-Modulo-Error-Token": "test"},
-            )
-        assert resp.status_code == 201
-        (_, _, events), _ = ingest.call_args
-        assert events[0]["context_json"] == {"url": "/api/x"}
+        with TestClient(_make_ingest_app()) as client:
+            with (
+                patch("modulo.api.routes.errors._key_store") as ks,
+                patch("modulo.api.routes.errors._service.ingest_batch", new_callable=AsyncMock) as ingest,
+            ):
+                ks.verify_hmac = AsyncMock(return_value=True)
+                ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
+                resp = client.post(
+                    "/api/v1/errors/ingest",
+                    json=body,
+                    headers={"X-Modulo-Error-Token": "test"},
+                )
+            assert resp.status_code == 201
+            (_, _, events), _ = ingest.call_args
+            assert events[0]["context_json"] == {"url": "/api/x"}
 
     def test_public_ingest_persists_breadcrumbs_in_context(self):
         body = {
@@ -148,17 +148,17 @@ class TestIngestFoldsBreadcrumbs:
                 }
             ]
         }
-        client = TestClient(_make_ingest_app())
-        with patch(
-            "modulo.api.routes.errors._service.ingest_batch",
-            new_callable=AsyncMock,
-        ) as ingest:
-            ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
-            resp = client.post("/api/v1/errors/ingest/public", json=body)
-        assert resp.status_code == 201
-        (_, _, events), _ = ingest.call_args
-        assert events[0]["context_json"]["breadcrumbs"] == _BREADCRUMBS
-        assert events[0]["context_json"]["url"] == "/"
+        with TestClient(_make_ingest_app()) as client:
+            with patch(
+                "modulo.api.routes.errors._service.ingest_batch",
+                new_callable=AsyncMock,
+            ) as ingest:
+                ingest.return_value = [{"group_id": str(uuid.uuid4()), "is_new": True}]
+                resp = client.post("/api/v1/errors/ingest/public", json=body)
+            assert resp.status_code == 201
+            (_, _, events), _ = ingest.call_args
+            assert events[0]["context_json"]["breadcrumbs"] == _BREADCRUMBS
+            assert events[0]["context_json"]["url"] == "/"
 
 
 # =========================================================================
@@ -250,8 +250,8 @@ class TestBreadcrumbSerialization:
             patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=group)),
             patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=sample)),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(app) as client,
         ):
-            client = TestClient(app)
             resp = client.get(f"/api/v1/errors/{group.id}")
         assert resp.status_code == 200
         assert resp.json()["sample_event"]["breadcrumbs"] == _BREADCRUMBS
