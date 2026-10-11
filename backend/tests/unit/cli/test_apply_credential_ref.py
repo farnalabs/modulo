@@ -156,6 +156,47 @@ class TestCredentialRefModel:
                 credential_ref="vault/openai key",
             )
 
+    def test_api_key_explicit_null_with_credential_ref(self) -> None:
+        """An explicit ``api_key: null`` alongside ``credential_ref`` is valid.
+
+        Exercises the ``api_key is None`` short-circuit in the api_key
+        validator: a null value must pass through untouched (never be treated
+        as a reference), leaving ``credential_ref`` as the sole credential.
+        """
+        entity = ModelBackendEntity.model_validate(
+            {
+                "name": "openai",
+                "display_name": "OpenAI",
+                "provider": "openai",
+                "model_id": "gpt-x",
+                "api_key": None,
+                "credential_ref": "vault/openai-key",
+            }
+        )
+        assert entity.api_key is None
+        assert entity.credential_reference() == "secretref://vault/openai-key"
+
+    def test_credential_ref_explicit_null_with_api_key(self) -> None:
+        """An explicit ``credential_ref: null`` alongside ``api_key`` is valid.
+
+        Exercises the ``credential_ref is None`` short-circuit in the
+        credential_ref validator: a null value must pass through untouched,
+        leaving ``api_key`` as the sole credential.
+        """
+        entity = ModelBackendEntity.model_validate(
+            {
+                "name": "openai",
+                "display_name": "OpenAI",
+                "provider": "openai",
+                "model_id": "gpt-x",
+                "api_key": "${env:SK}",
+                "credential_ref": None,
+            }
+        )
+        assert entity.credential_ref is None
+        assert entity.credential_reference() is None
+        assert entity.env_ref_var() == "SK"
+
 
 class TestResolveSecretRefs:
     def test_credential_ref_forwarded_as_secretref_token(self) -> None:
@@ -188,6 +229,37 @@ class TestVaultListingParser:
         with pytest.raises(VaultListingError, match="no content"):
             executor_module._parse_vault_key_listing({"result": {"isError": False}})
 
+    def test_non_object_result_raises(self) -> None:
+        """A ``result`` that is not an object (e.g. a bare error string) fails closed."""
+        with pytest.raises(VaultListingError, match="no result"):
+            executor_module._parse_vault_key_listing({"result": "not-an-object"})
+
+    def test_non_text_content_raises(self) -> None:
+        """A content block whose ``text`` is not a string fails closed."""
+        envelope = {"result": {"isError": False, "content": [{"type": "text", "text": 5}]}}
+        with pytest.raises(VaultListingError, match="not text"):
+            executor_module._parse_vault_key_listing(envelope)
+
+    def test_non_json_content_raises(self) -> None:
+        """A content block whose ``text`` is not JSON fails closed."""
+        envelope = {"result": {"isError": False, "content": [{"type": "text", "text": "{not json"}]}}
+        with pytest.raises(VaultListingError, match="not JSON"):
+            executor_module._parse_vault_key_listing(envelope)
+
+    def test_payload_not_an_object_raises(self) -> None:
+        """A JSON payload that is not an object fails closed."""
+        envelope = _mcp_envelope([])
+        envelope["result"]["content"][0]["text"] = json.dumps(["a", "b"])
+        with pytest.raises(VaultListingError, match="no secrets list"):
+            executor_module._parse_vault_key_listing(envelope)
+
+    def test_payload_without_secrets_list_raises(self) -> None:
+        """A JSON object lacking a ``secrets`` list fails closed."""
+        envelope = _mcp_envelope([])
+        envelope["result"]["content"][0]["text"] = json.dumps({"foo": "bar"})
+        with pytest.raises(VaultListingError, match="no secrets list"):
+            executor_module._parse_vault_key_listing(envelope)
+
 
 class TestListVaultKeys:
     @respx.mock
@@ -207,6 +279,33 @@ class TestListVaultKeys:
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             with pytest.raises(VaultListingError, match="status 402"):
+                executor.list_vault_keys()
+
+    @respx.mock
+    def test_transport_error_raises(self) -> None:
+        """A transport-level failure (connection refused, timeout) fails closed."""
+        respx.post("https://api.test/mcp/").mock(side_effect=httpx.ConnectError("connection refused"))
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(VaultListingError, match="request failed"):
+                executor.list_vault_keys()
+
+    @respx.mock
+    def test_invalid_json_response_raises(self) -> None:
+        """A 2xx response whose body is not JSON fails closed."""
+        respx.post("https://api.test/mcp/").respond(content=b"not-json", headers={"content-type": "application/json"})
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(VaultListingError, match="invalid JSON"):
+                executor.list_vault_keys()
+
+    @respx.mock
+    def test_non_object_envelope_raises(self) -> None:
+        """A 2xx JSON response that is not an object fails closed."""
+        respx.post("https://api.test/mcp/").respond(json=["not", "an", "object"])
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(VaultListingError, match="non-object response"):
                 executor.list_vault_keys()
 
 
@@ -315,3 +414,38 @@ class TestApplyTimeTypedError:
         assert "credential_reference_error" in failed[0]["error"]
         assert "vault/openai-key" in failed[0]["error"]
         assert not report["created"]
+
+
+class TestValidationDetailFormatting:
+    def test_non_dict_item_rendered_verbatim(self) -> None:
+        """A non-dict detail entry is rendered as-is, never crash the formatter."""
+        assert executor_module._format_validation_detail("plain string") == "plain string"
+
+    def test_dict_item_without_loc_returns_head(self) -> None:
+        """A typed detail with no ``loc`` returns the ``type: msg`` head."""
+        assert executor_module._format_validation_detail({"type": "x", "msg": "boom"}) == "x: boom"
+
+    def test_dict_item_with_empty_loc_returns_head(self) -> None:
+        """An empty ``loc`` list is treated as absent (no ``(loc=...)`` suffix)."""
+        assert executor_module._format_validation_detail({"type": "x", "msg": "boom", "loc": []}) == "x: boom"
+
+    def test_dict_item_with_loc_appends_loc_suffix(self) -> None:
+        assert (
+            executor_module._format_validation_detail({"type": "x", "msg": "boom", "loc": ["body", "api_key"]})
+            == "x: boom (loc=body.api_key)"
+        )
+
+    def test_extract_detail_renders_a_list_of_entries(self) -> None:
+        """``_extract_detail`` joins a FastAPI validation-detail list with ``; ``."""
+        response = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {"type": "a", "msg": "one", "loc": ["body", "api_key"]},
+                    "raw-entry",
+                ]
+            },
+        )
+        detail = executor_module._extract_detail(response)
+        assert "a: one (loc=body.api_key)" in detail
+        assert "raw-entry" in detail
