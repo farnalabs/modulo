@@ -229,10 +229,14 @@ entities:
 `credential_ref` adds a **plan-time** guarantee: before it computes the plan,
 the CLI lists the org vault keys (through the server's `list_secrets` surface)
 and **fails the plan** – never a silent pass – when the named key is absent, or
-when the listing cannot be reached to confirm it. The affected entity appears
-in the plan's `blocked` list with a reason naming the key, so a PR comment shows
-the misconfiguration before anything is written. A credential that is missing
-for any other reason (a `secretref://` set directly on `api_key`, a key that
+when the listing cannot be reached to confirm it. The `list_secrets` surface
+requires the `secret.manage` scope, so the `MODULO_API_KEY` you store as a
+GitHub secret must be an operator key permitted to list secrets; a key that
+cannot list secrets blocks the affected entity rather than passing it. The
+affected entity appears in the plan's `blocked` list with a reason naming the
+key, so a PR comment shows the misconfiguration before anything is written. A
+credential that is missing for any other reason (a `secretref://` set directly
+on `api_key`, a key that
 exists at plan time but is deleted before apply) still fails the apply with the
 server's typed `credential_reference_error` (422), naming only the key.
 
