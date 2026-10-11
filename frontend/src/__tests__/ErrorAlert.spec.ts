@@ -44,4 +44,13 @@ describe('ErrorAlert', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
+
+  it('renders an empty body when no message is supplied (no empty <p>)', async () => {
+    // The message prop is optional; omitting it must not render a blank <p>.
+    const wrapper = mount(ErrorAlert, {
+      props: { onRetry: () => {} },
+    })
+    await nextTick()
+    expect(wrapper.find('p').exists()).toBe(false)
+  })
 })

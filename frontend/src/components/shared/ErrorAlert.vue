@@ -3,7 +3,7 @@
     class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
   >
     <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
-    <p v-else>{{ message }}</p>
+    <p v-else-if="message">{{ message }}</p>
     <button type="button"
       v-if="onRetry && retryable !== false"
       class="ml-2 underline"
