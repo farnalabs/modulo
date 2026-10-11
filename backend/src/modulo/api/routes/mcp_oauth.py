@@ -1,28 +1,36 @@
-"""OAuth 2.0 client management endpoints (browser-authenticated).
+"""OAuth 2.0 client management endpoints (browser-authenticated) + the
+anonymous consent-context read (FAR-1476).
 
-POST /api/v1/mcp/oauth/clients         — Register a new OAuth client
-GET  /api/v1/mcp/oauth/clients          — List OAuth clients
-DELETE /api/v1/mcp/oauth/clients/{id}   — Delete an OAuth client
-POST /api/v1/mcp/oauth/consent/approve  — Approve a pending browser consent
+POST /api/v1/mcp/oauth/clients              — Register a new OAuth client
+GET  /api/v1/mcp/oauth/clients               — List OAuth clients
+DELETE /api/v1/mcp/oauth/clients/{id}        — Delete an OAuth client
+POST /api/v1/mcp/oauth/consent/approve       — Approve a pending browser consent
+                                                (optionally narrowing the grant)
+GET  /api/v1/mcp/oauth/consent/context       — Anonymous display context for a
+                                                pending consent (FAR-1476 slice 3)
 
-Every route here carries ``require_feature("mcp_server")`` (FAR-1283): the flag
-is the operator kill switch for the whole MCP capability, so the backend has to
-honour it — the settings-page ``FeatureGate`` only hides the UI.
+Every AUTHENTICATED route here carries ``require_feature("mcp_server")``
+(FAR-1283): the flag is the operator kill switch for the whole MCP capability,
+so the backend has to honour it — the settings-page ``FeatureGate`` only hides
+the UI.
 
 The protocol endpoints (GET /mcp/oauth/authorize, POST /mcp/oauth/token,
-POST /mcp/oauth/refresh) live in the MCP sub-app at ``mcp_server.py``. They are
-reachable WITHOUT a session, so they must NOT use ``require_feature`` (whose
-plan resolution depends on the authenticated ``get_current_user`` chain and
-would 401 the pre-auth caller) — ``mcp_server`` is enforced there against the
-client's resolved org instead.
+POST /mcp/oauth/refresh) live in the MCP sub-app at ``mcp_server.py``, and the
+consent-context read above lives here — all three are reachable WITHOUT a
+session, so they must NOT use ``require_feature`` (whose plan resolution
+depends on the authenticated ``get_current_user`` chain and would 401 the
+pre-auth caller) — ``mcp_server`` is enforced there against the pending
+consent row's resolved org instead (the ``_oauth_authorize`` pattern).
 """
 
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
@@ -39,6 +47,7 @@ from modulo.api.team_scope import team_membership_exists
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.oauth import (
+    InvalidGrantError,
     InvalidRedirectUriError,
     InvalidScopeError,
     create_authorization_code,
@@ -48,11 +57,14 @@ from modulo.auth.oauth import (
     normalize_redirect_uris,
     normalize_scopes,
     validate_redirect_uri,
+    verify_live_role_covers_scopes,
 )
 from modulo.auth.permissions import PERMISSIONS, is_delegable
 from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.runtime_config.key_bridge import public_url_is_configured
+from modulo.db.models.oauth_client import OAuthClient
+from modulo.db.models.oauth_token import OAuthConsentState
 from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
@@ -432,6 +444,12 @@ async def remove_oauth_client(
 
 class ConsentApproveRequest(BaseModel):
     state: str = Field(min_length=1, max_length=128)
+    # FAR-1476 slice 3: optional per-scope deny. ``None`` (omitted) grants every
+    # stored scope — the pre-slice behaviour, unchanged. When provided it must
+    # be a canonical SUBSET of the stored state row's scopes; anything outside
+    # that set is rejected (fail closed — the code can never carry more than the
+    # authorize leg stored).
+    granted_scopes: list[str] | None = None
 
 
 class ConsentApproveResponse(BaseModel):
@@ -463,10 +481,11 @@ async def approve_consent(
     """Approve a pending OAuth consent (ADR 047 DECISION 1 — the approve POST IS the consent).
 
     The authenticated approve POST is the human approval: the Bearer principal
-    IS the consenting account. There is deliberately NO consent page / deny
-    affordance (deferred until an interactive customer exists). ``state`` is a
-    client-chosen correlation/replay-binding nonce — the Bearer requirement is
-    the consent-CSRF control (a cross-origin auto-POST cannot attach a
+    IS the consenting account. The browser consent page (FAR-1476 slice 3)
+    renders the pending grant set from ``GET /consent/context`` and lets the
+    human deny individual scopes; ``state`` is a client-chosen
+    correlation/replay-binding nonce — the Bearer requirement is the
+    consent-CSRF control (a cross-origin auto-POST cannot attach a
     localStorage Bearer).
 
     Security properties:
@@ -475,7 +494,10 @@ async def approve_consent(
       and it is re-validated before it is used to build the redirect.
     - The code is minted from the state row's scopes + code_challenge ONLY, so
       a tampered display can never escalate the granted scope (display is
-      never authoritative).
+      never authoritative). ``granted_scopes`` can only NARROW that set: it is
+      canonicalised, must be a non-empty subset of the stored scopes (anything
+      outside fails closed with 400, never widens), and the live-role check
+      re-runs against the granted subset so a demotion still degrades.
     - The returned ``redirect_url`` is server-derived: ``redirect_uri?code=..&state=..``.
     """
     from modulo.auth.oauth import consume_consent_state
@@ -507,11 +529,54 @@ async def approve_consent(
                     detail=str(e),
                 ) from e
 
+            # FAR-1476 slice 3: resolve the granted set. Omitted = every stored
+            # scope (pre-slice behaviour). Provided = canonical subset only.
+            stored_scopes = list(state_row.scopes)
+            if req.granted_scopes is None:
+                granted_scopes = stored_scopes
+            else:
+                try:
+                    granted_scopes = sorted(set(normalize_scopes(" ".join(req.granted_scopes))))
+                except InvalidScopeError as e:
+                    # Unknown scope keys fail closed before the subset check —
+                    # an unrecognised key can never ride along.
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=str(e),
+                    ) from e
+                if not granted_scopes:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="granted_scopes must grant at least one scope; decline the consent instead",
+                    )
+                outside = sorted(set(granted_scopes) - set(stored_scopes))
+                if outside:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="granted_scopes must be a subset of the requested scopes; not requested: "
+                        + ", ".join(outside),
+                    )
+                # Re-verify the live role against the GRANTED subset (the token
+                # endpoint re-checks again at exchange; a demotion between
+                # authorize and approve degrades here too, fail closed).
+                try:
+                    await verify_live_role_covers_scopes(
+                        session,
+                        account_id=principal.account_id,
+                        org_id=state_row.organisation_id,
+                        scopes=granted_scopes,
+                    )
+                except InvalidGrantError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=str(e),
+                    ) from e
+
             code = await create_authorization_code(
                 session,
                 client_id=state_row.client_id,
                 org_id=state_row.organisation_id,
-                scopes=" ".join(state_row.scopes),
+                scopes=" ".join(granted_scopes),
                 redirect_uri=state_row.redirect_uri,
                 account_id=principal.account_id,
                 code_challenge=state_row.code_challenge,
@@ -548,3 +613,151 @@ async def approve_consent(
     separator = "&" if "?" in state_row.redirect_uri else "?"
     redirect_url = f"{state_row.redirect_uri}{separator}code={quote(code)}&state={quote(req.state)}"
     return ConsentApproveResponse(redirect_url=redirect_url)
+
+
+# ---------------------------------------------------------------------------
+# Consent context — anonymous, pre-auth (FAR-1476 slice 3)
+# ---------------------------------------------------------------------------
+
+
+class ConsentContextTeam(BaseModel):
+    id: str
+    name: str
+
+
+class ConsentContextResponse(BaseModel):
+    """Display-only context for the pending consent (FAR-1476 slice 3).
+
+    Nothing here is authoritative: the approve POST mints the code from the
+    stored state row only, so a tampered display can never escalate the grant.
+    Deliberately carries NO redirect_uri, no secrets and no org internals.
+    """
+
+    client_name: str
+    scopes: list[str]
+    team: ConsentContextTeam | None = None
+
+
+async def _query_pending_consent_state(session: AsyncSession, state: str) -> OAuthConsentState | None:
+    """Read an unexpired, unconsumed consent state WITHOUT consuming it.
+
+    Deliberately a plain SELECT (no ``consume`` side effect) so the browser can
+    render the grant set before the human decides. RLS note: this read runs
+    BEFORE any org context is known (the org is a column OF this row), which is
+    why migration 0295 widened the table's policy with the NULL-context arm —
+    the same contract ``oauth_clients`` already has for the pre-auth authorize
+    read.
+    """
+    result = await session.execute(
+        select(OAuthConsentState).where(
+            OAuthConsentState.state == state,
+            OAuthConsentState.consumed.is_(False),
+            OAuthConsentState.expires_at > datetime.now(UTC),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _query_oauth_client_for_consent(session: AsyncSession, client_id: str) -> OAuthClient | None:
+    """Read the consent's OAuth client (display name + team boundary)."""
+    result = await session.execute(select(OAuthClient).where(OAuthClient.client_id == client_id))
+    return result.scalar_one_or_none()
+
+
+async def _query_team_for_consent(session: AsyncSession, team_id: uuid.UUID) -> Team | None:
+    """Read the client's team row for the team-boundary display line."""
+    result = await session.execute(select(Team).where(Team.id == team_id))
+    return result.scalar_one_or_none()
+
+
+@router.get("/consent/context", response_model=None)
+@handle_db_errors("mcp_oauth.consent_context")
+async def consent_context(
+    state: str = Query(min_length=1, max_length=128),
+    session: AsyncSession = Depends(get_db_session),
+) -> ConsentContextResponse | JSONResponse:
+    """GET /api/v1/mcp/oauth/consent/context?state=... — display context for the
+    browser consent page (FAR-1476 slice 3).
+
+    ANONYMOUS / pre-auth by contract: the caller is the not-yet-signed-in
+    browser that just landed on the SPA consent route from the authorize 302,
+    so this route must NOT use ``require_feature`` / ``get_current_tenant_user``
+    (their plan resolution composes the authenticated ``get_current_user``
+    chain and would 401 before the handler ran). The org is resolved from the
+    pending consent row itself and ``mcp_server`` is enforced against it —
+    the ``_oauth_authorize`` pattern.
+
+    Returns the canonical scope keys stored by the authorize leg (already
+    canonicalised + ceiling-intersected), the client's display name, and its
+    team boundary when set. Unknown / expired / consumed states are a single
+    404 that does not leak whether a client exists. Nothing beyond the display
+    context is returned — never the redirect_uri, secrets, or org internals.
+    """
+    # Imported here (not at module level) to avoid a circular import with the
+    # MCP sub-app, which imports route modules during its own construction.
+    from modulo.api.mcp_server import _mcp_feature_unavailable_response, _mcp_server_flag_enabled
+
+    try:
+        async with session.begin():
+            state_row = await _query_pending_consent_state(session, state)
+            if state_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Consent request not found",
+                )
+
+            # Bind the session's org BEFORE the client/team reads and the flag
+            # resolution, so every subsequent read is org-scoped (teams carries
+            # a team-isolation policy that needs the org GUC).
+            await set_rls_org(session, state_row.organisation_id)
+
+            # FAR-1283, pre-auth edition: the kill switch is enforced against
+            # the org the caller just proved (the pending consent row) without
+            # an authenticated dependency chain.
+            if not await _mcp_server_flag_enabled(state_row.organisation_id, session):
+                return _mcp_feature_unavailable_response()
+
+            client_row = await _query_oauth_client_for_consent(session, state_row.client_id)
+            if client_row is None:
+                # Client deleted mid-flow — same undifferentiated 404.
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Consent request not found",
+                )
+
+            team: ConsentContextTeam | None = None
+            if client_row.team_id is not None:
+                team_row = await _query_team_for_consent(session, client_row.team_id)
+                if team_row is not None:
+                    team = ConsentContextTeam(id=str(team_row.id), name=team_row.name)
+
+            return ConsentContextResponse(
+                client_name=client_row.name,
+                scopes=list(state_row.scopes),
+                team=team,
+            )
+    except ProgrammingError:
+        _log.exception("mcp_oauth.consent_context")
+        _log.warning("mcp_oauth.consent_context.programming_error")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "mcp_oauth.consent_context")
+        _log.exception("mcp_oauth.consent_context")
+        _log.warning("mcp_oauth.consent_context.sqlalchemy_error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MSG_DB_OPERATION_FAILED,
+        ) from None
+    except asyncio.CancelledError:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("mcp_oauth.consent_context.unexpected_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_UNEXPECTED_ERROR_NO_PERIOD,
+        ) from e

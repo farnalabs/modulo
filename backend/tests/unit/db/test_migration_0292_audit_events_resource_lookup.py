@@ -4,7 +4,7 @@ Structural + model-parity contract (no Postgres / Testcontainers needed):
 
 * **Revision chain** - the revision/down_revision pin this migration onto the
   0291_invitations_lookup_constraints parent; the migrations directory has
-  exactly one head (0294_eval_results_org_fk, pinned by all sibling
+  exactly one head (0295_oauth_consent_state_preauth_rls, pinned by all sibling
   chain tests) so the pre-commit check-migration-heads hook can never be
   ambushed by a renumber.
 * **Index shape (mocked ``op``)** - the upgrade creates exactly one index,
@@ -42,7 +42,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0292_audit_events_resource_lookup"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0291_invitations_lookup_constraints"
-_HEAD_MIGRATION = "0294_eval_results_org_fk"
+_HEAD_MIGRATION = "0295_oauth_consent_state_preauth_rls"
 
 _INDEX = "ix_audit_events_org_resource"
 _TABLE = "audit_events"

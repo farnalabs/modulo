@@ -277,6 +277,43 @@ applications. Built on the auth + model-backend core.
       (`backend/src/modulo/api/routes/oauth_metadata.py`,
       `backend/src/modulo/api/mcp_server.py`, `backend/src/modulo/api/main.py`;
       `backend/tests/unit/api/test_oauth_metadata.py`)
+- [x] Browser OAuth consent screen (2026-10-10, FAR-1476): the SPA consent
+      route `/oauth/authorize` is a real grant-review page, not a placeholder.
+      An anonymous pre-auth context endpoint
+      (`GET /api/v1/mcp/oauth/consent/context?state=...`,
+      `api/routes/mcp_oauth.py` — deliberately NO `require_feature` /
+      `get_current_user`, whose plan resolution would 401 a not-yet-signed-in
+      browser; the org is resolved from the pending `oauth_consent_states` row
+      and the `mcp_server` kill switch is enforced against it, the
+      `_oauth_authorize` pattern) returns the client's display name, the
+      canonical grant set stored by the authorize leg, and the client's team
+      boundary (`team: {id, name}` when `team_id` is set, so a team-bounded
+      client can say so) — and NOTHING else (no redirect_uri, no secrets, no
+      org internals; unknown/expired/consumed states are one undifferentiated
+      404). Migration 0295 widened the table's RLS policy with the
+      NULL-context arm (the same contract `oauth_clients` already has) so the
+      pre-auth read is visible to the runtime `modulo_app` role. The view
+      renders each scope with the registration picker's existing i18n labels
+      (`views.SettingsMcpView.scope_*_desc` — one labelling scheme, not two),
+      a per-scope deny checkbox (all granted by default), and a
+      "limited to team X" line; Approve sends
+      `{state, granted_scopes: <still-granted keys>}` and the approve POST
+      (now accepting optional `granted_scopes`) fails CLOSED: the keys are
+      canonicalised, must be a non-empty subset of the stored set (anything
+      outside → 400, never widens), and the live-role check re-runs against
+      the granted subset (403 on denial, no code minted) — omitted
+      `granted_scopes` keeps the pre-slice all-stored-scopes behaviour. The
+      client-name bug (showing the logged-in user's username) is gone: the
+      name comes from the context endpoint, display-only — the code is still
+      minted from the stored state row only. Decline renders a clear "you
+      declined" state rather than an OAuth error redirect, because the
+      context endpoint deliberately does not expose `redirect_uri` (a
+      query-supplied redirect would be an open redirect); the pending state
+      simply expires (~15 min)
+      (`frontend/src/views/OAuthConsentView.vue`,
+      `frontend/src/__tests__/views/OAuthConsentView.spec.ts`,
+      `backend/tests/unit/api/test_mcp_oauth_bdd.py`,
+      migration `0295_oauth_consent_state_preauth_rls`)
 - [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
       FAR-1476): the grantable scope set is the delegable `PERMISSIONS`
       registry — every key `auth.permissions.is_delegable` accepts (~158
@@ -314,6 +351,15 @@ applications. Built on the auth + model-backend core.
   published as a distinct surface here.
 
 ## QA History
+- 2026-10-10: **Spec-accuracy pass** – FAR-1476 slice 3 landed the real browser
+  consent screen (anonymous consent-context endpoint, per-scope deny on
+  approve, the rebuilt `/oauth/authorize` view). The tracker's OAuth bullet
+  previously described only client CRUD + the approve POST (and the approve
+  endpoint's own docstring claimed there was deliberately NO consent page);
+  added the consent-screen behaviour line above with its code/test citations
+  and the `frontend/src/manifest.yaml` `feat-mcp` behaviour + the
+  `/oauth/authorize` element-registry refresh. Known Gaps reviewed and
+  unchanged.
 - 2026-10-10: **Spec-accuracy pass (FAR-1476 slice)** – the registry widened
   the OAuth scope vocabulary from the fixed three-scope set to every delegable
   `PERMISSIONS` key, the `hitl.*` decision keys became delegable (2026-10-09

@@ -1,393 +1,262 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import type { Mock } from 'vitest'
 
-vi.mock('primevue/button', () => ({
-  default: {
-    name: 'Button',
-    template: '<button type="button" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
-    props: ['disabled', 'class'],
-    emits: ['click'],
-  },
+const mockRoute = {
+  path: '/oauth/authorize',
+  fullPath: '/oauth/authorize?state=st-1',
+  params: {} as Record<string, string>,
+  query: { state: 'st-1' } as Record<string, string>,
+  hash: '',
+  matched: [],
+  name: 'oauth-authorize',
+  redirectedFrom: undefined,
+}
+
+const routerPush = vi.fn()
+let accessToken: string | null = 'jwt-token'
+
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+  useRouter: () => ({ push: routerPush }),
+  createRouter: vi.fn(),
+  createWebHistory: vi.fn(),
 }))
-
-const mockGetAccessToken = vi.fn()
 
 vi.mock('../lib/api/client', () => ({
-  getAccessToken: (..._args: unknown[]) => mockGetAccessToken(),
+  getAccessToken: () => accessToken,
 }))
-
-vi.mock('../lib/api/formatError', () => ({
-  formatApiError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}))
-
-const origFetch = globalThis.fetch
-let fetchMock: ReturnType<typeof vi.fn>
 
 import OAuthConsentView from '../views/OAuthConsentView.vue'
 
+const TEAM_CONTEXT = {
+  client_name: 'My MCP App',
+  scopes: ['trigger:run', 'hitl:review', 'library:browse'],
+  team: { id: 'team-1', name: 'Platform' },
+}
+
+const ORG_WIDE_CONTEXT = {
+  client_name: 'Org-wide App',
+  scopes: ['trigger:run'],
+  team: null,
+}
+
+function okResponse(payload: unknown) {
+  return { ok: true, status: 200, json: async () => payload }
+}
+
+function errorResponse(status: number, payload: unknown) {
+  return { ok: false, status, json: async () => payload }
+}
+
+const fetchMock = vi.fn()
+
 describe('OAuthConsentView', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks()
-    mockGetAccessToken.mockReturnValue(null)
-    fetchMock = vi.fn()
-    globalThis.fetch = fetchMock as unknown as typeof fetch
-    localStorage.clear()
+    accessToken = 'jwt-token'
+    mockRoute.query = { state: 'st-1' }
+    mockRoute.fullPath = '/oauth/authorize?state=st-1'
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
   })
 
   afterEach(() => {
-    globalThis.fetch = origFetch
+    vi.unstubAllGlobals()
   })
 
-  function setQuery(query: Record<string, string>) {
-    const route = (useRoute as Mock)()
-    route.query = query
-    route.fullPath = `/oauth/consent?${Object.entries(query).map(([k, v]) => `${k}=${v}`).join('&')}`
+  async function mountWithContext(context: unknown) {
+    fetchMock.mockResolvedValueOnce(okResponse(context))
+    const wrapper = mount(OAuthConsentView)
+    await flushPromises()
+    return wrapper
   }
 
-  it('renders heading and consent description', async () => {
-    setQuery({ client_id: 'test', scope: 'read' })
-    const wrapper = mount(OAuthConsentView)
-    await nextTick()
+  it('renders heading and the consent description', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
 
     expect(wrapper.text()).toContain('Authorize access')
     expect(wrapper.text()).toContain('Approve this application')
   })
 
-  it('shows login prompt when no token is present', async () => {
-    mockGetAccessToken.mockReturnValue(null)
-    setQuery({ client_id: 'test', scope: 'read' })
-    const wrapper = mount(OAuthConsentView)
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="oauth-consent-login"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('You must be signed in')
-  })
-
-  it('goToLogin navigates to login with redirect query', async () => {
-    mockGetAccessToken.mockReturnValue(null)
-    setQuery({ client_id: 'test', scope: 'read' })
-    const router = (useRouter as Mock)()
-    const wrapper = mount(OAuthConsentView)
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-login"]').trigger('click')
-    await nextTick()
-    expect(router.push).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'login' }),
-    )
-  })
-
-  it('shows consent form when token is present', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    setQuery({ client_id: 'myapp', scope: 'read write' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="oauth-consent-login"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="oauth-consent-approve"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('alice')
-  })
-
-  it('displays scope list from query string', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'bob' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    setQuery({ client_id: 'myapp', scope: 'openid profile email' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    const scopes = wrapper.findAll('[data-testid="oauth-consent-scope"]')
-    expect(scopes.length).toBe(3)
-    expect(scopes.map(s => s.text())).toEqual(['openid', 'profile', 'email'])
-  })
-
-  it('falls back to client_id when clientName is empty', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({}))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    setQuery({ client_id: 'fallback-client' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('fallback-client')
-  })
-
-  it('sets empty clientName on JWT parse error', async () => {
-    mockGetAccessToken.mockReturnValue('invalid.token.here')
-
-    setQuery({ client_id: 'some-client' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('some-client')
-  })
-
-  it('approve button is disabled while approving', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockReturnValue(new Promise(() => {}))
-
-    setQuery({ state: 'abc123' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await nextTick()
-
-    expect(
-      (wrapper.find('[data-testid="oauth-consent-approve"]').element as HTMLButtonElement).disabled,
-    ).toBe(true)
-  })
-
-  it('approve action makes POST and redirects', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ redirect_url: 'https://example.com/callback' }),
-    })
-
-    const hrefs: string[] = []
-    Object.defineProperty(window, 'location', {
-      value: { set href(v: string) { hrefs.push(v) }, get href() { return '' }, pathname: '/' },
-      writable: true,
-    })
-
-    setQuery({ state: 'xyz789' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/mcp/oauth/consent/approve', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ state: 'xyz789' }),
-    })
-    expect(hrefs).toContain('https://example.com/callback')
-  })
-
-  it('approve shows success message before redirect', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ redirect_url: 'https://example.com/callback' }),
-    })
-
-    setQuery({ state: 'abc' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Approved')
-  })
-
-  it('approve shows error on non-ok response', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockResolvedValue({
-      ok: false,
-      statusText: 'Bad Request',
-      json: () => Promise.resolve({ detail: 'Invalid state' }),
-    })
-
-    setQuery({ state: 'bad' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Invalid state')
-  })
-
-  it('approve shows error on network exception', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockRejectedValue(new Error('Network failure'))
-
-    setQuery({ state: 'net' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Network failure')
-  })
-
-  it('approve uses statusText when response body has no detail', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockResolvedValue({
-      ok: false,
-      statusText: 'Internal Server Error',
-      json: () => Promise.resolve({}),
-    })
-
-    setQuery({ state: 'err' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-    await nextTick()
-
-    expect(wrapper.text()).toContain('Internal Server Error')
-  })
-
-  it('approve button shows approving text while pending', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockReturnValue(new Promise(() => {}))
-
-    setQuery({ state: 'pend' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await nextTick()
-
-    expect(wrapper.find('[data-testid="oauth-consent-approve"]').text()).toContain('Approving...')
-  })
-
-  it('approve is a no-op when state is empty', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    setQuery({})
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
-    await flushPromises()
-
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it('renders the Modulo logo SVG', async () => {
-    setQuery({})
-    const wrapper = mount(OAuthConsentView)
-    await nextTick()
+  it('renders the Modulo logo mark', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
 
     const svg = wrapper.find('svg')
     expect(svg.exists()).toBe(true)
     expect(svg.attributes('role')).toBe('img')
-    expect(svg.attributes('aria-label')).toBe('Modulo logo')
   })
 
-  it('scope list handles null scope query gracefully', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
+  it('renders the client name, the grant set and the team-boundary line', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
 
-    setQuery({ client_id: 'test' })
-    const wrapper = mount(OAuthConsentView)
-    await flushPromises()
-    await nextTick()
-
-    const scopes = wrapper.findAll('[data-testid="oauth-consent-scope"]')
-    expect(scopes.length).toBe(0)
+    expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('My MCP App')
+    const rows = wrapper.findAll('label[data-testid^="oauth-consent-scope-"]')
+    expect(rows).toHaveLength(3)
+    // The canonical scope key is the single labelling scheme (shared with the
+    // registration picker) — rendered verbatim.
+    expect(wrapper.text()).toContain('trigger:run')
+    const teamLine = wrapper.find('[data-testid="oauth-consent-team-line"]')
+    expect(teamLine.exists()).toBe(true)
+    expect(teamLine.text()).toContain('Platform')
+    // Every requested scope starts granted.
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    expect(checkboxes).toHaveLength(3)
+    for (const box of checkboxes) {
+      expect((box.element as HTMLInputElement).checked).toBe(true)
+    }
   })
 
-  it('does not show consent form when token is absent', async () => {
-    mockGetAccessToken.mockReturnValue(null)
-    setQuery({ client_id: 'myapp', scope: 'read' })
-    const wrapper = mount(OAuthConsentView)
+  it('omits the team line for an org-wide client', async () => {
+    const wrapper = await mountWithContext(ORG_WIDE_CONTEXT)
+
+    expect(wrapper.find('[data-testid="oauth-consent-client-name"]').text()).toBe('Org-wide App')
+    expect(wrapper.find('[data-testid="oauth-consent-team-line"]').exists()).toBe(false)
+  })
+
+  it('renders an unknown scope key verbatim', async () => {
+    const wrapper = await mountWithContext({ client_name: 'App', scopes: ['mystery:scope'], team: null })
+
+    expect(wrapper.text()).toContain('mystery:scope')
+    expect(wrapper.find('[data-testid="oauth-consent-scope-mystery:scope"]').exists()).toBe(true)
+  })
+
+  it('excludes a toggled-off scope from the approve payload', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+
+    const libraryToggle = wrapper.find('[data-testid="oauth-consent-scope-toggle-library:browse"]')
+    expect(libraryToggle.exists()).toBe(true)
+    await libraryToggle.setValue(false)
+
+    // The approve response is an error so the view never navigates away.
+    fetchMock.mockResolvedValueOnce(errorResponse(500, { detail: 'boom' }))
+    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
     await flushPromises()
+
+    const approveCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes('/consent/approve'))
+    expect(approveCalls).toHaveLength(1)
+    const options = approveCalls[0][1] as RequestInit
+    const body = JSON.parse(String(options.body)) as { state: string; granted_scopes: string[] }
+    expect(body.state).toBe('st-1')
+    expect(body.granted_scopes).toEqual(['trigger:run', 'hitl:review'])
+    // The 500 surfaces as a visible alert (no silent failure).
+    expect(wrapper.find('[data-testid="oauth-consent-error"]').text()).toContain('boom')
+  })
+
+  it('shows the success state and redirects to the client on approve', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+    fetchMock.mockResolvedValueOnce(okResponse({ redirect_url: 'https://client.example/cb' }))
+
+    const hrefs: string[] = []
+    const originalLocation = window.location
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { set href(v: string) { hrefs.push(v) }, get href() { return '' }, pathname: '/' },
+    })
+
+    try {
+      await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="oauth-consent-success"]').exists()).toBe(true)
+      expect(hrefs).toContain('https://client.example/cb')
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation })
+    }
+  })
+
+  it('shows the approving label on the button while the POST is pending', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+    fetchMock.mockReturnValueOnce(new Promise(() => {}))
+
+    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.find('[data-testid="oauth-consent-approve"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="oauth-consent-approve"]').text()).toContain('Approving')
+  })
+
+  it('disables Approve and shows a hint when every scope is denied', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+
+    for (const box of wrapper.findAll('input[type="checkbox"]')) {
+      await box.setValue(false)
+    }
+
+    const approve = wrapper.find('[data-testid="oauth-consent-approve"]')
+    expect((approve.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('[data-testid="oauth-consent-no-scopes-hint"]').exists()).toBe(true)
+  })
+
+  it('renders the context error state when the context fetch fails', async () => {
+    fetchMock.mockResolvedValueOnce(errorResponse(404, { detail: 'Consent request not found' }))
+    const wrapper = mount(OAuthConsentView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="oauth-consent-context-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="oauth-consent-client-name"]').exists()).toBe(false)
   })
 
-  it('approve resets error before new attempt', async () => {
-    const header = btoa(JSON.stringify({ alg: 'none' }))
-    const payload = btoa(JSON.stringify({ username: 'alice' }))
-    const token = `${header}.${payload}.`
-    mockGetAccessToken.mockReturnValue(token)
-
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      statusText: 'Bad Request',
-      json: () => Promise.resolve({ detail: 'First error' }),
-    })
-
-    setQuery({ state: 'retry' })
+  it('renders the context error state when the context fetch throws', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('network down'))
     const wrapper = mount(OAuthConsentView)
     await flushPromises()
-    await nextTick()
 
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
+    expect(wrapper.find('[data-testid="oauth-consent-context-error"]').exists()).toBe(true)
+  })
+
+  it('renders the context error state when the state query param is missing', async () => {
+    mockRoute.query = {}
+    const wrapper = mount(OAuthConsentView)
     await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).toContain('First error')
 
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ redirect_url: 'https://ok.com' }),
+    expect(wrapper.find('[data-testid="oauth-consent-context-error"]').exists()).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('shows the loading state while the context request is in flight', async () => {
+    let resolveFetch: (value: unknown) => void = () => {}
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => { resolveFetch = resolve }))
+    const wrapper = mount(OAuthConsentView)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="oauth-consent-loading"]').exists()).toBe(true)
+
+    resolveFetch(okResponse(TEAM_CONTEXT))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="oauth-consent-loading"]').exists()).toBe(false)
+  })
+
+  it('shows the login card (not the consent card) when signed out', async () => {
+    accessToken = null
+    fetchMock.mockResolvedValueOnce(okResponse(TEAM_CONTEXT))
+    const wrapper = mount(OAuthConsentView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="oauth-consent-login"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="oauth-consent-approve"]').exists()).toBe(false)
+  })
+
+  it('sends a signed-out visitor to login with the redirect query', async () => {
+    accessToken = null
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+
+    await wrapper.find('[data-testid="oauth-consent-login"]').trigger('click')
+
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'login',
+      query: { redirect: '/oauth/authorize?state=st-1' },
     })
+  })
 
-    await wrapper.find('[data-testid="oauth-consent-approve"]').trigger('click')
+  it('renders a clear declined state on Decline', async () => {
+    const wrapper = await mountWithContext(TEAM_CONTEXT)
+
+    await wrapper.find('[data-testid="oauth-consent-decline"]').trigger('click')
     await flushPromises()
-    await nextTick()
-    expect(wrapper.text()).not.toContain('First error')
+
+    expect(wrapper.find('[data-testid="oauth-consent-declined"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('You declined this authorization request.')
+    // The consent card is replaced, not merely hidden below the fold.
+    expect(wrapper.find('[data-testid="oauth-consent-approve"]').exists()).toBe(false)
   })
 })
