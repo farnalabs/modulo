@@ -23,8 +23,8 @@
       </div>
 
       <!--
-        Consent-load or approval failure: nothing to auto-retry — the user
-        reloads the consent URL or re-initiates the flow from the client app.
+        Approval failure (error is only ever set by approve()): no auto-retry —
+        the in-place Approve button below is the retry path.
       -->
       <ErrorAlert v-if="error" :message="error" :retryable="false" />
 

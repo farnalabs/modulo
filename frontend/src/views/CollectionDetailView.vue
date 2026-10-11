@@ -43,10 +43,15 @@
           }}
         </Button>
       </div>
+      <!--
+        FAR-1669: install is a non-idempotent POST (creates a CollectionInstall),
+        so a Retry that re-fires after a lost response could double-install.
+        retryable=false — the Install button above is the retry path.
+      -->
       <ErrorAlert
         v-if="installError"
         :message="installError"
-        :on-retry="install"
+        :retryable="false"
         role="alert"
         aria-live="assertive"
         data-testid="collection-install-error"
@@ -101,10 +106,14 @@
           }}
         </Button>
       </div>
+      <!--
+        FAR-1669: publish mutates collection status — not idempotent, so no
+        auto-retry. retryable=false — the Publish button above is the retry path.
+      -->
       <ErrorAlert
         v-if="publishError"
         :message="publishError"
-        :on-retry="publish"
+        :retryable="false"
         role="alert"
       />
 
