@@ -402,6 +402,73 @@ class TestExtractionSeamContracts:
         assert seen_graphs == [snapshot_graph]
 
 
+class TestExtractedHelperEdgePaths:
+    """The extracted helpers' absent/degenerate inputs (S3776 split seams).
+
+    Each helper guards a field it cannot populate. Before the split these
+    guards rode inside the monolithic ``_build_context_inner`` and were only
+    exercised transitively; the split gives each its own call site, so each
+    falsy/capture-failure arm needs a direct pin: an absent description, a
+    condition payload with no usable value, an unserialisable response
+    contract, and a run with no snapshot at all.
+    """
+
+    async def test_description_absent_from_dict_config_is_none(self) -> None:
+        """A resolvable gate config dict that carries NO ``description``
+        yields ``None`` rather than an empty string (the ``_bounded_description``
+        falsy arm)."""
+        condition = f"node_id=='{_UUID_OTHER}'"
+        config: dict[str, Any] = {"condition": condition}
+        context = await _build(_edge_graph(config))
+        assert context is not None
+        assert context["description"] is None
+        assert context["condition"] == condition
+
+    async def test_condition_result_without_value_is_dropped(self) -> None:
+        """A condition payload carrying no usable ``value`` is recorded as no
+        evidence (the ``_condition_evidence`` value-absent arm) — the payload
+        IS fire-time truth, but an empty value proves nothing."""
+        config = {"description": "Approve the comments.", "condition": "ready"}
+        context = await _build(_edge_graph(config), condition_result={"expression": "ready"})
+        assert context is not None
+        assert context["condition_result"] is None
+
+    async def test_unserialisable_response_contract_is_dropped(self) -> None:
+        """An agent-defined response contract that cannot be re-serialised
+        (here: a non-JSON key) is dropped to ``None`` instead of raising out —
+        the ``_response_contract`` capture-failure arm."""
+        config: dict[str, Any] = {
+            "description": "Approve the comments.",
+            "condition": "ready",
+            "response_contract": {(1, 2): "not a JSON key"},  # type: ignore[dict-item]
+        }
+        context = await _build(_edge_graph(config))
+        assert context is not None
+        assert context["response_contract"] is None
+
+    async def test_run_without_snapshot_reads_no_graph(self) -> None:
+        """A run with no snapshot id skips the graph read entirely (the
+        ``_load_snapshot_graph`` early-return arm): the trigger stays
+        ``unknown`` and no field is resolved from a nonexistent graph."""
+        session = _make_session(None)
+        with patch(
+            "modulo.core.pipeline_engine.hitl_context.get_run",
+            AsyncMock(return_value=_run_mock(None)),
+        ):
+            context = await build_hitl_review_context(
+                session,
+                run_id=_RUN_ID,
+                review_id=_REVIEW_ID,
+                org_id=_ORG_ID,
+                pipeline_name="PR Reviewer",
+                completed_node_outputs={},
+            )
+        assert context is not None
+        assert context["description"] is None
+        assert context["condition"] is None
+        assert context["trigger"] == "unknown"
+
+
 class TestMalformedSnapshotNodes:
     """A snapshot whose ``nodes`` is not a list degrades WITH a log.
 
