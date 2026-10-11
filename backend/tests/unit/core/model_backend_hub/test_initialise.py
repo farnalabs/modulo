@@ -6,6 +6,7 @@ hermetic ``custom`` provider for registered backends.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from types import SimpleNamespace
@@ -285,6 +286,138 @@ async def test_initialise_skips_unexpected_fallback_id_types(
     await hub.initialise([row], secrets_backend=_secrets(secret="{}"))
     assert hub._fallbacks[row.id] == [fallback_id]
     assert "Unexpected fallback ID type" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# initialise() — per-backend isolation (S3776 refactor regression tests)
+# ---------------------------------------------------------------------------
+
+
+def _secrets_per_backend(
+    secrets: dict[str, str],
+    missing: frozenset[str] | set[str] = frozenset(),
+) -> AsyncMock:
+    """Secrets backend that resolves per-backend-id: *missing* ids raise KeyError."""
+
+    async def _get_secret(key: str) -> str:
+        if key in missing:
+            raise KeyError(key)
+        return secrets[key]
+
+    secrets_backend = AsyncMock()
+    secrets_backend.get_secret = AsyncMock(side_effect=_get_secret)
+    return secrets_backend
+
+
+@pytest.mark.anyio
+async def test_initialise_bad_backends_skipped_while_good_ones_register(
+    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One broken backend row must not prevent the good ones from registering.
+
+    Covers three failure classes: an unknown provider (dispatch ValueError),
+    a malformed secret JSON (skip path), and a valid custom-provider row.
+    """
+    good = _row(provider="custom")
+    bad_build = _row(provider="no_such_provider_xyz")
+    bad_secret = _row(provider="custom")
+    secrets = _secrets_per_backend(
+        {
+            str(good.id): '{"api_key": "sk-good"}',
+            str(bad_build.id): '{"api_key": "sk-x"}',
+            str(bad_secret.id): "{not json at all",
+        }
+    )
+
+    await hub.initialise([good, bad_build, bad_secret], secrets_backend=secrets)
+
+    assert good.id in hub.backend_ids
+    assert bad_build.id not in hub.backend_ids
+    assert bad_secret.id not in hub.backend_ids
+    assert "Failed to initialise backend" in caplog.text
+    assert "Malformed secret JSON" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_initialise_never_logs_credential_values(hub: ModelBackendHub, caplog: pytest.LogCaptureFixture) -> None:
+    """No emitted log record may contain a credential VALUE.
+
+    Exercises every logging path in the resolution pipeline with the same
+    canary secret: successful registration, malformed secret JSON (whose
+    document embeds the value), a non-object secret holding the value, an
+    undecryptable ciphertext whose plaintext IS the value, and a
+    missing-credentials row. Asserts at the record level (message + captured
+    traceback) as well as on the aggregate caplog text.
+    """
+    canary = "sk-CANARY-VALUE-9f3e2a"
+    caplog.set_level(logging.INFO, logger="modulo.core.model_backend_hub")
+
+    good = _row(provider="custom")
+    malformed = _row(provider="custom")
+    non_object = _row(provider="custom")
+    undecryptable = _row(provider="custom", credentials_ciphertext=b"not-a-fernet-token")
+    missing = _row(provider="custom", credentials_ciphertext=b"")
+    wrong_key_row = _row(
+        provider="custom",
+        credentials_ciphertext=Fernet(Fernet.generate_key()).encrypt(canary.encode()),
+    )
+    secrets = _secrets_per_backend(
+        {
+            str(good.id): f'{{"api_key": "{canary}"}}',
+            str(malformed.id): f'{{"api_key": "{canary}"',
+            str(non_object.id): f'["{canary}"]',
+        },
+        missing=frozenset({str(undecryptable.id), str(missing.id), str(wrong_key_row.id)}),
+    )
+
+    with patch(
+        "modulo.settings.get_settings",
+        return_value=SimpleNamespace(fernet_key=Fernet.generate_key().decode(), fernet_key_old=""),
+    ):
+        await hub.initialise(
+            [good, malformed, non_object, undecryptable, missing, wrong_key_row],
+            secrets_backend=secrets,
+        )
+
+    assert good.id in hub.backend_ids
+    for broken in (malformed, non_object, undecryptable, missing, wrong_key_row):
+        assert broken.id not in hub.backend_ids
+    # Every logging path fired — the assertion below is therefore not vacuous.
+    assert "Malformed secret JSON" in caplog.text
+    assert "not a JSON object" in caplog.text
+    assert "Failed to decrypt credentials_ciphertext" in caplog.text
+    assert "has no stored credentials" in caplog.text
+    for record in caplog.records:
+        assert canary not in record.getMessage()
+        if record.exc_text is not None:
+            assert canary not in record.exc_text
+    assert canary not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_initialise_decrypt_failure_fails_closed_for_that_backend_only(
+    hub: ModelBackendHub, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A ciphertext that will not decrypt fails CLOSED for that backend only:
+    it is skipped with a logged failure (no value), while a healthy sibling
+    row still registers."""
+    bad = _row(provider="custom", credentials_ciphertext=b"corrupt-ciphertext")
+    good = _row(provider="custom")
+    secrets = _secrets_per_backend(
+        {str(good.id): "{}"},
+        missing=frozenset({str(bad.id)}),
+    )
+
+    with patch(
+        "modulo.settings.get_settings",
+        return_value=SimpleNamespace(fernet_key=Fernet.generate_key().decode(), fernet_key_old=""),
+    ):
+        await hub.initialise([bad, good], secrets_backend=secrets)
+
+    assert bad.id not in hub.backend_ids
+    assert good.id in hub.backend_ids
+    assert "Failed to decrypt credentials_ciphertext" in caplog.text
+    assert "Failed to initialise backend" in caplog.text
 
 
 # ---------------------------------------------------------------------------
