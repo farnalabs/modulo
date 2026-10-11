@@ -5,6 +5,7 @@ The defusedxml monkey patch is installed at import time before the XML-RPC clien
 
 import asyncio
 import xmlrpc.client  # nosec B411
+from collections.abc import Sequence
 from typing import Any, cast
 
 import defusedxml.xmlrpc
@@ -28,6 +29,9 @@ _API_BASE = "https://pypi.org/pypi"
 class PyPIConnector(ConnectorBase):
     def __init__(self, token: str = "") -> None:  # nosec B107 — empty default, token is injected via connector credentials at instantiation
         self._token = token
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -54,13 +58,15 @@ class PyPIConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid PyPI auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="PyPI token lacks required permissions")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to PyPI registry")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

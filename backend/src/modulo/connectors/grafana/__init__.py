@@ -1,6 +1,7 @@
 """GrafanaConnector — async Grafana HTTP API connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -23,6 +24,9 @@ class GrafanaConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "http://localhost:3000") -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -52,11 +56,13 @@ class GrafanaConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Grafana API healthy")
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Grafana API token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

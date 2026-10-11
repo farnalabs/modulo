@@ -1,6 +1,7 @@
 """SentryConnector — async Sentry API connector (v0)."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -25,6 +26,9 @@ class SentryConnector(ConnectorBase):
         self._organization = organization
         self._base = f"{base_url.rstrip('/')}/api/0"
         self._redactor = CredentialRedactor([token])
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -56,12 +60,12 @@ class SentryConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Sentry auth token")
                 return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
                 )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

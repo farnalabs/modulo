@@ -1,6 +1,7 @@
 """GitHub Issues implementation of the TicketTrackerBase ABC."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -27,6 +28,9 @@ class GitHubTicketTracker(TicketTrackerBase):
         self._repo = config.get("repo", "")
         self._base_url = config.get("base_url", "https://api.github.com")
         self._redactor = CredentialRedactor.from_creds(creds)
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -58,7 +62,7 @@ class GitHubTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(self._redactor.redact_exc(e))
+            return health_check_failure(self._redactor.redact_exc(e), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

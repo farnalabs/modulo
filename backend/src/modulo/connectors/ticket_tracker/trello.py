@@ -9,6 +9,7 @@ otherwise it's "open".
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -60,6 +61,9 @@ class TrelloTicketTracker(TicketTrackerBase):
         # ``@redacting`` wrapper covers the error paths that escape a method.
         self._redactor = CredentialRedactor([self._api_key, self._token], scrub_url=True, chain_cause=False)
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.TICKET_TRACKER
@@ -100,7 +104,7 @@ class TrelloTicketTracker(TicketTrackerBase):
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)))
+            return health_check_failure(_RedactedTrelloError(self._health_failure_detail(e)), self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         filters = q.filters or {}

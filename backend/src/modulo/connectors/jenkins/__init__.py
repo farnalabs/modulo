@@ -4,6 +4,7 @@ import asyncio
 import base64
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -137,6 +138,16 @@ class JenkinsConnector(ConnectorBase):
         self._username = username
         self._token = token
         self._base_url = base_url.rstrip("/")
+        # FAR-1651Fix1: precomputed basic-auth wire forms, redactable in
+        # ``_credential_values`` — a reflected ``Authorization: Basic <b64>``
+        # header does NOT contain the raw token, so value-based redaction of
+        # the token alone misses it. Mirrors the rest-connector precedent
+        # (``RestConnector._collect_basic_secrets``).
+        self._basic_raw = f"{self._username}:{self._token}"
+        self._encoded = base64.b64encode(self._basic_raw.encode()).decode()
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token, self._basic_raw, self._encoded, f"Basic {self._encoded}")
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -218,11 +229,11 @@ class JenkinsConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid username or token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Jenkins API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Jenkins API timeout")
@@ -232,7 +243,7 @@ class JenkinsConnector(ConnectorBase):
             # The outbound SSRF guard in _client() rejects a private/internal
             # base_url. Report it as unhealthy with the remediation text rather
             # than letting it escape as a 502 from GET /connectors/{id}/health.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,

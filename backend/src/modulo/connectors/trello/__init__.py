@@ -1,6 +1,6 @@
 """TrelloConnector — async Trello REST API v1 connector."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
 import httpx
@@ -50,6 +50,9 @@ class TrelloConnector(ConnectorBase):
         # the shared ``CredentialRedactor`` rather than a per-connector fork.
         self._redactor = CredentialRedactor([api_key, token], scrub_url=True, chain_cause=False)
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.TRELLO
@@ -91,7 +94,7 @@ class TrelloConnector(ConnectorBase):
         r = await self._request("GET", "/members/me", raise_on_status=False)
 
         if r.status_code != 200:
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {self._redactor.redact(r.text[:200])}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
         profile: dict[str, Any] = r.json()
         if "id" not in profile:

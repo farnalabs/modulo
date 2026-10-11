@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -91,6 +92,9 @@ class SlackConnector(ConnectorBase):
         self._bot_token = bot_token
         self._redactor = CredentialRedactor([bot_token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.SLACK
@@ -134,10 +138,11 @@ class SlackConnector(ConnectorBase):
                 raise self._error_for_status(exc) from exc
         raise SlackNetworkError("Slack API request failed after retries") from last_exc
 
-    @staticmethod
-    def _error_for_status(exc: httpx.HTTPStatusError) -> SlackError:
+    def _error_for_status(self, exc: httpx.HTTPStatusError) -> SlackError:
         status = exc.response.status_code
-        detail = f"Slack API HTTP {status}: {exc.response.text[:200]}"
+        # Redact BEFORE truncation (FAR-1651): truncating the raw body first
+        # can split a token in half and leave a fragment the redactor misses.
+        detail = self._redacted_detail(f"Slack API HTTP {status}: {exc.response.text}")[:200]
         if status == 429:
             return SlackRateLimitError(detail)
         if status in (401, 403):
@@ -148,7 +153,9 @@ class SlackConnector(ConnectorBase):
         try:
             return response.json()
         except json.JSONDecodeError as exc:
-            raise SlackAPIError(f"Slack API returned invalid JSON: {response.text[:200]}") from exc
+            raise SlackAPIError(
+                self._redacted_detail(f"Slack API returned invalid JSON: {response.text}")[:200]
+            ) from exc
 
     async def verify_scopes(self) -> dict[str, Any]:
         r = await self._call_api("GET", "/auth.test")
@@ -195,7 +202,7 @@ class SlackConnector(ConnectorBase):
                 return HealthResult(ok=False, detail="Bot is not in any channel")
             return HealthResult(ok=True)
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

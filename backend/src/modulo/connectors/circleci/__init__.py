@@ -1,5 +1,6 @@
 """CircleCI CI runner — triggers and observes pipeline runs via the CircleCI API v2."""
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -48,6 +49,9 @@ class CircleCIConnector(CIRunnerBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     def _headers(self) -> dict[str, str]:
         return {
             "Circle-Token": self._token,
@@ -92,11 +96,13 @@ class CircleCIConnector(CIRunnerBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"CircleCI API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="CircleCI API timeout")

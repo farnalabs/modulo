@@ -1,5 +1,6 @@
 """TeamCity CI/CD connector — triggers and observes builds via the TeamCity REST API."""
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -52,6 +53,9 @@ class TeamCityConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "http://localhost:8111") -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -106,11 +110,13 @@ class TeamCityConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"TeamCity API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="TeamCity API timeout")
@@ -121,7 +127,7 @@ class TeamCityConnector(ConnectorBase):
             # base_url by raising — and the default base_url is loopback. A health
             # check must REPORT that as unhealthy (surfacing the guard's
             # remediation text), never propagate it.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,

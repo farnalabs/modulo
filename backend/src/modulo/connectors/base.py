@@ -2,9 +2,12 @@
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+
+from modulo.connectors.security import CredentialRedactor
 
 logger = logging.getLogger(__name__)
 
@@ -872,13 +875,24 @@ class HealthResult:
     detail: str = ""
 
 
-def health_check_failure(exc: Exception) -> HealthResult:
+def health_check_failure(exc: Exception, redact: Callable[[str], str]) -> HealthResult:
     """Degrade a failed connector health check into a not-ok result.
 
     Centralises the truncation policy applied to the error detail so every
     connector reports a consistent, bounded failure message.
+
+    ``redact`` — REQUIRED (FAR-1651). The detail string is built from the raw
+    exception message, which is itself a live credential-echo surface (an
+    upstream 4xx body, a transport error's request URL, a connector's own
+    ``ValueError`` rendering of a response payload). Every caller passes its
+    credential redaction (typically ``self._redacted_detail``) so the FULL
+    message is scrubbed before truncation — truncating first can split a
+    credential across the 200-char boundary and leave the surviving fragment
+    unrecoverable. Redaction is mandatory rather than optional so a new caller
+    cannot silently persist an unredacted exception: the signature is the
+    enforcement, not a convention.
     """
-    return HealthResult(ok=False, detail=str(exc)[:200])
+    return HealthResult(ok=False, detail=redact(str(exc))[:200])
 
 
 class CIRunStatus(StrEnum):
@@ -921,6 +935,33 @@ class ConnectorBase(ABC):
     @abstractmethod
     def connector_type(self) -> ConnectorType:
         """Type identifier for this connector."""
+
+    def _credential_values(self) -> Sequence[str]:
+        """The connector's live credential strings as they appear in requests.
+
+        Subclasses that hold credentials (tokens, API keys, app passwords)
+        MUST override this to return the exact secret strings they send to the
+        upstream API — the same values that upstream error bodies, redirect
+        targets or proxies can echo back verbatim. Connectors
+        holding no secrets keep the empty default.
+
+        Returns a sequence, never a bare ``tuple[str]`` of one value: a
+        connector may hold several distinct credentials (e.g. access key +
+        app key), and every one of them must be redactable.
+        """
+        return ()
+
+    def _redacted_detail(self, text: str) -> str:
+        """Return *text* with this connector's credential values masked.
+
+        Every ``health_check`` (and health-adjacent diagnostic) path that
+        embeds an upstream response body, exception message or request URL
+        into a ``HealthResult.detail`` MUST route the string through this
+        method so a credential echoed by the upstream service never reaches
+        the caller. Conformance is enforced by
+        ``tests/unit/connectors/test_health_detail_credential_redaction.py``.
+        """
+        return CredentialRedactor(self._credential_values()).redact(text)
 
     @abstractmethod
     async def health_check(self) -> HealthResult:

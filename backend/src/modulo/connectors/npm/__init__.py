@@ -1,6 +1,7 @@
 """NpmConnector — async npm Registry API connector for package metadata."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -27,6 +28,9 @@ class NpmConnector(ConnectorBase):
     def __init__(self, token: str = "") -> None:  # nosec B107 — empty default, token is injected via connector credentials at instantiation
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.NPM
@@ -52,13 +56,15 @@ class NpmConnector(ConnectorBase):
                     return HealthResult(ok=False, detail="Invalid npm auth token")
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="npm token lacks required permissions")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Cannot connect to npm registry")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

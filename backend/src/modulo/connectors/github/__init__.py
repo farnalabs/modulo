@@ -7,7 +7,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, NoReturn, cast
 
 import httpx
@@ -387,6 +387,9 @@ class GitHubConnector(ConnectorBase):
         self._circuit_open_until = 0.0
         self._circuit_half_open = False
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.GITHUB
@@ -697,7 +700,7 @@ class GitHubConnector(ConnectorBase):
         status_code = exc.response.status_code
         if self._should_trip_circuit(status_code):
             self._record_failure()
-        detail = self._redactor.redact(f"GitHub API HTTP {status_code}: {exc.response.text[:200]}")
+        detail = self._redacted_detail(f"GitHub API HTTP {status_code}: {exc.response.text}")[:200]
         if status_code == 429:
             quota = _rate_limit_detail(exc.response)
             if quota:
@@ -745,7 +748,7 @@ class GitHubConnector(ConnectorBase):
             return response.json()
         except json.JSONDecodeError as exc:
             raise GitHubAPIError(
-                self._redactor.redact(f"GitHub API returned invalid JSON: {response.text[:200]}"),
+                self._redacted_detail(f"GitHub API returned invalid JSON: {response.text}")[:200],
                 error_code="invalid_response",
             ) from exc
 
@@ -845,12 +848,12 @@ class GitHubConnector(ConnectorBase):
         except GitHubNetworkError as exc:
             return HealthResult(ok=False, detail=self._redactor.redact(f"GitHub network error: {exc}"))
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
         try:
             user_login = (self._parse_json(r)).get("login", "")
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
         token_scopes = self._parse_scopes_from_headers(r)
         if is_fine_grained_pat(self._token):

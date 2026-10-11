@@ -1,6 +1,7 @@
 """MondayConnector — async Monday.com GraphQL API v2 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -161,6 +162,9 @@ class MondayConnector(ConnectorBase):
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._api_key,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.MONDAY
@@ -198,12 +202,12 @@ class MondayConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

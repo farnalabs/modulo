@@ -1,6 +1,7 @@
 """BitbucketConnector — async Bitbucket Cloud API connector."""
 
 import base64
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -58,6 +59,26 @@ class BitbucketConnector(ConnectorBase):
             self._auth_header = {"Authorization": f"Basic {encoded}"}
         else:
             raise ValueError("Provide either token (OAuth 2.0) or username+app_password")
+        # Captured for credential redaction of echoed upstream detail
+        # (``ConnectorBase._credential_values``); the username is NOT a secret.
+        self._credential: str | None = token or app_password
+        # FAR-1651Fix1: kept when basic auth is configured, ``None`` for the
+        # Bearer mode. In basic mode the reflected ``Authorization: Basic <b64>``
+        # header (and its decoded ``user:password`` form) do NOT contain the
+        # raw app password, so they must be redactable too. Mirrors the
+        # rest-connector precedent (``RestConnector._collect_basic_secrets``).
+        self._basic_encoded: str | None = None
+        self._basic_raw: str | None = None
+        if self._auth_header.get("Authorization", "").startswith("Basic "):
+            self._basic_raw = f"{username}:{app_password}"
+            self._basic_encoded = base64.b64encode(self._basic_raw.encode()).decode()
+
+    def _credential_values(self) -> Sequence[str]:
+        if not self._credential:
+            return ()
+        if self._basic_encoded is not None and self._basic_raw is not None:
+            return (self._credential, self._basic_raw, self._basic_encoded, f"Basic {self._basic_encoded}")
+        return (self._credential,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -79,7 +100,7 @@ class BitbucketConnector(ConnectorBase):
                 r = await client.get("/user")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             user_info = r.json()
             if not isinstance(user_info, dict):
@@ -89,14 +110,16 @@ class BitbucketConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Bitbucket API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Bitbucket API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

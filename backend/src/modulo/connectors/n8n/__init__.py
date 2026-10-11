@@ -1,6 +1,7 @@
 """N8NConnector — async n8n REST API connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -29,6 +30,9 @@ class N8NConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._redactor = CredentialRedactor([token])
+
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -60,14 +64,14 @@ class N8NConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid n8n API token")
                 return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
                 )
         except httpx.ConnectError as exc:
             return HealthResult(ok=False, detail=self._redactor.redact(f"Cannot connect to n8n: {exc}"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

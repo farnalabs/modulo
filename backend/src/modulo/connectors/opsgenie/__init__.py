@@ -1,6 +1,7 @@
 """OpsgenieConnector — async Opsgenie REST API v2 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -44,6 +45,9 @@ class OpsgenieConnector(ConnectorBase):
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._api_key,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.OPSGENIE
@@ -66,11 +70,13 @@ class OpsgenieConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Opsgenie API key validated")
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Opsgenie API key")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

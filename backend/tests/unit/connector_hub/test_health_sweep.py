@@ -157,7 +157,10 @@ async def test_sweep_isolates_exploding_instance(sweep, tmp_path, monkeypatch) -
     assert result["healthy"] == 1
     assert result["unhealthy"] == 1
     errors = [row.last_health_check_error for row in await rows()]
-    assert any(e is not None and "RuntimeError: boom" in e for e in errors)
+    # FAR-1651Fix3: the residual catch persists a fail-closed placeholder, not
+    # the raw exception message — the full text goes to the log, never to the
+    # operator-visible column. The exception TYPE is still triageable.
+    assert any(e is not None and "RuntimeError" in e and "boom" not in e for e in errors)
     assert any(e is None for e in errors)
 
 

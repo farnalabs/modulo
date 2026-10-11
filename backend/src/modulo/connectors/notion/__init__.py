@@ -1,5 +1,6 @@
 """NotionConnector — async Notion REST API v1 connector."""
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
@@ -46,6 +47,9 @@ class NotionConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.NOTION
@@ -71,7 +75,7 @@ class NotionConnector(ConnectorBase):
                 r = await client.get("/users")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             body = r.json()
             results = _safe_records(body, "results")
@@ -79,14 +83,14 @@ class NotionConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Notion API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Notion API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Notion API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Notion API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

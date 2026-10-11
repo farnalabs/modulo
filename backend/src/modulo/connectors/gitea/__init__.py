@@ -1,6 +1,7 @@
 """GiteaConnector — async Gitea API connector for self-hosted Gitea instances."""
 
 import base64
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -45,6 +46,9 @@ class GiteaConnector(ConnectorBase):
     def __init__(self, token: str, base_url: str = "https://codeberg.org") -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -100,21 +104,21 @@ class GiteaConnector(ConnectorBase):
                 r = await client.get("/user")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             user_info = r.json()
             username = user_info.get("login", "")
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Gitea API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Gitea API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Gitea API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Gitea API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
         missing = await self._get_missing_scopes()
         if missing:
