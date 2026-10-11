@@ -367,6 +367,91 @@ def check_suspension(
 # ---------------------------------------------------------------------------
 
 
+def _check_deleted_test_files(diff: str) -> list[str]:
+    """Check 4: flag test files deleted in a ``git diff --name-status`` output.
+
+    *diff* is the stdout of ``git diff --name-status <range> -- <test dirs>``.
+    Returns the violations found (0 or 1), preserving the original message.
+    """
+    deleted_test_files: list[str] = []
+    for line in diff.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t", 1)
+        if len(parts) < 2:
+            continue
+        status, path = parts[0], parts[1]
+        if status == "D":
+            deleted_test_files.append(path)
+    if deleted_test_files:
+        return [f"deleted test files: {', '.join(deleted_test_files)}"]
+    return []
+
+
+def _check_removed_assertions(diff: str) -> list[str]:
+    """Checks 1-2: flag a decrease in test-function or assert-line count.
+
+    *diff* is the unified diff content of the changed test files. Diff
+    headers (``+++ b/...`` / ``--- a/...``) are excluded from both counts —
+    even when the file path itself contains the substring ``assert``.
+    Returns the violations found, in the original check order (function
+    count first, assert count second).
+    """
+    violations: list[str] = []
+    added_funcs = 0
+    removed_funcs = 0
+    added_asserts = 0
+    removed_asserts = 0
+    for line in diff.splitlines():
+        if line.startswith(("+++", "---")):
+            continue
+        if line.startswith("+"):
+            added_funcs += bool(re.match(r"\+def test_\w+", line))
+            added_asserts += "assert" in line
+        elif line.startswith("-"):
+            removed_funcs += bool(re.match(r"\-def test_\w+", line))
+            removed_asserts += "assert" in line
+
+    if removed_funcs > added_funcs:
+        violations.append(
+            f"test-function count decreased: -{removed_funcs} removed, "
+            f"+{added_funcs} added (net {added_funcs - removed_funcs})"
+        )
+    if removed_asserts > added_asserts:
+        violations.append(
+            f"assert-line count decreased: -{removed_asserts} removed, "
+            f"+{added_asserts} added (net {added_asserts - removed_asserts})"
+        )
+    return violations
+
+
+def _check_skipped_tests(diff: str) -> list[str]:
+    """Check 3: flag added skip/xfail/skipif markers in the diff.
+
+    *diff* is the unified diff content of the changed test files. Returns
+    the violations found (0 or 1), preserving the original message.
+    """
+    skip_patterns = [
+        re.compile(r"^\+.*\bpytest\.mark\.skip\b"),
+        re.compile(r"^\+.*\bpytest\.mark\.xfail\b"),
+        re.compile(r"^\+.*\b@unittest\.skip\b"),
+        re.compile(r"^\+.*\bskipif\b"),
+        re.compile(r"^\+.*\bpytest\.skip\("),
+        re.compile(r"^\+.*\bskip\("),
+    ]
+    added_skips = 0
+    for line in diff.splitlines():
+        if not (line.startswith("+") and not line.startswith("+++")):
+            continue
+        for pat in skip_patterns:
+            if pat.search(line):
+                added_skips += 1
+                break
+    if added_skips > 0:
+        return [f"added {added_skips} skip/xfail/skipif marker(s)"]
+    return []
+
+
 def check_no_test_weakening(
     repo_root: Path,
     base_ref: str,
@@ -381,6 +466,11 @@ def check_no_test_weakening(
     4. Zero deleted test files
     5. Zero deleted fixture teardown blocks (yield/addfinalizer/finally in
        changed test files)
+
+    Checks 1-2 delegate to ``_check_removed_assertions``, check 3 to
+    ``_check_skipped_tests`` and check 4 to ``_check_deleted_test_files``;
+    this orchestrator keeps the S8705 diff-range bound, the two ``git diff``
+    fetches, and check 5.
 
     Returns ``(eligible, violations)``.
     """
@@ -412,24 +502,12 @@ def check_no_test_weakening(
             check=False,
             cwd=str(repo_root),
         )
-        changed_files = result.stdout.strip().splitlines()
+        name_status_text = result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False, ["test-weakening check denied (fail-closed): could not fetch diff"]
 
-    deleted_test_files = []
-    for line in changed_files:
-        if not line.strip():
-            continue
-        parts = line.split("\t", 1)
-        if len(parts) < 2:
-            continue
-        status, path = parts[0], parts[1]
-        if status == "D":
-            deleted_test_files.append(path)
-
     # 4. Zero deleted test files
-    if deleted_test_files:
-        violations.append(f"deleted test files: {', '.join(deleted_test_files)}")
+    violations.extend(_check_deleted_test_files(name_status_text))
 
     # Get the full diff content for test-function, assert, skip, teardown checks
     diff_cmd = [
@@ -455,53 +533,11 @@ def check_no_test_weakening(
         return False, ["test-weakening check denied (fail-closed): could not fetch diff content"]
 
     # 1. Test-function count must not decrease
-    # Count added vs removed def test_* lines
-    added_funcs = 0
-    removed_funcs = 0
-    for line in diff_text.splitlines():
-        if line.startswith("+") and not line.startswith("+++") and re.match(r"\+def test_\w+", line):
-            added_funcs += 1
-        elif line.startswith("-") and not line.startswith("---") and re.match(r"\-def test_\w+", line):
-            removed_funcs += 1
-    if removed_funcs > added_funcs:
-        violations.append(
-            f"test-function count decreased: -{removed_funcs} removed, "
-            f"+{added_funcs} added (net {added_funcs - removed_funcs})"
-        )
-
     # 2. Assert-line count must not decrease
-    added_asserts = 0
-    removed_asserts = 0
-    for line in diff_text.splitlines():
-        if line.startswith("+") and not line.startswith("+++") and "assert" in line:
-            added_asserts += 1
-        elif line.startswith("-") and not line.startswith("---") and "assert" in line:
-            removed_asserts += 1
-    if removed_asserts > added_asserts:
-        violations.append(
-            f"assert-line count decreased: -{removed_asserts} removed, "
-            f"+{added_asserts} added (net {added_asserts - removed_asserts})"
-        )
+    violations.extend(_check_removed_assertions(diff_text))
 
     # 3. Zero added skip/xfail/skipif/@unittest.skip/conditional skips
-    skip_patterns = [
-        re.compile(r"^\+.*\bpytest\.mark\.skip\b"),
-        re.compile(r"^\+.*\bpytest\.mark\.xfail\b"),
-        re.compile(r"^\+.*\b@unittest\.skip\b"),
-        re.compile(r"^\+.*\bskipif\b"),
-        re.compile(r"^\+.*\bpytest\.skip\("),
-        re.compile(r"^\+.*\bskip\("),
-    ]
-    added_skips = 0
-    for line in diff_text.splitlines():
-        if not (line.startswith("+") and not line.startswith("+++")):
-            continue
-        for pat in skip_patterns:
-            if pat.search(line):
-                added_skips += 1
-                break
-    if added_skips > 0:
-        violations.append(f"added {added_skips} skip/xfail/skipif marker(s)")
+    violations.extend(_check_skipped_tests(diff_text))
 
     # 5. Zero deleted fixture teardown blocks in changed test files
     # Look for removed lines containing yield/addfinalizer/finally in test files
