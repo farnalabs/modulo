@@ -355,6 +355,62 @@ def test_receive_webhook_valid_hmac_promotes_audit_actor_source(client: TestClie
     assert captured.call_args.kwargs["payload_json"]["actor_source"] == "signature_verified"
 
 
+def test_receive_webhook_hmac_secret_decrypt_failure_falls_back_to_raw_secret(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """HMAC-secret decrypt failure falls back to the RAW stored secret with the
+    exception LOGGED (never silent): the stored value may itself be the
+    plaintext secret, so a delivery signed against it must still verify — and
+    the decrypt failure must be visible in the logs either way."""
+    import logging as _logging
+
+    stored_secret = "stored-plaintext-secret"
+    system_session = make_system_session_mock(trigger_config={"hmac_secret": stored_secret})
+    app_session = _make_mock_session()
+
+    async def override_system_session() -> AsyncGenerator[AsyncMock, None]:
+        yield system_session
+
+    async def override_app_session() -> AsyncGenerator[AsyncMock, None]:
+        yield app_session
+
+    app.dependency_overrides[get_system_db_session] = override_system_session
+    app.dependency_overrides[get_db_session] = override_app_session
+
+    ts = int(time.time())
+    body = b'{"event": "test"}'
+    signature = "sha256=" + hmac.new(stored_secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+    try:
+        with (
+            patch(
+                "modulo.api.routes.webhooks.decode_stored_secret_scoped",
+                new=AsyncMock(side_effect=ValueError("fernet decode failed")),
+            ),
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.dispatch_run", new=AsyncMock(return_value=("enqueued", "job-id"))),
+            patch("modulo.api.routes.webhooks.set_rls_org", new=AsyncMock()),
+        ):
+            m.return_value = (_make_mock_run(), None, {})
+            with caplog.at_level(_logging.ERROR, logger="modulo.api.routes.webhooks"):
+                resp = client.post(
+                    f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Modulo-Timestamp": str(ts),
+                        "X-Modulo-Webhook-Secret": signature,
+                    },
+                )
+    finally:
+        app.dependency_overrides.pop(get_system_db_session, None)
+        app.dependency_overrides.pop(get_db_session, None)
+
+    # The fallback (raw) secret verified the signature → accepted, not 401.
+    assert resp.status_code == 202, resp.text
+    # The decrypt failure was LOGGED, not swallowed silently.
+    assert "webhooks.hmac_secret_decrypt_failed" in caplog.text
+
+
 def test_receive_webhook_paused_org_returns_202_paused(client: TestClient) -> None:
     """Paused org: 202 {"status": "paused"} with NO run_id, engine never called."""
     with (
@@ -1128,6 +1184,133 @@ def test_receive_webhook_backpressure_refusal_records_event_after_unwind(client:
     assert len(kwargs["payload_hash"]) == 64
 
 
+def test_receive_webhook_trigger_busy_re_records_original_payload_hash_after_unwind(client: TestClient) -> None:
+    """FAR-604: the busy re-record happens in a FRESH transaction AFTER the
+    main transaction has unwound, and carries the ORIGINAL payload hash —
+    sha256 of the raw body exactly as received, not a re-serialised form.
+    The main begin() block must have seen the TriggerBusyError (rollback);
+    the ``concurrency_limit_reached`` event is then written post-unwind with
+    the original hash, which is what makes the 2xx ack honest and the
+    delivery replayable from the event log."""
+    from modulo.core.trigger_engine import TriggerBusyError, sha256_hex
+
+    sent_body = b'{"event": "busy-payload"}'
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks.record_busy_delivery", new_callable=AsyncMock) as record,
+            patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.side_effect = TriggerBusyError(_TRIGGER_ID)
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                content=sent_body,
+                headers={"X-Modulo-Timestamp": str(int(time.time())), "Content-Type": "application/json"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "queued"
+    dispatch.assert_not_called()
+    # The main transaction UNWOUND (aexit saw the exception → rollback) — so
+    # the busy re-record could not have been in-transaction; it ran in a
+    # fresh transaction after the unwind.
+    aexit = begin_cm.__aexit__
+    assert aexit.await_count == 1
+    assert aexit.await_args.args[0] is TriggerBusyError
+    # The fresh-transaction event carries the ORIGINAL payload hash + body
+    # exactly as received on the wire.
+    record.assert_awaited_once()
+    kwargs = record.await_args.kwargs
+    assert kwargs["raw_body"] == sent_body
+    assert kwargs["payload_hash"] == sha256_hex(sent_body)
+    assert kwargs["payload_hash"] == hashlib.sha256(sent_body).hexdigest()
+    assert kwargs["raw_payload"] == {"event": "busy-payload"}
+
+
+def test_receive_webhook_guardrail_blocked_run_422_with_committed_rows(client: TestClient) -> None:
+    """FAR-213: an eval-blocked run is acked 422 and the run + TriggerEvent
+    rows STAY COMMITTED — the begin() block unwinds cleanly (last aexit with
+    no exception), proving the blocked delivery remains visible in the run
+    list instead of being rolled back with the refusal."""
+    run_mock = _make_mock_run()
+    run_mock.error_code = "eval_blocked"
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.return_value = (run_mock, None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+                json={"event": "test"},
+                headers={"X-Modulo-Timestamp": str(int(time.time()))},
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 422
+    assert "guardrail" in resp.json()["detail"].lower()
+    dispatch.assert_not_called()
+    # The last aexit of the main transaction was a CLEAN COMMIT (no exception
+    # propagating out of the begin-block) — the run + TriggerEvent rows the
+    # engine wrote inside it survive.
+    aexit = begin_cm.__aexit__
+    assert aexit.await_args_list[-1].args == (None, None, None)
+
+
+def test_replay_webhook_guardrail_blocked_run_422_with_committed_rows(client: TestClient) -> None:
+    """FAR-213 replay mirror: an eval-blocked replayed run is acked 422 (never
+    a false 'accepted'), no background dispatch fires, and the run +
+    TriggerEvent rows stay committed."""
+    event_id = uuid.uuid4()
+    run_mock = _make_mock_run()
+    run_mock.error_code = "eval_blocked"
+    session = _make_mock_session()
+    begin_cm = session.begin.return_value
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    app.dependency_overrides[get_db_session] = override_session
+    try:
+        with (
+            patch("modulo.api.routes.webhooks._trigger_engine.replay_event", new_callable=AsyncMock) as m,
+            patch("modulo.api.routes.webhooks._dispatch_webhook_run", new_callable=AsyncMock) as dispatch,
+            patch("modulo.api.routes.webhooks.set_rls_org"),
+        ):
+            m.return_value = (run_mock, None, {})
+            resp = client.post(
+                f"/api/v1/triggers/{_TRIGGER_ID}/webhook/replay/{event_id}",
+                headers=_auth_headers("admin"),
+            )
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+
+    assert resp.status_code == 422
+    assert "guardrail" in resp.json()["detail"].lower()
+    dispatch.assert_not_called()
+    aexit = begin_cm.__aexit__
+    assert aexit.await_args_list[-1].args == (None, None, None)
+
+
 def test_receive_webhook_invalid_config_json_returns_400(client: TestClient) -> None:
     """A non-dict config_json (schema drift / manual edit) must 400 at the
     route, not AttributeError -> 500 on external ingress."""
@@ -1225,3 +1408,50 @@ def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> N
         and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
         for c in session.add.call_args_list
     )
+
+
+async def test_record_rejected_delivery_without_org_returns_false() -> None:
+    """FAR-604 defensive guard: with no resolved org there is nothing to record
+    against, so the helper returns False (fail-closed) WITHOUT touching the
+    recorder. The route then refuses loudly instead of sending a false 2xx ack.
+    """
+    from modulo.api.routes.webhooks import _record_rejected_delivery
+
+    result = await _record_rejected_delivery(
+        kind="busy",
+        trigger_id=_TRIGGER_ID,
+        org_id=None,
+        raw_body=b'{"event": "test"}',
+        raw_payload={"event": "test"},
+    )
+
+    assert result is False
+
+
+def test_receive_webhook_trigger_busy_unresolvable_returns_429(client: TestClient) -> None:
+    """Defensive: TriggerBusyError can only fire after the bootstrap resolved
+    the org. If the post-unwind re-record reports nothing was recorded, the
+    route must refuse with 429 (+ Retry-After) — never a false 2xx ack that
+    would suppress the sender's retry with nothing recorded."""
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch(
+            "modulo.api.routes.webhooks._record_rejected_delivery",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as record,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": str(int(time.time()))},
+        )
+
+    assert resp.status_code == 429
+    assert "retry" in resp.json()["detail"].lower()
+    assert resp.headers.get("Retry-After") == "5"
+    record.assert_awaited_once()
