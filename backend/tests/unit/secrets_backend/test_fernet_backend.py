@@ -15,6 +15,7 @@ from modulo.db.models.secret import Secret
 _KEY = Fernet.generate_key().decode()
 _SECRET_VALUE = "my-secret-value"
 _ORG_ID = uuid.UUID(int=42)
+_OTHER_ORG_ID = uuid.UUID(int=99)
 
 
 def _make_session(*, row: Any = None, org_id: uuid.UUID | None = _ORG_ID) -> MagicMock:
@@ -43,6 +44,18 @@ def _make_session(*, row: Any = None, org_id: uuid.UUID | None = _ORG_ID) -> Mag
 @pytest.fixture
 def mock_session() -> MagicMock:
     return _make_session()
+
+
+def _statements_against_secrets_table(execute_calls: list[tuple[str, Any, Any, Any]]) -> list[tuple[str, Any]]:
+    """Return ``(sql_text, statement)`` pairs issued against the ``secrets`` table.
+
+    The org-id probe is a ``current_setting('app.organisation_id', ...)`` query,
+    whose SQL text ALSO contains the string ``organisation_id``. Matching on
+    that substring alone would therefore match the probe and let a tenant-scoped
+    regression pass, so callers select on the table the statement touches and
+    assert on its *compiled parameters* instead of its text.
+    """
+    return [(text, stmt) for text, stmt, _args, _kwargs in execute_calls if "secrets" in text]
 
 
 class TestGetSecret:
@@ -325,7 +338,7 @@ class TestGetSecretOrgScoping:
         execute_calls = []
 
         async def mock_execute(stmt, *args, **kwargs):
-            execute_calls.append((str(stmt), args, kwargs))
+            execute_calls.append((str(stmt), stmt, args, kwargs))
             result = MagicMock()
             if "current_setting" in str(stmt):
                 result.scalar.return_value = str(_ORG_ID)
@@ -338,16 +351,50 @@ class TestGetSecretOrgScoping:
         value = await backend.get_secret("my-key")
         assert value == _SECRET_VALUE, f"Expected {_SECRET_VALUE}, got {value}"
 
-        # Verify org_id was added to WHERE clause
-        get_secret_call = [c for c in execute_calls if "organisation_id" in str(c[0])]
-        assert len(get_secret_call) > 0, "Expected organisation_id filter in get_secret query"
+        # The SELECT must carry the tenant predicate, and that predicate must bind
+        # the org id read from the session — not merely mention the column name.
+        selects = [stmt for text, stmt in _statements_against_secrets_table(execute_calls) if "SELECT" in text]
+        assert len(selects) == 1, f"Expected exactly one SELECT against secrets, got {len(selects)}"
+        bound = list(selects[0].compile().params.values())
+        assert _ORG_ID in bound, f"Expected the SELECT to bind the session org id {_ORG_ID}, got {bound}"
 
     async def test_wrong_org_raises_key_error(self):
-        """get_secret with key that exists but under a different org should raise KeyError."""
-        backend = FernetSecretsBackend(fernet_key=_KEY, session=_make_session())
+        """A key stored under another org must be invisible, even though it exists.
 
-        with pytest.raises(KeyError):
+        The mock here enforces the row's own tenant the way the database would:
+        the row is returned ONLY when the statement binds the org it belongs to.
+        So this test fails if ``get_secret`` ever stops scoping the SELECT by
+        organisation — a regression the plain ``_make_session`` mock cannot see,
+        because it returns the row for every non-probe query.
+        """
+        row = MagicMock(spec=Secret)
+        row.organisation_id = _OTHER_ORG_ID
+        row.encrypted_value = Fernet(_KEY.encode()).encrypt(_SECRET_VALUE.encode())
+
+        session = MagicMock()
+        session.add = MagicMock()
+        session.flush = AsyncMock()
+
+        async def mock_execute(stmt, *args, **kwargs):
+            result = MagicMock()
+            if "current_setting" in str(stmt):
+                result.scalar.return_value = str(_ORG_ID)
+            else:
+                # Emulate the tenant predicate: no row unless the query names its org.
+                org_matches = row.organisation_id in list(stmt.compile().params.values())
+                result.scalar_one_or_none.return_value = row if org_matches else None
+            return result
+
+        session.execute = AsyncMock(side_effect=mock_execute)
+        backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
+
+        with pytest.raises(KeyError, match="key-from-other-org"):
             await backend.get_secret("key-from-other-org")
+
+        # Sanity: the same mock DOES yield the row once the org matches, proving
+        # the assertion above came from the tenant filter and not a broken stub.
+        row.organisation_id = _ORG_ID
+        assert await backend.get_secret("key-from-other-org") == _SECRET_VALUE
 
 
 class TestDeleteSecretOrgScoping:
@@ -357,7 +404,7 @@ class TestDeleteSecretOrgScoping:
         execute_calls = []
 
         async def mock_execute(stmt, *args, **kwargs):
-            execute_calls.append((str(stmt), args, kwargs))
+            execute_calls.append((str(stmt), stmt, args, kwargs))
             result = MagicMock()
             if "current_setting" in str(stmt):
                 result.scalar.return_value = str(_ORG_ID)
@@ -369,9 +416,12 @@ class TestDeleteSecretOrgScoping:
 
         await backend.delete_secret("my-key")
 
-        # Verify at least one captured call contains organisation_id
-        delete_stmt = [c for c in execute_calls if "organisation_id" in c[0]]
-        assert len(delete_stmt) > 0, "Expected organisation_id filter in delete query"
+        # The DELETE must bind the tenant id. Asserting on bound parameters (not
+        # on the SQL text) is what makes this fail if the org predicate is dropped.
+        deletes = [stmt for text, stmt in _statements_against_secrets_table(execute_calls) if "DELETE" in text]
+        assert len(deletes) == 1, f"Expected exactly one DELETE against secrets, got {len(deletes)}"
+        bound = list(deletes[0].compile().params.values())
+        assert _ORG_ID in bound, f"Expected the DELETE to bind the session org id {_ORG_ID}, got {bound}"
 
 
 class TestOrgIdCaching:
