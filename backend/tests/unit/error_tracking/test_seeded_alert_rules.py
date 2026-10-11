@@ -12,7 +12,6 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.error_tracking import (
     DEFAULT_ALERT_RULES,
@@ -29,12 +28,9 @@ from modulo.core.error_tracking import (
 )
 from modulo.db.models.error_event import ErrorEvent
 from modulo.db.models.error_notification_rule import DeletedDefault, ErrorNotificationRule
+from tests.unit.error_tracking._factories import make_session
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
-
-def _make_session() -> AsyncMock:
-    return AsyncMock(spec=AsyncSession)
 
 
 def _configure_begin(session: MagicMock) -> MagicMock:
@@ -79,7 +75,7 @@ def _seed_session(
     ``deleted_defaults`` queries return *tombstoned* signals; per-signal rule
     lookups return from *existing_rules* in DEFAULT_ALERT_RULES order.
     """
-    session = _make_session()
+    session = make_session()
     existing_iter = iter(existing_rules or [])
     tomb_result = MagicMock()
     tomb_result.all.return_value = [(s,) for s in (tombstoned or set())]
@@ -252,7 +248,7 @@ class TestTombstones:
 
     async def test_clear_tombstone_returns_true_only_when_present(self) -> None:
         row = MagicMock(spec=DeletedDefault)
-        session = _make_session()
+        session = make_session()
         result = MagicMock(scalar_one_or_none=MagicMock(return_value=row))
         session.execute = AsyncMock(return_value=result)
         session.delete = AsyncMock()
@@ -263,7 +259,7 @@ class TestTombstones:
 
     async def test_restore_clears_tombstones_and_reseeds(self) -> None:
         row = MagicMock(spec=DeletedDefault)
-        session = _make_session()
+        session = make_session()
         tomb_result = MagicMock()
         tomb_result.scalars.return_value.all.return_value = [row]
         tomb_result.all.return_value = []
@@ -287,7 +283,7 @@ class TestTombstones:
 
 class TestEmitSignalEvent:
     async def test_creates_event_with_stable_fingerprint_and_evaluates(self) -> None:
-        session = _make_session()
+        session = make_session()
         group = MagicMock()
         group.id = uuid.uuid4()
         group.count = 1
@@ -321,7 +317,7 @@ class TestEmitSignalEvent:
         assert kwargs["run_id"] == "run-1"
 
     async def test_dispatch_all_called_when_rules_fire(self) -> None:
-        session = _make_session()
+        session = make_session()
         group = MagicMock()
         group.id = uuid.uuid4()
         group.count = 1
@@ -345,7 +341,7 @@ class TestEmitSignalEvent:
         engine.dispatch_all.assert_awaited_once()
 
     async def test_evaluation_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = _make_session()
+        session = make_session()
         group = MagicMock()
         group.id = uuid.uuid4()
         group.count = 1
@@ -365,7 +361,7 @@ class TestEmitSignalEvent:
 
 class TestRetryDeferredAlertFireOnce:
     async def test_fires_once_per_run_group_signal(self) -> None:
-        session = _make_session()
+        session = make_session()
         group = MagicMock()
         group.id = uuid.uuid4()
         group.count = 1
@@ -409,7 +405,7 @@ class TestRetryDeferredAlertFireOnce:
         assert kwargs["elevation_signal"] == "agent.failed"
 
     async def test_different_run_group_fires_again(self) -> None:
-        session = _make_session()
+        session = make_session()
         group = MagicMock()
         group.id = uuid.uuid4()
         group.count = 1
@@ -446,7 +442,7 @@ class TestRetryDeferredAlertFireOnce:
 
 class TestEmitAlertResolved:
     async def test_dispatches_resolution_with_rule_webhook(self) -> None:
-        session = _make_session()
+        session = make_session()
         rule = _rule_mock(signal="agent.failed", webhook_url="https://hooks.example.com/resolve")
         rule_result = MagicMock(scalar_one_or_none=MagicMock(return_value=rule))
         session.execute = AsyncMock(return_value=rule_result)
@@ -465,7 +461,7 @@ class TestEmitAlertResolved:
         assert kwargs["reason"] == "superseded"
 
     async def test_dispatch_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
-        session = _make_session()
+        session = make_session()
         rule_result = MagicMock(scalar_one_or_none=MagicMock(return_value=None))
         session.execute = AsyncMock(return_value=rule_result)
         with patch(

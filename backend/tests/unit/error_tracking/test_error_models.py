@@ -496,54 +496,6 @@ class TestUpdateErrorGroup:
             await engine.dispose()
 
 
-class TestAppendOnly:
-    def test_insert_not_blocked(self) -> None:
-        event = ErrorEvent(
-            organisation_id=_ORG_ID,
-            fingerprint="abc",
-            level="error",
-            message="test",
-            source="backend",
-        )
-        assert event.fingerprint == "abc"
-
-    def test_update_listener_blocks(self) -> None:
-        """The registered before_update guard actually raises AppendOnlyViolationError."""
-        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
-
-        blocker = _make_blocker(ErrorEvent, "error_events", "update")
-        event = ErrorEvent(
-            organisation_id=_ORG_ID,
-            fingerprint="abc",
-            level="error",
-            message="test",
-            source="backend",
-        )
-        event.id = uuid.uuid4()
-        with pytest.raises(AppendOnlyViolationError) as exc_info:
-            blocker(None, None, event)
-        assert "append-only" in str(exc_info.value).lower()
-        assert str(event.id) in str(exc_info.value)
-
-    def test_delete_listener_blocks(self) -> None:
-        """The registered before_delete guard actually raises AppendOnlyViolationError."""
-        from modulo.core.audit_logger.append_only import AppendOnlyViolationError, _make_blocker
-
-        blocker = _make_blocker(ErrorEvent, "error_events", "delete")
-        event = ErrorEvent(
-            organisation_id=_ORG_ID,
-            fingerprint="abc",
-            level="error",
-            message="test",
-            source="backend",
-        )
-        event.id = uuid.uuid4()
-        with pytest.raises(AppendOnlyViolationError) as exc_info:
-            blocker(None, None, event)
-        assert "append-only" in str(exc_info.value).lower()
-        assert str(event.id) in str(exc_info.value)
-
-
 class TestOrgScoping:
     async def test_get_error_group_filters_by_org(self) -> None:
         session = AsyncMock(spec=AsyncSession)

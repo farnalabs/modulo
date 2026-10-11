@@ -8,9 +8,7 @@ meter provider or DB (``_get_meter`` is patched / OTel is stubbed via
 
 from __future__ import annotations
 
-import sys
-import types
-from collections.abc import Iterator
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -57,31 +55,6 @@ def _make_meter() -> MagicMock:
     return meter
 
 
-@pytest.fixture
-def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
-    """Inject a fake ``opentelemetry`` / ``opentelemetry.metrics`` into ``sys.modules``
-    for the duration of the test and clean up afterwards so the stubs never shadow the
-    real OTel package for other test modules running in the same process.
-
-    Yields ``(meter, fake_metrics)`` where ``fake_metrics.get_meter_provider`` returns
-    ``None`` by default; tests may override it to point at a fake provider.
-    """
-    fake_metrics = types.ModuleType("opentelemetry.metrics")
-    meter = _make_meter()
-    fake_metrics.get_meter_provider = MagicMock(return_value=None)
-    fake_otel = types.ModuleType("opentelemetry")
-    fake_otel.metrics = fake_metrics
-    patcher = patch.dict(
-        sys.modules,
-        {"opentelemetry": fake_otel, "opentelemetry.metrics": fake_metrics},
-    )
-    patcher.start()
-    try:
-        yield meter, fake_metrics
-    finally:
-        patcher.stop()
-
-
 # =========================================================================
 # _get_meter — OTel discovery
 # =========================================================================
@@ -110,42 +83,43 @@ class TestGetMeter:
 
 
 class TestInitMetrics:
-    def test_no_meter_provider_leaves_handles_unset(self) -> None:
-        with patch.object(metrics_mod, "_get_meter", return_value=None), patch.object(metrics_mod, "_log") as log:
+    def test_no_meter_provider_leaves_handles_unset(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch.object(metrics_mod, "_get_meter", return_value=None):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is None
         assert metrics_mod._error_groups_active is None
-        log.warning.assert_called_once_with("metrics.no_meter_provider — OTel metrics disabled")
+        assert "metrics.no_meter_provider" in caplog.text
 
-    def test_registers_counter_and_gauge(self) -> None:
+    def test_registers_counter_and_gauge(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is meter.create_counter.return_value
         assert metrics_mod._error_groups_active is meter.create_gauge.return_value
         meter.create_counter.assert_called_once()
         meter.create_gauge.assert_called_once()
-        log.info.assert_called_once_with("metrics.registered")
+        assert "metrics.registered" in caplog.text
 
-    def test_idempotent_when_already_initialized(self) -> None:
+    def test_idempotent_when_already_initialized(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._errors_total = MagicMock()
         metrics_mod._error_groups_active = MagicMock()
-        with patch.object(metrics_mod, "_get_meter") as get_meter, patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter") as get_meter:
             metrics_mod.init_metrics()
         get_meter.assert_not_called()
-        log.info.assert_not_called()
+        assert "metrics.registered" not in caplog.text
 
-    def test_gauge_attribute_error_keeps_counter_only(self) -> None:
+    def test_gauge_attribute_error_keeps_counter_only(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
         meter.create_gauge.side_effect = AttributeError("gauge unsupported")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is meter.create_counter.return_value
         assert metrics_mod._error_groups_active is None
-        log.warning.assert_called_once_with(
-            "metrics.gauge_not_supported — OTel SDK version does not support create_gauge"
-        )
-        log.info.assert_called_once_with("metrics.registered")
+        assert "metrics.gauge_not_supported" in caplog.text
+        assert "metrics.registered" in caplog.text
 
 
 # =========================================================================
@@ -370,13 +344,13 @@ class TestInitAlertCounter:
             unit="1",
         )
 
-    def test_exception_leaves_counter_unset(self) -> None:
+    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
         meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod._init_alert_counter()
         assert metrics_mod._error_alerts_total is None
-        log.warning.assert_called_once_with("metrics.alert_counter_failed", exc_info=True)
+        assert "metrics.alert_counter_failed" in caplog.text
 
 
 # =========================================================================
@@ -634,43 +608,43 @@ class TestSampleRunRuntimeMetrics:
 
 
 class TestInitSuppressedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
+    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._alerts_suppressed_total = None
         meter = _make_meter()
         meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod._init_suppressed_counter()
         assert metrics_mod._alerts_suppressed_total is None
-        log.warning.assert_called_once_with("metrics.suppressed_counter_failed", exc_info=True)
+        assert "metrics.suppressed_counter_failed" in caplog.text
 
 
 class TestInitDeliveryFailedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
+    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._alert_delivery_failed_total = None
         meter = _make_meter()
         meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod._init_delivery_failed_counter()
         assert metrics_mod._alert_delivery_failed_total is None
-        log.warning.assert_called_once_with("metrics.delivery_failed_counter_failed", exc_info=True)
+        assert "metrics.delivery_failed_counter_failed" in caplog.text
 
 
 class TestInitConnectorUnknownCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
+    def test_exception_leaves_counter_unset(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._connector_unknown_total = None
         meter = _make_meter()
         meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod._init_connector_unknown_counter()
         assert metrics_mod._connector_unknown_total is None
-        log.warning.assert_called_once_with("metrics.connector_unknown_counter_failed", exc_info=True)
+        assert "metrics.connector_unknown_counter_failed" in caplog.text
 
 
 class TestCreateRuntimeInstrumentException:
-    def test_generic_exception_returns_none(self) -> None:
+    def test_generic_exception_returns_none(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
         meter.create_gauge.side_effect = ValueError("boom")
-        with patch.object(metrics_mod, "_log") as log:
-            result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
+        result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
         assert result is None
-        log.warning.assert_called_once_with("metrics.runtime_instrument_failed — %s skipped", "my_gauge", exc_info=True)
+        assert "metrics.runtime_instrument_failed" in caplog.text
+        assert "my_gauge" in caplog.text

@@ -10,40 +10,13 @@ matching signal events; NULL-signal (legacy) rules keep matching by level.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from unittest.mock import patch
 
 from modulo.core.error_tracking.alerting import AlertEngine, _CooldownKey
-from modulo.db.models.error_notification_rule import ErrorNotificationRule
-
-_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-_GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
-
-
-def _make_rule(**overrides: object) -> MagicMock:
-    rule = MagicMock(spec=ErrorNotificationRule)
-    rule.id = uuid.uuid4()
-    rule.organisation_id = _ORG_ID
-    rule.name = "Test Rule"
-    rule.enabled = True
-    rule.condition_level = "error"
-    rule.condition_min_count = 1
-    rule.condition_window_seconds = 0
-    rule.action_type = "in_app"
-    rule.webhook_url = None
-    rule.cooldown_seconds = 300
-    rule.signal = None
-    for k, v in overrides.items():
-        setattr(rule, k, v)
-    return rule
-
-
-def _session_with_rules(rules: list[MagicMock]) -> AsyncMock:
-    session = AsyncMock(spec=AsyncSession)
-    rules_result = MagicMock(scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=rules))))
-    session.execute = AsyncMock(return_value=rules_result)
-    return session
+from tests.unit.error_tracking._factories import GROUP_ID as _GROUP_ID
+from tests.unit.error_tracking._factories import ORG_ID as _ORG_ID
+from tests.unit.error_tracking._factories import make_rule as _make_rule
+from tests.unit.error_tracking._factories import session_with_rules as _session_with_rules
 
 
 class TestCooldownKeyFormat:

@@ -55,47 +55,47 @@ class TestCatchAllMiddleware:
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_returns_500_on_unhandled_exception(self, mock_ingest: Any) -> None:
         app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/crash")
-        assert resp.status_code == 500
-        body = resp.json()
-        assert body["type"] == "urn:problem:modulo:internal_error"
-        assert body["title"] == "Internal Error"
-        assert body["status"] == 500
+        with TestClient(app) as client:
+            resp = client.get("/crash")
+            assert resp.status_code == 500
+            body = resp.json()
+            assert body["type"] == "urn:problem:modulo:internal_error"
+            assert body["title"] == "Internal Error"
+            assert body["status"] == 500
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_healthy_route_passes_through(self, mock_ingest: Any) -> None:
         app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/test")
-        assert resp.status_code == 200
-        assert resp.json() == {"ok": "yes"}
+        with TestClient(app) as client:
+            resp = client.get("/test")
+            assert resp.status_code == 200
+            assert resp.json() == {"ok": "yes"}
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_calls_ingest_on_error(self, mock_ingest: Any) -> None:
         app = _make_app()
-        client = TestClient(app)
-        client.get("/crash")
-        mock_ingest.assert_awaited_once()
+        with TestClient(app) as client:
+            client.get("/crash")
+            mock_ingest.assert_awaited_once()
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_crash_in_ingest_does_not_crash_response(self, mock_ingest: Any) -> None:
         mock_ingest.side_effect = RuntimeError("ingest crashed too")
         app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/crash")
-        assert resp.status_code == 500
+        with TestClient(app) as client:
+            resp = client.get("/crash")
+            assert resp.status_code == 500
 
     @patch("modulo.api.middleware.catch_all._ingest_unhandled_error")
     def test_ingest_receives_request_context(self, mock_ingest: Any) -> None:
         app = _make_app()
-        client = TestClient(app)
-        resp = client.get("/crash")
-        assert resp.status_code == 500
-        mock_ingest.assert_awaited_once()
-        request = mock_ingest.await_args.args[0]
-        assert request.method == "GET"
-        assert request.url.path == "/crash"
+        with TestClient(app) as client:
+            resp = client.get("/crash")
+            assert resp.status_code == 500
+            mock_ingest.assert_awaited_once()
+            request = mock_ingest.await_args.args[0]
+            assert request.method == "GET"
+            assert request.url.path == "/crash"
 
 
 # =========================================================================

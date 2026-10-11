@@ -82,7 +82,8 @@ def _clear_rate_limit_state():
 
 @pytest.fixture
 def client():
-    return TestClient(_make_app())
+    with TestClient(_make_app()) as c:
+        yield c
 
 
 class TestPublicIngestEndpoint:
