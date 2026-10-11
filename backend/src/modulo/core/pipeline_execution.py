@@ -41,28 +41,44 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionma
 # FAR-1649: the ``PHASE_*`` label values themselves live in the
 # dependency-free leaf ``modulo.core.dispatch_phases``. They moved there so
 # ``cron_helpers`` / ``run_admission`` can branch on them without importing
-# THIS module, which reaches langgraph at module level. This import IS the
-# re-export: every ``pipeline_execution.PHASE_*`` name keeps resolving here
-# for every existing importer (saq_worker, executor, tests) while the values
-# have ONE definition. The ``noqa: F401`` lines are names this module itself
-# never references but other modules historically import from HERE.
+# THIS module, which reaches langgraph at module level. Every
+# ``pipeline_execution.PHASE_*`` name keeps resolving here for every existing
+# importer (saq_worker, executor, tests) while the values have ONE
+# definition — exported EXPLICITLY via ``__all__`` below, because this
+# package's mypy config disables implicit re-exports (a plain
+# ``from ... import`` is not an export under ``no_implicit_reexport``).
 from modulo.core.dispatch_phases import (
-    PHASE_CAPACITY_CHECK,  # noqa: F401  (re-export)
+    PHASE_CAPACITY_CHECK,
     PHASE_CLAIMED,
-    PHASE_EXECUTOR_RUNNING,  # noqa: F401  (re-export)
+    PHASE_EXECUTOR_RUNNING,
     PHASE_FIRST_NODE_DISPATCHED,
-    PHASE_GRAPH_COMPILE,  # noqa: F401  (re-export)
-    PHASE_INIT_ENV,  # noqa: F401  (re-export)
-    PHASE_LOADING_CONTEXT,  # noqa: F401  (re-export)
+    PHASE_GRAPH_COMPILE,
+    PHASE_INIT_ENV,
+    PHASE_LOADING_CONTEXT,
     PHASE_LOADING_SETUP,
     PHASE_NOT_STARTED,
     PHASE_SETUP_COMPLETE,
-    PHASE_SPEND_CHECK,  # noqa: F401  (re-export)
+    PHASE_SPEND_CHECK,
     PHASE_STREAMING,
 )
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
+
+__all__ = [
+    "PHASE_CAPACITY_CHECK",
+    "PHASE_CLAIMED",
+    "PHASE_EXECUTOR_RUNNING",
+    "PHASE_FIRST_NODE_DISPATCHED",
+    "PHASE_GRAPH_COMPILE",
+    "PHASE_INIT_ENV",
+    "PHASE_LOADING_CONTEXT",
+    "PHASE_LOADING_SETUP",
+    "PHASE_NOT_STARTED",
+    "PHASE_SETUP_COMPLETE",
+    "PHASE_SPEND_CHECK",
+    "PHASE_STREAMING",
+]
 
 _log = logging.getLogger(__name__)
 
