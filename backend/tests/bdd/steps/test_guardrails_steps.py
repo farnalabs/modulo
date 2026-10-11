@@ -38,6 +38,7 @@ from modulo.db.models.environment_profile import EnvironmentProfile
 from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.models.evidence import Evidence
 from modulo.db.models.journey import Journey
 from modulo.db.models.organisation import Organisation
 from modulo.db.models.pipeline import Pipeline
@@ -237,6 +238,7 @@ _TABLES: list[Table] = cast(
         Journey.__table__,
         EvalDefinitionRow.__table__,
         EvalResult.__table__,
+        Evidence.__table__,
         Eval.__table__,
         AuditEvent.__table__,
         AuditChainHead.__table__,

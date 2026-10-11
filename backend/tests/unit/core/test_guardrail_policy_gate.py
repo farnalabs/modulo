@@ -533,10 +533,14 @@ class TestUndefinedResolution:
 # F2 — evidence-write authorisation (unit half)
 #
 # RESIDUAL (FAR-1107 chunk 8, F3): ``assert_guardrail_evidence_write_authorised``
-# was removed because no production code path writes Evidence rows
-# (``connector_*`` / ``capability_*`` keys) to the Evidence table.  The
-# closest seam is ``_persist_guardrail_eval_results`` in ``db/crud/run.py``,
-# which writes ``EvalResult`` rows — not Evidence rows.  Chunk 7's dormancy
-# is NOT lifted by this chunk; the owning chunk for the first evidence-write
-# call site is TBD.
+# was removed because no production code path wrote Evidence rows to the
+# Evidence table.  RESOLVED (FAR-1293): the first production evidence write
+# landed on ``_persist_guardrail_eval_results`` in ``db/crud/run.py`` — each
+# guardrail eval decision appends an ``eval_guardrail_<eval_id>`` fact
+# (producer ``eval``, subject ``run``) through
+# ``core/eval_engine/evidence_layer.append_evidence``, which enforces the
+# key-namespace ownership check before any row is added.  Acceptance coverage
+# for that write path (namespaced key, fail-closed refusal of an unowned
+# namespace, and the production wiring itself) lives in
+# ``tests/unit/db/test_evidence_first_producer.py``.
 # ---------------------------------------------------------------------------

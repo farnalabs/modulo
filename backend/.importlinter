@@ -122,6 +122,15 @@ ignore_imports =
     # core.
     modulo.db.crud.run -> modulo.core.guardrails
     modulo.db.crud.run -> modulo.core.eval_engine
+    # FAR-1293 — the evidence store's first production producer: the guardrail
+    # persist seam (db.crud.run._persist_guardrail_eval_results) appends one
+    # Evidence fact per guardrail eval decision via
+    # core.eval_engine.evidence_layer.append_evidence, the store's single
+    # write path (it enforces the key-namespace ownership check before any
+    # row is added). Same narrow cross-boundary category as the FAR-208
+    # guardrail seam above: db.crud.run only invokes the write helper; all
+    # evidence-layer semantics stay in core.
+    modulo.db.crud.run -> modulo.core.eval_engine.evidence_layer
     # FAR-967 chunk 10 — run-start verification loads policy-gate pins from
     # the snapshot, recomputes the fingerprint, and applies the operator
     # control (enabled/disabled re-check); same cross-boundary category as

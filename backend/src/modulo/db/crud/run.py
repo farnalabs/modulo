@@ -1855,6 +1855,11 @@ async def _persist_guardrail_eval_results(
     detail is count-only / pattern-descriptive — never raw payload (item 7
     no-raw-persist). Observe-mode guardrails stamp observed=True so the
     guardrail_summary observed bucket is counted exactly once.
+
+    Also appends one generic Evidence fact per decision (FAR-1293 — the
+    evidence store's first production producer), routed through
+    ``append_evidence`` so the key-namespace ownership check runs before any
+    row is added.
     """
     from modulo.db.models.eval_definition import EvalDefinition as _EvalDefinitionModel
     from modulo.db.models.eval_result import EvalResult as EvalResultModel
@@ -1889,6 +1894,34 @@ async def _persist_guardrail_eval_results(
                 detail=(gr.detail or "")[:2000],
                 observed=guardrail_observed_by_eval.get(gr.eval_id, False),
             )
+        )
+
+    # FAR-1293 — the append-only evidence store's FIRST production write: one
+    # fact per guardrail/eval decision. Key ``eval_guardrail_<eval_id>`` sits
+    # inside the ``eval`` producer's owned ``eval_`` namespace, and the write
+    # routes through ``append_evidence`` -> ``assert_write_authorisation``, so
+    # an unowned namespace is refused (EvidenceWriteAuthorisationError
+    # propagates out of create_run and aborts the run's transaction — the
+    # refusal fails CLOSED, never a silently-dropped or unauthorised fact).
+    # Subject is the run, so ``fetch("run", str(run_id), org)`` returns every
+    # guardrail decision recorded for that run. Deferred import (like every
+    # other core import in this module); the narrow
+    # ``db.crud.run -> core.eval_engine.evidence_layer`` edge carries its own
+    # ``db-does-not-import-core`` exemption entry — same cross-boundary
+    # category as the existing FAR-208 ``db.crud.run -> core.eval_engine``
+    # guardrail seam this write hangs off.
+    from modulo.core.eval_engine.evidence_layer import append_evidence
+
+    for gr in guardrail_results:
+        append_evidence(
+            session,
+            organisation_id=org_id,
+            key=f"eval_guardrail_{gr.eval_id}",
+            subject_type="run",
+            subject_id=str(run_id),
+            value=gr.passed,
+            producer_type="eval",
+            producer_id=gr.eval_id,
         )
 
 
