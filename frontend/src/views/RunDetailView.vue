@@ -347,6 +347,40 @@
         <pre class="text-xs whitespace-pre-wrap font-mono text-destructive/80">{{ run.error_detail }}</pre>
       </div>
 
+      <!-- FAR-704: deadline-kill / cancellation triage evidence retained from
+           the sandbox attempt (raw-output marker store). Rendered whenever the
+           run detail carries triage entries — typically a node-deadline
+           watchdog kill, where no node envelope exists to show instead. -->
+      <div
+        v-if="deadlineTriageEntries.length > 0"
+        data-testid="run-detail-deadline-triage"
+        class="rounded-lg border border-border bg-muted/40 p-4 mb-4"
+      >
+        <h3 class="text-sm font-semibold mb-1">{{ $t('views.RunDetailView.deadline_triage_title') }}</h3>
+        <p class="text-xs text-muted-foreground mb-3">{{ $t('views.RunDetailView.deadline_triage_help') }}</p>
+        <div
+          v-for="(entry, entryIndex) in deadlineTriageEntries"
+          :key="entry.attempt_key ?? entry.node_id ?? String(entryIndex)"
+          data-testid="run-detail-deadline-triage-entry"
+          class="rounded border bg-card p-3 mb-2 last:mb-0"
+        >
+          <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="font-mono font-semibold">{{ entry.node_id }}</span>
+            <span v-if="entry.attempt_key" class="font-mono text-muted-foreground">{{ entry.attempt_key }}</span>
+            <span v-if="entry.delivery_done" class="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning-text">{{ $t('views.RunDetailView.deadline_triage_delivery_done') }}</span>
+          </div>
+          <p v-if="entry.no_output_reason" class="mt-1 text-xs whitespace-pre-wrap">{{ entry.no_output_reason }}</p>
+          <details v-if="entry.sandbox_log_tail" class="mt-2">
+            <summary class="cursor-pointer text-xs text-muted-foreground">{{ $t('views.RunDetailView.deadline_triage_log_tail') }}</summary>
+            <pre class="mt-1 text-xs whitespace-pre-wrap font-mono">{{ entry.sandbox_log_tail }}</pre>
+          </details>
+          <details v-if="entry.raw_output_tail" class="mt-2">
+            <summary class="cursor-pointer text-xs text-muted-foreground">{{ $t('views.RunDetailView.deadline_triage_output_tail') }}</summary>
+            <pre class="mt-1 text-xs whitespace-pre-wrap font-mono">{{ entry.raw_output_tail }}</pre>
+          </details>
+        </div>
+      </div>
+
       <!-- Cancellation reason (FAR-1233): WHY this run was cancelled.
            Rendered for every cancelled run — the reason itself degrades to a
            neutral "not recorded" message when the run predates the
@@ -909,6 +943,10 @@ type RunResponse = components['schemas']['RunResponse'] & {
   work_item_refs?: WorkItemRef[] | null
   child_runs?: ChildRunRef[] | null
   capacity?: RunCapacity | null
+  // FAR-704: node-deadline / cancellation triage evidence projected from the
+  // raw-output retention markers (generated schema not yet regenerated —
+  // declared locally like work_item_refs until the next types refresh).
+  deadline_triage?: DeadlineTriageEntry[] | null
 }
 type RunIOResponse = components['schemas']['RunIOResponse']
 
@@ -932,6 +970,20 @@ interface ChildRunRef {
   run_number?: number | null
   status?: string
   pipeline_name?: string | null
+}
+
+// FAR-704: one cancelled sandbox attempt's retained triage evidence
+// (RunResponse.deadline_triage). All strings arrive pre-redacted from the
+// backend marker store.
+interface DeadlineTriageEntry {
+  node_id?: string | null
+  attempt_key?: string | null
+  no_output_reason?: string | null
+  sandbox_log_tail?: string | null
+  raw_output_tail?: string | null
+  stdout_length?: number | null
+  stderr_length?: number | null
+  delivery_done?: boolean
 }
 
 interface CostBreakdownEntry {
@@ -1630,6 +1682,14 @@ const cancelledByLabel = computed(() => {
   if (!by) return ''
   if (by === 'system') return t('views.RunDetailView.cancelled_by_system')
   return t('views.RunDetailView.cancelled_by_actor', { actor: shortId(by) })
+})
+
+// FAR-704: deadline-kill / cancellation triage entries (RunResponse
+// .deadline_triage). Defensive: a non-array value (malformed response)
+// degrades to an empty list so the panel simply does not render.
+const deadlineTriageEntries = computed<DeadlineTriageEntry[]>(() => {
+  const entries = run.value?.deadline_triage
+  return Array.isArray(entries) ? (entries as DeadlineTriageEntry[]) : []
 })
 
 function nodeStatusBadgeClass(node: NodeEntry): string {

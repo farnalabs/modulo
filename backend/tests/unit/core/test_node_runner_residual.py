@@ -3257,6 +3257,110 @@ async def test_sandbox_cancellation_final_drain_failure_is_isolated(caplog):
     assert any("cancel_retention_drain_failed" in m for m in caplog.messages)
 
 
+async def test_sandbox_cancellation_retains_deadline_triage_marker():
+    """FAR-704: a cancelled sandbox attempt with NO delivery sentinel still
+    retains a triage marker (deadline_triage=True, no_output_reason, redacted
+    log tail + output tail) — the only post-hoc record of a node-deadline
+    watchdog kill, where the dispatch is cancelled before output.json is read
+    and no node envelope reaches the Agent Return Contract columns."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=13))
+    sandbox.files.read = AsyncMock(return_value="partial work\n")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(return_value="agent.log: e2b endAt reached")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert marker.get("delivery_done") is not True  # no sentinel drained
+    assert marker["status"] == "failed"
+    assert "agent.log: e2b endAt reached" in marker["sandbox_log_tail"]
+    assert marker["no_output_reason"]
+    assert "partial work" in marker["raw_output"]
+    assert marker["stdout_length"] == len("partial work\n")
+    # The marker rides the dedicated attempt_key-keyed retention store —
+    # NEVER outputs_json / node_telemetry_json (Agent Return Contract).
+    assert "outputs_json" not in marker
+    assert "node_telemetry_json" not in marker
+
+
+async def test_sandbox_cancellation_triage_marker_stamps_delivery_done_for_sentinel():
+    """FAR-704 + FAR-228: when the sentinel WAS drained, the SAME always-written
+    triage marker carries delivery_done=True (monotone merge preserves it)."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def(delivery_sentinel="ALL DONE"))
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=14))
+    sandbox.files.read = AsyncMock(return_value="work\nALL DONE\n")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(return_value="")),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert marker["delivery_done"] is True
+
+
+async def test_sandbox_cancellation_log_tail_fetch_failure_does_not_block_marker(caplog):
+    """FAR-704: a failing log-tail probe degrades to an empty tail — the triage
+    marker is still persisted, then the original cancellation re-raises."""
+    fn = make_sandbox_agent_fn(_sandbox_node_def())
+    handle = MagicMock()
+    handle.wait = AsyncMock(side_effect=asyncio.CancelledError)
+    sandbox = MagicMock()
+    sandbox.files.write = AsyncMock()
+    sandbox.files.get_info = AsyncMock(return_value=MagicMock(size=1))
+    sandbox.files.read = AsyncMock(return_value="x")
+    sandbox.commands.run = AsyncMock(return_value=handle)
+    sandbox.kill = AsyncMock()
+    captured: dict[str, Any] = {}
+
+    async def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    with (
+        patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
+        patch.object(nr, "_sandbox_cancel_retention_persist", new=AsyncMock(side_effect=_capture)),
+        patch.object(nr, "_read_log_tail_via_provider", new=AsyncMock(side_effect=RuntimeError("logs down"))),
+        caplog.at_level(logging.ERROR, logger="modulo.core.pipeline_engine.node_runner"),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await fn(_run_state())
+    assert any("cancel_log_tail_fetch_failed" in m for m in caplog.messages)
+    marker = captured.get("marker")
+    assert isinstance(marker, dict)
+    assert marker["deadline_triage"] is True
+    assert not marker["sandbox_log_tail"]
+
+
 async def test_sandbox_success_delivery_marker_persist_reraises_cancellation():
     fn = make_sandbox_agent_fn(_sandbox_node_def(delivery_sentinel="ALL DONE"))
     cmd_result = MagicMock()

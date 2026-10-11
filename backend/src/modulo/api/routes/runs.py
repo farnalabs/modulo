@@ -323,6 +323,76 @@ async def _do_get_workspace_inputs(
         return None
 
 
+# FAR-704: display-side bounds for the triage tails. The stored marker's
+# raw_output is capped at the node's retention cap (up to 512 KB) and the
+# log tail at 6 KB — a run-detail response must carry a bounded display
+# slice, never the full retained blob.
+_TRIAGE_RAW_OUTPUT_TAIL_CHARS = 4000
+_TRIAGE_LOG_TAIL_CHARS = 6000
+
+
+def _deadline_triage_from_markers(markers: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Project cancellation/deadline-kill triage markers for the run detail (FAR-704).
+
+    Only markers carrying the ``deadline_triage is True`` signature are
+    surfaced; every other raw-output marker (delivery-done, no-parseable
+    output, stall) is ignored here. String fields are truncated to bounded
+    display tails (the retained marker stays authoritative in the store).
+    Sorted by attempt_key for a deterministic response order.
+    """
+    if not isinstance(markers, dict):
+        return []
+    entries: list[dict[str, Any]] = []
+    for attempt_key in sorted(k for k in markers if isinstance(k, str)):
+        marker = markers[attempt_key]
+        if not isinstance(marker, dict) or marker.get("deadline_triage") is not True:
+            continue
+        raw_output = str(marker.get("raw_output") or "")
+        log_tail = str(marker.get("sandbox_log_tail") or "")
+        entries.append(
+            {
+                "node_id": marker.get("node_id"),
+                "attempt_key": attempt_key,
+                "no_output_reason": marker.get("no_output_reason"),
+                "sandbox_log_tail": log_tail[-_TRIAGE_LOG_TAIL_CHARS:] if log_tail else "",
+                "raw_output_tail": raw_output[-_TRIAGE_RAW_OUTPUT_TAIL_CHARS:] if raw_output else "",
+                "stdout_length": marker.get("stdout_length"),
+                "stderr_length": marker.get("stderr_length"),
+                "delivery_done": marker.get("delivery_done") is True,
+            }
+        )
+    return entries
+
+
+async def _do_get_deadline_triage(
+    factory: async_sessionmaker[AsyncSession],
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[dict[str, Any]] | None:
+    """Load the run's deadline-kill triage evidence (FAR-704).
+
+    Reads the run's raw-output retention markers through the repo reader and
+    projects the ``deadline_triage``-signed ones. Best-effort like
+    ``_do_get_workspace_inputs``: a DB failure degrades to None (the run
+    response is valid without triage evidence); empty list when the run has
+    no triage markers.
+    """
+    try:
+        async with factory() as session, session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+            return _deadline_triage_from_markers(markers)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "runs.deadline_triage_unavailable",
+            extra={"run_id": str(run_id)},
+            exc_info=True,
+        )
+        return None
+
+
 def _select_trigger_actor(
     run: Run,
     account_labels: dict[uuid.UUID, str],
@@ -855,6 +925,15 @@ class RunResponse(BaseModel):
     # resolved/final SHAs — never credentials.  Absent when no workspace
     # inputs were configured for this run.
     workspace_inputs: list[dict[str, Any]] | None = None
+    # FAR-704: node-deadline / cancellation triage evidence, projected from
+    # the FAR-188 raw-output retention markers (run_node_outputs keyed by
+    # attempt_key) that carry the ``deadline_triage`` signature. Each entry
+    # carries the redacted output tail, the sandbox log tail, and the
+    # no_output_reason, so a deadline kill (error_code
+    # node_deadline_exceeded) is triageable from the run page even though no
+    # node envelope reached the Agent Return Contract columns. Empty list
+    # when the run has no such marker; None on a failed read.
+    deadline_triage: list[dict[str, Any]] | None = None
 
 
 async def _run_gate_fired(session: AsyncSession, run: Any) -> bool:
@@ -946,6 +1025,7 @@ def _build_run_response(
     *,
     gate_fired: bool = False,
     workspace_inputs: list[dict[str, Any]] | None = None,
+    deadline_triage: list[dict[str, Any]] | None = None,
 ) -> RunResponse:
     """Build a RunResponse from a Run ORM entity, populating derived fields.
 
@@ -1045,6 +1125,7 @@ def _build_run_response(
         warnings=compute_run_warnings(run.cost_breakdown),
         input_payload=input_payload,
         workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
     )
 
 
@@ -1639,6 +1720,7 @@ async def get_run_status(
             lambda: _do_get_run_observability(factory, principal, run)
         )
         workspace_inputs = await _run_with_retry(lambda: _do_get_workspace_inputs(factory, principal, run_id))
+        deadline_triage = await _run_with_retry(lambda: _do_get_deadline_triage(factory, principal, run_id))
     except IntegrityError:
         _log.exception(_CODE_RUNS_GET_RUN_STATUS)
         raise HTTPException(
@@ -1688,6 +1770,7 @@ async def get_run_status(
         ),
         gate_fired=gate_fired,
         workspace_inputs=workspace_inputs,
+        deadline_triage=deadline_triage,
     )
 
 

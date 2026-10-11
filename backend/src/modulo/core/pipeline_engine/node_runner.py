@@ -9719,6 +9719,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
     # instead of raising UnboundLocalError that replaces the cancellation.
     _drain_fn: Any = None
     _drained_chunks: list[str] = []
+    # FAR-704: the cancellation-triage marker (below, in the CancelledError
+    # handler) reads the idle-watchdog stall reason so a stall kill's
+    # no_output_reason carries it. Pre-bound at function scope for the same
+    # reason as _drain_fn: a cancellation during provisioning must not hit
+    # UnboundLocalError inside the handler (the inner try re-assigns it
+    # when the dispatch gets far enough to resolve the stall detector).
+    stall_reason: str | None = None
     # FAR-211: the local loop-interception callback server, started when the
     # node's loop_intercept config is enabled AND the pipeline has bound
     # guardrails. Pre-bound at function scope so the finally-block teardown
@@ -10592,7 +10599,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # Track the last time the agent emitted output so the idle
             # watchdog can fail fast on stalls (FAR-97). The callbacks run
             # from the SDK's event task and may be async or sync.
-            stall_reason: str | None = None
+            stall_reason = None
 
             # FAR-98: stall_timeout_seconds (node config) overrides the idle
             # watchdog's silence window. Resolve the DEFAULT at runtime so
@@ -11740,44 +11747,100 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     "sandbox_agent.cancel_retention_drain_failed",
                     extra={"node_id": node_id, "run_id": run_id},
                 )
+        # FAR-704: retain cancellation TRIAGE evidence whenever a sandbox
+        # existed. The absolute node-deadline watchdog (pipeline_execution)
+        # cancels this dispatch before output.json is ever read, so no node
+        # envelope reaches run_node_outputs — without this marker the run
+        # detail carries nodes:[] and Mode 2 (healthy agent killed at E2B
+        # endAt) vs Mode 3 (provider op-timeout) cannot be told apart
+        # post-hoc. The marker is the dedicated attempt_key-keyed retention
+        # store (FAR-188); it NEVER rides outputs_json / node_telemetry_json
+        # (the Agent Return Contract columns). The FAR-228 delivery_done
+        # stamp rides the SAME marker when the sentinel was drained (the
+        # marker merge is monotone — a later retry never unsets it).
+        if sandbox is not None:
             _drained_tail = "".join(_drained_chunks)
-            if delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel):
-                _cancel_marker: dict[str, Any] = {
-                    "_modulo_marker": True,
-                    "status": "failed",
-                    "summary": (
-                        "Sandbox agent cancelled after delivery sentinel observed — "
-                        "delivery_done retained (idempotency gate)"
+            # The E2B kill reason only lives in the sandbox logs, and the
+            # logs endpoint only serves live sandboxes — fetch the tail
+            # BEFORE the finally-block kill, while the sandbox may still be
+            # alive (FAR-97/FAR-197 observability, mirrored here). Guarded +
+            # bounded + cancel-safe: a nested cancel or any error degrades
+            # to an empty tail, never blocks the marker write or the
+            # original cancellation's re-raise.
+            _cancel_log_tail = ""
+            try:
+                _cancel_log_tail = await asyncio.wait_for(
+                    asyncio.shield(
+                        _read_log_tail_via_provider(
+                            _sandbox_id,
+                            max_bytes=6000,
+                            provider_type=_resolved_provider,
+                            borrowed_provider=_dispatch_provider,
+                        )
                     ),
-                    "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
-                    "parse_error": "",
-                    "pr_url": _extract_pr_url(_drained_tail),
-                    "exit_code": -1,
-                    "stdout_length": len(_drained_tail),
-                    "stderr_length": 0,
-                    "attempt_key": attempt_key,
-                    "node_id": node_id,
-                    "delivery_done": True,
-                }
-                try:
-                    await _sandbox_cancel_retention_persist(
-                        session_factory=session_factory,
-                        run_id=run_id,
-                        org_id=org_id,
-                        node_id=node_id,
-                        attempt_key=attempt_key,
-                        marker=_cancel_marker,
-                    )
-                # Nested cancellation here is deliberate — idempotency-gate cleanup
-                # must not re-raise early or the delivery-done marker is skipped
-                # (FAR-228 fix); the original cancellation re-raises at line 4566.
-                except asyncio.CancelledError:  # NOSONAR
-                    _uncancel_current_task()
-                except Exception:
-                    _log.exception(
-                        "sandbox_agent.cancel_retention_persist_failed",
-                        extra={"node_id": node_id, "run_id": run_id},
-                    )
+                    timeout=_IDEMPOTENCY_GATE_CANCEL_PERSIST_TIMEOUT,
+                )
+            # Nested cancellation is deliberate — the triage marker must
+            # still be written; the original cancellation re-raises below.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_log_tail_fetch_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
+            _cancel_sentinel_hit = bool(
+                delivery_sentinel and _source_contains_delivery_sentinel(_drained_tail, delivery_sentinel)
+            )
+            _cancel_no_output_reason = (
+                stall_reason
+                or "Sandbox attempt cancelled before a terminal node envelope was produced "
+                "(node-deadline watchdog, run cancel, or worker shutdown)"
+            )
+            _cancel_marker: dict[str, Any] = {
+                "_modulo_marker": True,
+                "status": "failed",
+                "summary": (
+                    "Sandbox agent cancelled after delivery sentinel observed — "
+                    "delivery_done retained (idempotency gate)"
+                    if _cancel_sentinel_hit
+                    else "Sandbox agent cancelled — triage evidence retained (FAR-704)"
+                ),
+                "raw_output": _redact_raw_output(_drained_tail)[:_stdout_cap],
+                "parse_error": "",
+                "pr_url": _extract_pr_url(_drained_tail),
+                "exit_code": -1,
+                "stdout_length": len(_drained_tail),
+                "stderr_length": 0,
+                "attempt_key": attempt_key,
+                "node_id": node_id,
+                # FAR-704 triage surface: the run detail API projects markers
+                # carrying this flag into RunResponse.deadline_triage.
+                "deadline_triage": True,
+                "no_output_reason": sanitize_error_text(_cancel_no_output_reason),
+                "sandbox_log_tail": sanitize_error_text(_redact_raw_output(_cancel_log_tail)),
+            }
+            if _cancel_sentinel_hit:
+                _cancel_marker["delivery_done"] = True
+            try:
+                await _sandbox_cancel_retention_persist(
+                    session_factory=session_factory,
+                    run_id=run_id,
+                    org_id=org_id,
+                    node_id=node_id,
+                    attempt_key=attempt_key,
+                    marker=_cancel_marker,
+                )
+            # Nested cancellation here is deliberate — idempotency-gate cleanup
+            # must not re-raise early or the delivery-done marker is skipped
+            # (FAR-228 fix); the original cancellation re-raises at line 4566.
+            except asyncio.CancelledError:  # NOSONAR
+                _uncancel_current_task()
+            except Exception:
+                _log.exception(
+                    "sandbox_agent.cancel_retention_persist_failed",
+                    extra={"node_id": node_id, "run_id": run_id},
+                )
         raise
     except (SupersededNodeError, SandboxNodeFailedError, ScriptModeError):
         # A6: the retryable/superseded node-failure classes propagate to the

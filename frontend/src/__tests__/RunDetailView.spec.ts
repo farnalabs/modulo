@@ -16,6 +16,7 @@ let mockHeartbeatAt: string | null = null
 let mockWorkItemRefs: unknown = null
 let mockChildRuns: unknown = null
 let mockCapacity: unknown = null
+let mockDeadlineTriage: unknown = null
 let mockPendingGates: Array<Record<string, unknown>> = []
 let mockWorkspaceLease: Record<string, unknown> | null = null
 let mockNodeLabels: Record<string, string> | null = null
@@ -83,6 +84,7 @@ vi.mock('../lib/api/client', () => {
               work_item_refs: mockWorkItemRefs,
               child_runs: mockChildRuns,
               capacity: mockCapacity,
+              deadline_triage: mockDeadlineTriage,
             },
             error: undefined
           })
@@ -191,6 +193,7 @@ describe('RunDetailView', () => {
     mockWorkItemRefs = null
     mockChildRuns = null
     mockCapacity = null
+    mockDeadlineTriage = null
     mockPendingGates = []
     mockWorkspaceLease = null
     mockNodeLabels = null
@@ -232,6 +235,49 @@ describe('RunDetailView', () => {
     await flushPromises()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Run Detail')
+    wrapper.unmount()
+  })
+
+  it('renders deadline-kill triage evidence when the run detail carries it (FAR-704)', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    mockDeadlineTriage = [
+      {
+        node_id: 'n1',
+        attempt_key: 'run:r1:node:n1:1',
+        no_output_reason: 'node-deadline watchdog',
+        sandbox_log_tail: 'agent.log: e2b endAt reached',
+        raw_output_tail: 'partial agent output',
+        stdout_length: 20,
+        stderr_length: 0,
+        delivery_done: false,
+      },
+    ]
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    const panel = wrapper.find('[data-testid="run-detail-deadline-triage"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('n1')
+    expect(panel.text()).toContain('node-deadline watchdog')
+    expect(panel.text()).toContain('agent.log: e2b endAt reached')
+    const entry = wrapper.find('[data-testid="run-detail-deadline-triage-entry"]')
+    expect(entry.exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('does not render the triage panel when the run has no triage entries', async () => {
+    mockRunStatus = 'failed'
+    mockErrorCode = 'node_deadline_exceeded'
+    mockDeadlineTriage = null
+    router.push('/runs/test-run-id')
+    await router.isReady()
+    const wrapper = createWrapper()
+    await nextTick()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="run-detail-deadline-triage"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

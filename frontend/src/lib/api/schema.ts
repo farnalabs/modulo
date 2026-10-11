@@ -17692,6 +17692,10 @@ export interface components {
             workspace_inputs?: {
                 [key: string]: unknown;
             }[] | null;
+            /** Deadline Triage */
+            deadline_triage?: {
+                [key: string]: unknown;
+            }[] | null;
         };
         /** RunSummary */
         RunSummary: {

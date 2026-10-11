@@ -3231,3 +3231,152 @@ def test_get_run_status_includes_workspace_inputs(client: TestClient) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["workspace_inputs"] == inputs
+
+
+# ---------------------------------------------------------------------------
+# FAR-704: deadline-kill triage evidence (_deadline_triage_from_markers /
+# _do_get_deadline_triage / run-detail surfacing)
+# ---------------------------------------------------------------------------
+
+
+def test_deadline_triage_from_markers_projects_signed_markers_only() -> None:
+    """Only markers carrying ``deadline_triage is True`` are surfaced; other
+    raw-output markers (delivery-done, no-parseable-output) are ignored."""
+    markers = {
+        "run:r1:node:n1:1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "no_output_reason": "node-deadline watchdog",
+            "sandbox_log_tail": "agent.log tail",
+            "raw_output": "partial output",
+            "stdout_length": 14,
+            "stderr_length": 0,
+            "delivery_done": False,
+        },
+        "run:r1:node:n2:1": {
+            # delivery-done marker without the triage signature — ignored
+            "_modulo_marker": True,
+            "delivery_done": True,
+            "node_id": "n2",
+        },
+        "run:r1:node:n3:1": "not-a-dict",
+    }
+    entries = runs_module._deadline_triage_from_markers(markers)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["node_id"] == "n1"
+    assert entry["attempt_key"] == "run:r1:node:n1:1"
+    assert entry["no_output_reason"] == "node-deadline watchdog"
+    assert entry["sandbox_log_tail"] == "agent.log tail"
+    assert entry["raw_output_tail"] == "partial output"
+    assert entry["stdout_length"] == 14
+    assert entry["delivery_done"] is False
+
+
+def test_deadline_triage_from_markers_truncates_long_tails() -> None:
+    """The retained marker's raw_output can be up to 512KB — the run-detail
+    projection carries a bounded display slice, never the full blob."""
+    long_output = "x" * (runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS + 500)
+    markers = {
+        "k1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "raw_output": long_output,
+            "sandbox_log_tail": "",
+        }
+    }
+    entries = runs_module._deadline_triage_from_markers(markers)
+    assert len(entries) == 1
+    assert len(entries[0]["raw_output_tail"]) == runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS
+    assert entries[0]["raw_output_tail"] == "x" * runs_module._TRIAGE_RAW_OUTPUT_TAIL_CHARS
+    assert not entries[0]["sandbox_log_tail"]
+
+
+def test_deadline_triage_from_markers_none_or_empty() -> None:
+    assert not runs_module._deadline_triage_from_markers(None)
+    assert not runs_module._deadline_triage_from_markers({})
+
+
+async def test_do_get_deadline_triage_returns_entries() -> None:
+    markers = {
+        "run:r1:node:n1:1": {
+            "deadline_triage": True,
+            "node_id": "n1",
+            "no_output_reason": "cancelled",
+        }
+    }
+    session = _make_mock_session()
+
+    async def _markers(session: Any, *, run_id: Any, organisation_id: Any = None) -> Any:
+        return markers
+
+    factory = _factory_for(session)
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.runs.read_run_markers", new_callable=AsyncMock, side_effect=_markers),
+    ):
+        out = await runs_module._do_get_deadline_triage(factory, _principal(), _RUN_ID)
+    assert out is not None
+    assert len(out) == 1
+    assert out[0]["node_id"] == "n1"
+
+
+async def test_do_get_deadline_triage_none_on_db_error() -> None:
+    session = _make_mock_session()
+    factory = _factory_for(session)
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new_callable=AsyncMock),
+        patch(
+            "modulo.api.routes.runs.read_run_markers",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        assert await runs_module._do_get_deadline_triage(factory, _principal(), _RUN_ID) is None
+
+
+async def test_do_get_deadline_triage_propagates_cancelled() -> None:
+    import asyncio
+
+    session = _make_mock_session()
+    factory = _factory_for(session)
+    with (
+        patch(
+            "modulo.api.routes.runs.set_rls_org",
+            new_callable=AsyncMock,
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await runs_module._do_get_deadline_triage(factory, _principal(), _RUN_ID)
+
+
+def test_get_run_status_includes_deadline_triage(client: TestClient) -> None:
+    """FAR-704: the run-detail response surfaces the triage entries so a
+    node-deadline kill is triageable from the run page."""
+    run = _make_run(status="failed", error_code="node_deadline_exceeded")
+    entries = [
+        {
+            "node_id": "n1",
+            "attempt_key": "run:r1:node:n1:1",
+            "no_output_reason": "node-deadline watchdog",
+            "sandbox_log_tail": "agent.log tail",
+            "raw_output_tail": "partial",
+            "stdout_length": 7,
+            "stderr_length": 0,
+            "delivery_done": False,
+        }
+    ]
+    with (
+        patch("modulo.api.routes.runs._do_get_run", return_value=run),
+        patch(
+            "modulo.api.routes.runs._do_get_deadline_triage",
+            new_callable=AsyncMock,
+            return_value=entries,
+        ),
+        patch("modulo.api.routes.runs.set_rls_org"),
+    ):
+        resp = client.get(f"/api/v1/runs/{_RUN_ID}")
+
+    assert resp.status_code == 200
+    assert resp.json()["deadline_triage"] == entries
