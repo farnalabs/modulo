@@ -2,7 +2,7 @@
   <div :class="rootClass">
     <div class="min-w-0">
       <p v-if="isProblem">{{ problem!.title }}: {{ problem!.detail }}</p>
-      <p v-else>{{ message }}</p>
+      <p v-else-if="message">{{ message }}</p>
       <button type="button"
         v-if="onRetry && retryable !== false"
         class="ml-2 underline"

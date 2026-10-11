@@ -22,9 +22,11 @@
         <p class="mt-1 text-muted-foreground">{{ $t('views.OAuthConsentView.consent_description') }}</p>
       </div>
 
-      <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-        {{ error }}
-      </div>
+      <!--
+        Approval failure (error is only ever set by approve()): no auto-retry —
+        the in-place Approve button below is the retry path.
+      -->
+      <ErrorAlert v-if="error" :message="error" :retryable="false" />
 
       <div v-if="success" class="rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-sm">
         {{ $t('views.OAuthConsentView.approved_redirecting') }}
@@ -71,6 +73,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import { getAccessToken } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const route = useRoute()
 const router = useRouter()

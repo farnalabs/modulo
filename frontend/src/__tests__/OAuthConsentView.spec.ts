@@ -19,7 +19,10 @@ vi.mock('../lib/api/client', () => ({
   getAccessToken: (..._args: unknown[]) => mockGetAccessToken(),
 }))
 
-vi.mock('../lib/api/formatError', () => ({
+// Spread the real module so ErrorAlert's isProblemDetail (a formatError
+// import) stays available; only formatApiError is stubbed for message control.
+vi.mock('../lib/api/formatError', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/api/formatError')>()),
   formatApiError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }))
 
@@ -27,6 +30,7 @@ const origFetch = globalThis.fetch
 let fetchMock: ReturnType<typeof vi.fn>
 
 import OAuthConsentView from '../views/OAuthConsentView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('OAuthConsentView', () => {
   beforeEach(async () => {
@@ -239,6 +243,16 @@ describe('OAuthConsentView', () => {
     await nextTick()
 
     expect(wrapper.text()).toContain('Invalid state')
+
+    // FAR-1669 prove-the-fix: the approval-failure box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div also showed the message, so
+    // findComponent is what fails on a revert. No Retry (`:retryable="false"`):
+    // the in-place Approve button below is the retry path.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('message')).toBe('Invalid state')
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('approve shows error on network exception', async () => {
