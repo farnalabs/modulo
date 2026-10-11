@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
 
 const h = vi.hoisted(() => ({
   mockFetchUnreadCount: vi.fn(),
@@ -12,6 +13,8 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../lib/api/notifications', () => ({
   fetchUnreadCount: h.mockFetchUnreadCount,
+  fetchDashboardNotifications: vi.fn().mockResolvedValue({ notifications: [], total_unread: 0 }),
+  markAllNotificationsRead: vi.fn(),
 }))
 
 vi.mock('../lib/api/client', () => ({
@@ -71,7 +74,7 @@ function notificationEvent(overrides: Record<string, unknown> = {}): Record<stri
 }
 
 async function mountBell() {
-  const wrapper = mount(NotificationBell)
+  const wrapper = mount(NotificationBell, { global: { plugins: [createPinia()] } })
   await flushPromises()
   await nextTick()
   return wrapper
@@ -80,6 +83,7 @@ async function mountBell() {
 describe('NotificationBell (FAR-250)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    setActivePinia(createPinia())
     bannerFlag.value = false
     h.mockFetchUnreadCount.mockResolvedValue(3)
     h.mockApiGet.mockResolvedValue({
@@ -223,5 +227,72 @@ describe('NotificationBell (FAR-250)', () => {
     h.mockFetchUnreadCount.mockResolvedValue(0)
     const wrapper = await mountBell()
     expect(wrapper.find('[data-testid="notification-unread-badge"]').exists()).toBe(false)
+  })
+
+  // -------------------------------------------------------------------------
+  // FAR-249 — dropdown toggle
+  // -------------------------------------------------------------------------
+
+  it('toggles the dropdown from the bell button with aria-expanded in step', async () => {
+    const wrapper = await mountBell()
+    const button = wrapper.find('[data-testid="notification-bell-button"]')
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(false)
+    expect(button.attributes('aria-expanded')).toBe('false')
+    expect(button.attributes('aria-controls')).toBe('notification-dropdown')
+
+    await button.trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+    expect(button.attributes('aria-expanded')).toBe('true')
+
+    await button.trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(false)
+    expect(button.attributes('aria-expanded')).toBe('false')
+  })
+
+  it('exposes an aria-live region announcing the unread count', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(3)
+    const wrapper = await mountBell()
+    const live = wrapper.find('[data-testid="notification-unread-live"]')
+    expect(live.exists()).toBe(true)
+    expect(live.attributes('role')).toBe('status')
+    expect(live.attributes('aria-live')).toBe('polite')
+    // The visual badge is decorative — the live region carries the announcement.
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').attributes('aria-hidden')).toBe('true')
+  })
+
+  it('closes the dropdown on Escape', async () => {
+    const wrapper = await mountBell()
+    const button = wrapper.find('[data-testid="notification-bell-button"]')
+    await button.trigger('click')
+
+    await wrapper.find('[data-testid="notification-dropdown"]').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(false)
+  })
+
+  it('closes the dropdown when a click lands outside the bell', async () => {
+    const wrapper = await mountBell()
+    await wrapper.find('[data-testid="notification-bell-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+
+    const outside = document.createElement('div')
+    document.body.appendChild(outside)
+    outside.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(false)
+    outside.remove()
+  })
+
+  it('keeps the dropdown open when the click is inside the bell root', async () => {
+    const wrapper = await mountBell()
+    const button = wrapper.find('[data-testid="notification-bell-button"]')
+    await button.trigger('click')
+
+    // A click on the button itself must not immediately re-close via the
+    // document-level outside-click handler (toggle wins).
+    await button.trigger('click')
+    await button.trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
   })
 })

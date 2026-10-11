@@ -628,3 +628,124 @@ def test_identical_scope_duplicate_is_still_refused(tmp_path: Path) -> None:
         again = client.post(f"{_BASE}/{_LIVE_ID}/dismiss", json={"dismiss_scope": "self"})
         assert again.status_code == 400, again.text
         assert "already dismissed" in again.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-249 — dashboard limit Query param
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_limit_returns_requested_row_count(tmp_path: Path) -> None:
+    """``?limit=N`` drives how many live rows the dashboard returns."""
+    now = datetime.now(UTC)
+    notifications = [
+        _notification(
+            notification_id=uuid.UUID(f"00000000-0000-0000-0000-0000000000b{i}"),
+            expires_at=now + timedelta(hours=72),
+            title=f"row {i}",
+        )
+        for i in range(1, 5)
+    ]
+    with _notification_client(tmp_path, notifications=notifications) as (client, _actor):
+        assert len(_items(client.get(f"{_DASHBOARD_PATH}?limit=2"))) == 2
+        assert len(_items(client.get(f"{_DASHBOARD_PATH}?limit=4"))) == 4
+        # Default stays 5; more rows than the default still respect the ask.
+        assert len(_items(client.get(_DASHBOARD_PATH))) == 4
+
+
+def test_dashboard_limit_out_of_range_is_422_end_to_end(tmp_path: Path) -> None:
+    """The bound is enforced at the edge on the real route, not just in mocks."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live"),
+        ],
+    ) as (client, _actor):
+        assert client.get(f"{_DASHBOARD_PATH}?limit=0").status_code == 422
+        assert client.get(f"{_DASHBOARD_PATH}?limit=51").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# FAR-249 — mark-all-read
+# ---------------------------------------------------------------------------
+
+
+def test_mark_all_read_clears_the_unread_badge_and_active_inbox(tmp_path: Path) -> None:
+    """Mark-all-read is the bulk form of review-later: badge -> 0, active
+    inbox empty, rows retained under the dismissed_self history filter."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_TTL_ID, expires_at=now + timedelta(hours=72), title="live one"),
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live two"),
+        ],
+    ) as (client, _actor):
+        assert client.get(_UNREAD).json()["count"] == 2
+        assert len(_items(client.get(_ACTIVE))) == 2
+
+        resp = client.post(f"{_BASE}/mark-all-read")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"status": "marked_read", "marked": 2}
+
+        assert client.get(_UNREAD).json()["count"] == 0
+        assert not _ids(client.get(_ACTIVE))
+        assert not _ids(client.get(_DEFAULT_INBOX))
+        # Nothing is deleted — the rows are the caller's dismissed_self history.
+        assert set(_ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self"))) == {
+            str(_TTL_ID),
+            str(_LIVE_ID),
+        }
+
+
+def test_mark_all_read_skips_expired_rows(tmp_path: Path) -> None:
+    """An expired row is already out of every live view — it is not marked."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_TTL_ID, expires_at=now - timedelta(hours=1), title="expired"),
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live"),
+        ],
+    ) as (client, _actor):
+        resp = client.post(f"{_BASE}/mark-all-read")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["marked"] == 1
+
+        assert _ids(client.get(f"{_BASE}?page=1&page_size=20&status=dismissed_self")) == [str(_LIVE_ID)]
+
+
+def test_mark_all_read_is_per_user(tmp_path: Path) -> None:
+    """One user's mark-all-read never touches a sibling's unread state."""
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="shared org row"),
+        ],
+    ) as (client, actor):
+        assert client.post(f"{_BASE}/mark-all-read").json()["marked"] == 1
+
+        actor.account_id = _USER_B
+        actor.username = "user-b"
+        actor.org_role = "runner"
+        assert client.get(_UNREAD).json()["count"] == 1
+        assert len(_items(client.get(_ACTIVE))) == 1
+
+
+def test_mark_all_read_is_a_noop_when_already_clear(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live"),
+        ],
+    ) as (client, _actor):
+        first = client.post(f"{_BASE}/mark-all-read")
+        assert first.json()["marked"] == 1
+
+        # Already dismissed for this user: nothing left in the live view.
+        again = client.post(f"{_BASE}/mark-all-read")
+        assert again.status_code == 200, again.text
+        assert again.json()["marked"] == 0

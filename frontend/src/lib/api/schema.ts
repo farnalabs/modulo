@@ -8152,6 +8152,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/notifications/in-app/mark-all-read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark All Read Endpoint
+         * @description Mark every live notification in the caller's view as read (FAR-249).
+         *
+         *     Authz parity with the list/read routes: ``require_permission('notification.self')``
+         *     plus the same RLS org/user context. The write is strictly per-user — the
+         *     CRUD files ``dismiss_scope='self'`` rows for the calling account only, so
+         *     one user's mark-all-read never touches a sibling's unread state.
+         */
+        post: operations["mark_all_read_endpoint_api_v1_notifications_in_app_mark_all_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/notifications/in-app": {
         parameters: {
             query?: never;
@@ -14843,6 +14868,13 @@ export interface components {
         ManualPurgeRequest: {
             /** Older Than */
             older_than: string;
+        };
+        /** MarkAllReadResponse */
+        MarkAllReadResponse: {
+            /** Status */
+            status: string;
+            /** Marked */
+            marked: number;
         };
         /** McpConfigResponse */
         McpConfigResponse: {
@@ -38690,6 +38722,7 @@ export interface operations {
     get_dashboard_api_v1_notifications_in_app_dashboard_get: {
         parameters: {
             query?: {
+                limit?: number;
                 _fresh?: boolean;
             };
             header?: never;
@@ -38738,6 +38771,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_all_read_endpoint_api_v1_notifications_in_app_mark_all_read_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
                 };
             };
             /** @description Validation Error */

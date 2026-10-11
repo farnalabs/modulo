@@ -4251,7 +4251,17 @@ export default {
     "NotificationBell": {
       "notifications": "Notifications",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
-      "reconnect_action": "Reconnect"
+      "reconnect_action": "Reconnect",
+      "unread_count_status": "{count} unread notifications"
+    },
+    "NotificationDropdown": {
+      "title": "Notifications",
+      "mark_all_read": "Mark all as read",
+      "marking_all_read": "Marking…",
+      "marked_all_read_status": "All notifications marked as read",
+      "failed_to_mark_all_read": "Failed to mark all as read",
+      "no_notifications": "No notifications",
+      "view_all": "View all notifications"
     },
     "PageTabs": {
       "section_navigation": "Section navigation"

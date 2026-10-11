@@ -305,8 +305,16 @@ async def get_dashboard_notifications(
     min_level: str = "warning",
     limit: int = 5,
 ) -> list[Notification]:
+    """Return the live dashboard feed for one user (severity-filtered).
+
+    ``limit`` is defence in depth: the route validates it with
+    ``Query(ge=1, le=DASHBOARD_LIMIT_MAX)`` and answers 422 out of range, so
+    this clamp is only reachable by an internal caller. It clamps into the
+    valid range rather than resetting to the default — resetting silently
+    discarded the caller's intent (asking for 50 returned 5).
+    """
     if limit < 1 or limit > DASHBOARD_LIMIT_MAX:
-        limit = 5
+        limit = min(max(limit, 1), DASHBOARD_LIMIT_MAX)
     min_rank = LEVEL_RANK.get(min_level, 1)
     allowed_levels = [lvl for lvl, rnk in LEVEL_RANK.items() if rnk >= min_rank]
 
@@ -522,6 +530,70 @@ async def review_later(
         dismiss_scope="self",
         is_admin=False,
     )
+
+
+async def mark_all_read_for_user(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> int:
+    """Mark every live notification in *user_id*'s view as read (FAR-249).
+
+    Modulo has no separate read-state column: a notification is "unread" until
+    the user dismisses it for themselves (the unread badge counts live,
+    non-dismissed rows). "Mark all read" is therefore the bulk form of the
+    existing per-item ``review_later`` — it files a ``dismiss_scope='self'``
+    Dismissal for every row currently in the caller's live view and returns how
+    many were marked.
+
+    Scope of the write — exactly the live view, nothing more:
+
+    * **visible to this user** (``_visible_to_user_clause``): org rows, admin
+      rows for an org admin, and this user's own user-scoped rows — never
+      another user's private rows and never an admin row a non-admin cannot
+      see;
+    * **not already dismissed** for this user (``_hidden_from_user_clause``),
+      so a re-run is a no-op (0 marked) rather than a duplicate-key crash;
+    * **not expired** (``_not_expired_clause``) — an expired row is already out
+      of every live view and out of the unread count;
+    * **not opted-out** (``apply_prefs_filter``) — an opted-out category is
+      never shown and never counted, so there is nothing to mark.
+
+    A concurrent mark-all-read (or a concurrent per-item review-later) can race
+    the INSERT on the ``uq_dismissal_user_notification`` unique constraint; the
+    resulting ``IntegrityError`` is re-raised as ``ValueError`` so the route
+    answers 400 instead of a generic 500.
+    """
+    q = select(Notification.id).where(
+        Notification.organisation_id == org_id,
+        _visible_to_user_clause(user_id),
+        _hidden_from_user_clause(user_id),
+        _not_expired_clause(),
+    )
+    q = apply_prefs_filter(q, account_id=user_id)
+    try:
+        result = await session.execute(q)
+        notification_ids = [uuid.UUID(str(row[0])) for row in result.all()]
+    except ProgrammingError:
+        return 0
+    if not notification_ids:
+        return 0
+
+    session.add_all(
+        Dismissal(
+            organisation_id=org_id,
+            notification_id=notification_id,
+            dismissed_by_user_id=user_id,
+            dismiss_scope="self",
+        )
+        for notification_id in notification_ids
+    )
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        raise ValueError("Notifications already marked as read (concurrent)") from exc
+    return len(notification_ids)
 
 
 async def get_unread_count(

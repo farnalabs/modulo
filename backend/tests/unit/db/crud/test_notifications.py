@@ -128,12 +128,35 @@ class TestDashboardNotifications:
         result = await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
         assert result == notifications
 
-    async def test_limit_clamped_to_five_when_out_of_range(self, mock_session: AsyncMock) -> None:
-        mock_session.execute = AsyncMock(return_value=_listing_result([]))
-        from modulo.db.crud.notifications import get_dashboard_notifications
+    async def test_limit_clamped_into_valid_range_not_reset_to_default(self, mock_session: AsyncMock) -> None:
+        """FAR-249: an out-of-range limit is clamped, not silently reset to 5.
 
-        assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=0)
-        assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=500)
+        The old clamp reset anything out of range back to the default, so a
+        caller asking for 50 rows got 5 with no signal. The route now 422s
+        out-of-range values; this clamp is defence in depth for internal
+        callers and must preserve intent inside the valid range.
+        """
+        from sqlalchemy.dialects import sqlite
+
+        from modulo.db.crud.notifications import DASHBOARD_LIMIT_MAX, get_dashboard_notifications
+
+        mock_session.execute = AsyncMock(return_value=_listing_result([]))
+
+        def _sql_of(call_index: int) -> str:
+            query = mock_session.execute.await_args_list[call_index].args[0]
+            return str(query.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+
+        await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=0)
+        assert "LIMIT 1" in _sql_of(0)
+
+        await get_dashboard_notifications(
+            mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=DASHBOARD_LIMIT_MAX + 100
+        )
+        assert f"LIMIT {DASHBOARD_LIMIT_MAX}" in _sql_of(1)
+
+        # An in-range limit is passed through untouched.
+        await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=10)
+        assert "LIMIT 10" in _sql_of(2)
 
     async def test_min_level_filter_admits_lower_levels(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
@@ -631,3 +654,77 @@ class TestLinkedRunState:
         states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
 
         assert states == {}
+
+
+class TestMarkAllRead:
+    """FAR-249 — bulk per-user self-dismissal ("mark all read")."""
+
+    async def test_files_self_dismissals_for_every_live_visible_row(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        live_ids = [uuid.uuid4(), uuid.uuid4()]
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(live_ids[0],), (live_ids[1],)])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        marked = await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        assert marked == 2
+        added = mock_session.add_all.call_args.args[0]
+        dismissals = list(added)
+        assert [d.notification_id for d in dismissals] == live_ids
+        # Per-user, per-org, self scope — never a sibling's unread state.
+        for dismissal in dismissals:
+            assert dismissal.dismissed_by_user_id == _USER_ID
+            assert dismissal.organisation_id == _ORG_ID
+            assert dismissal.dismiss_scope == "self"
+        mock_session.flush.assert_awaited_once()
+
+    async def test_live_view_clauses_are_applied_to_the_select(self, mock_session: AsyncMock) -> None:
+        """The select must carry visibility, not-expired and not-dismissed."""
+        from sqlalchemy.dialects import sqlite
+
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        sql = str(mock_session.execute.await_args.args[0].compile(dialect=sqlite.dialect()))
+        assert "expires_at" in sql
+        assert "dismissals" in sql
+        assert "organisation_id" in sql
+
+    async def test_no_live_rows_is_a_noop(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        marked = await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        assert marked == 0
+        mock_session.add_all.assert_not_called()
+        mock_session.flush.assert_not_awaited()
+
+    async def test_programming_error_returns_zero(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
+
+        assert await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 0
+
+    async def test_concurrent_duplicate_raises_value_error(self, mock_session: AsyncMock) -> None:
+        """A concurrent self-dismissal of the same rows surfaces as ValueError."""
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(_NOTIF_ID,)])
+        mock_session.execute = AsyncMock(return_value=result)
+        mock_session.flush = AsyncMock(side_effect=IntegrityError("s", {}, Exception()))
+
+        with pytest.raises(ValueError, match="concurrent"):
+            await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
