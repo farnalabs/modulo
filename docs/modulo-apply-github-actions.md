@@ -202,7 +202,46 @@ Config-load, auth and network errors exit `1` on every command (the CLI
 fails before producing a report), so a broken config or missing
 `MODULO_API_KEY` fails the job loudly rather than posting an empty plan.
 
-## Notes
+## Vault credentials (`credential_ref`)
+
+CI is exactly where a committed apply config must never contain a credential
+value. A model backend's credential is therefore declared as a **reference**,
+never a literal, in one of three forms:
+
+- `api_key: ${env:VAR}` – resolved client-side from the environment. Fine for
+  a value the CI runner already holds, but the runner must hold it.
+- `api_key: secretref://<key>` – a token the **server** resolves against the
+  org vault at write time (FAR-1640). The value never leaves the server.
+- `credential_ref: <key>` – the same server-side vault reference in its
+  declarative short form (FAR-1216): name the bare vault key, and the CLI sends
+  the server the `secretref://<key>` token.
+
+```yaml
+entities:
+  model_backends:
+    - name: openai-prod
+      display_name: OpenAI (production)
+      provider: openai
+      model_id: gpt-4o
+      credential_ref: openai-prod-key   # value lives in the org vault
+```
+
+`credential_ref` adds a **plan-time** guarantee: before it computes the plan,
+the CLI lists the org vault keys (through the server's `list_secrets` surface)
+and **fails the plan** – never a silent pass – when the named key is absent, or
+when the listing cannot be reached to confirm it. The `list_secrets` surface
+requires the `secret.manage` scope, so the `MODULO_API_KEY` you store as a
+GitHub secret must be an operator key permitted to list secrets; a key that
+cannot list secrets blocks the affected entity rather than passing it. The
+affected entity appears in the plan's `blocked` list with a reason naming the
+key, so a PR comment shows the misconfiguration before anything is written. A
+credential that is missing for any other reason (a `secretref://` set directly
+on `api_key`, a key that
+exists at plan time but is deleted before apply) still fails the apply with the
+server's typed `credential_reference_error` (422), naming only the key.
+
+Set the vault entry out-of-band (the org vault / `create_secret` surface) before
+merging the config; the key itself is never committed.
 
 - The plan jobs post the CLI's plain-text report (`create` / `update` /
   `block` / `fail` / `unchanged` lines plus the summary). If you need the

@@ -52,6 +52,11 @@ def quantize_circuit_breaker_threshold(value: float | None) -> float | None:
 
 # \Z (not $) so a trailing-newline variant ("${env:VAR}\n") fails to match.
 ENV_REF_PATTERN = re.compile(r"\$\{env:([A-Za-z_]\w*)\}\Z", re.ASCII)
+# The server-side org-vault reference scheme (FAR-1640). A declarative
+# ``credential_ref: <key>`` is sent to the server as ``secretref://<key>`` —
+# the SAME mechanism ``api_key: secretref://<key>`` already uses — so there is
+# exactly one wire form and one server resolver.
+SECRET_REF_SCHEME = "secretref://"
 SECRET_REF_PATTERN = re.compile(r"secretref://\S+\Z")
 
 
@@ -134,12 +139,20 @@ class SchemaEntity(BaseModel):
 class ModelBackendEntity(BaseModel):
     """A declarative model backend (mirrors ModelBackendCreate).
 
-    ``api_key`` is write-only and MUST be a reference: ``${env:VAR}`` (resolved
-    client-side at apply time) or ``secretref://<key>``. A ``secretref://``
-    reference is forwarded to the server UNCHANGED and resolved against the org
-    vault at write time (FAR-1640); a missing/foreign key fails the affected
-    entity with a typed error naming the key. Inline secret values are
-    forbidden.
+    The credential is write-only and supplied EITHER as ``api_key`` (a
+    reference: ``${env:VAR}`` resolved client-side at apply time, or a
+    ``secretref://<key>`` token) OR as ``credential_ref: <key>`` — the
+    declarative short form naming a bare org-vault key (FAR-1216). Exactly one
+    of the two is required. ``credential_ref`` is normalised on the wire to
+    ``secretref://<key>``, the SAME token ``api_key`` accepts, so there is one
+    server resolver (FAR-1640) and no parallel mechanism.
+
+    A ``secretref://`` reference is forwarded to the server UNCHANGED and
+    resolved against the org vault at write time; a missing/foreign key fails
+    the affected entity with a typed ``credential_reference_error`` (422)
+    naming the key. ``credential_ref`` additionally fails at PLAN time when the
+    key is not present in the org vault (never a silent pass). Inline secret
+    values are forbidden.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -148,14 +161,19 @@ class ModelBackendEntity(BaseModel):
     display_name: str = Field(min_length=1, max_length=255)
     provider: str = Field(min_length=1, max_length=128)
     model_id: str = Field(min_length=1, max_length=128)
-    api_key: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
+    # FAR-1216: org-vault key reference — the declarative alternative to a
+    # literal ``api_key``. Mutually exclusive with ``api_key``.
+    credential_ref: str | None = Field(default=None, min_length=1)
     default_params: dict[str, Any] = Field(default_factory=dict)
     visibility: str = Field(default="org")
     tier: Literal["native", "preview", "in_dev"] = "native"
 
     @field_validator("api_key")
     @classmethod
-    def _api_key_must_be_ref(cls, value: str) -> str:
+    def _api_key_must_be_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         if not ENV_REF_PATTERN.fullmatch(value) and not SECRET_REF_PATTERN.fullmatch(value):
             msg = (
                 "api_key must be a reference (${env:VAR_NAME} — letters, digits, "
@@ -165,17 +183,46 @@ class ModelBackendEntity(BaseModel):
             raise ValueError(msg)
         return value
 
+    @field_validator("credential_ref")
+    @classmethod
+    def _credential_ref_is_bare_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if value != value.strip() or any(ch.isspace() for ch in value):
+            raise ValueError("credential_ref must be a vault key with no surrounding or internal whitespace")
+        if value.startswith(SECRET_REF_SCHEME):
+            raise ValueError(
+                "credential_ref must be the bare vault key (omit the 'secretref://' prefix); "
+                "use api_key for an explicit 'secretref://<key>' token"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_credential(self) -> ModelBackendEntity:
+        """Require exactly one of ``api_key`` / ``credential_ref``."""
+        if (self.api_key is None) == (self.credential_ref is None):
+            raise ValueError("exactly one of api_key or credential_ref is required")
+        return self
+
     def env_ref_var(self) -> str | None:
         """Return the env var name when api_key is an ${env:...} ref, else None."""
+        if self.api_key is None:
+            return None
         match = ENV_REF_PATTERN.match(self.api_key)
         return match.group(1) if match else None
+
+    def credential_reference(self) -> str | None:
+        """The ``secretref://<key>`` wire token when ``credential_ref`` is set, else None."""
+        if self.credential_ref is None:
+            return None
+        return f"{SECRET_REF_SCHEME}{self.credential_ref}"
 
     def managed_view(self, *, include_api_key: bool = False) -> dict[str, Any]:
         """Canonical managed-field view used for hashing.
 
         ``api_key`` is write-only and is never included by default.
         """
-        payload = {
+        payload: dict[str, Any] = {
             "display_name": self.display_name,
             "provider": self.provider,
             "model_id": self.model_id,
@@ -184,7 +231,7 @@ class ModelBackendEntity(BaseModel):
             "tier": self.tier,
         }
         if include_api_key:
-            payload["api_key"] = self.api_key
+            payload["api_key"] = self.api_key if self.api_key is not None else self.credential_reference()
         return payload
 
 
