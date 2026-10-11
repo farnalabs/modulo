@@ -183,3 +183,4 @@ minimumReleaseAgeExclude:
   - 'vue-router@5.4.0'
   - '@lucide/vue@1.53.0'
   - '@lucide/vue@1.54.0'
+  - '@lucide/vue@1.55.0'
