@@ -9,7 +9,7 @@ SyncResult without raising, leaving the last-good cached manifest intact.
 from __future__ import annotations
 
 import types
-from typing import Self
+from typing import Any, Self
 
 import pytest
 from sqlalchemy.exc import InvalidRequestError
@@ -101,6 +101,25 @@ class _FakeClient:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class _AwaitableInTransactionSession(_FakeSession):
+    """Session whose ``in_transaction()`` returns an AWAITABLE (sync.py:55).
+
+    Some session/driver combinations return a coroutine here. Every coroutine
+    is truthy, so the value must be AWAITED — a truthiness check alone would
+    always take the "txn active" branch and call ``execute()`` outside one.
+    """
+
+    def __init__(self, existing: LibrarySyncState | None = None, *, active_tx: bool = False) -> None:
+        super().__init__(existing=existing)
+        self._active_tx = active_tx
+
+    async def _resolve(self) -> bool:
+        return self._active_tx
+
+    def in_transaction(self) -> Any:
+        return self._resolve()
 
 
 class TestSyncLibrary:
@@ -235,6 +254,27 @@ class TestCachedManifest:
         assert await get_cached_manifest(session) == manifest
         # Still the same caller-owned transaction (no re-begin, no close).
         assert session._active_tx is True
+
+    async def test_in_transaction_result_may_be_awaitable(self) -> None:
+        """sync.py:55 — a coroutine from ``in_transaction()`` is awaited.
+
+        Every coroutine is truthy, so without the ``await`` the truthiness
+        check would always take the "txn active" branch: with no transaction
+        really open, ``_load_state``'s ``execute()`` then raises
+        ``InvalidRequestError`` (sessions are ``autobegin=False``) and the
+        manifest degrades to ``None`` instead of being returned.
+        """
+        manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}
+        state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
+
+        # Awaitable resolves False: no transaction open — must begin() its own.
+        outside = _AwaitableInTransactionSession(existing=state)
+        assert await get_cached_manifest(outside) == manifest
+
+        # Awaitable resolves True: reuse the caller's open transaction as-is.
+        inside = _AwaitableInTransactionSession(existing=state, active_tx=True)
+        assert await get_cached_manifest(inside) == manifest
+        assert inside._active_tx is True
 
     async def test_fail_open_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _explode(_session: object) -> LibrarySyncState:
