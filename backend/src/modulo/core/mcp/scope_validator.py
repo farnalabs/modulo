@@ -79,6 +79,7 @@ _SCOPE_CONNECTOR_LIST = "connector.list"  # nosec B105 — permission scope name
 _SCOPE_PARAMETER_SCHEMA_LIST = "parameter_schema.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_HITL_LIST = "hitl.list"  # nosec B105 — permission scope name, not a credential
 _SCOPE_PIPELINE_UPDATE = "pipeline.update"  # nosec B105 — permission scope name, not a credential
+_SCOPE_EVAL_LIST = "eval.list"  # nosec B105 — permission scope name, not a credential
 
 _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "trigger_pipeline": "run.trigger",
@@ -111,7 +112,7 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "create_model_backend": "model_backend.create",
     "list_runs": "run.list",
     "get_run_evals": "run.evals",
-    "list_eval_definitions": "eval.list",
+    "list_eval_definitions": _SCOPE_EVAL_LIST,
     "create_eval_definition": "eval.definition.create",
     "update_eval_definition": "eval.definition.update",
     "delete_eval_definition": "eval.definition.delete",
@@ -186,8 +187,8 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "get_lifecycle_map": "lifecycle_map.list",
     "list_plugins": "plugin.list",
     "list_sso_providers": "sso.manage",
-    "list_eval_suites": "eval.list",
-    "get_eval_suite": "eval.list",
+    "list_eval_suites": _SCOPE_EVAL_LIST,
+    "get_eval_suite": _SCOPE_EVAL_LIST,
     "get_schema_versions": "schema.list",
     "get_pipeline_diff": "pipeline.list",
 }

@@ -2012,6 +2012,20 @@ def _parse_optional_uuid(
     return _parse_uuid_param(value, field)
 
 
+def _parse_iso8601_param(value: str | None, field: str) -> tuple[datetime | None, dict[str, Any] | None]:
+    """Parse an OPTIONAL ISO 8601 timestamp param, returning ``(value, None)`` or ``(None, error_dict)``."""
+    if value is None:
+        return None, None
+    try:
+        return datetime.fromisoformat(value), None
+    except ValueError:
+        return None, {
+            "error": "validation_failed",
+            "field": field,
+            "detail": f"Invalid {field} format: {value!r} (expected ISO 8601)",
+        }
+
+
 _TOOL_SHELL_P = ParamSpec("_TOOL_SHELL_P")
 
 
@@ -9194,6 +9208,62 @@ async def get_audit_log(
         return _tool_exception_error("Failed to read audit log", exc, "mcp.get_audit_log")
 
 
+def _notification_delivery_filters(
+    *,
+    status: str | None,
+    event_type: str | None,
+    endpoint_uid: uuid.UUID | None,
+    from_dt: datetime | None,
+    to_dt: datetime | None,
+    cursor_dt: datetime | None = None,
+) -> list[Any]:
+    """Build the shared WHERE clauses for the delivery-list and count queries."""
+    from modulo.db.models.notification_delivery import NotificationDeliveryLog
+
+    clauses: list[Any] = []
+    if status:
+        clauses.append(NotificationDeliveryLog.status == status)
+    if event_type:
+        clauses.append(NotificationDeliveryLog.event_type == event_type)
+    if endpoint_uid:
+        clauses.append(NotificationDeliveryLog.endpoint_id == endpoint_uid)
+    if from_dt:
+        clauses.append(NotificationDeliveryLog.created_at >= from_dt)
+    if to_dt:
+        clauses.append(NotificationDeliveryLog.created_at <= to_dt)
+    if cursor_dt:
+        clauses.append(NotificationDeliveryLog.created_at < cursor_dt)
+    return clauses
+
+
+def _notification_delivery_page(rows: list[Any], lim: int) -> tuple[list[Any], str | None]:
+    """Trim the limit+1 probe to the page size and derive the next cursor."""
+    has_more = len(rows) > lim
+    if has_more:
+        rows = rows[:lim]
+    next_cursor: str | None = None
+    if has_more and rows and rows[-1][0].created_at:
+        next_cursor = rows[-1][0].created_at.isoformat()
+    return rows, next_cursor
+
+
+def _notification_delivery_item(row: Any) -> dict[str, Any]:
+    """Serialize one ``(NotificationDeliveryLog, endpoint_url)`` row."""
+    delivery, endpoint_url = row
+    return {
+        "id": str(delivery.id),
+        "event_type": delivery.event_type,
+        "status": delivery.status,
+        "attempt_count": delivery.attempt_count,
+        "response_code": delivery.response_code,
+        "last_error": delivery.last_error,
+        "response_body": delivery.response_body,
+        "endpoint_url": endpoint_url or "",
+        "endpoint_id": str(delivery.endpoint_id) if delivery.endpoint_id else None,
+        "created_at": delivery.created_at.isoformat() if delivery.created_at else "",
+    }
+
+
 @mcp.tool(
     name="list_notification_deliveries",
     description=(
@@ -9217,41 +9287,18 @@ async def list_notification_deliveries(
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope("list_notification_deliveries")
 
-        endpoint_uid: uuid.UUID | None = None
-        if endpoint_id is not None:
-            endpoint_uid, endpoint_err = _parse_uuid_param(endpoint_id, "endpoint_id")
-            if endpoint_err:
-                return endpoint_err
-        from_dt: datetime | None = None
-        if date_from is not None:
-            try:
-                from_dt = datetime.fromisoformat(date_from)
-            except ValueError:
-                return {
-                    "error": "validation_failed",
-                    "field": "date_from",
-                    "detail": f"Invalid date_from format: {date_from!r} (expected ISO 8601)",
-                }
-        to_dt: datetime | None = None
-        if date_to is not None:
-            try:
-                to_dt = datetime.fromisoformat(date_to)
-            except ValueError:
-                return {
-                    "error": "validation_failed",
-                    "field": "date_to",
-                    "detail": f"Invalid date_to format: {date_to!r} (expected ISO 8601)",
-                }
-        cursor_dt: datetime | None = None
-        if cursor is not None:
-            try:
-                cursor_dt = datetime.fromisoformat(cursor)
-            except ValueError:
-                return {
-                    "error": "validation_failed",
-                    "field": "cursor",
-                    "detail": f"Invalid cursor format: {cursor!r} (expected ISO 8601)",
-                }
+        endpoint_uid, endpoint_err = _parse_optional_uuid(endpoint_id, "endpoint_id")
+        if endpoint_err:
+            return endpoint_err
+        from_dt, from_err = _parse_iso8601_param(date_from, "date_from")
+        if from_err:
+            return from_err
+        to_dt, to_err = _parse_iso8601_param(date_to, "date_to")
+        if to_err:
+            return to_err
+        cursor_dt, cursor_err = _parse_iso8601_param(cursor, "cursor")
+        if cursor_err:
+            return cursor_err
 
         from sqlalchemy import func as sa_func
 
@@ -9279,63 +9326,37 @@ async def list_notification_deliveries(
                 )
                 .where(
                     NotificationDeliveryLog.organisation_id == org_id,
+                    *_notification_delivery_filters(
+                        status=status,
+                        event_type=event_type,
+                        endpoint_uid=endpoint_uid,
+                        from_dt=from_dt,
+                        to_dt=to_dt,
+                        cursor_dt=cursor_dt,
+                    ),
                 )
+                .order_by(NotificationDeliveryLog.created_at.desc())
+                .limit(lim + 1)
             )
-            if status:
-                query = query.where(NotificationDeliveryLog.status == status)
-            if event_type:
-                query = query.where(NotificationDeliveryLog.event_type == event_type)
-            if endpoint_uid:
-                query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_uid)
-            if from_dt:
-                query = query.where(NotificationDeliveryLog.created_at >= from_dt)
-            if to_dt:
-                query = query.where(NotificationDeliveryLog.created_at <= to_dt)
-            if cursor_dt:
-                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
-            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(lim + 1)
 
             rows = list((await s.execute(query)).all())
 
             count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
                 NotificationDeliveryLog.organisation_id == org_id,
+                *_notification_delivery_filters(
+                    status=status,
+                    event_type=event_type,
+                    endpoint_uid=endpoint_uid,
+                    from_dt=from_dt,
+                    to_dt=to_dt,
+                ),
             )
-            if status:
-                count_query = count_query.where(NotificationDeliveryLog.status == status)
-            if event_type:
-                count_query = count_query.where(NotificationDeliveryLog.event_type == event_type)
-            if endpoint_uid:
-                count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_uid)
-            if from_dt:
-                count_query = count_query.where(NotificationDeliveryLog.created_at >= from_dt)
-            if to_dt:
-                count_query = count_query.where(NotificationDeliveryLog.created_at <= to_dt)
             total = (await s.execute(count_query)).scalar() or 0
 
-        has_more = len(rows) > lim
-        if has_more:
-            rows = rows[:lim]
-
-        next_cursor: str | None = None
-        if has_more and rows and rows[-1][0].created_at:
-            next_cursor = rows[-1][0].created_at.isoformat()
+        rows, next_cursor = _notification_delivery_page(rows, lim)
 
         return {
-            "data": [
-                {
-                    "id": str(d[0].id),
-                    "event_type": d[0].event_type,
-                    "status": d[0].status,
-                    "attempt_count": d[0].attempt_count,
-                    "response_code": d[0].response_code,
-                    "last_error": d[0].last_error,
-                    "response_body": d[0].response_body,
-                    "endpoint_url": d[1] or "",
-                    "endpoint_id": str(d[0].endpoint_id) if d[0].endpoint_id else None,
-                    "created_at": d[0].created_at.isoformat() if d[0].created_at else "",
-                }
-                for d in rows
-            ],
+            "data": [_notification_delivery_item(d) for d in rows],
             "total": total,
             "next_cursor": next_cursor,
         }
@@ -9753,6 +9774,34 @@ async def get_schema_versions(
         return _tool_exception_error("Failed to list schema versions", exc, "mcp.get_schema_versions")
 
 
+def _mask_diff_snapshot_graph(graph: Any) -> Any:
+    """Mask the ``nodes`` of one snapshot graph, leaving a non-dict graph untouched."""
+    if not isinstance(graph, dict):
+        return graph
+    graph_copy = dict(graph)
+    nodes = graph.get("nodes")
+    if isinstance(nodes, list):
+        graph_copy["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+    return graph_copy
+
+
+def _mask_pipeline_diff_payload(result: dict[str, Any]) -> dict[str, Any]:
+    """Mask node credentials across a snapshot-diff payload (REST parity, FAR-1181)."""
+    masked: dict[str, Any] = dict(result)
+    for key in ("snapshot_a", "snapshot_b"):
+        snapshot_payload = masked.get(key)
+        if isinstance(snapshot_payload, dict):
+            masked[key] = {
+                **snapshot_payload,
+                "graph": _mask_diff_snapshot_graph(snapshot_payload.get("graph")),
+            }
+    for key in ("nodes_added", "nodes_removed"):
+        entries = masked.get(key)
+        if isinstance(entries, list):
+            masked[key] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in entries]
+    return masked
+
+
 @mcp.tool(
     name="get_pipeline_diff",
     description=(
@@ -9809,24 +9858,7 @@ async def get_pipeline_diff(
         # FAR-1181 (echo of the REST parity in routes/pipelines.py): the
         # diff payload carries raw node dicts copied from the stored
         # snapshots — mask them exactly like the snapshot-detail graph read.
-        masked: dict[str, Any] = dict(result)
-        for key in ("snapshot_a", "snapshot_b"):
-            snapshot_payload = masked.get(key)
-            if isinstance(snapshot_payload, dict):
-                graph = snapshot_payload.get("graph")
-                masked_graph = graph
-                if isinstance(graph, dict):
-                    graph_copy = dict(graph)
-                    nodes = graph.get("nodes")
-                    if isinstance(nodes, list):
-                        graph_copy["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
-                    masked_graph = graph_copy
-                masked[key] = {**snapshot_payload, "graph": masked_graph}
-        for key in ("nodes_added", "nodes_removed"):
-            entries = masked.get(key)
-            if isinstance(entries, list):
-                masked[key] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in entries]
-        return masked
+        return _mask_pipeline_diff_payload(result)
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
