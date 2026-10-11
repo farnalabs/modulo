@@ -1,8 +1,15 @@
 """Pipeline CRUD REST API.
 
 Alpha: Graph replacement uses row-level locking (SELECT ... FOR UPDATE) in
-replace_pipeline_graph. No advisory lock is deployed; the row lock on the
-pipeline row serialises concurrent graph writes within a serialisable transaction.
+replace_pipeline_graph. No advisory lock is deployed for the graph row itself;
+the row lock on the pipeline row serialises concurrent graph writes within a
+serialisable transaction.
+
+FAR-1109: the graph write ALSO translates each node's declared ``policy_gate``
+block into the ``policy_gates`` row lifecycle. Those row operations acquire the
+per-eval advisory lock from the FAR-1106 authoring routes
+(``_with_gate_advisory_lock``) so the declarative and in-product surfaces
+serialise against each other.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +55,7 @@ from modulo.api.middleware.sensitive_mask import (
     resolve_and_reject_mask_sentinels,
 )
 from modulo.api.models.team_visibility import TeamVisibilityMixin
+from modulo.api.routes.evals import _create_or_replace_gate, _with_gate_advisory_lock
 from modulo.api.team_scope import (
     TeamScopedResource,
     resolve_pipeline_team_scope,
@@ -150,11 +158,13 @@ from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.models.agent import Agent
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.environment_profile import EnvironmentProfile
+from modulo.db.models.eval import Eval
 from modulo.db.models.model_backend import ModelBackend
 from modulo.db.models.notification_endpoint import NotificationEndpoint
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.schema import Schema
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.db.soft_delete import include_soft_deleted
@@ -1193,6 +1203,12 @@ class PipelineGraphPolicyGate(BaseModel):
     gate). Declaring the field means the validated node dict retains the block
     and ``replace_pipeline_graph`` persists it verbatim in
     ``pipeline.graph_nodes_json``, and the read path round-trips it.
+
+    Retention alone does NOT enforce: the runtime engine resolves gating only
+    from ``policy_gates`` rows joined to evals. The graph-write normalisation
+    therefore also TRANSLATES each declared block into the gate-row lifecycle
+    (create / update / soft-delete) via :func:`_reconcile_graph_policy_gates`;
+    a stored block with no row governs nothing.
     """
 
     action: Literal["warn", "block"]
@@ -3053,6 +3069,325 @@ async def _sync_agent_row_commands(
     return changed
 
 
+# ---------------------------------------------------------------------------
+# FAR-1109: translate node-attached ``policy_gate`` blocks into PolicyGate rows
+# ---------------------------------------------------------------------------
+#
+# The runtime engine resolves gating ONLY from ``policy_gates`` rows joined to
+# evals (``PipelineExecutor._load_eval_defs_for_pipeline``). A ``policy_gate``
+# block carried in ``graph_nodes_json`` therefore governs nothing on its own —
+# the graph-write normalisation must translate each declared block into the
+# corresponding row lifecycle. These helpers run under FAR-1106's per-eval
+# advisory lock so the translation serialises with the in-product
+# ``/evals/{eval_id}/policy-gate`` authoring routes.
+
+_POLICY_GATE_ACTIONS = ("warn", "block")
+
+
+def _iter_declared_policy_gates(nodes: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
+    """Yield ``(eval_id, node_id, action)`` for every node carrying a gate block.
+
+    A malformed / absent block simply declares no gate on that node and is
+    skipped here (the ``PipelineGraphNode`` model has already validated any
+    block that reached the write path).
+    """
+    declared: list[tuple[str, str, str]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        gate = node.get("policy_gate")
+        node_id = node.get("id")
+        if not isinstance(gate, dict) or node_id is None:
+            continue
+        eval_id = gate.get("eval_id")
+        if eval_id is None:
+            continue
+        declared.append((str(eval_id), str(node_id), str(gate.get("action"))))
+    return declared
+
+
+def _declared_policy_gates(nodes: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Map ``eval_id`` -> ``{"node_id", "action"}`` for a graph's declared gates."""
+    return {
+        eval_id: {"node_id": node_id, "action": action}
+        for eval_id, node_id, action in _iter_declared_policy_gates(nodes)
+    }
+
+
+def _reject_duplicate_policy_gates(nodes: list[dict[str, Any]]) -> None:
+    """Reject two nodes declaring a gate on the same eval (FAR-1109).
+
+    ``policy_gates`` carries ``UNIQUE(eval_id) WHERE deleted_at IS NULL`` — one
+    LIVE gate per eval — so two declarations can never converge. Fail loudly
+    instead of silently keeping the last, which would leave permanent drift.
+    """
+    seen: dict[str, str] = {}
+    for eval_id, node_id, _action in _iter_declared_policy_gates(nodes):
+        if eval_id in seen:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"policy_gate eval_id {eval_id} is declared on more than one node "
+                    f"({seen[eval_id]} and {node_id}); an eval may carry at most one live gate"
+                ),
+            )
+        seen[eval_id] = node_id
+
+
+async def _load_gate_eval_for_node(
+    session: AsyncSession,
+    *,
+    eval_id: uuid.UUID,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    node_id: str,
+) -> Eval:
+    """Load the eval a declared gate binds to, validating the binding.
+
+    The gate is the eval's gate (the DB binds one gate per eval, one eval per
+    node), so the declared ``eval_id`` must resolve to a live, node-scoped eval
+    of THIS pipeline whose ``node_id`` is the node carrying the block. A
+    violation is a 422 — a missing eval, a cross-pipeline reference or a
+    non-node-scoped eval can never converge and must fail loudly, never persist
+    a gate that governs a different node/pipeline than the config declares.
+    """
+    row = (
+        await session.execute(
+            select(Eval).where(
+                Eval.id == eval_id,
+                Eval.organisation_id == org_id,
+                Eval.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate references eval {eval_id} which does not exist in this organisation",
+        )
+    if str(row.pipeline_id) != str(pipeline_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate references eval {eval_id} which belongs to a different pipeline",
+        )
+    if row.node_id is None or str(row.node_id) != str(node_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate on node {node_id} references eval {eval_id} which is not bound to that node",
+        )
+    return row
+
+
+async def _audit_gate_translation(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    event_type: str,
+    gate: PolicyGate,
+    payload_json: dict[str, Any],
+) -> None:
+    """Best-effort gate audit event (parity with the authoring routes).
+
+    A failed audit never blocks the graph write — the same fail-open contract
+    the ``/evals/{eval_id}/policy-gate`` routes use.
+    """
+    try:
+        await append_audit_event(
+            session,
+            org_id=principal.organisation_id,
+            event_type=event_type,
+            actor_user_id=principal.account_id,
+            resource_type="policy_gate",
+            resource_id=gate.id,
+            payload_json=payload_json,
+        )
+    except Exception:
+        logger.exception(
+            "policy_gate.graft_translation_audit_failed",
+            extra={"org_id": str(principal.organisation_id), "eval_id": str(gate.eval_id)},
+        )
+
+
+async def _ensure_declared_gate(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    eval_row: Eval,
+    action: str,
+) -> None:
+    """Create the gate row for a declared block, or update it in place.
+
+    Runs under the per-eval advisory lock. A live row with the same action is a
+    no-op (so a repeated ``modulo apply`` is idempotent — no id/version churn);
+    a live row with a different action is updated IN PLACE (version bump +
+    ``pre_version_raw`` snapshot, mirroring the authoring route); no live row is
+    created via the shared ``_create_or_replace_gate`` helper.
+    """
+    if action not in _POLICY_GATE_ACTIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"policy_gate action {action!r} must be one of {list(_POLICY_GATE_ACTIONS)}",
+        )
+    eval_id = eval_row.id
+
+    async def _do() -> None:
+        live = (
+            await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if live is None:
+            gate = await _create_or_replace_gate(
+                eval_id,
+                {"node_id": eval_row.node_id, "action": action},
+                session,
+                principal,
+            )
+            await _audit_gate_translation(
+                session,
+                principal,
+                "policy_gate.created",
+                gate,
+                {"eval_id": str(eval_id), "action": gate.action, "version": gate.version, "enabled": gate.enabled},
+            )
+            return
+        if live.action == action:
+            return
+        previous_action = live.action
+        live.pre_version_raw = {"action": previous_action}
+        live.version = (live.version or 1) + 1
+        live.action = action
+        await _audit_gate_translation(
+            session,
+            principal,
+            "policy_gate.updated",
+            live,
+            {
+                "eval_id": str(eval_id),
+                "action": live.action,
+                "version": live.version,
+                "pre_version_raw": {"action": previous_action},
+                "enabled": live.enabled,
+            },
+        )
+
+    await _with_gate_advisory_lock(eval_id, session, _do)
+
+
+async def _soft_delete_declared_gate(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    eval_id: uuid.UUID,
+) -> None:
+    """Soft-delete the live gate a removed graph block leaves behind.
+
+    Never a hard delete (``PolicyGateDecision`` rows may restrict against the
+    gate). Runs under the per-eval advisory lock so it cannot race a concurrent
+    authoring create.
+    """
+
+    async def _do() -> None:
+        live = (
+            await session.execute(
+                select(PolicyGate).where(
+                    PolicyGate.eval_id == eval_id,
+                    PolicyGate.organisation_id == org_id,
+                    PolicyGate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if live is None:
+            return
+        action = live.action
+        live.deleted_at = func.now()
+        live.deleted_by = principal.account_id
+        await _audit_gate_translation(
+            session,
+            principal,
+            "policy_gate.deleted",
+            live,
+            {"eval_id": str(eval_id), "action": action},
+        )
+
+    await _with_gate_advisory_lock(eval_id, session, _do)
+
+
+async def _reconcile_graph_policy_gates(
+    session: AsyncSession,
+    *,
+    principal: TenantPrincipal,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    previous_nodes: list[dict[str, Any]],
+    new_nodes: list[dict[str, Any]],
+) -> None:
+    """Translate declared node ``policy_gate`` blocks into PolicyGate rows.
+
+    The declarative source of truth for a pipeline's gates is its graph's
+    ``policy_gate`` blocks: a block with no live row is created, a changed
+    block updates its row in place, and a block that disappeared from the graph
+    soft-deletes its row. Comparison is per eval across the PREVIOUS and NEW
+    graphs, so only evals the graph actually names are managed — a gate authored
+    through the evals API for an eval the graph never declared is left
+    untouched.
+
+    All reconciliation runs in the caller's transaction (the graph write and
+    its gate rows commit or roll back together) and under FAR-1106's per-eval
+    advisory lock, reusing the same mechanism as the authoring routes.
+    """
+    _reject_duplicate_policy_gates(new_nodes)
+    previous = _declared_policy_gates(previous_nodes)
+    desired = _declared_policy_gates(new_nodes)
+    affected = sorted(set(desired) | set(previous))
+    if not affected:
+        return
+    try:
+        for eval_key in affected:
+            try:
+                eval_uuid = uuid.UUID(eval_key)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"policy_gate eval_id {eval_key!r} is not a valid UUID",
+                ) from None
+            want = desired.get(eval_key)
+            if want is not None:
+                eval_row = await _load_gate_eval_for_node(
+                    session,
+                    eval_id=eval_uuid,
+                    org_id=org_id,
+                    pipeline_id=pipeline_id,
+                    node_id=want["node_id"],
+                )
+                await _ensure_declared_gate(
+                    session,
+                    principal=principal,
+                    org_id=org_id,
+                    eval_row=eval_row,
+                    action=want["action"],
+                )
+            elif previous.get(eval_key) is not None:
+                await _soft_delete_declared_gate(
+                    session,
+                    principal=principal,
+                    org_id=org_id,
+                    eval_id=eval_uuid,
+                )
+    finally:
+        # ``_with_gate_advisory_lock`` sets ``SET LOCAL statement_timeout = '5s'``
+        # for the CURRENT transaction, so it would otherwise bound every
+        # remaining statement in the caller's transaction (graph validation,
+        # the owner-team work on the PATCH-update path). Reset it to the session
+        # default once the gate ops are done.
+        await session.execute(text("RESET statement_timeout"))
+
+
 @router.patch(
     "/{pipeline_id}/graph",
     dependencies=[Depends(audited("pipeline_graph_replaced", "pipeline", principal_dep=get_current_tenant_user))],
@@ -3086,6 +3421,10 @@ async def replace_pipeline_graph_endpoint(
             # not persist the mask literals over the stored secrets. Echoes are
             # resolved against the stored graph before the write commits.
             node_data = merge_masked_graph_nodes(node_data, list(pipeline.graph_nodes_json or []))
+            # FAR-1109: capture the PRE-write graph before replace_pipeline_graph
+            # mutates it, so the policy-gate translation can tell which declared
+            # gate blocks are new / kept / removed.
+            previous_gate_nodes = list(pipeline.graph_nodes_json or [])
             validator_graph = {
                 "nodes": node_data,
                 "edges": [_edge_data_to_validator(edge) for edge in edge_data],
@@ -3123,6 +3462,19 @@ async def replace_pipeline_graph_endpoint(
                 grants_deny_guardrail_admin=_grants_deny_guardrail_admin(principal),
             )
             if graph is not None:
+                # FAR-1109: the graph's declared ``policy_gate`` blocks are the
+                # pipeline's config-as-code gate declaration. Translate them
+                # into PolicyGate rows inside the SAME transaction — the runtime
+                # only resolves gating from those rows, so a stored block alone
+                # governs nothing.
+                await _reconcile_graph_policy_gates(
+                    session,
+                    principal=principal,
+                    org_id=principal.organisation_id,
+                    pipeline_id=pipeline_id,
+                    previous_nodes=previous_gate_nodes,
+                    new_nodes=node_data,
+                )
                 # FAR-488a: keep the bound Agent rows in step with node-level
                 # agent_commands PATCHes INSIDE the same transaction, so the
                 # next snapshot materializes the command the operator saved.
@@ -3453,6 +3805,9 @@ async def _apply_graph_update(
     # PATCH /graph endpoint) — a full-replace write round-tripping the masked
     # read must not persist the mask literals over the stored secrets.
     node_data = merge_masked_graph_nodes(node_data, list(existing.graph_nodes_json or []))
+    # FAR-1109: capture the PRE-write graph so the policy-gate translation can
+    # tell which declared gate blocks are new / kept / removed.
+    previous_gate_nodes = list(existing.graph_nodes_json or [])
     validator_graph = {
         "nodes": node_data,
         "edges": [_edge_data_to_validator(edge) for edge in edge_data],
@@ -3485,6 +3840,18 @@ async def _apply_graph_update(
     )
     if graph is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_PIPELINE_NOT_FOUND)
+    # FAR-1109: translate the graph's declared ``policy_gate`` blocks into
+    # PolicyGate rows in the SAME transaction as the graph write. Without this
+    # a declarative gate is persisted in graph_nodes_json but never governs a
+    # run (the runtime reads only policy_gates rows).
+    await _reconcile_graph_policy_gates(
+        session,
+        principal=principal,
+        org_id=org_id,
+        pipeline_id=pipeline_id,
+        previous_nodes=previous_gate_nodes,
+        new_nodes=node_data,
+    )
     # FAR-488a: same Agent-row sync as the PATCH /graph endpoint — a graph
     # replacement shipped inside a PATCH update payload must also run.
     await _sync_agent_row_commands(session, org_id=org_id, nodes=node_data)

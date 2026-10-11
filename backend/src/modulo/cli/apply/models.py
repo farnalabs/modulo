@@ -350,9 +350,11 @@ class ApplyGraphNode(StdoutRetentionValidatorMixin, BaseModel):
     # Declared here so the CLI accepts the declarative block (and so the
     # mirror-field drift alarm in test_apply_models stays green); the executor
     # resolves the referenced eval and the block travels in the graph write.
-    # Absent on a node means NO live gate — apply removes any current gate on
-    # that node (the CLI never writes gate rows directly; the graph replace is
-    # the single write surface).
+    # The CLI never writes gate rows directly: the SERVER's graph-write
+    # normalisation translates each declared block into the PolicyGate row
+    # lifecycle (create / update / soft-delete), so absence of a block on a
+    # node soft-deletes any current gate on that node rather than leaving it
+    # governing.
     policy_gate: ApplyGraphPolicyGate | None = None
     fan_out: dict[str, Any] | None = None
     collect: list[dict[str, Any]] | None = None
