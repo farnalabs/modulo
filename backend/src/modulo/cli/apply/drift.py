@@ -138,6 +138,64 @@ def _diff_git_content(
     return entries
 
 
+def policy_gate_changes(
+    desired_graph: dict[str, Any] | None,
+    current_graph: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Node-attached policy-gate add/change/remove breakdown (FAR-1109).
+
+    Nodes are matched by id; each entry names the node, the change class
+    (``added`` / ``changed`` / ``removed``) and the gate's action (plus the
+    previous action on a change) so the apply/drift report can list gate
+    changes as a DISTINCT change class instead of burying them in a generic
+    "graph updated". Absence of a block on a node means no live gate, so a
+    current gate with no desired counterpart is a ``removed`` change.
+
+    The graphs are the canonical normalised shape (same source as the plan
+    hash), so a change here is a real managed-field change. ``policy_gate`` is
+    not credential-bearing, so redaction never touches it — the caller may pass
+    either raw or redacted graphs.
+    """
+    desired_nodes = {str(n.get("id")): n for n in ((desired_graph or {}).get("nodes") or [])}
+    current_nodes = {str(n.get("id")): n for n in ((current_graph or {}).get("nodes") or [])}
+    changes: list[dict[str, Any]] = []
+    for node_id in sorted(desired_nodes.keys() | current_nodes.keys()):
+        desired_gate = desired_nodes.get(node_id, {}).get("policy_gate")
+        current_gate = current_nodes.get(node_id, {}).get("policy_gate")
+        if desired_gate == current_gate:
+            continue
+        if current_gate is None:
+            changes.append(
+                {
+                    "change": "added",
+                    "node": node_id,
+                    "action": desired_gate.get("action"),
+                    "eval_id": desired_gate.get("eval_id"),
+                }
+            )
+        elif desired_gate is None:
+            changes.append(
+                {
+                    "change": "removed",
+                    "node": node_id,
+                    "action": current_gate.get("action"),
+                    "eval_id": current_gate.get("eval_id"),
+                }
+            )
+        else:
+            changes.append(
+                {
+                    "change": "changed",
+                    "node": node_id,
+                    "action": desired_gate.get("action"),
+                    "previous_action": current_gate.get("action"),
+                    "eval_id": desired_gate.get("eval_id"),
+                    "previous_eval_id": current_gate.get("eval_id"),
+                }
+            )
+    return changes
+
+
 def _diff_fields(desired: dict[str, Any], current: dict[str, Any]) -> dict[str, list[str]]:
     """Top-level add/remove/modify breakdown between two managed-field views.
 
@@ -231,7 +289,13 @@ def build_drift_detail(
         git_content = _diff_git_content(view["graph"], raw_current_graph)
         if git_content:
             breakdown["git_content"] = git_content
-        if graph_changed or git_content:
+        # FAR-1109: name node-attached policy-gate changes explicitly — the
+        # generic node breakdown flags the node as "modified", but an operator
+        # must be able to tell a gate change from any other node change.
+        gate_changes = policy_gate_changes(view["graph"], current_graph)
+        if gate_changes:
+            breakdown["policy_gates"] = gate_changes
+        if graph_changed or git_content or gate_changes:
             detail[name] = breakdown
 
     # Non-pipeline field breakdown (keyed "<kind>:<name>").
@@ -266,4 +330,4 @@ def has_drift(report: dict[str, Any]) -> bool:
     return bool(report.get("created") or report.get("updated") or report.get("blocked"))
 
 
-__all__ = ["build_drift_detail", "has_drift"]
+__all__ = ["build_drift_detail", "has_drift", "policy_gate_changes"]

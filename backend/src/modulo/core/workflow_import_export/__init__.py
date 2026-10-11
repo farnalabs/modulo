@@ -39,6 +39,7 @@ from modulo.db.crud.pipeline import (
     ManualNodeOutputSchemaError,
     create_pipeline,
     enforce_manual_node_output_schemas,
+    reject_declared_policy_gates,
 )
 from modulo.db.crud.pipeline_owner import validate_accountability_owner
 from modulo.db.crud.schema import create_schema, create_schema_version
@@ -1437,6 +1438,11 @@ async def _materialize_pipeline_and_edges(
         schema_id_map,
         ctx.overrides.connector_instances,
     )
+    # FAR-1109: import writes ``graph_nodes_json`` directly and does NOT run the
+    # graph-write policy-gate translation, so a bundle declaring a
+    # ``policy_gate`` block must fail loudly rather than import silently
+    # unenforced.
+    reject_declared_policy_gates(graph_nodes, surface="Pipeline import")
 
     pipeline = await _create_imported_pipeline(
         ctx,
