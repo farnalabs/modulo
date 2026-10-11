@@ -4427,6 +4427,51 @@ def _finalize_node_result(
     return result
 
 
+def _community_gated_stub(
+    state: dict[str, Any],
+    *,
+    node_id: str,
+    agent_id: uuid.UUID | None,
+) -> dict[str, Any] | None:
+    """FAR-764 community-execution gate (ADR 032 D2): the block stub.
+
+    Community-sourced agents that have not been granted by the operator are
+    restricted to read-only / no-tool scope. The gated agent set is seeded
+    into state by the executor at run start. A gated node returns a stub
+    artifact instead of invoking the model - the agent cannot execute until
+    the operator grants access. Returns ``None`` when no gate applies.
+    """
+    gated = state.get("_community_gated_agents") or set()
+    # Compare the canonicalised UUID form, not the raw snapshot string - a
+    # non-canonical rendering (uppercase / brace / no-dash) of the same agent
+    # id would otherwise slip past the gate and fail it open.
+    if agent_id is not None and str(agent_id) in gated:
+        return {
+            "artifacts": [
+                {
+                    "node_id": node_id,
+                    "status": "blocked",
+                    "reason": "community_sourced_not_granted",
+                }
+            ]
+        }
+    return None
+
+
+def _missing_backend_stub(*, node_id: str, agent_id: uuid.UUID | None) -> dict[str, Any]:
+    """FAR-1115: no ``model_backend_id`` - raise (agent node) or stub (plain).
+
+    An agent node (model-backed by intent) whose agent resolves to no
+    model_backend_id is a misconfiguration - not a legitimate stub. Surface a
+    clear, actionable error naming both the node and the agent so the
+    operator can fix the config immediately. Connector-binding / manual nodes
+    without agent_id keep the original stub behavior (byte-identical).
+    """
+    if agent_id is not None:
+        raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
+    return {"artifacts": [{"node_id": node_id, "status": "executed"}]}
+
+
 async def _dispatch_node(
     node_def: dict[str, Any],
     state: dict[str, Any],
@@ -4459,31 +4504,10 @@ async def _dispatch_node(
     # raises a LangGraph interrupt, so control never reaches the node body.
     await _run_conformance_gate(state, node_id=node_id, agent_id=agent_id)
 
-    # FAR-764: community execution gate (ADR 032 D2).  Community-sourced
-    # agents that have not been granted by the operator are restricted to
-    # read-only / no-tool scope.  The gated agent set is seeded into state
-    # by the executor at run start.  A gated node returns a stub artifact
-    # instead of invoking the model - the agent cannot execute until the
-    # operator grants access.
-    gated = state.get("_community_gated_agents") or set()
-    # Compare the canonicalised UUID form, not the raw snapshot string - a
-    # non-canonical rendering (uppercase / brace / no-dash) of the same agent
-    # id would otherwise slip past the gate and fail it open.
-    if agent_id is not None and str(agent_id) in gated:
-        return (
-            {
-                "artifacts": [
-                    {
-                        "node_id": node_id,
-                        "status": "blocked",
-                        "reason": "community_sourced_not_granted",
-                    }
-                ]
-            },
-            "",
-            "",
-            "",
-        )
+    # FAR-764: community execution gate (ADR 032 D2) - one-line stub branch.
+    gated_stub = _community_gated_stub(state, node_id=node_id, agent_id=agent_id)
+    if gated_stub is not None:
+        return gated_stub, "", "", ""
 
     run_context: dict[str, Any] = state.get("run_context") or {}
     raw_input = run_context.get("input", {})
@@ -4528,16 +4552,10 @@ async def _dispatch_node(
 
     # If no model_backend_id, fall back to stub behavior
     # (connector_binding nodes, manual nodes routed through wrong path, etc.).
+    # FAR-1115 lives in ``_missing_backend_stub``: raise for a misconfigured
+    # agent node, byte-identical stub otherwise.
     if not model_backend_id_str:
-        # FAR-1115: an agent node (model-backed by intent) whose agent
-        # resolves to no model_backend_id is a misconfiguration - not a
-        # legitimate stub.  Surface a clear, actionable error naming both
-        # the node and the agent so the operator can fix the config
-        # immediately.  Connector-binding / manual nodes without agent_id
-        # keep the original stub behavior (byte-identical).
-        if agent_id is not None:
-            raise NodeMissingModelBackendError(node_id=node_id, agent_id=str(agent_id))
-        return {"artifacts": [{"node_id": node_id, "status": "executed"}]}, "", "", ""
+        return _missing_backend_stub(node_id=node_id, agent_id=agent_id), "", "", ""
     return None, model_backend_id_str, prompt_template, raw_input
 
 
