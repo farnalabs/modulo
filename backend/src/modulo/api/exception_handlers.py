@@ -1,7 +1,7 @@
 import logging
 import traceback
 
-from fastapi import Request
+from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -74,7 +74,7 @@ def union_allow_header(request: Request) -> str | None:
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     headers = dict(exc.headers or {})
-    if exc.status_code == 405:
+    if exc.status_code == status.HTTP_405_METHOD_NOT_ALLOWED:
         allow = union_allow_header(request)
         if allow is not None:
             headers["Allow"] = allow
