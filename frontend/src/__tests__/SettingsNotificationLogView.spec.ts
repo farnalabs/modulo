@@ -124,7 +124,7 @@ describe('SettingsNotificationLogView', () => {
     const wrapper = mount(SettingsNotificationLogView)
     await flushPromises()
     expect(wrapper.text()).toContain('pipeline.completed')
-    expect(wrapper.text()).toContain('delivered')
+    expect(wrapper.text()).toContain('Delivered')
     expect(wrapper.text()).toContain('https://hooks.example.com/notify')
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('Sep')
@@ -320,7 +320,7 @@ describe('SettingsNotificationLogView', () => {
     await flushPromises()
     const badge = wrapper.find('.badge-status-success')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('delivered')
+    expect(badge.text()).toContain('Delivered')
   })
 
   it('statusBadge returns destructive class for failed', async () => {
@@ -336,7 +336,7 @@ describe('SettingsNotificationLogView', () => {
     await flushPromises()
     const badge = wrapper.find('.badge-status-destructive')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('failed')
+    expect(badge.text()).toContain('Failed')
   })
 
   it('statusBadge returns slate class for dead_lettered', async () => {
@@ -352,6 +352,7 @@ describe('SettingsNotificationLogView', () => {
     await flushPromises()
     const badge = wrapper.find('.badge-context-slate')
     expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('Dead Lettered')
   })
 
   it('statusBadge returns warning class for pending', async () => {
@@ -367,7 +368,7 @@ describe('SettingsNotificationLogView', () => {
     await flushPromises()
     const badge = wrapper.find('.badge-status-warning')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('pending')
+    expect(badge.text()).toContain('Pending')
   })
 
   it('statusBadge returns slate class for unknown status', async () => {
@@ -383,6 +384,7 @@ describe('SettingsNotificationLogView', () => {
     await flushPromises()
     const badge = wrapper.find('.badge-context-slate')
     expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('unknown_status')
   })
 
   it('formatTimestamp returns dash for null', async () => {
@@ -465,7 +467,7 @@ describe('SettingsNotificationLogView', () => {
     if (retry) {
       await retry.trigger('click')
       await flushPromises()
-      expect(wrapper.text()).toContain('delivered')
+      expect(wrapper.text()).toContain('Delivered')
     }
   })
 
