@@ -57,15 +57,13 @@ def decide(pr: dict, base_repo: str) -> tuple[str, str]:
     if payload_base and payload_base.lower() != base_repo.lower():
         return (
             "external",
-            f"payload base repo ({payload_base}) does not match caller base repo "
-            f"({base_repo}) - fail closed",
+            f"payload base repo ({payload_base}) does not match caller base repo ({base_repo}) - fail closed",
         )
 
     if head_full.lower() != base_repo.lower():
         return (
             "external",
-            f"PR head is from {head_full}, not {base_repo} (fork / external "
-            "contributor) - fail closed",
+            f"PR head is from {head_full}, not {base_repo} (fork / external contributor) - fail closed",
         )
 
     association = pr.get("author_association")
@@ -74,8 +72,7 @@ def decide(pr: dict, base_repo: str) -> tuple[str, str]:
     if association not in TRUSTED_ASSOCIATIONS:
         return (
             "external",
-            f"author_association '{association}' is not a trusted same-repo "
-            f"association - fail closed",
+            f"author_association '{association}' is not a trusted same-repo association - fail closed",
         )
 
     author = (pr.get("user") or {}).get("login") or "?"
