@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -51,10 +52,7 @@ class DropboxPaperConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         return pinned_async_client_sync(
-            _DROPBOX_API,
-            base_url=_DROPBOX_API,
-            headers=self._headers(),
-            timeout=30,
+            _DROPBOX_API, base_url=_DROPBOX_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:

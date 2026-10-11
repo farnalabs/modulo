@@ -133,6 +133,32 @@ def _sanitise_schema(schema: dict[str, Any]) -> tuple[dict[str, Any], list[str]]
     return sanitised, warnings
 
 
+def _check_const(node: dict[str, Any], reasons: list[str]) -> None:
+    """Append a rejection reason when *node*'s ``const`` string exceeds the cap."""
+    const_val = node.get("const")
+    if isinstance(const_val, str) and len(const_val) > _MAX_CONST_STRING_LENGTH:
+        reasons.append(f"const_string_exceeds_{_MAX_CONST_STRING_LENGTH}_chars")
+
+
+def _check_enum(node: dict[str, Any], reasons: list[str]) -> None:
+    """Append rejection reasons when *node*'s ``enum`` exceeds its caps.
+
+    Cardinality is checked first; per-entry length is only checked when the
+    cardinality is within the cap (at most one entry-length reason is
+    recorded).
+    """
+    enum_val = node.get("enum")
+    if not isinstance(enum_val, list):
+        return
+    if len(enum_val) > _MAX_ENUM_CARDINALITY:
+        reasons.append(f"enum_cardinality_exceeds_{_MAX_ENUM_CARDINALITY}")
+        return
+    for entry in enum_val:
+        if isinstance(entry, str) and len(entry) > _MAX_CONST_STRING_LENGTH:
+            reasons.append(f"enum_entry_exceeds_{_MAX_CONST_STRING_LENGTH}_chars")
+            break
+
+
 def _check_bounds(schema: dict[str, Any]) -> tuple[bool, list[str]]:
     """Return ``(should_reject, reasons)`` when const/enum bounds are exceeded.
 
@@ -142,20 +168,8 @@ def _check_bounds(schema: dict[str, Any]) -> tuple[bool, list[str]]:
 
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
-            # const bounds
-            const_val = node.get("const")
-            if isinstance(const_val, str) and len(const_val) > _MAX_CONST_STRING_LENGTH:
-                reasons.append(f"const_string_exceeds_{_MAX_CONST_STRING_LENGTH}_chars")
-            # enum bounds
-            enum_val = node.get("enum")
-            if isinstance(enum_val, list):
-                if len(enum_val) > _MAX_ENUM_CARDINALITY:
-                    reasons.append(f"enum_cardinality_exceeds_{_MAX_ENUM_CARDINALITY}")
-                else:
-                    for entry in enum_val:
-                        if isinstance(entry, str) and len(entry) > _MAX_CONST_STRING_LENGTH:
-                            reasons.append(f"enum_entry_exceeds_{_MAX_CONST_STRING_LENGTH}_chars")
-                            break
+            _check_const(node, reasons)
+            _check_enum(node, reasons)
             # Recurse into children.
             for value in node.values():
                 if isinstance(value, (dict, list)):

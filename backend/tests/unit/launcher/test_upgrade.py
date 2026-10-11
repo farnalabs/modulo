@@ -1520,7 +1520,7 @@ class TestBundledBootArgv:
         version_dir.mkdir(parents=True)
         (install_root / "current").symlink_to("versions/1.0.0") if os.name == "posix" else None
         with pytest.raises(UpgradeError, match="no launcher hook"):
-            upgrade_module._bundled_boot_argv(install_root, "1.0.0", tmp_path / "data")
+            upgrade_module._bundled_boot_argv(install_root, tmp_path / "data")
 
 
 class TestQuantifiedDiskPreflight:
@@ -2167,11 +2167,33 @@ class TestStopRunningStack:
         ):
             upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
 
+    def test_live_lock_holder_restarts_unit_and_refuses(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        unit_file = tmp_path / "test.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+
+        holder = MagicMock(pid=4242)
+
+        with (
+            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
+            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("modulo.launcher.upgrade.subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("modulo.launcher.supervisor.request_stop"),
+            patch("modulo.launcher.upgrade._read_lock_holder", return_value=holder),
+            patch("modulo.launcher.upgrade._pid_alive", return_value=True),
+            patch("modulo.launcher.upgrade._restart_unit_best_effort") as mock_restart,
+            pytest.raises(UpgradeError, match="STILL locked by a live launcher"),
+        ):
+            upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
+
+        mock_restart.assert_called_once_with(why="post-stop abort: restoring the stopped service")
+
 
 class TestRestartUnitBestEffort:
     def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
-        assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+        assert upgrade_module._restart_unit_best_effort(why="test") is None
 
     def test_unit_restart_success(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2181,7 +2203,7 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=0)
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
     def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch):
         unit_file = tmp_path / "test.service"
@@ -2191,11 +2213,11 @@ class TestRestartUnitBestEffort:
 
         mock_result = MagicMock(returncode=1, stderr=b"failed")
         with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
-    def test_import_error_caught(self, tmp_path):
+    def test_import_error_caught(self):
         with patch("builtins.__import__", side_effect=ImportError("no service module")):
-            assert upgrade_module._restart_unit_best_effort(tmp_path, why="test") is None
+            assert upgrade_module._restart_unit_best_effort(why="test") is None
 
 
 class TestApiPortOf:

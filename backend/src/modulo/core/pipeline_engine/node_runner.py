@@ -4835,8 +4835,36 @@ def _build_llm_judge_callable(
     runs inside an already-running asyncio event loop. We bridge sync -> async
     by running the async backend invoke on a dedicated event loop in a worker
     thread via ``_run_coroutine_sync``.
+
+    ``backend_id_str`` comes from ``eval_def.config["model_backend_id"]`` —
+    unvalidated free-form JSON, so a typo or stale manual edit can put any
+    string here. A malformed id does NOT raise: raising ``ValueError`` out of
+    ``run_evals_persist_before_decide``'s per-eval loop would abort every
+    sibling eval and terminalise the run via the generic error path. Instead
+    the returned judge fails THIS eval closed with a clear configuration
+    message (``passed=False``), so the block/warn decision still fires and
+    the remaining evals in the loop still run.
     """
-    backend_id = uuid.UUID(backend_id_str)
+    try:
+        backend_id = uuid.UUID(backend_id_str)
+    except (ValueError, TypeError) as exc:
+        detail = (
+            f"llm_judge eval has a malformed model_backend_id {backend_id_str!r}: "
+            f"not a valid UUID ({exc}); fix the eval definition's "
+            "config['model_backend_id']"
+        )
+        _log.error(
+            "llm_judge.malformed_model_backend_id",
+            extra={"model_backend_id": backend_id_str, "detail": detail},
+        )
+
+        def _fail_closed_judge(
+            output: dict[str, Any],
+            eval_def: EvalDefDTO,
+        ) -> dict[str, Any]:
+            return {"passed": False, "score": 0.0, "detail": detail}
+
+        return _fail_closed_judge
 
     def _judge(
         output: dict[str, Any],
@@ -11363,8 +11391,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             _sandbox_repair_info: dict[str, int] = {}
             try:
                 # FAR-899: use real JSON Schema validation with mode support
-                # FAR-901: pass schema_dir + node_id so the validator reads
-                # the on-disk contract version.
                 # FAR-902: collect repair stats for the enforcement record.
                 _val_outcome, _val_errors, _ = _validate_against_schema(
                     output_json,
@@ -11373,8 +11399,6 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
                     schema_id=schema_id,
                     schema_version=schema_version,
                     _repair_invoke_fn=_sandbox_repair_invoke_fn,
-                    schema_dir=_contract_local_tmp,
-                    node_id=node_id,
                     _repair_info=_sandbox_repair_info,
                 )
                 # FIX H: log the validation outcome for observability
@@ -12551,8 +12575,6 @@ def _validate_against_schema(
     schema_version: int = 0,
     repair_budget_config: Any = None,
     _repair_invoke_fn: Any | None = None,
-    schema_dir: "Path | None" = None,
-    node_id: str | None = None,
     _repair_info: dict[str, int] | None = None,
 ) -> tuple[str, list[dict[str, Any]], Any]:
     """Validate *data* against *schema* using Draft202012Validator.

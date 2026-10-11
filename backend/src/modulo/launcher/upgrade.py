@@ -941,14 +941,14 @@ def stop_running_stack(data_dir: Path, *, unit_file: Path | None = None) -> None
     request_stop(data_dir)
     holder = _read_lock_holder(data_dir.parent / (data_dir.name + ".lock"))
     if holder is not None and _pid_alive(holder.pid):
-        _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+        _restart_unit_best_effort(why="post-stop abort: restoring the stopped service")
         raise UpgradeError(
             f"Refusing: the data dir {data_dir} is STILL locked by a live launcher (holder PID "
             f"{holder.pid}) - stop it first: modulo stop"
         )
 
 
-def _restart_unit_best_effort(data_dir: Path, *, why: str) -> None:
+def _restart_unit_best_effort(*, why: str) -> None:
     """Best-effort `systemctl --user start` of the FAR-674 unit (+ loud log).
 
     Post-stop aborts otherwise leave the bundled stack DARK: the unit was
@@ -1088,7 +1088,7 @@ def _check_pg_major(components: dict[str, str], data_dir: Path) -> None:
         )
 
 
-def _bundled_boot_argv(install_root: Path, version: str, data_dir: Path) -> list[str]:
+def _bundled_boot_argv(install_root: Path, data_dir: Path) -> list[str]:
     """The NEW bundle's boot argv (the documented migration mechanism).
 
     Mechanism choice: the flow EXECs the NEW bundle's own `launcher start`
@@ -1143,7 +1143,7 @@ def run_boot(
     launcher = Path(boot_argv[0])
     stderr_allowance = 65536
     stderr_file = tempfile.TemporaryFile(prefix="modulo-upgrade-boot-stderr-")  # noqa: SIM115 - the lifetime must span Popen + the poll loop
-    process = subprocess.Popen(  # noqa: S603 - pinned argv, synthesized trusted input
+    process = subprocess.Popen(  # noqa: S603 - pinned argv; synthesized trusted input
         boot_argv,
         cwd=str(launcher.parent),
         stdout=subprocess.DEVNULL,
@@ -1433,7 +1433,7 @@ def perform_upgrade(
             _target_dir, prior_dir = _move_into_place(bundle_dir, install_root, version)
             atomic_symlink_swap(install_root / "current", f"versions/{version}")
         except UpgradeError:
-            _restart_unit_best_effort(data_dir, why="post-stop abort: restoring the stopped service")
+            _restart_unit_best_effort(why="post-stop abort: restoring the stopped service")
             raise
         marker_path = write_upgrade_marker(
             data_dir,
@@ -1446,7 +1446,7 @@ def perform_upgrade(
         boot_runner = boot or run_boot
         prior_link_target = prior_dir.name if prior_dir is not None else None
         try:
-            boot_runner(_bundled_boot_argv(install_root, version, data_dir), api_port=_api_port_of(data_dir))
+            boot_runner(_bundled_boot_argv(install_root, data_dir), api_port=_api_port_of(data_dir))
         except UpgradeError as exc:
             raise UpgradeError(
                 f"{exc}\n\n"
@@ -1458,7 +1458,7 @@ def perform_upgrade(
                     prior_link_target=prior_link_target,
                 )
             ) from exc
-        _restart_unit_best_effort(data_dir, why="healthy post-upgrade boot gate passed: restoring the service")
+        _restart_unit_best_effort(why="healthy post-upgrade boot gate passed: restoring the service")
         pruned = prune_versions(install_root, current_target=reserve_target)
         pruned += sweep_upgrade_caches(install_root)
 

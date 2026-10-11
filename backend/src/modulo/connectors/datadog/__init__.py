@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -51,6 +52,7 @@ class DatadogConnector(ConnectorBase):
                 "DD-APPLICATION-KEY": self._app_key,
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     @redacting

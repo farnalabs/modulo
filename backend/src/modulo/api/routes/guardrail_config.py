@@ -337,7 +337,6 @@ async def _apply_guardrail_upserts(
 
 
 async def _apply_guardrail_deletes(
-    session: AsyncSession,
     rows_by_name: dict[str, Eval],
     proposed_by_id: dict[str, Any],
     account_id: uuid.UUID,
@@ -402,7 +401,7 @@ async def _reconcile_guardrail_rows(
         return colliding
     for pipeline, rows_by_name in pipelines_rows:
         await _apply_guardrail_upserts(session, pipeline, rows_by_name, proposed_by_id, config_set, org_id, account_id)
-        await _apply_guardrail_deletes(session, rows_by_name, proposed_by_id, account_id)
+        await _apply_guardrail_deletes(rows_by_name, proposed_by_id, account_id)
     await session.flush()
     return []
 

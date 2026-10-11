@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import (
     MAX_DELAY,
     MAX_RETRIES,
@@ -497,6 +498,7 @@ class GitLabConnector(ConnectorBase):
             base_url=self._base_url,
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _declared_effective_scopes(self, client: httpx.AsyncClient) -> frozenset[str]:

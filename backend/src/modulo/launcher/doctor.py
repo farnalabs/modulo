@@ -1004,8 +1004,6 @@ def _build_database_probes(
 
 def _build_system_probes(
     data_dir: Path,
-    composed: dict[str, str],
-    state: Any,
 ) -> tuple[
     Callable[[], list[str]],
     Callable[[], int | None],
@@ -1245,7 +1243,7 @@ def default_probes(data_dir: Path, state: Any) -> DoctorProbes:
         _probe_modulo_on_path,
         _probe_install_root,
         _probe_second_install_hint,
-    ) = _build_system_probes(data_dir, composed, state)
+    ) = _build_system_probes(data_dir)
 
     def _probe_degraded_reason() -> str | None:
         from modulo.launcher.supervisor import RUNTIME_FILENAME, read_degraded_reason

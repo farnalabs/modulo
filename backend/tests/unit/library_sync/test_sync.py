@@ -1,8 +1,9 @@
 """Unit tests for community-library sync orchestration (FAR-363).
 
 The sync layer is tested with a fake AsyncSession (no real DB) and a fake
-LibraryClient. The contract under test: store the verified manifest + apply
-revocations, and fail open (never raise, preserve the last-good cache).
+LibraryClient. The contract under test: store the verified manifest and apply
+revocations, and fail open — every failure path records the error and returns a
+SyncResult without raising, leaving the last-good cached manifest intact.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import types
 from typing import Self
 
 import pytest
+from sqlalchemy.exc import InvalidRequestError
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
 
 from modulo.core.library_sync import get_cached_manifest, is_revoked, sync_library
@@ -28,6 +30,18 @@ def _settings(*, endpoint: str = ENDPOINT, root_key: str = "", timeout: float = 
     )
 
 
+def _install_client(
+    monkeypatch: pytest.MonkeyPatch,
+    client: _FakeClient,
+    *,
+    endpoint: str = ENDPOINT,
+    root_key: str = "",
+) -> None:
+    """Point the sync module's settings + client factory at *client* (no real HTTP)."""
+    monkeypatch.setattr(sync_module, "get_settings", lambda: _settings(endpoint=endpoint, root_key=root_key))
+    monkeypatch.setattr(sync_module, "LibraryClient", lambda **_: client)
+
+
 class _FakeResult:
     def __init__(self, value: object) -> None:
         self._value = value
@@ -37,25 +51,32 @@ class _FakeResult:
 
 
 class _FakeSession:
-    """Minimal AsyncSession stand-in covering the sync paths (no real DB)."""
+    """Minimal AsyncSession stand-in covering the sync paths (no real DB).
+
+    Models the real session's ``autobegin=False`` shape: ``execute`` outside an
+    active transaction, and a re-entrant ``begin``, both raise
+    ``InvalidRequestError``.
+    """
 
     def __init__(self, existing: LibrarySyncState | None = None) -> None:
         self.state = existing
-        self.added: list[object] = []
         self._active_tx = False
 
     def in_transaction(self) -> bool:
         return self._active_tx
 
     async def execute(self, _stmt: object) -> _FakeResult:
+        if not self._active_tx:
+            raise InvalidRequestError("execute() called outside a transaction")
         return _FakeResult(self.state)
 
     def add(self, obj: object) -> None:
-        self.added.append(obj)
         if self.state is None:
             self.state = obj  # type: ignore[assignment]
 
     def begin(self) -> Self:
+        if self._active_tx:
+            raise InvalidRequestError("a transaction is already begun on this session")
         self._active_tx = True
         return self
 
@@ -68,9 +89,8 @@ class _FakeSession:
 
 
 class _FakeClient:
-    def __init__(self, manifest: dict | None, catalog: list[dict] | None, error: Exception | None = None) -> None:
+    def __init__(self, manifest: dict | None, error: Exception | None = None) -> None:
         self.manifest = manifest
-        self.catalog = catalog
         self.error = error
         self.closed = False
 
@@ -78,9 +98,6 @@ class _FakeClient:
         if self.error is not None:
             raise self.error
         return self.manifest
-
-    async def fetch_catalog(self) -> list[dict] | None:
-        return self.catalog
 
     async def close(self) -> None:
         self.closed = True
@@ -106,10 +123,8 @@ class TestSyncLibrary:
             {"id": "agent-2", "type": "agent", "slug": "healthy-agent"},
         ]
         manifest = _signed_manifest(private_key, entries=entries, revoked=[{"id": "agent-1"}])
-        client = _FakeClient(manifest=manifest, catalog=entries)
-
-        monkeypatch.setattr(sync_module, "get_settings", lambda: _settings(endpoint=ENDPOINT, root_key=public_key))
-        monkeypatch.setattr(sync_module, "LibraryClient", lambda **_: client)
+        client = _FakeClient(manifest=manifest)
+        _install_client(monkeypatch, client, root_key=public_key)
 
         session = _FakeSession()
         result = await sync_library(session)
@@ -129,10 +144,8 @@ class TestSyncLibrary:
         private_key, public_key = keys
         old_manifest = _signed_manifest(private_key, entries=[{"id": "agent-1"}])
         new_manifest = _signed_manifest(private_key, entries=[{"id": "agent-1"}, {"id": "agent-2"}])
-        client = _FakeClient(manifest=new_manifest, catalog=[{"id": "agent-1"}, {"id": "agent-2"}])
-
-        monkeypatch.setattr(sync_module, "get_settings", lambda: _settings(endpoint=ENDPOINT, root_key=public_key))
-        monkeypatch.setattr(sync_module, "LibraryClient", lambda **_: client)
+        client = _FakeClient(manifest=new_manifest)
+        _install_client(monkeypatch, client, root_key=public_key)
 
         existing = LibrarySyncState(id=SINGLETON_ID, manifest_json=old_manifest, catalog_json=[{"id": "agent-1"}])
         session = _FakeSession(existing=existing)
@@ -143,10 +156,9 @@ class TestSyncLibrary:
         assert len(existing.catalog_json) == 2
         assert existing.last_error is None
 
-    async def test_fail_open_on_manifest_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _FakeClient(manifest=None, catalog=None)
-        monkeypatch.setattr(sync_module, "get_settings", lambda: _settings(endpoint=ENDPOINT))
-        monkeypatch.setattr(sync_module, "LibraryClient", lambda **_: client)
+    async def test_manifest_failure_records_error_without_raising(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _FakeClient(manifest=None)
+        _install_client(monkeypatch, client)
 
         session = _FakeSession()
         result = await sync_library(session)
@@ -156,10 +168,43 @@ class TestSyncLibrary:
         assert session.state is not None
         assert "manifest" in (session.state.last_error or "")
 
+    async def test_fail_open_preserves_last_good_manifest(
+        self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        private_key, public_key = keys
+        good_manifest = _signed_manifest(private_key, entries=[{"id": "agent-1"}])
+        good_catalog = [{"id": "agent-1", "type": "agent", "slug": "keeper"}]
+        client = _FakeClient(manifest=None)
+        _install_client(monkeypatch, client, root_key=public_key)
+
+        existing = LibrarySyncState(id=SINGLETON_ID, manifest_json=good_manifest, catalog_json=good_catalog)
+        session = _FakeSession(existing=existing)
+        result = await sync_library(session)
+
+        assert result.success is False
+        assert existing.manifest_json == good_manifest
+        assert existing.catalog_json == good_catalog
+        assert existing.last_error == "manifest fetch or verification failed"
+        assert existing.last_synced_at is not None
+
+    async def test_record_failure_never_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _FakeClient(manifest=None)
+        _install_client(monkeypatch, client)
+
+        async def _boom(_session: object) -> None:
+            raise RuntimeError("state load failed")
+
+        monkeypatch.setattr(sync_module, "_load_state", _boom)
+
+        session = _FakeSession()
+        result = await sync_library(session)
+
+        assert isinstance(result, sync_module.SyncResult)
+        assert result.success is False
+
     async def test_fail_open_on_unexpected_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _FakeClient(manifest=None, catalog=None, error=RuntimeError("boom"))
-        monkeypatch.setattr(sync_module, "get_settings", lambda: _settings(endpoint=ENDPOINT))
-        monkeypatch.setattr(sync_module, "LibraryClient", lambda **_: client)
+        client = _FakeClient(manifest=None, error=RuntimeError("boom"))
+        _install_client(monkeypatch, client)
 
         session = _FakeSession()
         result = await sync_library(session)
@@ -171,7 +216,7 @@ class TestSyncLibrary:
 
 
 class TestCachedManifest:
-    async def test_returns_none_when_empty(self) -> None:
+    async def test_returns_none_when_no_state_stored(self) -> None:
         session = _FakeSession()
         assert await get_cached_manifest(session) is None
 
@@ -179,6 +224,17 @@ class TestCachedManifest:
         manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}
         state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
         assert await get_cached_manifest(_FakeSession(existing=state)) == manifest
+
+    async def test_reuses_active_transaction(self) -> None:
+        """``_read_state`` must not re-enter ``begin`` when a txn is already open."""
+        manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}
+        state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
+        session = _FakeSession(existing=state)
+        session._active_tx = True
+
+        assert await get_cached_manifest(session) == manifest
+        # Still the same caller-owned transaction (no re-begin, no close).
+        assert session._active_tx is True
 
     async def test_fail_open_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _explode(_session: object) -> LibrarySyncState:
@@ -206,4 +262,11 @@ class TestIsRevoked:
         assert await is_revoked(self._state_with_manifest(manifest), "agent-2") is False
 
     async def test_false_when_no_manifest(self) -> None:
+        assert await is_revoked(_FakeSession(), "agent-1") is False
+
+    async def test_false_when_manifest_read_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _explode(_session: object) -> dict | None:
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(sync_module, "get_cached_manifest", _explode)
         assert await is_revoked(_FakeSession(), "agent-1") is False

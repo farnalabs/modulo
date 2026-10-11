@@ -36,6 +36,9 @@ __all__ = [
     "main",
 ]
 
+#: Module holding the re-exported CLI symbols resolved lazily below.
+_MIGRATE_ORG_MODULE = "modulo.cli.migrate_org"
+
 #: attribute name -> (module, attribute) resolved on first access.
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "break_glass_cli": ("modulo.cli.break_glass", "cli"),

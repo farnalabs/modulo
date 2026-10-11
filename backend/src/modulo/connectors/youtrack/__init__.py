@@ -6,6 +6,7 @@ from typing import Any, cast
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -71,6 +72,7 @@ class YouTrackConnector(ConnectorBase):
             base_url=self._base_url,
             headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -50,10 +51,7 @@ class OnePasswordConnector(ConnectorBase):
         # DNS-rebinding window). ``trust_env=False`` stops a proxy from
         # re-resolving the destination server-side and defeating the pin.
         return pinned_async_client_sync(
-            self._base,
-            base_url=self._base,
-            headers=self._headers(),
-            timeout=30,
+            self._base, base_url=self._base, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:

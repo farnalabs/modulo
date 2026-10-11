@@ -37,7 +37,12 @@ from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.model_backend_hub import _build_backend
 from modulo.core.model_backend_presets import MODEL_BACKEND_PRESETS
 from modulo.core.plugin_registry import get_plugin_registry
-from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    SecretsBackend,
+    create_secrets_backend,
+    resolve_credential,
+)
 from modulo.core.validation_level import model_backend_baseline_level, resolve_validation_level
 from modulo.db.crud.model_backend import (
     create_model_backend,
@@ -78,6 +83,32 @@ HealthCheckStatus = Literal["ok", "unhealthy", "not_applicable"]
 
 def _encrypt(api_key: str, fernet_key: str) -> bytes:
     return Fernet(fernet_key.encode()).encrypt(api_key.encode())
+
+
+async def _resolve_credential_or_422(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    value: str,
+) -> tuple[str, SecretsBackend]:
+    """Resolve a literal/``secretref://`` credential (FAR-1640).
+
+    Runs under the caller's already-opened RLS transaction (the backend reads
+    the org from the session), so a key belonging to another organisation is
+    indistinguishable from a missing one. Every resolution failure is a typed
+    422 naming the offending key — never a silent empty credential, never a 500.
+    Returns the resolved value plus the backend instance (reused for the
+    encrypted write).
+    """
+    secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+    try:
+        resolved = await resolve_credential(secrets_backend, value)
+    except CredentialReferenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.validation_detail(["body", "api_key"]),
+        ) from None
+    return resolved, secrets_backend
 
 
 async def _run_health_check_on_save(
@@ -255,6 +286,8 @@ class ModelBackendCreate(TeamVisibilityMixin):
     display_name: str = Field(..., min_length=1, max_length=255)
     provider: str = Field(..., min_length=1, max_length=128)
     model_id: str = Field(..., min_length=1, max_length=128)
+    # A literal credential, or a ``secretref://<key>`` vault reference the
+    # SERVER resolves at write time (FAR-1640).
     api_key: str = Field(..., min_length=1)
     # A REAL field (not ClassVar): pydantic v2 excludes ClassVar annotations
     # from the model fields, so a ClassVar default_params silently dropped
@@ -601,11 +634,16 @@ async def create_model_backend_endpoint(
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
     _validate_provider(req.provider)
-    ciphertext = _encrypt(req.api_key, settings.fernet_key)
     try:
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             await set_rls_user_context(session, principal.account_id, principal.org_role)
+
+            # FAR-1640: resolve a ``secretref://<key>`` vault reference under
+            # the caller's org RLS context BEFORE anything is written — a
+            # missing/foreign key is a typed 422.
+            resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
+            ciphertext = _encrypt(resolved_api_key, settings.fernet_key)
 
             if req.fallback_backend_ids:
                 await _validate_fallback_ids(session, principal.organisation_id, req.fallback_backend_ids)
@@ -645,8 +683,7 @@ async def create_model_backend_endpoint(
                 tier=req.tier,
             )
 
-            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-            secret_value = json.dumps({"api_key": req.api_key})
+            secret_value = json.dumps({"api_key": resolved_api_key})
             await secrets_backend.set_secret(str(mb.id), secret_value)
             response = _to_response(mb)
         # The entity write has COMMITTED above. The PRD 8.1 health check runs
@@ -658,7 +695,7 @@ async def create_model_backend_endpoint(
             mb,
             req.provider,
             req.model_id,
-            req.api_key,
+            resolved_api_key,
             dict(req.default_params or {}),
             org_id=principal.organisation_id,
             user_id=principal.account_id,
@@ -816,14 +853,15 @@ async def list_pipeline_references_endpoint(
     )
 
 
-def _prepare_update_payload(req: ModelBackendUpdate, settings: Settings) -> dict[str, Any]:
-    """Build the update dict, encrypting a supplied api_key into ciphertext."""
+def _prepare_update_payload(req: ModelBackendUpdate) -> dict[str, Any]:
+    """Build the non-credential update dict.
+
+    ``api_key`` is removed and handled inside the RLS transaction (FAR-1640),
+    where a ``secretref://`` vault reference can be resolved under the caller's
+    org context and the resolved value encrypted exactly as before.
+    """
     updates: dict[str, Any] = req.model_dump(exclude_unset=True)
-    if "api_key" in updates and updates["api_key"] is not None:
-        ct = _encrypt(updates.pop("api_key"), settings.fernet_key)
-        updates["credentials_ciphertext"] = ct  # nosemgrep: credential-not-in-state
-    elif "api_key" in updates:
-        updates.pop("api_key")
+    updates.pop("api_key", None)
     return updates
 
 
@@ -851,8 +889,14 @@ async def _update_backend_tx(
     req: ModelBackendUpdate,
     settings: Settings,
     updates: dict[str, Any],
-) -> tuple[ModelBackend, ModelBackendResponse]:
-    """Apply the update in one transaction: RLS, fallback validation, write, secret."""
+) -> tuple[ModelBackend, ModelBackendResponse, str | None]:
+    """Apply the update in one transaction: RLS, fallback validation, write, secret.
+
+    FAR-1640: a supplied ``api_key`` carrying a ``secretref://<key>`` vault
+    reference is resolved and encrypted inside this transaction — the resolved
+    value is never echoed. Returns the resolved credential (or None when no
+    credential change was requested) so the post-commit health check can use it.
+    """
     async with session.begin():
         await set_rls_org(session, principal.organisation_id)
         await set_rls_user_context(session, principal.account_id, principal.org_role)
@@ -860,16 +904,22 @@ async def _update_backend_tx(
         existing = await get_model_backend(session, backend_id)
         if existing is None or existing.organisation_id != principal.organisation_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MSG_NOT_FOUND)
+        resolved_api_key: str | None = None
+        secrets_backend: SecretsBackend | None = None
+        if req.api_key is not None:
+            resolved_api_key, secrets_backend = await _resolve_credential_or_422(session, settings, value=req.api_key)
+            updates["credentials_ciphertext"] = _encrypt(  # nosemgrep: credential-not-in-state
+                resolved_api_key, settings.fernet_key
+            )
         mb = await update_model_backend(session, backend_id, updates)
         if mb is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_MODEL_BACKEND_NOT_FOUND)
         await session.refresh(mb)
-        if req.api_key is not None:
-            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
-            secret_value = json.dumps({"api_key": req.api_key})
+        if resolved_api_key is not None and secrets_backend is not None:
+            secret_value = json.dumps({"api_key": resolved_api_key})
             await secrets_backend.set_secret(str(mb.id), secret_value)
         response = _to_response(mb)
-        return mb, response
+        return mb, response, resolved_api_key
 
 
 async def _update_and_post_process(
@@ -894,14 +944,14 @@ async def _update_and_post_process(
     its exact PRD name when an API key is supplied; the generic edit event
     carries only the non-credential fields that actually changed.
     """
-    mb, response = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
-    if req.api_key is not None:
+    mb, response, resolved_api_key = await _update_backend_tx(session, backend_id, principal, req, settings, updates)
+    if resolved_api_key is not None:
         await _run_health_check_on_save_and_persist(
             session,
             mb,
             mb.provider,
             mb.model_id,
-            req.api_key,
+            resolved_api_key,
             dict(mb.default_params or {}),
             org_id=principal.organisation_id,
             user_id=principal.account_id,
@@ -918,7 +968,7 @@ async def _update_and_post_process(
             payload={"backend_id": str(mb.id), "changed_fields": changed_fields},
             log_key=_CODE_MODEL_BACKENDS_AUDIT_APPEND_FAILED,
         )
-    if req.api_key is not None:
+    if resolved_api_key is not None:
         await append_audit_event_isolated(
             session,
             principal,
@@ -992,7 +1042,7 @@ async def update_model_backend_endpoint(
     principal: TenantPrincipal = require_permission_any_credential("model_backend.update"),
     settings: Settings = Depends(get_settings),
 ) -> ModelBackendResponse:
-    updates = _prepare_update_payload(req, settings)
+    updates = _prepare_update_payload(req)
     return await _apply_backend_update(session, backend_id, principal, req, settings, updates)
 
 

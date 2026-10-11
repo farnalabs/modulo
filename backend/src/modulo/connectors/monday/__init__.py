@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -171,6 +172,7 @@ class MondayConnector(ConnectorBase):
             base_url=_MONDAY_API,
             headers={"Authorization": self._api_key},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -16,7 +16,6 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from cryptography.fernet import Fernet
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
@@ -28,13 +27,10 @@ from modulo.connectors.base import (
 from modulo.core.connector_hub import ConnectorHub, ConnectorNotFoundError
 from modulo.core.secrets_backend import create_secrets_backend
 
+from .secrets_helpers import SHARED_FERNET_KEY as _KEY
+from .secrets_helpers import encrypt_credentials
+
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
-
-_KEY = Fernet.generate_key().decode()
-
-
-def _encrypt(payload: dict[str, Any]) -> bytes:
-    return Fernet(_KEY.encode()).encrypt(json.dumps(payload).encode())
 
 
 @dataclass
@@ -44,7 +40,7 @@ class _FakeCI:
     id: uuid.UUID
     connector_type_id: str
     config_json: dict[str, Any] = field(default_factory=dict)
-    credentials_ciphertext: bytes = field(default_factory=lambda: _encrypt({}))
+    credentials_ciphertext: bytes = field(default_factory=lambda: encrypt_credentials({}))
     visibility: str = "org"
     allowed_operations: list[str] | None = None
 
@@ -56,7 +52,7 @@ async def test_e2e_full_lifecycle_spans_and_credential_cleanup(tmp_path, otel_sp
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="team",
         allowed_operations=["read", "write"],
     )
@@ -112,7 +108,7 @@ async def test_e2e_credentials_decrypted_into_connector_and_close_releases():
         id=uuid.uuid4(),
         connector_type_id="github",
         config_json={},
-        credentials_ciphertext=_encrypt({"token": token}),
+        credentials_ciphertext=encrypt_credentials({"token": token}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     hub = ConnectorHub(secrets_backend=backend, org_id="org-e2e")
@@ -160,7 +156,7 @@ async def test_e2e_error_span_recorded(tmp_path, otel_span_exporter: InMemorySpa
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt({}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
     backend = create_secrets_backend(fernet_key=_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):

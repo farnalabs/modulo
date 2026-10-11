@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import InvalidRequestError, PendingRollbackError, SQLAlchemyError
+from sqlalchemy.exc import InvalidRequestError, OperationalError, PendingRollbackError, SQLAlchemyError
 
 from modulo.api.constants import MSG_DB_ERROR_PLEASE_TRY
 from modulo.api.db_error_handling import MSG_SESSION_CONTRACT
@@ -30,6 +30,19 @@ _VALID_32 = "a" * 32
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000002")
 _RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000100")
+
+
+class _DriverError(Exception):
+    """Stand-in for an asyncpg/psycopg driver error carrying a SQLSTATE."""
+
+    def __init__(self, message: str, sqlstate: str) -> None:
+        super().__init__(message)
+        self.sqlstate = sqlstate
+
+
+def _lock_timeout_error() -> OperationalError:
+    """FAR-1610: the bounded row-lock wait expiring surfaces as SQLSTATE 55P03."""
+    return OperationalError("stmt", {}, _DriverError("canceling statement due to lock timeout", "55P03"))
 
 
 def _make_settings() -> Settings:
@@ -72,6 +85,34 @@ def client() -> Generator[TestClient, None, None]:
 class TestClaimGateSQLAlchemyError:
     @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_claim_gate_returns_503(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 503
+
+
+class TestClaimGateLockTimeout:
+    """FAR-1610: ``HITLManager.claim`` now bounds its row-lock wait
+    transaction-scoped, so a contended hot ``runs``/``hitl_claims`` row is
+    reachable BY DESIGN as SQLSTATE 55P03. The route must answer an attributable
+    409 naming the contention (mirroring ``runs.cancel_run``), never the generic
+    retry-inviting 503; any other SQLAlchemyError still maps to 503."""
+
+    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=_lock_timeout_error()))
+    def test_claim_gate_lock_timeout_returns_409(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
+            json={"expiry_minutes": 15},
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "lock" in detail.lower(), detail
+        assert "another change is in progress" in detail, detail
+
+    @patch("modulo.api.routes.hitl.HITLManager.claim", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    def test_claim_gate_non_lock_sqlalchemy_error_still_503(self, client: TestClient) -> None:
+        """Only 55P03 is attributable: a genuine transient error keeps its 503."""
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/claim",
             json={"expiry_minutes": 15},
@@ -217,6 +258,36 @@ class TestApproveGateSQLAlchemyError:
     @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
     @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
     def test_approve_gate_returns_503(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "test-token", "notes": "approved"},
+        )
+        assert resp.status_code == 503
+
+
+class TestApproveGateLockTimeout:
+    """FAR-1610: the shared ``_run_hitl_manager`` decision body bounds its
+    row-lock wait transaction-scoped, so a 55P03 on the hot rows is reachable
+    by design on every decision route. It must surface as an attributable 409 -
+    not the generic 503 - while a non-lock SQLAlchemyError keeps its 503."""
+
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=_lock_timeout_error()))
+    def test_approve_gate_lock_timeout_returns_409(self, client: TestClient) -> None:
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
+            json={"claim_token": "test-token", "notes": "approved"},
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "lock" in detail.lower(), detail
+        assert "another change is in progress" in detail, detail
+
+    @patch("modulo.api.hitl_answer_validation.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.resolve_hitl_review_config", new=AsyncMock(return_value=None))
+    @patch("modulo.api.routes.hitl.HITLManager.approve", new=AsyncMock(side_effect=SQLAlchemyError("mock", {}, "")))
+    def test_approve_gate_non_lock_sqlalchemy_error_still_503(self, client: TestClient) -> None:
         resp = client.post(
             f"/api/v1/runs/{_RUN_ID}/hitl/gate-1/approve",
             json={"claim_token": "test-token", "notes": "approved"},

@@ -120,6 +120,25 @@ jobs:
                 ACCEPTED=true
                 break
                 ;;
+              400)
+                # FAR-1097 follow-up (same treatment merge-queue.yml already
+                # applies): HTTP 400 "Duplicate webhook payload" is the engine's
+                # byte-level idempotency guard (DuplicateWebhookError) - the
+                # identical delivery was already ACCEPTED within the ~5-min
+                # dedup window (a concurrent run or a workflow re-run). The
+                # review run already exists, so this is a handled no-op, NOT a
+                # dispatch failure. Failing here produced a false main-CI
+                # failure that the Lifecycle Watchdog keys off (observed on
+                # run 38089984823 for PR #1543, which was reviewed and merged
+                # by the run created from the earlier identical delivery).
+                if grep -q "Duplicate webhook payload" "${RESPONSE_FILE}"; then
+                  echo "::notice::Modulo PR Review duplicate delivery suppressed (identical payload already accepted within the dedup window) - the review run already exists."
+                  ACCEPTED=true
+                  break
+                fi
+                echo "::error::Modulo PR Review webhook POST failed with HTTP ${HTTP_CODE} (non-retryable) - no pipeline run was created."
+                exit 1
+                ;;
               429|000|5*)
                 if [ "${i}" -eq 5 ]; then
                   break

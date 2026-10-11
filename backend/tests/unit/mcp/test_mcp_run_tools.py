@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from modulo.api.mcp_server import cancel_run, get_run_evals, get_run_status, list_eval_definitions
 from modulo.core.mcp.scope_validator import MCPAuthorizationError
@@ -15,6 +15,14 @@ from modulo.core.mcp.scope_validator import MCPAuthorizationError
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PLACEHOLDER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000003")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
+
+
+def _lock_timeout_error(statement: str = "SELECT runs") -> OperationalError:
+    """Simulated row-lock contention (SQLSTATE 55P03), as SQLAlchemy surfaces it."""
+    from asyncpg import exceptions as asyncpg_exceptions
+
+    driver_error = asyncpg_exceptions.LockNotAvailableError("canceling statement due to lock timeout")
+    return OperationalError(statement, {}, driver_error)
 
 
 @pytest.fixture(autouse=True)
@@ -559,6 +567,119 @@ class TestCancelRun(_AuthContext):
         result = await cancel_run(run_id=str(uuid.uuid4()))
 
         assert result["error"] == "migration_required"
+
+
+class TestCancelRunLockBound(_AuthContext):
+    """FAR-1610: the MCP cancel leg issues the caller-side lock bound before the
+    shared ``request_cancellation`` takes the hot ``runs`` row lock, and maps a
+    bounded 55P03 to a branchable ``lock_timeout`` result (not a generic
+    ``database_unavailable``)."""
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.row_lock.set_mutation_row_lock_timeout")
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_bounds_before_request_cancellation(
+        self,
+        mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_bound: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        order: list[str] = []
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        run = _make_mock_run(status="running")
+        mock_get_run.return_value = run
+
+        async def _bound(_session: Any) -> None:
+            order.append("bound")
+
+        async def _request(*_a: Any, **_k: Any) -> Any:
+            order.append("request")
+            return run
+
+        mock_bound.side_effect = _bound
+        mock_request_cancellation.side_effect = _request
+
+        result = await cancel_run(run_id=str(run.id))
+
+        assert result == {"run_id": str(run.id), "cancellation_requested": True}
+        assert order == ["bound", "request"]
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server._session")
+    async def test_lock_timeout_returns_lock_timeout_code(
+        self,
+        mock_session: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = _make_mock_run(status="running")
+        mock_request_cancellation.side_effect = _lock_timeout_error()
+
+        result = await cancel_run(run_id=str(uuid.uuid4()))
+
+        assert result["error"] == "lock_timeout"
+        assert "lock" in result["detail"].lower()
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server._session")
+    async def test_non_lock_db_error_is_not_lock_timeout(
+        self,
+        mock_session: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """Only 55P03 is a busy-row conflict: any other SQLAlchemy error keeps
+        its existing (generic) handling, never the branchable ``lock_timeout``."""
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        mock_get_run.return_value = _make_mock_run(status="running")
+        mock_request_cancellation.side_effect = OperationalError("UPDATE runs", {}, RuntimeError("deadlock detected"))
+
+        result = await cancel_run(run_id=str(uuid.uuid4()))
+
+        assert result["error"] != "lock_timeout"
+        assert result["error"] == "database_unavailable"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.crud.run.get_run")
+    @patch("modulo.db.crud.run.request_cancellation")
+    @patch("modulo.api.mcp_server.finalize_cancelled_run")
+    @patch("modulo.api.mcp_server._session")
+    async def test_paused_run_skips_finalize(
+        self,
+        mock_session: AsyncMock,
+        mock_finalize_cancelled: AsyncMock,
+        mock_request_cancellation: AsyncMock,
+        mock_get_run: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """A PAUSED-then-cancelled run runs no finalize (its cost is already
+        terminalised); only a never-paused in-flight run is finalised here."""
+        mock_sesh = AsyncMock()
+        mock_session.return_value = _make_session_context(mock_sesh)
+        run = _make_mock_run(status="hitl_parked")
+        mock_get_run.return_value = run
+        mock_request_cancellation.return_value = run
+
+        result = await cancel_run(run_id=str(run.id))
+
+        assert result == {"run_id": str(run.id), "cancellation_requested": True}
+        mock_finalize_cancelled.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
