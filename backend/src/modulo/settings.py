@@ -179,7 +179,7 @@ class Settings(BaseSettings):
     # ADR 005: single-org invariant for self-hosted. When False (default),
     # org creation is blocked, org-slug login is rejected, and the login-context
     # endpoint always reports single-org. Set MODULO_MULTI_ORG_ENABLED=true to
-    # enable multi-org behaviour (reserved for future FarnaLabs SaaS).
+    # enable multi-org behaviour (reserved for future multi-organisation deployments).
     modulo_multi_org_enabled: bool = Field(False)
 
     # Demo auto-login experience (FAR-535). All three must be set — MODULO_DEMO_ENABLED
