@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, LargeBinary, String, Text
+from sqlalchemy import JSON, Boolean, CheckConstraint, Index, LargeBinary, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from modulo.db.models.base import OrgScoped
@@ -8,6 +8,43 @@ from modulo.db.models.base import OrgScoped
 
 class SsoProvider(OrgScoped):
     __tablename__ = "sso_providers"
+    __table_args__ = (
+        # Pre-auth global enablement lookups
+        # (crud.get_enabled_saml_provider / list_enabled_oidc_providers /
+        # list_enabled_saml_providers) filter WHERE provider_type = ? AND
+        # enabled with no org predicate, so the OrgScoped organisation_id
+        # index cannot serve them. The partial predicate matches the shared
+        # "enabled" filter exactly (migration 0296).
+        Index(
+            "ix_sso_providers_type_enabled",
+            "provider_type",
+            postgresql_where=text("enabled"),
+            sqlite_where=text("enabled"),
+        ),
+        # provider_type is otherwise validated only at the API boundary
+        # (admin_sso ^(oidc|saml)$); crud.create_provider and the startup
+        # env-seed write it unchecked.
+        CheckConstraint(
+            "provider_type IN ('oidc', 'saml')",
+            name="ck_sso_providers_type",
+        ),
+        # default_role is granted as the org membership role at join time.
+        # The API admits operator/runner, the SSO callback flow legitimately
+        # uses viewer, and the startup seed takes a free-form setting — so
+        # the full org-role vocabulary is enforced (mirrors
+        # ck_org_memberships_role), not just the current API subset.
+        CheckConstraint(
+            "default_role IN ('admin', 'operator', 'runner', 'viewer')",
+            name="ck_sso_providers_default_role",
+        ),
+        # preset vocabulary mirrors core.sso_presets.PRESETS — keep in sync
+        # when adding a preset (same hardcoded-vocabulary convention as
+        # trigger_events.validation_result).
+        CheckConstraint(
+            "preset IN ('custom', 'google', 'auth0', 'okta', 'azure-ad', 'onelogin')",
+            name="ck_sso_providers_preset",
+        ),
+    )
 
     provider_type: Mapped[str] = mapped_column(String(16), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -19,19 +56,19 @@ class SsoProvider(OrgScoped):
     metadata_xml: Mapped[str | None] = mapped_column(Text, nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     scopes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     # FAR-855: auto_provision is now the JOIN-GATE mode switch, NOT a blanket
     # JIT grant. Default is False ("invitation only") both in Python and in the
     # DB server_default (migration 0246) so new org sign-ins deny by default;
     # only memberships held or granted (SCIM / invitation / domain allowlist)
     # let a previously-unknown SSO identity join.
-    auto_provision: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    auto_provision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # FAR-855: case-insensitive EXACT-match allowlist of verified email
     # domains, consulted only when auto_provision is True. Empty list = mode 3
     # ("anyone who authenticates") which additionally requires the
     # sso_unrestricted_provisioning feature flag (default OFF).
     allowed_domains: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
-    default_role: Mapped[str] = mapped_column(String(32), default="runner", server_default="runner")
+    default_role: Mapped[str] = mapped_column(String(32), nullable=False, default="runner", server_default="runner")
     group_mappings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, server_default="[]")
     preset: Mapped[str] = mapped_column(String(32), nullable=False, server_default="custom")
     tenant_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
