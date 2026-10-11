@@ -5561,17 +5561,21 @@ def make_hitl_review_fn(
             return eval_condition_skip
 
         # --- Autonomy skip/approve. ---
-        # FAR-1175 S1: read the pipeline's live earned level + the org's
-        # ``autonomy_gating`` flag at gate time (both fail-open — an error
-        # degrades to the S0 pinned-default behaviour). The live earned level is
-        # combined with the run's pinned-at-start value INSIDE resolve_autonomy
-        # so a demotion bites this in-flight run while a promotion does not.
-        earned_live = await read_live_earned_autonomy(
-            session_factory,
-            org_id=org_id,
-            pipeline_id=state.get("_pipeline_id"),
-        )
+        # FAR-1175 S1: the org's ``autonomy_gating`` flag is resolved FIRST
+        # (fail-open, default OFF). Only when the flag is ON do we read the
+        # pipeline's live earned level — with the flag off (the default) the
+        # gate path costs NO extra per-gate SELECT and is byte-identical to S0.
+        # The live earned level is combined with the run's pinned-at-start value
+        # INSIDE resolve_autonomy so a demotion bites this in-flight run while a
+        # promotion does not.
         gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
+        earned_live: str | None = None
+        if gating_enabled:
+            earned_live = await read_live_earned_autonomy(
+                session_factory,
+                org_id=org_id,
+                pipeline_id=state.get("_pipeline_id"),
+            )
         resolution, autonomy_result = _hitl_review_autonomy_result(
             review_id,
             state,

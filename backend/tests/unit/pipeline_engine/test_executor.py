@@ -40,6 +40,7 @@ from modulo.core.pipeline_engine.runtime_retry import (
     COMPENSATION_FAILED_CODE,
     CompensationFailedError,
 )
+from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
 from modulo.db.crud.run import SandboxConcurrencyLimit
 from modulo.otel_bridge import trace_id_for_thread
 from tests.unit.api.mock_session import make_empty_execute_result
@@ -1440,6 +1441,170 @@ async def test_execute_seeds_state_with_run_context():
     assert captured_state["run_context"]["cancelled"] is False
     assert captured_state["run_context"]["input"] == {"task": "do it"}
     assert not captured_state["artifacts"]
+
+
+# ---------------------------------------------------------------------------
+# FAR-1175 S1 — earned autonomy pinned at run start
+# ---------------------------------------------------------------------------
+
+
+def _pipeline_with_earned(level: str | None) -> MagicMock:
+    pipeline = MagicMock()
+    pipeline.earned_autonomy_level = level
+    return pipeline
+
+
+def _earned_executor(
+    monkeypatch: pytest.MonkeyPatch, *, live: str | None, error: Exception | None = None
+) -> PipelineExecutor:
+    """Build an executor whose ``_resolve_earned_at_start`` live read is wired.
+
+    Patches the lazily-imported crud/RLS seams the method uses.
+    """
+    if error is not None:
+        monkeypatch.setattr(
+            "modulo.db.crud.pipeline.get_pipeline",
+            AsyncMock(side_effect=error),
+        )
+    else:
+        monkeypatch.setattr(
+            "modulo.db.crud.pipeline.get_pipeline",
+            AsyncMock(return_value=_pipeline_with_earned(live)),
+        )
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(_make_session(_make_snapshot()))
+    return executor
+
+
+def _earned_snapshot(*, default: str | None, ceiling: str | None) -> MagicMock:
+    snap = _make_snapshot()
+    snap.default_autonomy_level = default
+    snap.max_autonomy_level = ceiling
+    return snap
+
+
+async def test_resolve_earned_at_start_prefers_live_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    executor = _earned_executor(monkeypatch, live="notify_on_complete")
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A never-promoted pipeline (NULL earned column) pins its default."""
+    executor = _earned_executor(monkeypatch, live=None)
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_clamps_to_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live earned level above the snapshot ceiling is clamped down (levels
+    are ranked, never compared as strings)."""
+    executor = _earned_executor(monkeypatch, live="fully_autonomous")
+    snap = _earned_snapshot(default="manual_approval", ceiling="notify_on_complete")
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_returns_none_without_any_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = _earned_executor(monkeypatch, live=None)
+    snap = _earned_snapshot(default=None, ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result is None
+
+
+async def test_resolve_earned_at_start_read_failure_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient read failure must NOT seed a pin of ``None`` (which would let
+    a later live promotion loosen the run) — it degrades to the pinned default."""
+    executor = _earned_executor(monkeypatch, live=None, error=RuntimeError("db down"))
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_invalid_live_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unparseable earned value (the DB CHECK should prevent this) is not
+    seeded as a pin."""
+    executor = _earned_executor(monkeypatch, live="bogus_level")
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result is None
+
+
+async def test_resolve_earned_at_start_cancellation_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = _earned_executor(monkeypatch, live=None, error=asyncio.CancelledError())
+    snap = _earned_snapshot(default="manual_approval", ceiling=None)
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+
+async def test_execute_seeds_pinned_earned_autonomy_at_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """execute() pins the live earned level into the run's initial state as
+    ``_pipeline_earned_at_start`` — the value the gate combines (min) with the
+    live level so a promotion never loosens an in-flight run."""
+    run = _make_run()
+    final_run = _make_run(run_id=run.id, status="complete")
+    snapshot = _make_snapshot()
+    snapshot.default_autonomy_level = "manual_approval"
+    snapshot.max_autonomy_level = None
+    session = _make_session(snapshot)
+    factory = _make_session_factory(session)
+    registry = _mock_registry()
+    captured_state: dict[str, Any] = {}
+
+    async def _capture_stream(state: Any, config: Any, *, version: str = "v1") -> Any:
+        captured_state.update(state)
+        return
+        yield  # pragma: no cover
+
+    compiled = MagicMock()
+    compiled.astream_events = _capture_stream
+
+    monkeypatch.setattr(
+        "modulo.db.crud.pipeline.get_pipeline",
+        AsyncMock(return_value=_pipeline_with_earned("notify_on_complete")),
+    )
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.async_sessionmaker", return_value=factory),
+        patch("modulo.core.pipeline_engine.executor.get_run", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.update_run_status", return_value=final_run),
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.get_or_compile", return_value=compiled),
+        patch("modulo.core.pipeline_engine.executor.get_registry", return_value=registry),
+        patch("modulo.core.pipeline_engine.executor.GraphValidator", new=_mock_graph_validator()),
+        patch.object(PipelineExecutor, "_check_capacity", _bypass_capacity),
+    ):
+        executor = PipelineExecutor(MagicMock())
+        await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={"task": "x"})
+
+    assert captured_state["run_context"][PIPELINE_EARNED_AT_START_KEY] == "notify_on_complete"
 
 
 async def test_execute_fires_on_first_progress_once():
