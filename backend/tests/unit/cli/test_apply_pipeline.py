@@ -655,6 +655,65 @@ entities:
         assert not trigger_posts
 
     @respx.mock
+    def test_updated_pipeline_patch_failure_keeps_id_for_dependent_trigger(self) -> None:
+        """S3776 gate (main parity): an UPDATED pipeline whose PATCH later fails
+        KEEPS its id in the pipeline-ids map, so a dependent trigger still
+        resolves it and applies. The map is pre-seeded from the fetched current
+        pipelines and the failure recorder pops ONLY a just-created pipeline's
+        id, so an updated pipeline's id survives a failed PATCH on the apply
+        path. Only a JUST-CREATED pipeline's failed apply drops the id (see
+        test_graph_patch_failure_blocks_dependent_trigger)."""
+        existing_id = "00000000-0000-0000-0000-0000000000aa"
+        existing = _pipeline_item("sample", existing_id, description="Stale description")
+        routes = _mock_current_with_pipelines([existing])
+        routes["pipeline_patch"].mock(return_value=httpx.Response(500, json={"detail": "patch boom"}))
+        trigger_post = respx.post(re.compile(r"https://api\.test/api/v1/pipelines/[0-9a-f-]+/triggers")).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": str(uuid.uuid4()),
+                    "pipeline_id": existing_id,
+                    "name": "nightly",
+                    "trigger_type": "cron",
+                    "active": True,
+                    "max_concurrent_runs": 1,
+                    "daily_spend_limit": None,
+                    "config_json": {},
+                    "cron_expression": "0 3 * * *",
+                    "cron_timezone": None,
+                    "next_fire_at": None,
+                    "in_flight": 0,
+                    "streak_status": {"state": "ok"},
+                },
+            )
+        )
+        config = parse_apply_documents(
+            """
+api_version: modulo.dev/v1
+entities:
+  pipelines:
+    - name: sample
+      description: Sample pipeline
+      max_concurrent_runs: 3
+  triggers:
+    - pipeline: sample
+      name: nightly
+      trigger_type: cron
+      cron_expression: "0 3 * * *"
+"""
+        )
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False)
+        # The pipeline failed, and ONLY the pipeline failed.
+        assert [(e["kind"], e["name"]) for e in report["failed"]] == [("pipeline", "sample")]
+        # The dependent trigger still resolved the updated-but-failed
+        # pipeline's id and applied against it (main behaviour).
+        assert trigger_post.call_count == 1
+        assert trigger_post.calls.last.request.url.path == f"/api/v1/pipelines/{existing_id}/triggers"
+        assert [e["name"] for e in report["created"] if e["kind"] == "trigger"] == ["sample/nightly"]
+
+    @respx.mock
     def test_update_patches_top_fields_and_unchanged_graph_is_omitted(self) -> None:
         existing_id = "00000000-0000-0000-0000-0000000000aa"
         existing = _pipeline_item("sample", existing_id)
