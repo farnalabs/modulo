@@ -1702,6 +1702,256 @@ def _production_coverage_from_text(output: str, changed_lines: int) -> tuple[flo
     return effective_pct, measured_lines, unmeasured_lines
 
 
+def _evaluate_report_outcome(rc: int, output: str, *, language: str, fail_under: int) -> tuple[bool, str]:
+    """Pass/fail outcome when diff-cover produced no parseable line percentage.
+
+    Three situations share the "no parseable coverage" state and are told
+    apart by the exit code and output: an rc of 0 with nothing parseable (a
+    diff-cover/report mismatch — fail loudly), the explicit below-threshold
+    marker, and any other error (surface its last non-empty line).
+    """
+    if rc == 0:
+        return False, f"diff-cover exited 0 but produced no parseable coverage result for {language}"
+    if _THRESHOLD_NOT_MET_RE.search(output):
+        return False, f"coverage below threshold {fail_under}%"
+    error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
+    reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
+    return False, reason
+
+
+def _line_gate_outcome(
+    measured_pct: float | None,
+    unmeasured_lines: int,
+    rc: int,
+    output: str,
+    *,
+    language: str,
+    fail_under: int,
+) -> tuple[bool, str]:
+    """Decide the line-gate pass/fail and build the human-readable reason.
+
+    A parseable *measured_pct* is scored against *fail_under* (unmeasured
+    lines are already inside the percentage, counted at 0%); without one the
+    outcome comes from diff-cover's exit code and output
+    (:func:`_evaluate_report_outcome`).
+    """
+    if measured_pct is None:
+        return _evaluate_report_outcome(rc, output, language=language, fail_under=fail_under)
+    passed = measured_pct >= fail_under
+    if not passed and unmeasured_lines > 0:
+        reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
+    elif not passed:
+        reason = f"coverage {measured_pct:.1f}% is below threshold {fail_under}%"
+    elif unmeasured_lines > 0:
+        reason = (
+            f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
+        )
+    else:
+        reason = ""
+    return passed, reason
+
+
+def _score_changed_lines(
+    changed_files: dict[str, int],
+    json_data: dict | None,
+    production_stats: tuple[int, int] | None,
+    report_path: Path,
+    language: str,
+    js_src_root: str,
+    output: str,
+    changed_lines: int,
+) -> tuple[float | None, int, int, int]:
+    """Score the changed production lines (production files only).
+
+    Returns ``(measured_pct, measured_lines, unmeasured_lines, scored_lines)``.
+    ``scored_lines`` is the denominator actually scored by the gate: for files
+    present in the report it is their coverable changed lines; for files absent
+    from the report it is every changed line (scored at 0%).  It is reported as
+    ``changed_lines`` in the GateResult so ``Measured + Unmeasured == Changed
+    Lines`` stays coherent in the summary.
+
+    The JSON ``src_stats`` path is preferred (per-file, production-only, capped
+    at each file's changed-line count).  The text-output fallback keeps the
+    measured-line count so unmeasured lines are still detected when the JSON
+    report is absent.  Reached only when ``changed_lines > 0`` (the zero case
+    returns in :func:`evaluate` before this runs), so the divisions below are
+    safe.
+    """
+    src_stats = json_data.get("src_stats") if isinstance(json_data, dict) else None
+    if production_stats is not None and isinstance(src_stats, dict):
+        covered_lines, measured_lines = production_stats
+        # Only production files ABSENT from the report are "unmeasured" and
+        # scored at 0% (brand-new untested file detection).  Non-executable
+        # lines inside a measured file are simply not part of the coverage
+        # denominator (see _unmeasured_file_lines).
+        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data, present_files)
+        scored_lines = measured_lines + unmeasured_lines
+        measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
+        return measured_pct, measured_lines, unmeasured_lines, scored_lines
+    # Fallback: parse the text output (with the measured-line count so
+    # unmeasured lines are still detected when the JSON report is absent).
+    text_stats = _production_coverage_from_text(output, changed_lines)
+    if text_stats is not None:
+        measured_pct, measured_lines, unmeasured_lines = text_stats
+        return measured_pct, measured_lines, unmeasured_lines, changed_lines
+    return None, 0, 0, changed_lines
+
+
+def _branch_gate_outcome(
+    branch_covered: int, branch_total: int, branch_fail_under: int
+) -> tuple[float | None, bool | None]:
+    """Branch-gate outcome: ``(branch_actual_pct, branch_passed)``.
+
+    No branch records on any changed line -> ``(None, None)``: there is no
+    branch to measure, so the branch gate passes vacuously.  The report parsers
+    retain only branch records, so a changed line that simply has no branch
+    (straight-line code) is indistinguishable from one whose branch record is
+    absent — neither carries a branch into the denominator.  Treating the
+    former as 0% spuriously failed every branch-free diff of more than
+    TINY_DIFF_THRESHOLD lines.  ``branch_unmeasured`` (computed separately in
+    :func:`evaluate`) is a diagnostic only; it never drives the pass/fail
+    decision.  Genuinely unexercised branches still surface as
+    ``branch_total > 0`` with 0% coverage, and a brand-new untested file still
+    fails the line gate.
+    """
+    if branch_total == 0:
+        return None, None  # vacuous
+    branch_actual_pct = (branch_covered / branch_total) * 100.0
+    return branch_actual_pct, branch_actual_pct >= branch_fail_under
+
+
+def _empty_diff_gate(language: str, fail_under: int, deleted_files: dict[str, int], deleted_lines: int) -> GateResult:
+    """Gate result when the diff adds no executable production lines (FAR-1317).
+
+    A deletion-only production change FAILs instead of skipping into a pass —
+    the gate cannot tell a justified deletion from a load-bearing one, so it
+    fails closed.  A diff with neither additions nor deletions (test-only,
+    docs-only, or comment-only) is a skip.
+    """
+    if deleted_lines > 0:
+        return GateResult(
+            language=language,
+            skipped=False,
+            skip_reason=(
+                f"deletion-only production change: {deleted_lines} executable line(s) in "
+                f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
+                "coverage credit and cannot pass the gate (FAR-1317)"
+            ),
+            passed=False,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=0,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=True,
+        skip_reason="no changed production lines in this diff",
+        passed=True,
+        actual_pct=None,
+        threshold=fail_under,
+        changed_lines=0,
+    )
+
+
+def _missing_report_gate(
+    language: str,
+    report_path: Path | None,
+    fail_under: int,
+    allow_missing: bool,
+    changed_lines: int,
+    deleted_lines: int,
+) -> GateResult:
+    """Gate result when the coverage report is missing or unreadable.
+
+    CI default (``allow_missing`` False) fails closed — the upstream job that
+    produces the report failed or its artifact download broke.  Local
+    convenience (True) skips instead.
+    """
+    if allow_missing:
+        return GateResult(
+            language=language,
+            skipped=True,
+            skip_reason=f"no coverage report found at {report_path} (allow-missing)",
+            passed=True,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=changed_lines,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=False,
+        skip_reason=f"missing coverage report: {report_path}",
+        passed=False,
+        actual_pct=None,
+        threshold=fail_under,
+        changed_lines=changed_lines,
+        deleted_lines=deleted_lines,
+    )
+
+
+def _no_measurable_lines_gate(
+    changed_files: dict[str, int],
+    report_path: Path,
+    language: str,
+    js_src_root: str,
+    fail_under: int,
+    branch_fail_under: int,
+    changed_lines: int,
+    deleted_lines: int,
+) -> GateResult:
+    """Gate result when diff-cover reports no changed coverable lines (FAR-706).
+
+    Two situations share diff-cover's "no changed coverable lines" marker and
+    are told apart on the raw report's file list:
+
+    (a) the changed production files are absent from the report entirely
+        (brand-new, untested files) -> FAIL, scoring the absent files' lines
+        at 0%; and
+    (b) the changed production files ARE measured by the report, but none of
+        their changed lines are instrumentable (static ``.vue`` template
+        markup, import-only lines) -> there is no executable changed code to
+        cover, so SKIP rather than fail a file the report already measures.
+
+    Reached only when ``changed_lines > 0`` (the zero case returns earlier in
+    :func:`evaluate`).
+    """
+    present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
+    unmeasured_files = {path: count for path, count in changed_files.items() if path not in present_files}
+    if not unmeasured_files:
+        return GateResult(
+            language=language,
+            skipped=True,
+            skip_reason=(
+                "no measurable coverage data for changed lines: every changed production file "
+                "is measured by the report and its changed lines are non-instrumentable "
+                "(static template markup / import-only lines)"
+            ),
+            passed=True,
+            actual_pct=None,
+            threshold=fail_under,
+            changed_lines=changed_lines,
+            deleted_lines=deleted_lines,
+        )
+    return GateResult(
+        language=language,
+        skipped=False,
+        skip_reason="no coverage data for changed lines (0% effective)",
+        passed=False,
+        actual_pct=0.0,
+        threshold=fail_under,
+        changed_lines=changed_lines,
+        measured_lines=0,
+        unmeasured_lines=sum(unmeasured_files.values()),
+        deleted_lines=deleted_lines,
+        branch_actual_pct=0.0,
+        branch_passed=False,
+        branch_threshold=branch_fail_under,
+    )
+
+
 def evaluate(
     language: str,
     report_path: Path | None,
@@ -1739,30 +1989,7 @@ def evaluate(
 
     # --- No added production lines: a deletion-only change FAILs (never SKIPs) ---
     if changed_lines == 0:
-        if deleted_lines > 0:
-            return GateResult(
-                language=language,
-                skipped=False,
-                skip_reason=(
-                    f"deletion-only production change: {deleted_lines} executable line(s) in "
-                    f"{len(deleted_files)} file(s) removed and none added — deletions earn no "
-                    "coverage credit and cannot pass the gate (FAR-1317)"
-                ),
-                passed=False,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=0,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=True,
-            skip_reason="no changed production lines in this diff",
-            passed=True,
-            actual_pct=None,
-            threshold=fail_under,
-            changed_lines=0,
-        )
+        return _empty_diff_gate(language, fail_under, deleted_files, deleted_lines)
 
     # --- Tiny-diff exemption ---
     # Withheld when the diff also removes executable production lines
@@ -1784,26 +2011,13 @@ def evaluate(
 
     # --- Missing report ---
     if report_path is None or not report_path.exists():
-        if allow_missing:
-            return GateResult(
-                language=language,
-                skipped=True,
-                skip_reason=f"no coverage report found at {report_path} (allow-missing)",
-                passed=True,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=changed_lines,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=False,
-            skip_reason=f"missing coverage report: {report_path}",
-            passed=False,
-            actual_pct=None,
-            threshold=fail_under,
-            changed_lines=changed_lines,
-            deleted_lines=deleted_lines,
+        return _missing_report_gate(
+            language,
+            report_path,
+            fail_under,
+            allow_missing,
+            changed_lines,
+            deleted_lines,
         )
 
     # --- Run diff-cover with JSON report to detect unmeasured lines ---
@@ -1811,105 +2025,44 @@ def evaluate(
     rc, output = _run_diff_cover(report_path.resolve(), compare_branch, fail_under)
 
     # --- diff-cover found no coverage data for the changed lines ---
-    # Two situations share diff-cover's "no changed coverable lines" marker and
-    # must be told apart on the raw report's file list (FAR-706):
-    #   (a) the changed production files are absent from the report entirely
-    #       (brand-new, untested files) -> FAIL, scoring the absent files' lines
-    #       at 0%; and
-    #   (b) the changed production files ARE measured by the report, but none of
-    #       their changed lines are instrumentable (static ``.vue`` template
-    #       markup, import-only lines) -> there is no executable changed code to
-    #       cover, so SKIP rather than fail a file the report already measures.
-    # Reaching here means changed_lines > 0 (zero changed production lines
-    # already skipped above).
+    # Two situations share the marker and are told apart on the raw report's
+    # file list — see _no_measurable_lines_gate (FAR-706).  Reaching here
+    # means changed_lines > 0 (zero changed production lines already skipped
+    # above).
     if _NO_CHANGED_LINES_RE.search(output):
-        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
-        unmeasured_files = {path: count for path, count in changed_files.items() if path not in present_files}
-        if not unmeasured_files:
-            return GateResult(
-                language=language,
-                skipped=True,
-                skip_reason=(
-                    "no measurable coverage data for changed lines: every changed production file "
-                    "is measured by the report and its changed lines are non-instrumentable "
-                    "(static template markup / import-only lines)"
-                ),
-                passed=True,
-                actual_pct=None,
-                threshold=fail_under,
-                changed_lines=changed_lines,
-                deleted_lines=deleted_lines,
-            )
-        return GateResult(
-            language=language,
-            skipped=False,
-            skip_reason="no coverage data for changed lines (0% effective)",
-            passed=False,
-            actual_pct=0.0,
-            threshold=fail_under,
-            changed_lines=changed_lines,
-            measured_lines=0,
-            unmeasured_lines=sum(unmeasured_files.values()),
-            deleted_lines=deleted_lines,
-            branch_actual_pct=0.0,
-            branch_passed=False,
-            branch_threshold=branch_fail_under,
+        return _no_measurable_lines_gate(
+            changed_files,
+            report_path,
+            language,
+            js_src_root,
+            fail_under,
+            branch_fail_under,
+            changed_lines,
+            deleted_lines,
         )
 
     # --- Extract measured coverage (production files only) ---
-    # changed_lines > 0 here: the zero case returned above, so the divisions
-    # below are safe.
-    measured_pct: float | None = None
-    measured_lines = 0
-    unmeasured_lines = 0
-    # Denominator actually scored by the gate.  For files present in the report
-    # this is their coverable changed lines; for files absent from the report it
-    # is every changed line (scored at 0%).  Reported as ``changed_lines`` in the
-    # summary so ``Measured + Unmeasured == Changed Lines`` stays coherent.
-    scored_lines = changed_lines
-
-    src_stats = json_data.get("src_stats") if isinstance(json_data, dict) else None
     production_stats = _production_coverage_from_json(changed_files, json_data)
-    if production_stats is not None and isinstance(src_stats, dict):
-        covered_lines, measured_lines = production_stats
-        # Only production files ABSENT from the report are "unmeasured" and
-        # scored at 0% (brand-new untested file detection).  Non-executable
-        # lines inside a measured file are simply not part of the coverage
-        # denominator (see _unmeasured_file_lines).
-        present_files = _report_counts_files(changed_files, report_path, language, js_src_root)
-        unmeasured_lines = _unmeasured_file_lines(changed_files, json_data, present_files)
-        scored_lines = measured_lines + unmeasured_lines
-        measured_pct = (covered_lines / scored_lines) * 100.0 if scored_lines else None
-    else:
-        # Fallback: parse the text output (with the measured-line count so
-        # unmeasured lines are still detected when the JSON report is absent).
-        text_stats = _production_coverage_from_text(output, changed_lines)
-        if text_stats is not None:
-            measured_pct, measured_lines, unmeasured_lines = text_stats
+    measured_pct, measured_lines, unmeasured_lines, scored_lines = _score_changed_lines(
+        changed_files,
+        json_data,
+        production_stats,
+        report_path,
+        language,
+        js_src_root,
+        output,
+        changed_lines,
+    )
 
     # --- Determine pass/fail ---
-    if measured_pct is not None:
-        passed = measured_pct >= fail_under
-        if not passed and unmeasured_lines > 0:
-            reason = f"coverage {measured_pct:.1f}% (with {unmeasured_lines} unmeasured lines at 0%) is below threshold {fail_under}%"
-        elif not passed:
-            reason = f"coverage {measured_pct:.1f}% is below threshold {fail_under}%"
-        elif unmeasured_lines > 0:
-            reason = (
-                f"coverage {measured_pct:.1f}% >= {fail_under}% (but {unmeasured_lines} unmeasured lines counted at 0%)"
-            )
-        else:
-            reason = ""
-    elif rc == 0:
-        passed = False
-        reason = f"diff-cover exited 0 but produced no parseable coverage result for {language}"
-    elif _THRESHOLD_NOT_MET_RE.search(output):
-        passed = False
-        reason = f"coverage below threshold {fail_under}%"
-    else:
-        passed = False
-        error_lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
-        reason = error_lines[-1] if error_lines else "diff-cover returned non-zero"
+    passed, reason = _line_gate_outcome(
+        measured_pct,
+        unmeasured_lines,
+        rc,
+        output,
+        language=language,
+        fail_under=fail_under,
+    )
 
     # --- Branch coverage on changed lines ---
     branch_covered, branch_total, branch_unmeasured = _compute_branch_coverage_from_raw(
@@ -1919,24 +2072,7 @@ def evaluate(
         language,
         js_src_root,
     )
-    branch_actual_pct: float | None = None
-    branch_passed_val: bool | None = None
-    if branch_total == 0:
-        # No branch records on any changed line: there is no branch to
-        # measure, so the branch gate passes vacuously.  The report parsers
-        # retain only branch records, so a changed line that simply has no
-        # branch (straight-line code) is indistinguishable from one whose
-        # branch record is absent — neither carries a branch into the
-        # denominator.  Treating the former as 0% spuriously failed every
-        # branch-free diff of more than TINY_DIFF_THRESHOLD lines.
-        # ``branch_unmeasured`` is retained as a diagnostic only; it never
-        # drives the pass/fail decision.  Genuinely unexercised branches
-        # still surface as ``branch_total > 0`` with 0% coverage, and a
-        # brand-new untested file still fails the line gate.
-        branch_passed_val = None  # vacuous
-    else:
-        branch_actual_pct = (branch_covered / branch_total) * 100.0
-        branch_passed_val = branch_actual_pct >= branch_fail_under
+    branch_actual_pct, branch_passed_val = _branch_gate_outcome(branch_covered, branch_total, branch_fail_under)
 
     return GateResult(
         language=language,
