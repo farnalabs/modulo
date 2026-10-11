@@ -167,7 +167,7 @@ jobs:
     name: Merge queue -> main
     needs: [freeze-gate, event-gate]
     if: needs.freeze-gate.outputs.frozen == 'false' && needs.event-gate.outputs.should_run == 'true'
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
