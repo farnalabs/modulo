@@ -112,15 +112,17 @@ const routePost = vi.hoisted(() => (
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
   const loadingRef = ref(useDataLoading.value)
+  const loadMock = vi.fn(async () => {})
   const mod = {
     useDataFetch: () => ({
       loading: loadingRef,
       error: ref(null),
       data: ref(undefined),
       fetched: ref(true),
-      load: async () => {},
+      load: loadMock,
     }),
     __loadingRef: loadingRef,
+    __loadMock: loadMock,
   }
   return mod
 })
@@ -1344,6 +1346,8 @@ describe('PipelineEditorView — run dialog', () => {
 
     // the rename error renders inside the teleported dialog
     expect(document.body.textContent).toContain('name_taken')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1420,6 +1424,8 @@ describe('PipelineEditorView — run dialog', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('delete_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -1846,6 +1852,8 @@ describe('PipelineEditorView — edge properties panel', () => {
     await flushPromises()
     await nextTick()
     expect(wrapper.text()).toContain('edge_rejected')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2034,6 +2042,8 @@ describe('PipelineEditorView — dialogs', () => {
     await nextTick()
     // the conversion error renders inside the teleported picker dialog
     expect(document.body.textContent).toContain('agent_missing')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2097,6 +2107,8 @@ describe('PipelineEditorView — dialogs', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('revert_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 
@@ -2165,6 +2177,8 @@ describe('PipelineEditorView — dialogs', () => {
     await flushPromises()
     await nextTick()
     expect(document.body.textContent).toContain('composite_denied')
+    // Dense dialog/panel context: the shared alert renders in its compact density.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(true)
     wrapper.unmount()
   })
 })
@@ -2201,6 +2215,15 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(wrapper.text()).toContain('graph_unavailable')
     // The toolbar should not render while an error is shown
     expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+    // The page-level ErrorAlert wires retry to the useDataFetch loader.
+    const retryBtn = wrapper.findAll('button').find(b => b.text().trim() === 'Retry')
+    expect(retryBtn).toBeTruthy()
+    const { __loadMock } = (await import('../composables/useDataFetch')) as unknown as { __loadMock: ReturnType<typeof vi.fn> }
+    __loadMock.mockClear()
+    await retryBtn!.trigger('click')
+    expect(__loadMock).toHaveBeenCalledTimes(1)
+    // The full-page alert stays at the default density — compact is opt-in.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).props('compact')).toBe(false)
     wrapper.unmount()
   })
 
@@ -2261,6 +2284,11 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     // the run dialog should show the save failure, not close
     expect(wrapper.find('[data-testid="pipeline-editor-run-prompt"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('save_broken')
+    // The run error renders via the shared ErrorAlert (FAR-1669), not a bespoke
+    // destructive <div>. retryable=false: a failed run/save-graph action is
+    // retried by the dialog's own Run button, so no in-place Retry is offered.
+    expect(wrapper.findComponent({ name: 'ErrorAlert' }).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from opentelemetry.trace import StatusCode
 
 import modulo.core.error_tracking.metrics as metrics_mod
 
@@ -29,6 +30,9 @@ def _reset_metric_handles() -> None:
         metrics_mod._runs_oldest_running_gauge,
         metrics_mod._runs_stall_reason_total,
         metrics_mod._runs_claim_count_histogram,
+        metrics_mod._alerts_suppressed_total,
+        metrics_mod._alert_delivery_failed_total,
+        metrics_mod._connector_unknown_total,
     )
     metrics_mod._errors_total = None
     metrics_mod._error_groups_active = None
@@ -37,6 +41,9 @@ def _reset_metric_handles() -> None:
     metrics_mod._runs_oldest_running_gauge = None
     metrics_mod._runs_stall_reason_total = None
     metrics_mod._runs_claim_count_histogram = None
+    metrics_mod._alerts_suppressed_total = None
+    metrics_mod._alert_delivery_failed_total = None
+    metrics_mod._connector_unknown_total = None
     yield
     (
         metrics_mod._errors_total,
@@ -46,6 +53,9 @@ def _reset_metric_handles() -> None:
         metrics_mod._runs_oldest_running_gauge,
         metrics_mod._runs_stall_reason_total,
         metrics_mod._runs_claim_count_histogram,
+        metrics_mod._alerts_suppressed_total,
+        metrics_mod._alert_delivery_failed_total,
+        metrics_mod._connector_unknown_total,
     ) = saved
 
 
@@ -154,13 +164,12 @@ class TestInitMetrics:
 
 
 class TestRecordErrorIngest:
-    def test_noop_when_counter_uninitialized(self) -> None:
-        counter = MagicMock()
-        with patch.object(metrics_mod, "_get_meter", return_value=None):
-            metrics_mod.record_error_ingest("critical", "sdk", "prod")
-        metrics_mod._errors_total = counter
+    def test_noop_when_counter_uninitialized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # record_error_ingest does NOT lazily initialise: an unset counter must
+        # stay unset and no add may happen.
+        monkeypatch.setattr(metrics_mod, "_errors_total", None)
         metrics_mod.record_error_ingest("critical", "sdk", "prod")
-        assert metrics_mod._errors_total is counter
+        assert metrics_mod._errors_total is None
 
     def test_records_attributes(self) -> None:
         counter = MagicMock()
@@ -370,13 +379,37 @@ class TestInitAlertCounter:
             unit="1",
         )
 
-    def test_exception_leaves_counter_unset(self) -> None:
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_alert_counter()
-        assert metrics_mod._error_alerts_total is None
-        log.warning.assert_called_once_with("metrics.alert_counter_failed", exc_info=True)
+
+# =========================================================================
+# Lazy-init exception paths — every counter init leaves its handle unset and
+# logs the matching failure key when ``create_counter`` raises.
+# =========================================================================
+
+
+@pytest.mark.parametrize(
+    ("init_fn", "attr", "log_key"),
+    [
+        ("_init_alert_counter", "_error_alerts_total", "metrics.alert_counter_failed"),
+        ("_init_suppressed_counter", "_alerts_suppressed_total", "metrics.suppressed_counter_failed"),
+        ("_init_delivery_failed_counter", "_alert_delivery_failed_total", "metrics.delivery_failed_counter_failed"),
+        (
+            "_init_connector_unknown_counter",
+            "_connector_unknown_total",
+            "metrics.connector_unknown_counter_failed",
+        ),
+    ],
+    ids=["alert", "suppressed", "delivery_failed", "connector_unknown"],
+)
+def test_init_counter_exception_leaves_counter_unset(
+    init_fn: str, attr: str, log_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metrics_mod, attr, None)
+    meter = _make_meter()
+    meter.create_counter.side_effect = RuntimeError("boom")
+    with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        getattr(metrics_mod, init_fn)()
+    assert getattr(metrics_mod, attr) is None
+    log.warning.assert_called_once_with(log_key, exc_info=True)
 
 
 # =========================================================================
@@ -629,41 +662,54 @@ class TestSampleRunRuntimeMetrics:
 
 
 # =========================================================================
-# exception-path coverage for exc_info=True additions (PR #97)
+# record_connector_unknown / record_connector_unknown_span (FAR-410)
 # =========================================================================
 
 
-class TestInitSuppressedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._alerts_suppressed_total = None
+class TestRecordConnectorUnknown:
+    def test_record_connector_unknown_lazily_initialises_and_records(self) -> None:
         meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_suppressed_counter()
-        assert metrics_mod._alerts_suppressed_total is None
-        log.warning.assert_called_once_with("metrics.suppressed_counter_failed", exc_info=True)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.record_connector_unknown("github", "node-1")
+        counter = meter.create_counter.return_value
+        counter.add.assert_called_once_with(1, attributes={"connector": "github", "node_id": "node-1"})
 
-
-class TestInitDeliveryFailedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._alert_delivery_failed_total = None
+    def test_record_connector_unknown_omits_empty_node_id(self) -> None:
         meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_delivery_failed_counter()
-        assert metrics_mod._alert_delivery_failed_total is None
-        log.warning.assert_called_once_with("metrics.delivery_failed_counter_failed", exc_info=True)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.record_connector_unknown("loki")
+        counter = meter.create_counter.return_value
+        counter.add.assert_called_once_with(1, attributes={"connector": "loki"})
 
+    def test_record_connector_unknown_span_marks_current_span(self) -> None:
+        span = MagicMock()
+        span.is_recording.return_value = True
+        with (
+            patch("opentelemetry.trace.get_current_span", return_value=span),
+            patch.object(metrics_mod, "record_connector_unknown") as record,
+        ):
+            metrics_mod.record_connector_unknown_span("sentry", "n1", "detail")
 
-class TestInitConnectorUnknownCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._connector_unknown_total = None
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_connector_unknown_counter()
-        assert metrics_mod._connector_unknown_total is None
-        log.warning.assert_called_once_with("metrics.connector_unknown_counter_failed", exc_info=True)
+        status = span.set_status.call_args.args[0]
+        assert status.status_code == StatusCode.ERROR
+        assert status.description == metrics_mod._CODE_CONNECTOR_UNKNOWN
+        attrs = span.set_attributes.call_args.args[0]
+        assert attrs["error.code"] == metrics_mod._CODE_CONNECTOR_UNKNOWN
+        assert attrs["connector"] == "sentry"
+        assert attrs["node_id"] == "n1"
+        assert attrs["error.message"] == "detail"
+        record.assert_called_once_with("sentry", "n1")
+
+    def test_record_connector_unknown_span_swallows_span_failure(self) -> None:
+        with (
+            patch("opentelemetry.trace.get_current_span", side_effect=RuntimeError("no tracer")),
+            patch.object(metrics_mod, "record_connector_unknown") as record,
+        ):
+            metrics_mod.record_connector_unknown_span("loki", "n2", "detail")
+
+        # A tracing failure is swallowed (best-effort) and the plain counter
+        # record still runs.
+        record.assert_called_once_with("loki", "n2")
 
 
 class TestCreateRuntimeInstrumentException:

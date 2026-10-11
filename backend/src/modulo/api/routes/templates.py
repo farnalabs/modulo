@@ -16,7 +16,12 @@ from modulo.api.dependencies import get_db_session, require_permission
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
-from modulo.db.crud.pipeline import ManualNodeOutputSchemaError, create_pipeline, enforce_manual_node_output_schemas
+from modulo.db.crud.pipeline import (
+    ManualNodeOutputSchemaError,
+    create_pipeline,
+    enforce_manual_node_output_schemas,
+    reject_declared_policy_gates,
+)
 from modulo.db.crud.template import (
     _agent_count_from_content,
     _preview_data_from_content,
@@ -254,6 +259,11 @@ async def create_pipeline_from_template_endpoint(
         agent_configs: list[dict[str, Any]] = content.get("agents", [])
         graph_nodes: list[dict[str, Any]] = content.get("graph_nodes", [])
         edges: list[dict[str, Any]] = content.get("edges", [])
+        # FAR-1109: template install writes ``graph_nodes_json`` directly and the
+        # node resolution below does not carry a ``policy_gate`` block through,
+        # so a template declaring a gate must fail loudly rather than install
+        # silently unenforced.
+        reject_declared_policy_gates(graph_nodes, surface="Pipeline creation from template")
 
         agent_ids = _allocate_template_agent_ids(agent_configs)
         async with session.begin():
