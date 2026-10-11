@@ -73,6 +73,30 @@ class TestFetchManifest:
         respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, content=b"not json"))
         assert await client.fetch_manifest() is None
 
+    @respx.mock
+    async def test_reuses_single_response_for_parsed_manifest(
+        self, keys: tuple[str, str], client: LibraryClient
+    ) -> None:
+        """One round-trip serves the whole parse+verify chain — no refetch.
+
+        The response returned by ``_get_validated`` is reused for the JSON
+        parse, the object check and the signature check; a second
+        ``_get_validated`` call (or a discarded response) would show up as a
+        second request against the route.
+        """
+        private_key, _ = keys
+        manifest = _signed_manifest(private_key, entries=[{"id": "agent-1", "type": "agent"}])
+        route = respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=manifest))
+
+        first = await client.fetch_manifest()
+        assert first == manifest
+        assert route.call_count == 1
+
+        # A repeat call is exactly one more request: no caching, no double-fetch.
+        second = await client.fetch_manifest()
+        assert second == manifest
+        assert route.call_count == 2
+
 
 class TestSsrfRejection:
     @respx.mock
@@ -121,6 +145,19 @@ class TestClientLifecycle:
         assert client._http_client is not None
         assert client._http_client is not first
 
+    async def test_reuses_an_open_client(self, client: LibraryClient) -> None:
+        """The ``_get_client`` reuse branch: an open client is returned as-is.
+
+        Without it (an unconditional rebuild) every call would leak the client
+        it replaced, and connection pooling across requests would be lost.
+        """
+        first = await client._get_client()
+        second = await client._get_client()
+
+        assert first.is_closed is False
+        assert second is first
+        assert client._http_client is first
+
 
 class TestFetchBlob:
     @respx.mock
@@ -141,3 +178,13 @@ class TestFetchBlob:
         sha256 = hashlib.sha256(b"x").hexdigest()
         respx.get(f"{ENDPOINT}/v1/blobs/{sha256}").mock(return_value=httpx.Response(404))
         assert await client.fetch_blob(sha256) is None
+
+    @respx.mock
+    async def test_accepts_uppercase_sha_by_lowering_before_compare(self, client: LibraryClient) -> None:
+        """``sha256.lower()`` in the hash guard: an uppercase caller-supplied
+        digest still matches the (always-lowercase) computed hex digest."""
+        content = b"<plugin>uppercase-sha</plugin>"
+        upper_sha = hashlib.sha256(content).hexdigest().upper()
+        respx.get(f"{ENDPOINT}/v1/blobs/{upper_sha}").mock(return_value=httpx.Response(200, content=content))
+
+        assert await client.fetch_blob(upper_sha) == content

@@ -80,7 +80,7 @@ class _FakeResult:
 class _FakeSession:
     """Minimal AsyncSession stand-in for the community helper queries."""
 
-    def __init__(self, installed_rows: list[tuple[str, str]] | None = None, existing_id: Any = None) -> None:
+    def __init__(self, installed_rows: list[tuple[Any, Any]] | None = None, existing_id: Any = None) -> None:
         self.installed_rows = installed_rows or []
         self.existing_id = existing_id
         self.added: list[Any] = []
@@ -193,6 +193,20 @@ class _FakeLibraryClient:
             raise self._close_error
 
 
+class TestInstalledRegistryKeys:
+    async def test_filters_non_str_rows(self, fake_manifest: None) -> None:
+        """Only (str, str) rows become registry keys; anything else is dropped.
+
+        A NULL/non-text column value must never form a key, or an entry with
+        matching null fields would be reported as installed.
+        """
+        session = _FakeSession(installed_rows=[("code-reviewer", "1.0.0"), (None, None), (123, 456)])
+
+        keys = await community_module._installed_registry_keys(session, ORG_ID)
+
+        assert keys == {("code-reviewer", "1.0.0")}
+
+
 class TestListCommunityEntries:
     async def test_returns_entries_with_installed_flags(self, fake_manifest: None) -> None:
         session = _FakeSession(installed_rows=[("code-reviewer", "1.0.0")])
@@ -201,6 +215,49 @@ class TestListCommunityEntries:
         by_id = {e["id"]: e for e in entries}
         assert by_id["entry-1"]["installed"] is True
         assert by_id["entry-2"]["installed"] is False
+
+    async def test_handles_non_str_ids(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-str ids: a numeric-id entry is listed, and a numeric revoked id
+        never revokes it (the revoked list only honours str ids)."""
+        int_id_entry = {**ENTRY_1, "id": 99, "slug": "int-id-agent"}
+        manifest = {
+            **MANIFEST,
+            "entries": [ENTRY_1, int_id_entry],
+            "revoked": [{"id": 99, "type": "agent", "slug": "int-id-agent", "version": "1.0.0"}],
+        }
+
+        async def _manifest(_session: Any) -> dict | None:
+            return manifest
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+
+        entries = await list_community_entries(_FakeSession(), ORG_ID)
+
+        # Without the isinstance(str) filter the revoked id stringifies to
+        # "99" and str(99) == "99" would drop the entry from the listing.
+        by_id = {entry["id"]: entry for entry in entries}
+        assert set(by_id) == {"entry-1", 99}
+        assert by_id[99]["slug"] == "int-id-agent"
+
+    async def test_matches_entry_id_by_str_normalisation(
+        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``str(entry.get("id"))``: a numeric entry id IS matched by the
+        equivalent str id in the revoked list."""
+        manifest = {
+            **MANIFEST,
+            "entries": [ENTRY_1, {**ENTRY_1, "id": 99, "slug": "int-id-agent"}],
+            "revoked": [{"id": "99", "type": "agent", "slug": "int-id-agent", "version": "1.0.0"}],
+        }
+
+        async def _manifest(_session: Any) -> dict | None:
+            return manifest
+
+        monkeypatch.setattr(community_module, "get_cached_manifest", _manifest)
+
+        entries = await list_community_entries(_FakeSession(), ORG_ID)
+
+        assert [entry["id"] for entry in entries] == ["entry-1"]
 
     async def test_returns_empty_when_no_manifest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _none(_session: Any) -> None:
@@ -511,3 +568,29 @@ class TestFetchBlob:
 
         with pytest.raises(RuntimeError, match="blob boom"):
             await community_module._fetch_blob("a" * 64)
+
+    async def test_raising_close_never_propagates(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``close()`` that raises is logged and swallowed on every path.
+
+        The teardown sits in ``finally`` OUTSIDE the ``except ValueError``
+        block, so without its own guard a raising ``close()`` would replace the
+        body's exception (or discard its ``return``) and escape — breaking the
+        documented "return None on failure" contract.
+        """
+        payload = b'{"name": "code-reviewer"}'
+        ok_client = self._install_client(monkeypatch, payload, close_error=RuntimeError("teardown failed"))
+
+        with caplog.at_level(logging.ERROR, logger=community_module.logger.name):
+            assert await community_module._fetch_blob(hashlib.sha256(payload).hexdigest()) == {"name": "code-reviewer"}
+
+        assert ok_client.closed is True
+        assert "community.install.client_close_failed" in caplog.messages
+
+        # Failure path: the body's ValueError handling returns None AND teardown
+        # fails — still no escape.
+        bad_payload = b"not json"
+        bad_client = self._install_client(monkeypatch, bad_payload, close_error=RuntimeError("teardown failed"))
+        assert await community_module._fetch_blob(hashlib.sha256(bad_payload).hexdigest()) is None
+        assert bad_client.closed is True

@@ -128,7 +128,8 @@ async def _fetch_blob(sha256: str) -> dict[str, Any] | None:
         return None
     finally:
         # Teardown must never surface: a raising close() would replace the
-        # body's exception (or discard its return value) — log and swallow.
+        # body's exception (or discard its return value) and escape the
+        # documented "return None on failure" contract above — log and swallow.
         try:
             await client.close()
         except Exception:
