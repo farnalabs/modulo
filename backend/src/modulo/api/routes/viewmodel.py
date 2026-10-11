@@ -7,11 +7,11 @@ GET /api/v1/viewmodel/current — single-request aggregate for the frontend
 import logging
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, Run
 from modulo.db.models.team import Team
 from modulo.db.models.view import SavedView
 from modulo.db.rls import set_rls_org, set_rls_user_context
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -337,7 +338,16 @@ async def viewmodel_current(
                 else:
                     hitl_query = hitl_query.where(HitlClaim.required_team_id.is_(None))
 
-                pending_hitl_result = await session.execute(hitl_query)
+                # FAR-1653: include_soft_deleted so a soft-deleted required
+                # team's name still renders on this historical read (the
+                # outer join would otherwise NULL the label via the global
+                # soft-delete filter's ON-clause criteria).
+                # ``Select[Any]`` cast: include_soft_deleted's ``T: Select[Any]``
+                # bound rejects the concrete ``Select[HitlClaim, str]`` the
+                # entity-plus-column select infers (SQLAlchemy's type parameters
+                # are invariant) — same pattern as lifecycle_maps/pipelines
+                # scope reads.
+                pending_hitl_result = await session.execute(include_soft_deleted(cast(Select[Any], hitl_query)))
                 pending_hitl = [
                     PendingHitlReview(
                         id=h.id,

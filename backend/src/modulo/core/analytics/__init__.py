@@ -40,6 +40,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_daily_facts import RunDailyFact
 from modulo.db.models.team import Team
+from modulo.db.soft_delete import include_soft_deleted
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -355,18 +356,30 @@ async def _snapshot_dimensions(
     session: AsyncSession,
     run: Run,
 ) -> tuple[str | None, str | None, uuid.UUID | None]:
-    """Team name + pipeline name/folder snapshots (explicit reads — async lazy-load is unavailable)."""
+    """Team name + pipeline name/folder snapshots (explicit reads — async lazy-load is unavailable).
+
+    FAR-1653: team AND pipeline lookups opt out of the global soft-delete
+    filter via ``include_soft_deleted`` — these are historical snapshots of a
+    completed run, so a team/pipeline soft-deleted after the run finished must
+    still resolve its name (matching the ``backfill_facts`` writer, whose
+    INSERT...FROM SELECT is never scoped by the SELECT-only listener).
+    """
     team_name: str | None = None
     if run.owner_team_id is not None:
-        team_name = (await session.execute(select(Team.name).where(Team.id == run.owner_team_id))).scalar_one_or_none()
+        # Entity select (not select(Team.name)): keeps the statement in the
+        # single-type-parameter form include_soft_deleted's bound accepts.
+        team = (
+            await session.execute(include_soft_deleted(select(Team).where(Team.id == run.owner_team_id)))
+        ).scalar_one_or_none()
+        team_name = team.name if team is not None else None
     pipeline_name: str | None = None
     folder_id: uuid.UUID | None = None
     if run.pipeline_id is not None:
-        row = (
-            await session.execute(select(Pipeline.name, Pipeline.folder_id).where(Pipeline.id == run.pipeline_id))
-        ).first()
-        if row is not None:
-            pipeline_name, folder_id = row
+        pipeline = (
+            await session.execute(include_soft_deleted(select(Pipeline).where(Pipeline.id == run.pipeline_id)))
+        ).scalar_one_or_none()
+        if pipeline is not None:
+            pipeline_name, folder_id = pipeline.name, pipeline.folder_id
     return team_name, pipeline_name, folder_id
 
 
