@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo import settings
 from modulo.connectors.base import (
+    canonical_capability,
+    canonical_capability_set,
     connector_binding_operation,
     connector_type_supports_dispatch,
     unrestricted_allowed_operations,
@@ -2581,10 +2583,28 @@ class GraphValidator:
             # value is RESTRICTED (fail closed: every required op reads as
             # missing) and is logged — the shared predicate keeps this decision
             # identical to ConnectorACL's and the guardrail conformance reader's.
+            # FAR-1594/FAR-1616: a NON-EMPTY list is not tested raw — its
+            # entries are reduced to the canonical bare-capability vocabulary
+            # by the SHARED helper with the instance's own connector type
+            # threaded through, and the REQUESTED op is canonicalised too, so
+            # graph-save time grants exactly what a ConnectorACL built with
+            # the same connector type grants at runtime (same-type legacy
+            # entries grant; mis-typed ones fail closed).
             raw_allowed: object = instance.allowed_operations
             if not unrestricted_allowed_operations(raw_allowed):
                 if isinstance(raw_allowed, list):
-                    allowed_ops: list[str] = raw_allowed
+                    # FAR-1594/FAR-1616: reduce the stored allowlist to the
+                    # canonical bare-capability vocabulary with the SHARED
+                    # helper, threading the instance's OWN connector type — a
+                    # stored same-type legacy entry (``github.read``) grants
+                    # ``read`` here exactly as the hub's ConnectorACL and the
+                    # guardrail conformance reader grant it; a mis-typed entry
+                    # (``github.read`` on a filesystem connector) grants
+                    # nothing (fail closed).
+                    allowed_ops: set[str] = canonical_capability_set(
+                        raw_allowed,
+                        connector_type_id=instance.connector_type_id,
+                    )
                 else:
                     _log.warning(
                         "graph_validator.connector_allowed_operations_malformed",
@@ -2593,8 +2613,21 @@ class GraphValidator:
                             "allowed_operations_type": type(raw_allowed).__name__,
                         },
                     )
-                    allowed_ops = []
-                missing = [op for op in required_ops if op not in allowed_ops]
+                    allowed_ops = set()
+                # Mirror ConnectorACL.check: canonicalise the REQUESTED
+                # operation too, so a stored legacy spelling grants the required
+                # op on exactly the terms the runtime ACL grants it. A
+                # non-string required op is not a capability in any spelling —
+                # report it MISSING (fail closed) rather than raising, and
+                # short-circuit before the set-membership test so an unhashable
+                # value cannot raise either.
+                missing = [
+                    op
+                    for op in required_ops
+                    if not (
+                        isinstance(op, str) and (op in allowed_ops or (canonical_capability(op) or op) in allowed_ops)
+                    )
+                ]
                 if missing:
                     result.error(
                         "CONNECTOR_MISSING_OPERATIONS",
