@@ -3,7 +3,7 @@
     <DashboardNotificationsPanel class="-mt-3 mb-4" />
     <PageHeader :title="$t('views.DashboardView.dashboard')" :subtitle="$t('views.DashboardView.overview_of_your_organisations_pipelines_and_runs')" data-testid="dashboard-title">
       <template #right>
-        <div class="flex flex-wrap justify-start sm:justify-end gap-1">
+        <div v-if="trendToggleVisible" class="flex flex-wrap justify-start sm:justify-end gap-1">
           <button type="button"
             v-for="w in trendWindows"
             :key="w.value ?? 'all'"
@@ -300,6 +300,11 @@ const spendSparklineData = computed(() => {
 const summaryTrendLabels = computed(() => summary.value?.trend?.map(d => d.date) ?? [])
 
 // --- Rolling-window toggle (FAR-92 / FAR-115) ---
+// Gated on the analytics_page flag (FAR-92): hidden when off — the dashboard
+// keeps the legacy all-time shape and the backend ignores `days` (scoping its
+// summary cache by the flag state).
+const trendToggleVisible = computed(() => planStore.featureEnabled('analytics_page'))
+
 const trendWindows: Array<{ labelKey: string; value: number | null }> = [
   { labelKey: 'views.DashboardView.trend_24h', value: 1 },
   { labelKey: 'views.DashboardView.trend_3d', value: 3 },

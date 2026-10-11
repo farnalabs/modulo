@@ -6,6 +6,11 @@ delta_pct}`` per metric, computed from ``run_daily_facts`` (count/status/tokens/
 success/duration), the ``org_daily_run_counts`` ledger (spend) and
 ``eval_results`` (eval pass rate). When ``days`` is omitted the response is
 unchanged (all-time scalars) — non-breaking for existing consumers.
+
+The period block is gated on the ``analytics_page`` feature flag (FAR-92):
+when the flag is off the endpoint keeps the legacy all-time shape (``days``
+is ignored, no ``period`` block) and the summary cache is flag-scoped so a
+flag-off response is never served to a flag-on caller.
 """
 
 import json
@@ -24,11 +29,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
-from modulo.api.dependencies import get_db_session, require_permission
+from modulo.api.dependencies import get_db_session, get_plan_context, require_permission
 from modulo.auth.jwt import TenantPrincipal
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.core.analytics import compute_delta
 from modulo.core.assistant.config_service import AssistantConfigService
+from modulo.core.feature_flags import PlanContext
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.crud.daily_run_count import org_level_predicate
 from modulo.db.crud.eval_run import non_guardrail_eval_results_clause
@@ -84,14 +90,18 @@ _IDLE_STATUSES = ("pending", "claimed", "hitl_parked")
 _DASHBOARD_CACHE_TTL = 60  # seconds — dashboard summary cached via Redis
 
 
-def _dashboard_cache_key(org_id: str, days: int | None) -> str:
-    """Cache key — the no-days key keeps the legacy flag-off path unchanged."""
+def _dashboard_cache_key(org_id: str, days: int | None, analytics_enabled: bool) -> str:
+    """Cache key — flag-scoped (FAR-92) so a flag-off (legacy all-time)
+    response is never served to a flag-on caller and vice versa."""
+    flag = "1" if analytics_enabled else "0"
     if days is None:
-        return f"dashboard:summary:{org_id}"
-    return f"dashboard:summary:{org_id}:{days}"
+        return f"dashboard:summary:{org_id}:{flag}"
+    return f"dashboard:summary:{org_id}:{days}:{flag}"
 
 
-async def _get_cached_dashboard(org_id: str, days: int | None = None) -> dict[str, Any] | None:
+async def _get_cached_dashboard(
+    org_id: str, days: int | None = None, analytics_enabled: bool = True
+) -> dict[str, Any] | None:
     """Read cached dashboard summary from Redis."""
     settings = get_settings()
     redis: Redis | None = None
@@ -99,7 +109,7 @@ async def _get_cached_dashboard(org_id: str, days: int | None = None) -> dict[st
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        key = _dashboard_cache_key(org_id, days)
+        key = _dashboard_cache_key(org_id, days, analytics_enabled)
         cached = await redis.get(key)
         if cached:
             cached_data: dict[str, Any] = json.loads(cached)
@@ -112,7 +122,9 @@ async def _get_cached_dashboard(org_id: str, days: int | None = None) -> dict[st
     return None
 
 
-async def _set_cached_dashboard(org_id: str, data: dict[str, Any], days: int | None = None) -> None:
+async def _set_cached_dashboard(
+    org_id: str, data: dict[str, Any], days: int | None = None, analytics_enabled: bool = True
+) -> None:
     """Write dashboard summary to Redis cache."""
     settings = get_settings()
     redis: Redis | None = None
@@ -120,7 +132,7 @@ async def _set_cached_dashboard(org_id: str, data: dict[str, Any], days: int | N
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        key = _dashboard_cache_key(org_id, days)
+        key = _dashboard_cache_key(org_id, days, analytics_enabled)
         await redis.setex(key, _DASHBOARD_CACHE_TTL, json.dumps(data, default=str))
     except Exception:
         _log.warning("dashboard.cache_write_failed", exc_info=True)
@@ -684,8 +696,14 @@ async def dashboard_summary(
     days: int | None = Query(None, ge=1, le=90),
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("dashboard.summary"),
+    plan: PlanContext = Depends(get_plan_context),
 ) -> dict[str, Any]:
-    """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend."""
+    """Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
+
+    Optional ``days`` (1..90) adds a period-scoped ``{current, previous, delta_pct}``
+    block per metric (FAR-92); ignored — the legacy all-time shape is preserved —
+    when the ``analytics_page`` feature flag is off.
+    """
     try:
         if days is not None and not (1 <= days <= 90):
             raise HTTPException(
@@ -695,7 +713,15 @@ async def dashboard_summary(
 
         org_id_str = str(principal.organisation_id)
 
-        cached = await _get_cached_dashboard(org_id_str, days)
+        # FAR-92: the rolling-window period block is gated on analytics_page.
+        # Flag off → the endpoint keeps the legacy all-time shape: `days` is
+        # ignored (no period block) and the cache entry is flag-scoped so a
+        # flag-off response is never served to a flag-on caller.
+        analytics_enabled = plan.feature_enabled("analytics_page")
+        if not analytics_enabled:
+            days = None
+
+        cached = await _get_cached_dashboard(org_id_str, days, analytics_enabled)
         if cached is not None:
             return cached
 
@@ -734,7 +760,7 @@ async def dashboard_summary(
         if period_metrics is not None:
             result["period"] = period_metrics
 
-        await _set_cached_dashboard(org_id_str, result, days)
+        await _set_cached_dashboard(org_id_str, result, days, analytics_enabled)
         return result
     except ProgrammingError as exc:
         _log.exception(_CODE_DASHBOARD_DASHBOARD_SUMMARY)
