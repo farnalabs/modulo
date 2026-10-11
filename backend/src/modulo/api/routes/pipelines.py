@@ -857,6 +857,60 @@ class PipelineUpdate(TeamVisibilityMixin):
             "Set to {} to clear (no pipeline override)."
         ),
     )
+    benign_signatures: list[dict[str, Any]] | None = Field(
+        None,
+        description=(
+            "Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). "
+            'Shape: [{"error_code": "<exact runs.error_code>", '
+            '"error_detail_contains": "<case-insensitive substring, optional>"}]. '
+            "A terminal failure whose (error_code, error_detail) matches one is "
+            "classified `benign` — a distinct class excluded from analytics "
+            "failure rates and error-code clusters — instead of counting as a "
+            "failure. Null clears (no signatures = historical behaviour)."
+        ),
+    )
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _validate_benign_signatures(cls, v: Any) -> list[dict[str, Any]] | None:
+        """Strict on the wire, lenient on storage.
+
+        The API REJECTS a malformed entry (422) so a typo cannot silently
+        disable a signature the operator believes is active; the storage reader
+        (``classify.normalize_benign_signatures``) stays lenient so a value
+        written before this validator (or by a direct DB edit) can never break
+        terminalization.
+
+        A key outside the accepted pair (FAR-707 QA) is rejected EXPLICITLY,
+        not only via the length check: ``{"error_code": "agent.failed",
+        "detail_contains": "rebase conflict"}`` would otherwise be stored with
+        its detail constraint silently lost and classify EVERY ``agent.failed``
+        failure as benign.
+        """
+        from modulo.core.pipeline_engine.classify import (
+            BENIGN_SIGNATURE_KEYS,
+            normalize_benign_signatures,
+        )
+
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("benign_signatures must be a list")
+        for entry in v:
+            if isinstance(entry, dict) and not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
+                raise ValueError(
+                    "benign_signatures entries accept ONLY the keys 'error_code' and "
+                    "'error_detail_contains' — an unknown key would silently widen the "
+                    "signature (an absent 'error_detail_contains' matches any detail)"
+                )
+        normalised = normalize_benign_signatures(v)
+        if len(normalised) != len(v):
+            raise ValueError(
+                "benign_signatures entries must be objects with a non-empty string "
+                "'error_code' and an optional string 'error_detail_contains'"
+            )
+        return normalised
+
     circuit_breaker_threshold: float | None = Field(
         None,
         gt=0,
@@ -984,6 +1038,10 @@ class PipelineResponse(BaseModel):
     rate_limit_config: dict[str, Any] | None = None
     retry_policy: dict[str, Any] = Field(default_factory=dict, json_schema_extra={"default": {}})
     stdout_retention_config: dict[str, Any] | None = None
+    # FAR-707: the explicit business-expected-outcome signatures the run
+    # classifier consults at terminalization. Additive + nullable: null = no
+    # signatures (historical behaviour); partial ORM stand-ins serialise null.
+    benign_signatures: list[dict[str, Any]] | None = None
     # FAR-1182: monthly spend circuit breaker. Additive, backward-compatible.
     circuit_breaker_threshold: float | None = Field(None, description=_CIRCUIT_BREAKER_THRESHOLD_DESCRIPTION)
     circuit_breaker_tripped: bool = False
@@ -1055,6 +1113,15 @@ class PipelineResponse(BaseModel):
     @classmethod
     def _coerce_stdout_retention_config(cls, value: Any) -> dict[str, Any] | None:
         return value if isinstance(value, dict) else None
+
+    @field_validator("benign_signatures", mode="before")
+    @classmethod
+    def _coerce_benign_signatures(cls, value: Any) -> list[dict[str, Any]] | None:
+        # Read side stays LENIENT (unlike the PATCH validator): a stored value
+        # written before this column existed, or by a direct DB edit, must
+        # serialise as-is rather than 500 a pipeline read. The classifier
+        # applies the same tolerance at match time.
+        return value if isinstance(value, list) else None
 
     # The breaker columns are read defensively (like the fields above): partial
     # ORM stand-ins may expose non-column attributes, which serialise as the

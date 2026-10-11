@@ -1,7 +1,7 @@
 """Autonomy gating S1 — earned autonomy level + run_daily_facts.autonomy_level (FAR-1175).
 
-Revision ID: 0296_autonomy_gating_s1
-Revises: 0295_decision_record_event_identity
+Revision ID: 0297_autonomy_gating_s1
+Revises: 0296_benign_run_outcomes
 Create Date: 2026-10-10
 
 ADR 043 slice S1 (evidence-driven autonomy gating). Two additive, nullable
@@ -27,8 +27,8 @@ level:
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0296_autonomy_gating_s1"
-down_revision: str | None = "0295_decision_record_event_identity"
+revision: str = "0297_autonomy_gating_s1"
+down_revision: str | None = "0296_benign_run_outcomes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

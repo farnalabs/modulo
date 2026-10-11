@@ -175,7 +175,7 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # every HITL gate when the ``autonomy_gating`` flag is on; in-flight runs
     # apply min(pinned-at-run-start, live) so a demotion bites mid-run but a
     # promotion never loosens an in-flight run (ADR 043 §3). CHECK
-    # ck_pipelines_earned_autonomy_level (migration 0295).
+    # ck_pipelines_earned_autonomy_level (migration 0297).
     earned_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
     earned_autonomy_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -190,6 +190,18 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # Shape: {"mode": "tail"|"full", "max_bytes": <positive int>} or None
     # (no pipeline override — inherit from org ceiling only).
     stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # FAR-707: explicit per-pipeline BENIGN run-outcome signatures. A terminal
+    # run whose (error_code, error_detail) matches one is classified ``benign``
+    # — a distinct terminal class excluded from analytics failure rates and
+    # failure-reason clusters — instead of countable ``no_delivery``.
+    # Shape (JSON list; NULL = no signatures = historical behaviour):
+    #   [{"error_code": "<exact runs.error_code>",            # REQUIRED
+    #     "error_detail_contains": "<case-insensitive substring>"}]  # optional
+    # Validated/matched by ``core.pipeline_engine.classify.normalize_benign_signatures``
+    # / ``matches_benign_signature``; malformed entries are IGNORED at read
+    # time (fail-open to the old counting — a broken config never marks a real
+    # failure benign). Migration 0296.
+    benign_signatures: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,

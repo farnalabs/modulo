@@ -272,7 +272,12 @@ async def _dump_date_range(
 
             current_date += timedelta(days=1)
     finally:
-        await client.close()
+        # Teardown must never surface: a raising close() would replace the
+        # body's exception (or discard the returned date list) — log and swallow.
+        try:
+            await client.close()
+        except Exception:
+            _log.exception("product_analytics.dump_client_close_failed")
     return succeeded_dates
 
 

@@ -298,6 +298,12 @@ class AnalyticsExportItem(BaseModel):
     # FAR-1175 (ADR 043 S1): the effective autonomy level the run resolved
     # under (from run.autonomy_level_applied; NULL when none).
     autonomy_level: str | None = None
+    # FAR-707: the run's terminal classification was a business-expected
+    # (``benign``) outcome — nullable, since pre-column rows and benign
+    # signatures that didn't exist at write time read NULL, treated as "not
+    # benign". Carried so the raw-facts export reproduces the failure-rate
+    # figures the analytics surfaces report (which exclude benign rows).
+    benign: bool | None = None
     created_at: str
 
 

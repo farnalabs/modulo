@@ -21,6 +21,7 @@ unit-tests:
   - backend/tests/unit/core/test_guardrail_conformance_midrun.py
   - backend/tests/unit/connectors/test_connector_base_seam.py
   - backend/tests/unit/connectors/test_connector_credential_redaction.py
+  - backend/tests/unit/connectors/test_health_detail_credential_redaction.py
   - backend/tests/unit/connectors/test_connector_egress_gate.py
   - backend/tests/unit/connector_hub/test_connector_hub.py
   - backend/tests/unit/api/test_pipeline_team_visibility.py

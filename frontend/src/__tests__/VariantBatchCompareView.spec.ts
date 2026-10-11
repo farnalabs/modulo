@@ -546,4 +546,51 @@ describe('VariantBatchCompareView', () => {
     expect(wrapper.text()).toContain('Partial — some variants incomplete')
     expect(wrapper.text()).not.toContain('>partial<')
   })
+
+  it('offers Retry on a failed batch load and re-fetches on click (FAR-1655)', async () => {
+    batchMocks.fetchVariantBatch.mockRejectedValueOnce(new Error('batch backend down'))
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+    expect(wrapper.text()).toContain('batch backend down')
+
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Retry re-ran loadBatch('b1') and the batch rendered.
+    expect(batchMocks.fetchVariantBatch).toHaveBeenCalledWith('b1')
+    expect(batchMocks.fetchVariantBatch.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.text()).toContain('Sonnet vs Opus')
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
+  it('offers Retry on a failed comparisons load and re-fetches on click (FAR-1655)', async () => {
+    batchMocks.fetchVariantBatches.mockRejectedValueOnce(new Error('comparisons backend down'))
+
+    const wrapper = mount(VariantBatchCompareView, {
+      global: { stubs: { FeatureGate: { template: '<div><slot /></div>' } } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+    expect(wrapper.text()).toContain('comparisons backend down')
+
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    // Retry re-ran loadComparisons and the comparison list rendered.
+    expect(batchMocks.fetchVariantBatches.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(wrapper.find('[data-testid="variant-batch-link-b1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
 })

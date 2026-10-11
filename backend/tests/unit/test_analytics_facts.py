@@ -244,6 +244,8 @@ class TestRecordRunFacts:
                 "created_at",
                 "duration_ms",
                 "error_code",
+                # FAR-707 business-expected-outcome marker.
+                "benign",
                 "claim_count",
                 "queue_wait_ms",
                 "final_idle_ms",
@@ -423,6 +425,48 @@ class TestRecordRunFacts:
 
         assert captured["values"]["execution_origin"] is None
         assert "execution_origin" in set(captured["set_"])
+
+    async def test_benign_marker_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-707: a run whose terminal classification is ``benign`` stamps
+        ``benign=True`` on the fact AND on the ON CONFLICT update set, so the
+        analytics read path (which never joins ``runs``) can drop it from the
+        failure rate and a re-finalization corrects a stale marker in place."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run(run_classification={"value": "benign", "reason": "benign_outcome"})
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["benign"] is True
+        assert "benign" in set(captured["set_"])
+
+    async def test_benign_marker_null_until_the_classification_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run with no classification record yet (raw-SQL terminalizer) stamps
+        NULL — never a confident False — so the reader's NULL-as-not-benign
+        fallback is what applies."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["benign"] is None
 
     async def test_writes_batch_id_dimension(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The run's batch_id is carried into the fact so batches are filterable."""

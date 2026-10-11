@@ -746,6 +746,12 @@ _EXPORT_COLUMNS: tuple[Any, ...] = (
     # under — an export consumer must be able to bucket autonomous vs
     # human-reviewed runs without re-joining the audit chain.
     RunDailyFact.autonomy_level,
+    # FAR-707: the run's terminal classification was ``benign`` (a
+    # business-expected outcome). Exported so an auditor pulling raw facts can
+    # reproduce the failure-rate figures the analytics surfaces report — the
+    # benign rows are excluded there, so the exported flag is what makes the
+    # exclusion auditable rather than invisible.
+    RunDailyFact.benign,
 )
 
 _EXPORT_COLUMN_NAMES: tuple[str, ...] = tuple(c.name for c in _EXPORT_COLUMNS)

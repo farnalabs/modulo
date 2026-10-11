@@ -4,6 +4,33 @@ Do NOT put connector-specific fixtures here; they belong in
 ``tests/connectors/conftest.py``.
 """
 
+# pydantic.root_model residency guard — WHY this import exists:
+#
+# pytest-cov starts coverage during ``pytest_load_initial_conftests``, BEFORE
+# this conftest is imported. When coverage is started with a single-module
+# source spec (e.g. ``--cov=modulo.core.library_service.community``),
+# coverage.py's ``InOrOut.set_matchers_depending_on_syspath()`` resolves the
+# module via ``find_spec`` — which executes the target's parent packages —
+# inside ``sys_modules_saved()``, and ``SysModuleSaver.restore()`` then
+# deletes every module imported during that block from ``sys.modules``.
+# That block's import chain (``library_service`` -> ``community`` ->
+# ``library_sync`` -> ``settings`` -> ``pydantic_settings.sources.utils``)
+# triggers pydantic's lazy ``pydantic.root_model`` load; the rollback removes
+# the submodule from ``sys.modules`` but leaves the ``RootModel`` attribute
+# bound on the already-imported ``pydantic`` package. Every later
+# ``from pydantic import RootModel`` is then satisfied by that dangling
+# attribute, the submodule is never re-imported, and ``mcp/types.py``'s
+# import-time ``class JSONRPCMessage(RootModel[...])`` crashes in
+# ``pydantic._internal._generics.create_generic_submodel`` with
+# ``KeyError: 'pydantic.root_model'`` — erroring every test whose setup
+# imports the app. This conftest is imported AFTER the rollback, so an
+# explicit submodule import here re-establishes the ``sys.modules`` entry
+# (explicit submodule imports bypass the dangling parent attribute) and every
+# later RootModel generic specialization can resolve its module. A pre-import
+# inside product code would NOT work: product modules first execute inside the
+# rollback block, so their import is deleted again. Guarded by
+# ``tests/unit/library_sync/test_coverage_source_import_guard.py``.
+import pydantic.root_model  # noqa: F401
 import pytest
 
 import modulo.auth.dependencies as _auth_dependencies

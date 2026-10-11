@@ -48,7 +48,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from langgraph.errors import NodeCancelledError
 
@@ -241,6 +241,78 @@ def resolve_compensation_target(_node_id: str, outgoing_edges: list[dict[str, An
     return None
 
 
+def _resolve_retry_policy(
+    node_def: dict[str, Any] | None,
+    pipeline_retry_policy: Any,
+    node_fires_job: bool,
+) -> NodeRetryPolicy:
+    """Resolve the EFFECTIVE retry policy for a node (pure, no I/O).
+
+    Reuses the authoring-layer resolution (``rc.resolve_node_retry``) so the
+    run-time and authoring-time vocabularies cannot drift, then applies the
+    FAR-1141 fail-closed override: a node whose binding FIRES an external job
+    (``operation="dispatch"`` + ``dispatch_action="trigger_run"``) is never
+    auto-retried — inline re-invocation would fire a SECOND job on the
+    customer's substrate. Derived from the BINDING, not the stored
+    ``idempotent`` flag, so an MCP-authored / hand-written graph that omits
+    the flag still fails closed (mirrors ``resolve_node_retry``'s
+    ``idempotent=false`` arm for graphs that DO carry the flag).
+    """
+    effective = rc.resolve_node_retry(node_def, pipeline_retry_policy)
+    if node_fires_job and effective.max_attempts > 1:
+        return NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
+    return effective
+
+
+class AttemptOutcome(NamedTuple):
+    """Pure classification of one attempt inside the retry loop.
+
+    ``kind`` is ``"retry"`` (a policy-retryable failure/stall within reach of
+    the attempt budget), ``"terminal_success"`` (the node produced a result to
+    return — including a stall the policy declines), or ``"terminal_failure"``
+    (the exception must propagate after edge-retry / compensation). ``event``
+    carries the retryable event name (``"stall"`` / ``"timeout"`` /
+    ``"error"``) for a retry, or the failure's classified event (possibly
+    ``None``) for a terminal failure.
+    """
+
+    kind: Literal["retry", "terminal_success", "terminal_failure"]
+    event: str | None
+
+
+def _classify_attempt(
+    result: dict[str, Any] | None,
+    policy: NodeRetryPolicy,
+    exc: BaseException | None,
+) -> AttemptOutcome:
+    """Classify one attempt's outcome (pure; no I/O, no side effects).
+
+    Holds the stall detection (``output.output.stall_reason`` — a stalled
+    sandbox-agent node RETURNS a failed output dict rather than raising, FAR-98)
+    AND the retryable-event membership logic (``failure_event`` +
+    ``rc.node_retries_on``). ``exc`` is ``None`` for a returned result;
+    ``result`` is unused when ``exc`` is set.
+    """
+    if exc is None:
+        if _stall_event(result) and rc.node_retries_on(policy, "stall"):
+            return AttemptOutcome(kind="retry", event="stall")
+        return AttemptOutcome(kind="terminal_success", event=None)
+    event = failure_event(exc)
+    if event is not None and rc.node_retries_on(policy, event):
+        return AttemptOutcome(kind="retry", event=event)
+    return AttemptOutcome(kind="terminal_failure", event=event)
+
+
+def _should_retry(outcome: AttemptOutcome, attempt_n: int, policy: NodeRetryPolicy) -> bool:
+    """Pure predicate: retry only on a retryable outcome within the attempt budget.
+
+    ``attempt_n`` is the 1-based attempt that just failed; total attempts stay
+    ``policy.max_attempts`` (``max_retries + 1``), so a retry fires only while
+    ``attempt_n < policy.max_attempts``.
+    """
+    return outcome.kind == "retry" and attempt_n < policy.max_attempts
+
+
 def make_retrying_node_fn(
     raw_fn: Callable[[dict[str, Any]], Any],
     *,
@@ -275,17 +347,9 @@ def make_retrying_node_fn(
 
     Returns an async callable with the same ``(state) -> dict`` contract.
     """
-    effective_policy = rc.resolve_node_retry(node_def, pipeline_retry_policy)
-    # FAR-1141 (CRITICAL 1): a node whose binding FIRES an external job
-    # (``operation="dispatch"`` + ``dispatch_action="trigger_run"``) is never
-    # auto-retried — inline re-invocation would fire a SECOND job on the
-    # customer's substrate. Derived from the BINDING, not the stored
-    # ``idempotent`` flag, so an MCP-authored / hand-written graph that omits
-    # the flag still fails closed (mirrors ``resolve_node_retry``'s
-    # ``idempotent=false`` arm for graphs that DO carry the flag).
+    # FAR-1141 (CRITICAL 1) fail-closed override lives in _resolve_retry_policy.
     node_fires_job = node_fires_dispatch_job(node_def)
-    if node_fires_job and effective_policy.max_attempts > 1:
-        effective_policy = NodeRetryPolicy(max_attempts=1, backoff_seconds=0.0, events=frozenset())
+    effective_policy = _resolve_retry_policy(node_def, pipeline_retry_policy, node_fires_job)
     outgoing_edges = outgoing_edges or []
     incoming_edges = incoming_edges or []
     node_defs = node_defs or {}
@@ -448,26 +512,19 @@ def make_retrying_node_fn(
             attempts += 1
             try:
                 result = await _invoke_raw(state)
-                if (
-                    _stall_event(result)
-                    and rc.node_retries_on(effective_policy, "stall")
-                    and attempts < effective_policy.max_attempts
-                ):
+                outcome = _classify_attempt(result, effective_policy, None)
+                if _should_retry(outcome, attempts, effective_policy):
                     await _sleep(attempts, effective_policy)
                     continue
                 return result
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                event = failure_event(exc)
-                if (
-                    event is not None
-                    and rc.node_retries_on(effective_policy, event)
-                    and attempts < effective_policy.max_attempts
-                ):
+                outcome = _classify_attempt(None, effective_policy, exc)
+                if _should_retry(outcome, attempts, effective_policy):
                     await _sleep(attempts, effective_policy)
                     continue
-                edge_result = await _edge_retry(state, event)
+                edge_result = await _edge_retry(state, outcome.event)
                 if edge_result is not None:
                     return edge_result
                 if await _handle_compensation(state, exc):
