@@ -30,9 +30,13 @@
           :on-dismiss="() => { folderError = null }"
         />
 
+        <!-- Retry is deliberately omitted (retryable=false): a failed move can only
+             be redone by re-dragging (or re-running the move dialog), so the shared
+             alert's retryable prop is used for exactly this opt-out. -->
         <ErrorAlert
           v-if="moveError"
           :message="moveError"
+          :retryable="false"
           :dismiss-label="$t('common.close')"
           :on-dismiss="() => { moveError = null }"
           class="mb-4"

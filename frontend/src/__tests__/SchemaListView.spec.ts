@@ -435,6 +435,10 @@ describe('SchemaListView', () => {
     expect(alert.exists()).toBe(true)
     expect(alert.text()).toContain('move exploded')
 
+    // Explicitly non-retryable: a failed move can only be redone by re-dragging,
+    // so no Retry control may render on the page-level alert.
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+
     // Dismiss clears the error (same behaviour as the old X button).
     await wrapper.find('[data-testid="error-alert-dismiss"]').trigger('click')
     await flushPromises()

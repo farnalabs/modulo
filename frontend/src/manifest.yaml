@@ -1917,6 +1917,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: org-hitl-review-window-load-error
         type: element
         dynamic_testid: false
@@ -4116,6 +4119,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: schema-list-mobile-folder-select
