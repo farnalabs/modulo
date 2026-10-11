@@ -15,7 +15,7 @@ import logging
 import os
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -202,6 +202,377 @@ async def _dispatch_webhook_run(run_id: str, org_id: str) -> None:
         await _ingest_webhook_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
+async def _verify_webhook_auth(
+    *,
+    request: Request,
+    trigger_id: uuid.UUID,
+    trigger: Trigger,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    raw_body: bytes,
+    hmac_signature: str | None,
+    modulo_timestamp: str,
+) -> None:
+    """Route-level timestamp + HMAC validation for an incoming webhook.
+
+    Belt-and-braces ahead of the engine's own check. Only triggers configured
+    with an ``hmac_secret`` are validated here — HMAC-less triggers accept
+    unauthenticated deliveries by design (FAR-1472). Raises the SAME typed
+    errors the inline path raised: ``TimestampExpiredError`` (400) and
+    ``HmacValidationError`` (401), surfaced by the route's outer handler.
+
+    An HMAC-secret DECRYPT failure falls back to the raw stored secret with the
+    exception LOGGED (never silent) — the stored value may itself be the
+    plaintext secret, so refusing outright would break legitimate triggers.
+
+    FAR-1516 ordering is preserved: the ``signature_verified`` actor-source
+    promotion fires only AFTER the HMAC check passes, and always BEFORE the
+    snapshot / dedup / engine work (the run is not created until the delivery
+    has authenticated).
+    """
+    # Route-level timestamp + HMAC validation (belt-and-braces ahead of
+    # the engine's own check). Only triggers configured with an
+    # hmac_secret are validated here — HMAC-less triggers accept
+    # unauthenticated deliveries by design. Failure events for these
+    # typed errors are rolled back with the request (documented
+    # pre-existing limitation). config_json shape was validated by the
+    # shared bootstrap helper (TriggerConfigInvalidError → 400 in the
+    # route), so ``.get`` here cannot AttributeError.
+    cfg = trigger.config_json or {}
+    hmac_secret_raw: str | None = cfg.get("hmac_secret")
+    hmac_secret: str | None = None
+    if hmac_secret_raw is not None:
+        try:
+            hmac_secret = await decode_stored_secret_scoped(
+                session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+            )
+        except Exception:
+            _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+            hmac_secret = hmac_secret_raw
+    if hmac_secret is not None:
+        ts = verify_timestamp(modulo_timestamp)
+        if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
+            raise HmacValidationError
+        # FAR-1516: provenance promotion — this delivery authenticated,
+        # so record signature_verified instead of the default.
+        bind_audit_actor_source(request, "signature_verified")
+    else:
+        _log.warning(
+            "webhooks.receive_webhook: unauthenticated delivery accepted "
+            "(no hmac_secret configured) — trigger %s org %s",
+            trigger_id,
+            org_id,
+        )
+
+
+async def _record_rejected_delivery(
+    *,
+    kind: Literal["backpressure", "busy"],
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID | None,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+    reason: str = "",
+) -> bool:
+    """FAR-604: re-record a refused delivery in a FRESH transaction.
+
+    Covers the two refused-delivery families whose in-request writes do NOT
+    survive the refusal: ``busy`` (the engine raises ``TriggerBusyError``
+    BEFORE any TriggerEvent is written) and ``backpressure`` (the engine's
+    ``backpressure_skipped`` write rolls back with the unwound main
+    transaction — deliberately NOT swallowed inside the begin-block, which
+    would commit the dedup insert and break the sender-retry contract).
+
+    MUST run AFTER the main request transaction has unwound — the call site
+    is the route's outer handler ladder, never the in-transaction block. The
+    underlying recorder (``record_busy_delivery`` /
+    ``record_backpressure_delivery``) opens its own session from the shared
+    engine and never raises; this helper is the same shape.
+
+    Returns ``True`` when a re-record was attempted (the org was resolved),
+    ``False`` when there is nothing to record against. Never raises.
+    """
+    if org_id is None:
+        return False
+    if kind == "busy":
+        await record_busy_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="webhook",
+            payload_hash=sha256_hex(raw_body),
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+    else:
+        await record_backpressure_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="webhook",
+            payload_hash=sha256_hex(raw_body),
+            reason=reason,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+    return True
+
+
+def _dispatch_or_ack(
+    *,
+    run: Any,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID | None,
+    background_tasks: BackgroundTasks,
+    guardrail_block_detail: str | None,
+    ci_failure_coalesced: bool,
+    event_not_accepted: bool,
+) -> dict[str, Any]:
+    """Post-transaction outcome of a received webhook delivery.
+
+    Runs only AFTER the main transaction has committed (or rolled back) — the
+    engine's in-transaction catches above decided the commit. Maps the three
+    commit-then-reject/handle outcomes and the FAR-213 ack-after-validate
+    semantics onto the HTTP answer:
+
+    * block-action guardrail at intake → 400 reject-and-retry (the
+      ``guardrail_blocked`` event + stored payload are already committed);
+    * FAR-1034 CI-failure coalesce → 202 handled no-op ack (see
+      ``CI_FAILURE_COALESCED_ACK`` for why this is not a 4xx);
+    * event type not accepted → 400 reject-and-retry;
+    * FAR-213 guardrail-blocked run (terminal ``eval_blocked``) → 422, never a
+      false ``accepted`` — the run + TriggerEvent rows stay committed so the
+      blocked delivery is visible in the run list;
+    * otherwise enqueue the background dispatch and ack 202.
+
+    ``run`` is ``None`` exactly when one of the three flags above fired (no
+    run was created); the flag branches return/raise before it is read.
+    """
+    if guardrail_block_detail is not None:
+        # A block-action guardrail rejected the delivery at the trigger
+        # boundary. The ``guardrail_blocked`` TriggerEvent and the stored raw
+        # payload were committed with the transaction above; the delivery is
+        # reject-and-retry — never acked, no run, no dedup slot.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=guardrail_block_detail,
+        )
+    if ci_failure_coalesced:
+        # FAR-1034 handled no-op: the ``coalesced`` TriggerEvent and the
+        # coalesce dedup marker row were committed with the transaction above
+        # (caught in-transaction). Ack the sender with the handled 2xx — see
+        # CI_FAILURE_COALESCED_ACK for why this is not a 4xx.
+        _log.info("webhooks.receive_webhook.ci_failure_coalesced trigger=%s", trigger_id)
+        return {"run_id": None, "status": "coalesced", "detail": CI_FAILURE_COALESCED_ACK}
+    if event_not_accepted:
+        # The ``event_type_not_accepted`` TriggerEvent was committed with the
+        # transaction above (caught in-transaction, mirroring the guardrail
+        # path). The delivery is reject-and-retry — the sender must adjust the
+        # payload to match the trigger's acceptance config.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event type not accepted by trigger configuration",
+        )
+    run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics: the delivery is validated
+    # (including the ingestion guardrail pass) BEFORE a success ack. A
+    # guardrail-blocked run (terminal eval_failed / eval_blocked) is created
+    # only so the failure is visible in the run list — it is NEVER dispatched
+    # and must not get a false "accepted" ack, so ack with a non-success 422.
+    # The run + TriggerEvent rows stay committed (the trigger event records the
+    # delivery attempt against the blocked run id).
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.receive_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
+    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
+
+    return {"run_id": str(run_id), "status": "accepted"}
+
+
+async def _verify_replay_auth(
+    *,
+    request: Request,
+    trigger_id: uuid.UUID,
+    trigger: Trigger,
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    event_id: uuid.UUID,
+) -> None:
+    """ADR 047 unauthenticated-replay auth: HMAC over the STORED payload.
+
+    Replay skips live-payload HMAC (the request body is empty) but an
+    unauthenticated caller must still present a valid signature — same
+    ``X-Modulo-Webhook-Secret`` + ``X-Modulo-Timestamp`` headers as
+    ``receive_webhook``, verified over the STORED raw body of the original
+    event. Raises the same typed errors: ``TimestampExpiredError`` (400),
+    ``HmacValidationError`` (401, including the no-hmac_secret-configured
+    case), ``ReplayNotFoundError`` (404).
+
+    An HMAC-secret decrypt failure falls back to the raw stored secret with
+    the exception LOGGED (never silent). FAR-1516: on success the actor
+    source is promoted to ``signature_verified`` — same ordering contract as
+    ``_verify_webhook_auth`` (promotion only after the check passes, always
+    before the snapshot / engine work).
+    """
+    # ADR 047: unauthenticated replay requires a valid HMAC signature
+    # over the stored payload (same check as receive_webhook).
+    hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
+    modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
+    ts = verify_timestamp(modulo_timestamp)
+    # config_json shape was validated by the shared bootstrap
+    # helper (TriggerConfigInvalidError → 400 in the route) — this read
+    # runs for authenticated replays too, so the guard cannot be
+    # skipped on any path.
+    cfg = trigger.config_json or {}
+    hmac_secret_raw: str | None = cfg.get("hmac_secret")
+    if hmac_secret_raw is None:
+        raise HmacValidationError
+    try:
+        hmac_secret = await decode_stored_secret_scoped(
+            session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
+        )
+    except Exception:
+        _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
+        hmac_secret = hmac_secret_raw
+    payload_row = await session.execute(
+        select(WebhookPayload).where(
+            WebhookPayload.trigger_event_id == event_id,
+            WebhookPayload.organisation_id == org_id,
+        )
+    )
+    stored = payload_row.scalar_one_or_none()
+    if stored is None:
+        raise ReplayNotFoundError(event_id)
+    if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
+        raise HmacValidationError
+    # FAR-1516: provenance promotion — the replay authenticated by
+    # HMAC over the stored payload.
+    bind_audit_actor_source(request, "signature_verified")
+
+
+async def _replay_paused_path(
+    *,
+    session: AsyncSession,
+    trigger_id: uuid.UUID,
+    trigger: Trigger,
+    org_id: uuid.UUID,
+    event_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Paused-org replay: commit a ``paused`` TriggerEvent and return the ack.
+
+    The paused event reuses the ORIGINAL event's payload hash. Safe-event-write
+    contract: an orphan trigger whose org row was HARD-deleted must not attempt
+    the TriggerEvent INSERT (it would violate the organisations FK -> 503) —
+    fail-closed with no event row and no crash. Runs INSIDE the request
+    transaction (called from the in-transaction ``TriggersPausedError`` catch),
+    so the paused event commits with it; raises ``ReplayNotFoundError`` when
+    the source event itself is gone (the outer ladder maps it to 404).
+    """
+    if not await _org_row_exists(session, org_id):
+        _log.warning(
+            "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
+            org_id,
+            trigger_id,
+        )
+        return {"status": "paused"}
+    orig_result = await session.execute(
+        select(TriggerEvent).where(
+            TriggerEvent.id == event_id,
+            TriggerEvent.organisation_id == org_id,
+        )
+    )
+    orig = orig_result.scalar_one_or_none()
+    if orig is None:
+        raise ReplayNotFoundError(event_id) from None
+    paused_event = TriggerEvent(
+        organisation_id=org_id,
+        trigger_id=trigger.id,
+        trigger_type="webhook",
+        raw_payload_hash=orig.raw_payload_hash,
+        validation_result="paused",
+    )
+    session.add(paused_event)
+    await session.flush()
+    return {"status": "paused"}
+
+
+async def _replay_busy_path(
+    *,
+    trigger_id: uuid.UUID,
+    trigger: Trigger | None,
+    org_id: uuid.UUID | None,
+    event_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Concurrent same-trigger replay: record the lock loser, then ack 202.
+
+    The engine serializes on its advisory lock and raises ``TriggerBusyError``
+    BEFORE any TriggerEvent is written; the main transaction rolls back, so the
+    busy replay is recorded HERE — AFTER the unwind — in a fresh transaction
+    (a ``concurrency_limit_reached`` event carrying the ORIGINAL event's
+    payload hash). The 2xx ack is honest because of that recording.
+
+    Returns the busy-ack dict, or ``None`` when the org could not be resolved
+    (TriggerBusyError can only fire after the bootstrap helper resolved the
+    org — the caller then refuses loudly rather than false-acks).
+    """
+    _log.info(
+        "webhooks.replay_webhook.trigger_busy trigger=%s pipeline=%s",
+        trigger_id,
+        trigger.pipeline_id if trigger is not None else None,
+    )
+    if org_id is None:
+        return None
+    await record_busy_delivery(
+        trigger_id=trigger_id,
+        org_id=org_id,
+        trigger_type="webhook",
+        source_event_id=event_id,
+    )
+    return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+
+
+def _replay_ack(
+    *,
+    run: Any,
+    org_id: uuid.UUID | None,
+    background_tasks: BackgroundTasks,
+    event_not_accepted: bool,
+) -> dict[str, Any]:
+    """Post-transaction outcome of a replayed delivery.
+
+    Mirror of ``_dispatch_or_ack`` for the replay route: event-type rejection
+    (400, the ``event_type_not_accepted`` event already committed), the FAR-213
+    ack-after-validate guardrail-blocked 422 (run + TriggerEvent rows stay
+    committed, never a false ``accepted``), else background dispatch + 202.
+
+    ``run`` is ``None`` exactly when ``event_not_accepted`` fired (no run was
+    created); that branch raises before it is read.
+    """
+    if event_not_accepted:
+        # The ``event_type_not_accepted`` TriggerEvent was committed with the
+        # transaction above (caught in-transaction, mirroring the guardrail
+        # path). The delivery is reject-and-retry — the sender must adjust the
+        # payload to match the trigger's acceptance config.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event type not accepted by trigger configuration",
+        )
+    run_id = run.id
+    # FAR-213 webhook ack-after-validate semantics (see _dispatch_or_ack): a
+    # guardrail-blocked replayed delivery is acked with a non-success 422, never
+    # a false "accepted" — the run + TriggerEvent rows stay committed.
+    if run.error_code == "eval_blocked":
+        _log.info("webhooks.replay_webhook.guardrail_blocked run=%s", run_id)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
+        )
+    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
+
+    return {"run_id": str(run_id), "status": "accepted"}
+
+
 # FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
 # is OPTIONAL - HMAC-less triggers accept unauthenticated calls by design, and
 # an HMAC-verified caller carries no Modulo credential. audited() takes a
@@ -260,6 +631,10 @@ async def receive_webhook(
     guardrail_block_detail: str | None = None
     ci_failure_coalesced = False
     event_not_accepted = False
+    # Declared here so the post-transaction helper call can reference it; it
+    # stays None exactly when one of the in-transaction catches fired (no run
+    # was created) — those paths return/raise before it is read.
+    run: Any = None
 
     try:
         raw_payload: dict[str, Any] = await request.json()
@@ -307,39 +682,21 @@ async def receive_webhook(
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
 
-            # Route-level timestamp + HMAC validation (belt-and-braces ahead of
-            # the engine's own check). Only triggers configured with an
-            # hmac_secret are validated here — HMAC-less triggers accept
-            # unauthenticated deliveries by design. Failure events for these
-            # typed errors are rolled back with the request (documented
-            # pre-existing limitation). config_json shape was validated by the
-            # shared bootstrap helper (TriggerConfigInvalidError → 400 below),
-            # so ``.get`` here cannot AttributeError.
-            cfg = trigger.config_json or {}
-            hmac_secret_raw: str | None = cfg.get("hmac_secret")
-            hmac_secret: str | None = None
-            if hmac_secret_raw is not None:
-                try:
-                    hmac_secret = await decode_stored_secret_scoped(
-                        session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
-                    )
-                except Exception:
-                    _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-                    hmac_secret = hmac_secret_raw
-            if hmac_secret is not None:
-                ts = verify_timestamp(modulo_timestamp)
-                if not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                    raise HmacValidationError
-                # FAR-1516: provenance promotion — this delivery authenticated,
-                # so record signature_verified instead of the default.
-                bind_audit_actor_source(request, "signature_verified")
-            else:
-                _log.warning(
-                    "webhooks.receive_webhook: unauthenticated delivery accepted "
-                    "(no hmac_secret configured) — trigger %s org %s",
-                    trigger_id,
-                    org_id,
-                )
+            # Route-level timestamp + HMAC validation (see
+            # _verify_webhook_auth; raises the same typed errors). Ordered
+            # after the bootstrap and BEFORE the snapshot/dedup work so an
+            # unauthenticated delivery never touches pipeline_snapshots or
+            # webhook_dedup_hashes.
+            await _verify_webhook_auth(
+                request=request,
+                trigger_id=trigger_id,
+                trigger=trigger,
+                session=session,
+                org_id=org_id,
+                raw_body=raw_body,
+                hmac_signature=hmac_signature,
+                modulo_timestamp=modulo_timestamp,
+            )
 
             try:
                 # Pause pre-check BEFORE the snapshot and dedup work — a paused
@@ -460,28 +817,27 @@ async def receive_webhook(
         #
         # The engine's ``backpressure_skipped`` event write happened INSIDE the
         # (now unwound) main transaction, so it rolled back with the refusal —
-        # re-record the event + raw payload in a FRESH transaction (the
-        # TriggerBusyError post-unwind pattern) BEFORE raising the 429, or the
-        # skip is invisible, contradicting the "auditable, never silent"
-        # contract. Deliberately NOT caught inside the begin-block: swallowing
-        # there would COMMIT the dedup insert, so a byte-identical sender
-        # retry would be deduped instead of re-evaluated.
+        # re-record the event + raw payload in a FRESH transaction
+        # (_record_rejected_delivery, the TriggerBusyError post-unwind pattern)
+        # BEFORE raising the 429, or the skip is invisible, contradicting the
+        # "auditable, never silent" contract. Deliberately NOT caught inside
+        # the begin-block: swallowing there would COMMIT the dedup insert, so
+        # a byte-identical sender retry would be deduped instead of
+        # re-evaluated.
         _log.info(
             "webhooks.receive_webhook.backpressure_refused trigger=%s pipeline=%s reason=%s",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
             exc.reason,
         )
-        if org_id is not None:
-            await record_backpressure_delivery(
-                trigger_id=trigger_id,
-                org_id=org_id,
-                trigger_type="webhook",
-                payload_hash=sha256_hex(raw_body),
-                reason=exc.reason,
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-            )
+        await _record_rejected_delivery(
+            kind="backpressure",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            reason=exc.reason,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=str(exc),
@@ -532,25 +888,25 @@ async def receive_webhook(
         # advisory lock. The loser is NOT executed and NOT auto-queued: the
         # engine raises BEFORE any TriggerEvent is written and the main
         # transaction rolls back, so the busy delivery is recorded here —
-        # AFTER the unwind — in a fresh transaction (a
-        # ``concurrency_limit_reached`` event + the raw payload, making it
-        # visible in the event log and replayable). The 2xx ack is honest
-        # because of that recording: 2xx suppresses sender retries (Slack) BY
-        # DESIGN, and replay is the recovery path, not a sender retry.
+        # AFTER the unwind — in a fresh transaction
+        # (_record_rejected_delivery: a ``concurrency_limit_reached`` event +
+        # the raw payload, making it visible in the event log and replayable).
+        # The 2xx ack is honest because of that recording: 2xx suppresses
+        # sender retries (Slack) BY DESIGN, and replay is the recovery path,
+        # not a sender retry.
         _log.info(
             "webhooks.receive_webhook.trigger_busy trigger=%s pipeline=%s",
             trigger_id,
             trigger.pipeline_id if trigger is not None else None,
         )
-        if org_id is not None:
-            await record_busy_delivery(
-                trigger_id=trigger_id,
-                org_id=org_id,
-                trigger_type="webhook",
-                payload_hash=sha256_hex(raw_body),
-                raw_body=raw_body,
-                raw_payload=raw_payload,
-            )
+        recorded = await _record_rejected_delivery(
+            kind="busy",
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+        )
+        if recorded:
             return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
         # Defensive: TriggerBusyError can only fire after the bootstrap
         # helper resolved the org. If it somehow did not, there is nothing to
@@ -588,51 +944,18 @@ async def receive_webhook(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    if guardrail_block_detail is not None:
-        # A block-action guardrail rejected the delivery at the trigger
-        # boundary. The ``guardrail_blocked`` TriggerEvent and the stored raw
-        # payload were committed with the transaction above; the delivery is
-        # reject-and-retry — never acked, no run, no dedup slot.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=guardrail_block_detail,
-        )
-
-    if ci_failure_coalesced:
-        # FAR-1034 handled no-op: the ``coalesced`` TriggerEvent and the
-        # coalesce dedup marker row were committed with the transaction above
-        # (caught in-transaction). Ack the sender with the handled 2xx — see
-        # CI_FAILURE_COALESCED_ACK for why this is not a 4xx.
-        _log.info("webhooks.receive_webhook.ci_failure_coalesced trigger=%s", trigger_id)
-        return {"run_id": None, "status": "coalesced", "detail": CI_FAILURE_COALESCED_ACK}
-
-    if event_not_accepted:
-        # The ``event_type_not_accepted`` TriggerEvent was committed with the
-        # transaction above (caught in-transaction, mirroring the guardrail
-        # path). The delivery is reject-and-retry — the sender must adjust the
-        # payload to match the trigger's acceptance config.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event type not accepted by trigger configuration",
-        )
-
-    run_id = run.id
-    # FAR-213 webhook ack-after-validate semantics: the delivery is validated
-    # (including the ingestion guardrail pass) BEFORE a success ack. A
-    # guardrail-blocked run (terminal eval_failed / eval_blocked) is created
-    # only so the failure is visible in the run list — it is NEVER dispatched
-    # and must not get a false "accepted" ack, so ack with a non-success 422.
-    # The run + TriggerEvent rows stay committed (the trigger event records the
-    # delivery attempt against the blocked run id).
-    if run.error_code == "eval_blocked":
-        _log.info("webhooks.receive_webhook.guardrail_blocked run=%s", run_id)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
-        )
-    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
-
-    return {"run_id": str(run_id), "status": "accepted"}
+    # Post-transaction outcome: the three commit-then-reject/handle paths
+    # (guardrail-blocked 400, FAR-1034 coalesced 202 ack, event-type 400),
+    # the FAR-213 guardrail-blocked 422, or the background dispatch + 202 ack.
+    return _dispatch_or_ack(
+        run=run,
+        trigger_id=trigger_id,
+        org_id=org_id,
+        background_tasks=background_tasks,
+        guardrail_block_detail=guardrail_block_detail,
+        ci_failure_coalesced=ci_failure_coalesced,
+        event_not_accepted=event_not_accepted,
+    )
 
 
 # FAR-1472 exemption (kept in audit_coverage_baseline.txt): same gap as
@@ -703,6 +1026,10 @@ async def replay_webhook(
     trigger: Trigger | None = None
     org_id: uuid.UUID | None = None
     event_not_accepted = False
+    # Declared here so the post-transaction helper call can reference it; it
+    # stays None exactly when event_not_accepted fired (no run was created) —
+    # that path raises before it is read.
+    run: Any = None
     if system_engine_is_fallback():
         # No modulo_system role provisioned: the BYPASSRLS bootstrap read
         # would silently match zero rows and every delivery would 404. Refuse
@@ -739,40 +1066,17 @@ async def replay_webhook(
             await set_rls_execution_context(session)
 
             if principal is None:
-                # ADR 047: unauthenticated replay requires a valid HMAC signature
-                # over the stored payload (same check as receive_webhook).
-                hmac_signature = request.headers.get("X-Modulo-Webhook-Secret")
-                modulo_timestamp = request.headers.get("X-Modulo-Timestamp")
-                ts = verify_timestamp(modulo_timestamp)
-                # config_json shape was validated by the shared bootstrap
-                # helper (TriggerConfigInvalidError → 400 below) — this read
-                # runs for authenticated replays too, so the guard cannot be
-                # skipped on any path.
-                cfg = trigger.config_json or {}
-                hmac_secret_raw: str | None = cfg.get("hmac_secret")
-                if hmac_secret_raw is None:
-                    raise HmacValidationError
-                try:
-                    hmac_secret = await decode_stored_secret_scoped(
-                        session, hmac_secret_raw, get_settings().fernet_key, org_id=org_id
-                    )
-                except Exception:
-                    _log.exception("webhooks.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-                    hmac_secret = hmac_secret_raw
-                payload_row = await session.execute(
-                    select(WebhookPayload).where(
-                        WebhookPayload.trigger_event_id == event_id,
-                        WebhookPayload.organisation_id == org_id,
-                    )
+                # ADR 047: unauthenticated replay requires a valid HMAC
+                # signature over the STORED payload (see _verify_replay_auth;
+                # raises the same typed errors).
+                await _verify_replay_auth(
+                    request=request,
+                    trigger_id=trigger_id,
+                    trigger=trigger,
+                    session=session,
+                    org_id=org_id,
+                    event_id=event_id,
                 )
-                stored = payload_row.scalar_one_or_none()
-                if stored is None:
-                    raise ReplayNotFoundError(event_id)
-                if not verify_hmac(stored.raw_body, hmac_secret, hmac_signature, timestamp=ts):
-                    raise HmacValidationError
-                # FAR-1516: provenance promotion — the replay authenticated by
-                # HMAC over the stored payload.
-                bind_audit_actor_source(request, "signature_verified")
 
             try:
                 # Pause pre-check AFTER principal auth / trigger load, BEFORE the
@@ -797,38 +1101,16 @@ async def replay_webhook(
                     snapshot_id=snapshot.id,
                 )
             except TriggersPausedError:
-                from modulo.db.models.trigger_event import TriggerEvent as _TriggerEventModel
-
-                # Safe event write: an orphan trigger whose org row was
-                # HARD-deleted must not attempt the TriggerEvent INSERT (it
-                # would violate the organisations FK -> 503). Fail-closed with
-                # no event row and no crash.
-                if not await _org_row_exists(session, org_id):
-                    _log.warning(
-                        "webhooks.replay_webhook: org %s missing — skipping paused event write for trigger %s",
-                        org_id,
-                        trigger_id,
-                    )
-                    return {"status": "paused"}
-                orig_result = await session.execute(
-                    select(_TriggerEventModel).where(
-                        _TriggerEventModel.id == event_id,
-                        _TriggerEventModel.organisation_id == org_id,
-                    )
+                # The paused event write commits with THIS transaction (the
+                # helper is called from inside the begin-block); see
+                # _replay_paused_path for the safe-event-write contract.
+                return await _replay_paused_path(
+                    session=session,
+                    trigger_id=trigger_id,
+                    trigger=trigger,
+                    org_id=org_id,
+                    event_id=event_id,
                 )
-                orig = orig_result.scalar_one_or_none()
-                if orig is None:
-                    raise ReplayNotFoundError(event_id) from None
-                paused_event = _TriggerEventModel(
-                    organisation_id=org_id,
-                    trigger_id=trigger.id,
-                    trigger_type="webhook",
-                    raw_payload_hash=orig.raw_payload_hash,
-                    validation_result="paused",
-                )
-                session.add(paused_event)
-                await session.flush()
-                return {"status": "paused"}
             except EventNotAcceptedError:
                 # The engine wrote the ``event_type_not_accepted``
                 # TriggerEvent INSIDE this transaction. Catch here (mirroring
@@ -908,26 +1190,17 @@ async def replay_webhook(
             ),
         ) from exc
     except TriggerBusyError:
-        # Concurrent same-trigger deliveries serialize on the engine's
-        # advisory lock. The loser is NOT executed and NOT auto-queued: the
-        # engine raises BEFORE any TriggerEvent is written and the main
-        # transaction rolls back, so the busy replay is recorded here —
-        # AFTER the unwind — in a fresh transaction (a
-        # ``concurrency_limit_reached`` event carrying the original event's
-        # payload hash). The 2xx ack is honest because of that recording.
-        _log.info(
-            "webhooks.replay_webhook.trigger_busy trigger=%s pipeline=%s",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
+        # Concurrent same-trigger replays serialize on the engine's advisory
+        # lock; the loser is recorded AFTER the unwind in a fresh transaction
+        # (see _replay_busy_path) and only then acked 2xx.
+        ack = await _replay_busy_path(
+            trigger_id=trigger_id,
+            trigger=trigger,
+            org_id=org_id,
+            event_id=event_id,
         )
-        if org_id is not None:
-            await record_busy_delivery(
-                trigger_id=trigger_id,
-                org_id=org_id,
-                trigger_type="webhook",
-                source_event_id=event_id,
-            )
-            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+        if ack is not None:
+            return ack
         # Defensive: TriggerBusyError can only fire after the bootstrap
         # helper resolved the org — refuse loudly rather than false-ack.
         _log.error("webhooks.replay_webhook.trigger_busy_unresolvable trigger=%s", trigger_id)
@@ -963,29 +1236,14 @@ async def replay_webhook(
             detail=MSG_INTERNAL_SERVER_ERROR,
         ) from None
 
-    if event_not_accepted:
-        # The ``event_type_not_accepted`` TriggerEvent was committed with the
-        # transaction above (caught in-transaction, mirroring the guardrail
-        # path). The delivery is reject-and-retry — the sender must adjust the
-        # payload to match the trigger's acceptance config.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Event type not accepted by trigger configuration",
-        )
-
-    run_id = run.id
-    # FAR-213 webhook ack-after-validate semantics (see receive_webhook): a
-    # guardrail-blocked replayed delivery is acked with a non-success 422, never
-    # a false "accepted" — the run + TriggerEvent rows stay committed.
-    if run.error_code == "eval_blocked":
-        _log.info("webhooks.replay_webhook.guardrail_blocked run=%s", run_id)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Delivery rejected: payload violates a bound guardrail (run created as eval_failed for visibility)",
-        )
-    background_tasks.add_task(_dispatch_webhook_run, str(run_id), str(org_id))
-
-    return {"run_id": str(run_id), "status": "accepted"}
+    # Post-transaction outcome: the event-type 400, the FAR-213
+    # guardrail-blocked 422, or the background dispatch + 202 ack.
+    return _replay_ack(
+        run=run,
+        org_id=org_id,
+        background_tasks=background_tasks,
+        event_not_accepted=event_not_accepted,
+    )
 
 
 @router.post(
