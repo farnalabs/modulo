@@ -312,4 +312,12 @@ describe('NotificationBell (FAR-250)', () => {
     await button.trigger('click')
     expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
   })
+
+  it('removes the document click listener when unmounted', async () => {
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+    const wrapper = await mountBell()
+    wrapper.unmount()
+    expect(removeSpy).toHaveBeenCalledWith('click', expect.any(Function))
+    removeSpy.mockRestore()
+  })
 })

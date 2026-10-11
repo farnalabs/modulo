@@ -233,4 +233,25 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(row.find('a').exists()).toBe(false)
     expect(row.text()).toContain('Run failed')
   })
+
+  it('emits close when the view-all link is clicked', async () => {
+    const wrapper = await mountDropdown()
+    await wrapper.find('[data-testid="notification-dropdown-view-all"]').trigger('click')
+    expect(wrapper.emitted('close')).toBeTruthy()
+  })
+
+  it('renders the info and fallback level-dot colours', async () => {
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [
+        notification({ id: 'n-info', level: 'info' }),
+        notification({ id: 'n-unknown', level: 'debug' }),
+      ],
+      total_unread: 2,
+    })
+    const wrapper = await mountDropdown()
+    const dots = wrapper.findAll('[data-testid="notification-dropdown"] li span.rounded-full')
+    expect(dots).toHaveLength(2)
+    // Distinct classes → both the `info` arm and the `default` arm executed.
+    expect(dots[0].classes()).not.toEqual(dots[1].classes())
+  })
 })

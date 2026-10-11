@@ -51,6 +51,15 @@ describe('fetchDashboardNotifications', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/v1/notifications/in-app/dashboard')
   })
 
+  it('passes the limit as a query param when provided (FAR-249)', async () => {
+    const payload = { notifications: [notification], total_unread: 3 }
+    apiGet.mockResolvedValue({ data: payload })
+    await expect(fetchDashboardNotifications(10)).resolves.toEqual(payload)
+    expect(apiGet).toHaveBeenCalledWith('/api/v1/notifications/in-app/dashboard', {
+      params: { query: { limit: 10 } },
+    })
+  })
+
   it('propagates API errors as a thrown Error with the formatted detail', async () => {
     apiGet.mockResolvedValue({ error: { detail: 'not allowed' } })
     await expect(fetchDashboardNotifications()).rejects.toThrow('not allowed')

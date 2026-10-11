@@ -39,10 +39,13 @@ export interface PaginatedNotificationsResponse {
 }
 
 export async function fetchDashboardNotifications(limit?: number): Promise<DashboardNotificationResponse> {
+  // A call without a limit stays a plain one-argument GET so the server
+  // applies its own default; a supplied limit rides as a bounded query param.
+  if (limit === undefined) {
+    return throwOnError(await api.GET('/api/v1/notifications/in-app/dashboard'))
+  }
   return throwOnError(
-    await api.GET('/api/v1/notifications/in-app/dashboard', {
-      params: limit === undefined ? undefined : { query: { limit } },
-    }),
+    await api.GET('/api/v1/notifications/in-app/dashboard', { params: { query: { limit } } }),
   )
 }
 
