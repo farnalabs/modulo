@@ -1136,3 +1136,31 @@ async def test_sweep_envelope_when_no_tier_is_applicable_logs_the_e2b_reason_alo
     assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "docker-reason"}
     assert "scope=e2b" in caplog.text
     assert "e2b-reason" in caplog.text
+
+
+async def test_sweep_envelope_dedupes_a_tier_reason_identical_to_dockers(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tier whose skip reason is IDENTICAL to Docker's is not logged a
+    second time under its own scope: the envelope reports one reason, never
+    the same string repeated (the ``e2b_skip != docker_skip`` guard), while
+    the returned envelope stays the historical Docker-reason one."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "engine-unavailable")
+    monkeypatch.setattr(
+        runner_reconciler,
+        "kubernetes_endpoint_skip_reason",
+        AsyncMock(return_value="engine-unavailable"),
+    )
+    monkeypatch.setattr(
+        runner_reconciler,
+        "e2b_endpoint_skip_reason",
+        AsyncMock(return_value="engine-unavailable"),
+    )
+
+    with caplog.at_level(logging.INFO):
+        result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "engine-unavailable"}
+    assert "scope=e2b" not in caplog.text
+    assert "scope=kubernetes" not in caplog.text
