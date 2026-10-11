@@ -138,12 +138,12 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
 - [x] Run-outcome delivery signal (FAR-189/228): every terminal run carries a
       `run_classification` JSON record written atomically with terminalization by
       the shared fenced terminal write – `value` (`delivered` / `no_delivery` /
-      `excluded` / `unclassified`), a stored `reason` (`pr_delivered` /
+      `excluded` / `benign` / `unclassified`), a stored `reason` (`pr_delivered` /
       `email_delivered` / `no_work` / `no_delivery` / `needs_human` /
       `source_error` / `parse_error` / `operator_or_hitl_cancelled` /
       `hitl_timeout` / `budget_exceeded` / `compensation_failed` /
       `router_no_match` / `hitl_rejected` / `hitl_superseded` /
-      `classifier_error`), `delivered_pr_urls`, `computed_at`,
+      `benign_outcome` / `classifier_error`), `delivered_pr_urls`, `computed_at`,
       and the `work_intact` / `declared_success_nodes` terminalization-fact
       metadata. A classifier/persist failure writes a fail-closed `unclassified`
       marker (`crud/run.py` `_write_unclassified_classification`, SAVEPOINT-fenced
@@ -151,6 +151,38 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       periodic reconciliation sweep (`reconcile_missing_classifications`, wired into
       `dispatcher_reconcile`) backfills raw-SQL terminalizers within a minute
       (`pipeline_engine/classify.py`, `test_run_classification.py`)
+- [x] Business-expected run outcomes (FAR-707): a pipeline may declare explicit
+      benign signatures (`benign_signatures` JSON column on `pipelines`, migration
+      0296 – a list of `{"error_code": "<exact runs.error_code>", "error_detail_contains":
+      "<case-insensitive substring, optional>"}` entries) via
+      `PATCH /api/v1/pipelines/{id}`, whose wire validation is STRICT: a non-list
+      value, a missing/non-string `error_code`, a non-string detail, or any key
+      outside the accepted pair is a 422 (a typo'd key must never silently widen
+      a signature to match any detail); `null` clears the config. At
+      terminalization a countable failure (`failed` / `eval_failed` / `stalled` /
+      `compensation_failed`) whose `(error_code, error_detail)` matches a
+      signature classifies `benign` (reason `benign_outcome`) INSTEAD of
+      `no_delivery` – checked only in that branch, so `excluded` / `delivered` /
+      non-terminal verdicts are never re-routed by a signature. A pipeline with
+      no signatures (NULL / `[]`) classifies identically to the pre-FAR-707
+      decision table; the stored config is read leniently at match time
+      (`normalize_benign_signatures` drops malformed entries and logs – a config
+      defect degrades to "no benign outcomes", never blocking terminalization).
+      The verdict is copied to `run_daily_facts.benign` (`record_run_facts` /
+      `_fact_is_benign`; NULL = written before the classification landed, read as
+      "not benign" fail-open) so analytics failure readers drop benign runs from
+      the rate's numerator AND denominator and from error-code failure clusters
+      without joining `runs` (ADR 020) – volume/cost/token totals still include
+      them. The reconciliation sweep re-records the fact when it lands a `benign`
+      verdict, because raw-SQL terminalizers write the fact before the
+      classification exists (`pipeline_engine/classify.py`
+      `classify_run`/`matches_benign_signature`/`_reconcile_classify_run`,
+      `api/routes/pipelines.py` `PipelineUpdate`, `core/analytics/`
+      `record_run_facts`, `core/analytics/builder.py`, `db/crud/run.py` run-stats
+      paths, migration `0296_benign_run_outcomes.py`;
+      `test_run_classification.py`, `test_pipelines_endpoint.py`,
+      `test_analytics_builder.py`, `test_analytics_record_facts.py`,
+      `test_runs_stats.py`)
 - [x] The delivery signal is agent-reported and honestly labelled (FAR-1336,
       vocabulary renamed from `self_reported` by FAR-1388):
       `delivered_pr_urls` are harvested in one walk from each node's structured

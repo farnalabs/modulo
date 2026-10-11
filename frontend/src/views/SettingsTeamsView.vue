@@ -9,7 +9,7 @@
     </header>
 
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadTeams" />
 
     <div v-if="!loading && !error">
       <div v-if="showCreateForm" class="card max-w-3xl p-6">

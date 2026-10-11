@@ -7,10 +7,14 @@ Verifies that:
 4. get_entry catches (ValueError, KeyError) but propagates unexpected errors.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
+
+# Logger of ``modulo.api.routes.community_library`` (the teardown guard's log key).
+_COMMUNITY_LIBRARY_LOGGER = "modulo.api.routes.community_library"
 
 
 class TestListCommunityExceptionNarrowing:
@@ -100,6 +104,76 @@ class TestFetchEntryContentExceptionNarrowing:
         from modulo.api.routes.community_library import _fetch_entry_content
 
         with pytest.raises(RuntimeError, match="unexpected"):
+            await _fetch_entry_content("abc123")
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.community_library.get_settings")
+    @patch("modulo.api.routes.community_library.LibraryClient")
+    async def test_raising_close_logged_and_swallowed(
+        self, mock_client_cls: MagicMock, mock_settings: MagicMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``close()`` that raises never escapes ``_fetch_entry_content``.
+
+        The teardown sits in ``finally`` AFTER the ``except ValueError`` arm,
+        so without its own guard it would replace BOTH the parsed-content
+        return (success) and the ``None`` degrade (ValueError) with the
+        teardown's own exception. Proves both returns survive and the
+        teardown failure is logged.
+        """
+        mock_settings.return_value = MagicMock(
+            modulo_library_endpoint="http://localhost",
+            modulo_library_root_public_key="key",
+            modulo_library_sync_timeout_seconds=15,
+        )
+        mock_client = AsyncMock()
+        mock_client.fetch_blob = AsyncMock(return_value=b'{"name": "code-reviewer"}')
+        mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+        mock_client_cls.return_value = mock_client
+
+        from modulo.api.routes.community_library import _fetch_entry_content
+
+        with caplog.at_level(logging.ERROR, logger=_COMMUNITY_LIBRARY_LOGGER):
+            result = await _fetch_entry_content("abc123")
+
+        assert result == {"name": "code-reviewer"}
+        mock_client.close.assert_awaited_once()
+        assert "community_library.client_close_failed" in caplog.messages
+
+        # Failure path: the ValueError degrade still returns None.
+        caplog.clear()
+        mock_client.fetch_blob = AsyncMock(side_effect=ValueError("bad json"))
+
+        with caplog.at_level(logging.ERROR, logger=_COMMUNITY_LIBRARY_LOGGER):
+            degraded = await _fetch_entry_content("abc123")
+
+        assert degraded is None
+        assert "community_library.client_close_failed" in caplog.messages
+
+    @pytest.mark.asyncio
+    @patch("modulo.api.routes.community_library.get_settings")
+    @patch("modulo.api.routes.community_library.LibraryClient")
+    async def test_raising_close_does_not_displace_body_exception(
+        self, mock_client_cls: MagicMock, mock_settings: MagicMock
+    ) -> None:
+        """Body exception + failing teardown: the BODY's error wins.
+
+        Without the teardown guard the ``finally``'s exception replaces the
+        propagating ``RuntimeError`` from ``fetch_blob``, masking the real
+        failure with the teardown's own message.
+        """
+        mock_settings.return_value = MagicMock(
+            modulo_library_endpoint="http://localhost",
+            modulo_library_root_public_key="key",
+            modulo_library_sync_timeout_seconds=15,
+        )
+        mock_client = AsyncMock()
+        mock_client.fetch_blob = AsyncMock(side_effect=RuntimeError("blob boom"))
+        mock_client.close = AsyncMock(side_effect=RuntimeError("teardown failed"))
+        mock_client_cls.return_value = mock_client
+
+        from modulo.api.routes.community_library import _fetch_entry_content
+
+        with pytest.raises(RuntimeError, match="blob boom"):
             await _fetch_entry_content("abc123")
 
 

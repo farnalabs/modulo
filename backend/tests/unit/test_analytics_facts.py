@@ -114,6 +114,17 @@ def _blob_read_results() -> list[SimpleNamespace]:
     ]
 
 
+def _autonomy_read_result(level: str | None = None) -> SimpleNamespace:
+    """The FAR-1175 autonomy-level read (``session.execute(...).scalar_one_or_none()``).
+
+    ``record_run_facts`` reads the run's most recent
+    ``run.autonomy_level_applied`` audit payload to populate the fact's
+    ``autonomy_level`` column. ``None`` (the default) models a run with no such
+    event — the fact records a NULL autonomy level.
+    """
+    return _scalar_one_result({"autonomy_level": level} if level is not None else None)
+
+
 # ---------------------------------------------------------------------------
 # Facts writer (modulo.core.analytics.__init__)
 # ---------------------------------------------------------------------------
@@ -233,6 +244,8 @@ class TestRecordRunFacts:
                 "created_at",
                 "duration_ms",
                 "error_code",
+                # FAR-707 business-expected-outcome marker.
+                "benign",
                 "claim_count",
                 "queue_wait_ms",
                 "final_idle_ms",
@@ -296,6 +309,7 @@ class TestRecordRunFacts:
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -305,8 +319,9 @@ class TestRecordRunFacts:
 
         session.begin_nested.assert_called_once()
         # snapshot dims + workspace_inputs_count (FAR-802) + the single blobs
-        # read + the enforcement-aggregate read (FAR-902) + the upsert.
-        assert session.execute.await_count == 3 + len(_blob_read_results()) + 1 + 1
+        # read + the enforcement-aggregate read (FAR-902) + the autonomy-level
+        # read (FAR-1175) + the upsert.
+        assert session.execute.await_count == 3 + len(_blob_read_results()) + 1 + 1 + 1
         assert captured["model"] is analytics_mod.RunDailyFact
         assert len(captured["index_elements"]) == 1
         assert captured["index_elements"][0].key == "run_id"
@@ -330,12 +345,42 @@ class TestRecordRunFacts:
         assert values["total_queue_wait_ms"] == 600_000  # started 10:30 - created 10:20
         # FAR-802: workspace_inputs_count fact (None when no audit row exists).
         assert values["workspace_inputs_count"] is None
+        # FAR-1175: autonomy_level fact (None when no run.autonomy_level_applied
+        # audit event exists).
+        assert values["autonomy_level"] is None
 
         update_keys = set(captured["set_"])
         assert {"status", "total_cost_usd", "total_tokens", "duration_ms", "run_date"} <= update_keys
         assert {"dispatched_at", "started_at", "completed_at", "total_queue_wait_ms"} <= update_keys
         # FAR-332 — batch_id dimension is part of the fact write + update path.
         assert "batch_id" in update_keys
+
+    async def test_autonomy_level_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-1175 / ADR 043: the run's effective autonomy level (read from its
+        most recent ``run.autonomy_level_applied`` audit event) reaches the fact
+        so the analytics surface can bucket autonomous vs human-reviewed runs
+        without re-joining the audit chain (ADR 020: no ``runs`` join)."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run(
+            owner_team_id="44444444-4444-4444-8444-444444444444",
+            pipeline_id="55555555-5555-4555-8555-555555555555",
+        )
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result("Platform"),
+                SimpleNamespace(first=lambda: ("CI", None)),
+                *_blob_read_results(),
+                _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
+                _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                _autonomy_read_result("supervised"),  # FAR-1175 autonomy-level read
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["autonomy_level"] == "supervised"
 
     async def test_execution_origin_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-1141 / ADR-042: the run's execution origin lands in the fact
@@ -349,6 +394,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -369,6 +415,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -378,6 +425,48 @@ class TestRecordRunFacts:
 
         assert captured["values"]["execution_origin"] is None
         assert "execution_origin" in set(captured["set_"])
+
+    async def test_benign_marker_copied_onto_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FAR-707: a run whose terminal classification is ``benign`` stamps
+        ``benign=True`` on the fact AND on the ON CONFLICT update set, so the
+        analytics read path (which never joins ``runs``) can drop it from the
+        failure rate and a re-finalization corrects a stale marker in place."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run(run_classification={"value": "benign", "reason": "benign_outcome"})
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["benign"] is True
+        assert "benign" in set(captured["set_"])
+
+    async def test_benign_marker_null_until_the_classification_exists(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A run with no classification record yet (raw-SQL terminalizer) stamps
+        NULL — never a confident False — so the reader's NULL-as-not-benign
+        fallback is what applies."""
+        captured = self._capturing_insert(monkeypatch)
+        run = _make_run()
+        session = _session(
+            execute_side_effect=[
+                _scalar_one_result(None),
+                SimpleNamespace(first=lambda: (None, None)),
+                *_blob_read_results(),
+                SimpleNamespace(),
+            ]
+        )
+        monkeypatch.setattr(analytics_mod, "record_facts_write_failed", MagicMock())
+
+        await analytics_mod.record_run_facts(session, run)
+
+        assert captured["values"]["benign"] is None
 
     async def test_writes_batch_id_dimension(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The run's batch_id is carried into the fact so batches are filterable."""
@@ -389,6 +478,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -407,6 +497,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -439,6 +530,7 @@ class TestRecordRunFacts:
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -469,6 +561,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -503,6 +596,7 @@ class TestRecordRunFacts:
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -525,6 +619,7 @@ class TestRecordRunFacts:
                 _scalar_one_result(None),
                 SimpleNamespace(first=lambda: (None, None)),
                 *_blob_read_results(),
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read
                 SimpleNamespace(),
             ]
         )
@@ -550,6 +645,7 @@ class TestRecordRunFacts:
                 *_blob_read_results(),
                 _scalar_one_result(None),  # FAR-802 workspace_inputs_count read (succeeds)
                 _enforcement_empty_result(),  # FAR-902 enforcement-aggregate read (succeeds)
+                _autonomy_read_result(),  # FAR-1175 autonomy-level read (succeeds)
                 RuntimeError("simulated facts insert failure"),
             ]
         )

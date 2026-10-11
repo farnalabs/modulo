@@ -50,7 +50,9 @@ const mockSummaryData = {
 
 const mockFlagData = {
   license: { tier: 'community', has_license_key: false, is_valid: false },
-  flags: [],
+  // FAR-92: the rolling-window toggle is gated on analytics_page — on by
+  // default here so the toggle tests see it; flag-off cases override.
+  flags: [{ name: 'analytics_page', currently_active: true }],
   would_activate: [],
 }
 
@@ -194,7 +196,15 @@ describe('DashboardView', () => {
     mockGet.mockImplementation((url: string) => {
       if (url === '/api/v1/admin/feature-flags') {
         return Promise.resolve({
-          data: { ...mockFlagData, flags: [{ name: 'dashboard_charts', currently_active: true }] },
+          // analytics_page on keeps the rolling-window toggle visible — the
+          // 7d/30d/90d labels asserted below are its window buttons.
+          data: {
+            ...mockFlagData,
+            flags: [
+              { name: 'dashboard_charts', currently_active: true },
+              { name: 'analytics_page', currently_active: true },
+            ],
+          },
           error: undefined,
         })
       }
@@ -275,6 +285,23 @@ describe('DashboardView', () => {
     expect(wrapper.findAll('[data-testid="trend-toggle-30"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-90"]')).toHaveLength(1)
     expect(wrapper.findAll('[data-testid="trend-toggle-all"]')).toHaveLength(1)
+  })
+
+  it('hides the rolling-window toggle when the analytics_page flag is off but still renders the summary', async () => {
+    mockGet.mockImplementation((url: string) => {
+      if (url === '/api/v1/admin/feature-flags') {
+        return Promise.resolve({ data: { ...mockFlagData, flags: [] }, error: undefined })
+      }
+      if (url === '/api/v1/admin/license') return Promise.resolve({ data: mockLicenseData, error: undefined })
+      if (url === '/api/v1/dashboard/summary') return Promise.resolve({ data: mockSummaryData, error: undefined })
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid^="trend-toggle-"]')).toHaveLength(0)
+    // The dashboard itself still renders — only the toggle is gated.
+    expect(wrapper.text()).toContain('142')
+    expect(wrapper.text()).toContain('Total Runs')
   })
 
   it('fetches a period-scoped summary when a window is selected', async () => {

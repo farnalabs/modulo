@@ -28,6 +28,7 @@ from modulo.core.analytics import (
     _derive_graph_dimensions,
     _fact_duration_ms,
     _fact_final_idle_ms,
+    _fact_is_benign,
     _fact_output_bytes,
     _fact_queue_wait_ms,
     _fact_run_blobs,
@@ -299,3 +300,43 @@ class TestDeriveGraphDimensions:
             ]
         }
         assert _derive_graph_dimensions(graph) == (2, 2, 120)
+
+
+class TestFactIsBenign:
+    """FAR-707 — the analytics ``benign`` marker is copied from the
+    classification record, and an ABSENT record is never read as benign."""
+
+    def test_benign_classification_stamps_true(self) -> None:
+        run = _run(run_classification={"value": "benign", "reason": "benign_outcome"})
+        assert _fact_is_benign(run) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        ["no_delivery", "delivered", "excluded", "unclassified"],
+    )
+    def test_any_other_verdict_stamps_false(self, value: str) -> None:
+        run = _run(run_classification={"value": value})
+        assert _fact_is_benign(run) is False
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            None,
+            "not-a-dict",
+            {},
+            {"value": None},
+            {"value": 3},
+            {"no_value_key": True},
+        ],
+    )
+    def test_a_missing_or_malformed_record_stamps_none(self, record: object) -> None:
+        """NULL = "not classified yet" (a raw-SQL terminalizer's fact lands
+        before the reconcile sweep backfills the record) — readers treat it as
+        NOT benign, never as a confident verdict."""
+        run = _run(run_classification=record)
+        assert _fact_is_benign(run) is None
+
+    def test_a_run_shaped_object_without_the_column_stamps_none(self) -> None:
+        run = _run()
+        assert not hasattr(run, "run_classification")
+        assert _fact_is_benign(run) is None

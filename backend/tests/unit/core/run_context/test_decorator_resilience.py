@@ -102,6 +102,12 @@ class TestReservedKeyProtection:
             ("cancelled", True),
             ("input", {"malicious": True}),
             ("_pipeline_default_autonomy", "fully_autonomous"),
+            # FAR-1175 S1: the engine-seeded earned pin and the ceiling are both
+            # reserved — a context-setter must never overwrite the pin (it would
+            # let the same agent that writes autonomy_recommendation erase its
+            # own in-flight ceiling).
+            ("_pipeline_earned_at_start", "fully_autonomous"),
+            ("_pipeline_max_autonomy", "fully_autonomous"),
             ("_run_context_write_log", "should be stripped"),
         ],
     )
@@ -113,6 +119,28 @@ class TestReservedKeyProtection:
         state: dict[str, Any] = {"run_context": {"cancelled": False}}
         result = await setter(state)
         assert reserved_key not in result["run_context"]
+
+    async def test_context_setter_cannot_overwrite_the_earned_pin(self) -> None:
+        """FAR-1175 S1 — a context-setter's write of the pinned earned level is
+        stripped, while its legitimate ``autonomy_recommendation`` survives."""
+        from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
+
+        @cancellable_node(role="context_setter")
+        async def setter(state: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "run_context": {
+                    PIPELINE_EARNED_AT_START_KEY: "fully_autonomous",
+                    "autonomy_recommendation": "fully_autonomous",
+                }
+            }
+
+        state: dict[str, Any] = {
+            "run_context": {PIPELINE_EARNED_AT_START_KEY: "manual_approval"},
+        }
+        result = await setter(state)
+
+        assert PIPELINE_EARNED_AT_START_KEY not in result["run_context"]
+        assert result["run_context"]["autonomy_recommendation"] == "fully_autonomous"
 
     async def test_only_reserved_keys_returns_no_write_log(self) -> None:
         @cancellable_node(role="context_setter")

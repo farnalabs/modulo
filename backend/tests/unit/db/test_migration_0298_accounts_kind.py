@@ -1,4 +1,4 @@
-"""Unit tests for migration 0296_accounts_kind downgrade guard (FAR-1385).
+"""Unit tests for migration 0298_accounts_kind downgrade guard (FAR-1385).
 
 The downgrade restores NOT NULL on ``email``/``auth_provider`` and drops the
 service-privilege CHECK, so it is only safe while every row is a human with an
@@ -16,12 +16,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 _PATH = (
-    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0296_accounts_kind.py"
+    Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions" / "0298_accounts_kind.py"
 )
 
 
 def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0296", _PATH)
+    spec = importlib.util.spec_from_file_location("migration_0298", _PATH)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -65,7 +65,7 @@ class TestDowngradeGuard:
         op.drop_constraint.assert_any_call("ck_accounts_service_privilege", "accounts", type_="check")
 
 
-def test_revision_chains_off_the_current_head() -> None:
+def test_revision_chains_off_0297_autonomy_gating_s1() -> None:
     module = _load()
-    assert module.revision == "0296_accounts_kind"
-    assert module.down_revision == "0295_decision_record_event_identity"
+    assert module.revision == "0298_accounts_kind"
+    assert module.down_revision == "0297_autonomy_gating_s1"

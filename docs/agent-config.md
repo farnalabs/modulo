@@ -91,12 +91,15 @@ Caught at HTTP request deserialisation – blocks the API call with a 422 respon
 
 | Code | Severity | Rule |
 |---|---|---|
-| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join` |
+| `node_type` validation | Error | `node_type` must be one of: `agent`, `manual`, `composite`, `sandbox_agent`, `router`, `hitl`, `join`, `dispatch` |
 | `agent_command` | Error | Sandbox agent nodes require a non-empty `agent_command` |
 | `template_id` | Error | Sandbox agent nodes require a `template_id` (e.g. `"opencode"`) |
 | `timeout_seconds` | Error | Per-node timeout must be between 60 and 604800 seconds if set |
 | `env_vars` reserved keys | Error | Sandbox agent `env_vars` keys must not start with `MODULO_` or `OPENCODE_API_KEY` |
 | `context_files` paths | Error | Sandbox agent `context_files` source paths must be absolute (start with `/`) |
+| `connector_binding` (dispatch) | Error | Dispatch nodes (`node_type: dispatch`, FAR-1141) require a `connector_binding` (the CI-runner dispatch target) and cannot reference an `agent_id` |
+| `operation` (dispatch) | Error | A dispatch node's `connector_binding.operation` must be `dispatch` (omitting it inherits the engine fallback; an explicit `query`/`write` is rejected). The binding `type` must implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`); `dispatch_action` selects one (default `trigger_run`) |
+| `await_completion` / `wait_timeout` | Error | Dispatch-only fields: `await_completion=True` and any `wait_timeout` on a non-`dispatch` node are rejected. `await_completion=True` additionally requires `dispatch_action='trigger_run'`; `wait_timeout` (> 0, <= 3600) requires `await_completion=True` |
 
 ### Layer 2: MCP Tool (`update_pipeline_graph`)
 
@@ -166,3 +169,11 @@ Runs on-save (via the REST API's `PATCH /{pipeline_id}/graph` endpoint) and pre-
 | `SANDBOX_WALLCLOCK_BUDGET_INVALID` | Error | `wallclock_budget_seconds` is not a valid positive budget (FAR-296) |
 | `SANDBOX_LOOP_INTERCEPT_MALFORMED` | Error | `loop_intercept` config is not a valid object (FAR-211) |
 | `SANDBOX_LOOP_INTERCEPT_EMPTY_PATTERNS` | Warning | `loop_intercept.intercepted_tool_patterns` is empty; no tool calls will be intercepted |
+| `SANDBOX_SINGLE_PR_PER_RUN_INVALID` | Error | `single_pr_per_run` is not a boolean (true = arm the one-PR-per-run guard for this sandbox run) |
+| `SANDBOX_MANAGED_INPUTS_INVALID` | Error | The sandbox node's managed workspace inputs config is invalid |
+
+**Dispatch / connector binding (FAR-1141)**
+
+| Code | Severity | Rule |
+|---|---|---|
+| `CONNECTOR_DISPATCH_UNSUPPORTED` | Error | A dispatch binding targets a connector instance whose type does not implement the CI-runner operations (`trigger_run` / `get_run_status` / `get_run_logs` / `list_runs`) |

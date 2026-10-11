@@ -122,3 +122,27 @@ async def validate_accountability_owner(
         ).first()
         if team_row is None:
             _reject(field, owner_account_id, "is not a member of the pipeline's owner team")
+
+
+async def is_account_in_team(
+    session: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    team_id: uuid.UUID,
+) -> bool:
+    """True when *account_id* is a member of *team_id* (FAR-1175 owner gate).
+
+    Used by the manual autonomy promote/demote surfaces to resolve the
+    "pipeline owner" arm of the admin/owner RBAC gate: a member of the
+    pipeline's owner team may change its autonomy level. Any role row counts
+    (mirrors the eligibility invariant in ``validate_accountability_owner``).
+    """
+    row = (
+        await session.execute(
+            select(TeamMembership.id).where(
+                TeamMembership.team_id == team_id,
+                TeamMembership.account_id == account_id,
+            ),
+        )
+    ).first()
+    return row is not None

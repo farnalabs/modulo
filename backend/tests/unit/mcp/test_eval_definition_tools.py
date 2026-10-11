@@ -141,13 +141,56 @@ class TestCreateEvalDefinition:
         assert result["version"] == 1
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.db.models.eval_definition.EvalDefinition")
     @patch("modulo.api.mcp_server._session")
-    async def test_operator_gets_insufficient_scope(
+    async def test_operator_can_create(
+        self,
+        mock_session: AsyncMock,
+        mock_eval_def_cls: MagicMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        """FAR-735: operators may create eval definitions (admin no longer required)."""
+        _set_context("operator")
+        created = _make_eval_def(name="my-eval", eval_type="regex", config_json={"k": "v"})
+        mock_eval_def_cls.side_effect = lambda **kw: created
+        mock_session.return_value = _make_session_cm(object())
+
+        result = await create_eval_definition(
+            pipeline_id=str(uuid.uuid4()),
+            name="my-eval",
+            eval_type="regex",
+            config_json={"k": "v"},
+        )
+
+        assert "error" not in result, result
+        assert result["name"] == "my-eval"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_runner_gets_insufficient_scope(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
-        _set_context("operator")
+        _set_context("runner")
+        mock_session.return_value = _make_session_cm(object())
+
+        result = await create_eval_definition(
+            pipeline_id=str(uuid.uuid4()),
+            name="my-eval",
+            eval_type="regex",
+        )
+
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_viewer_gets_insufficient_scope(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        _set_context("viewer")
         mock_session.return_value = _make_session_cm(object())
 
         result = await create_eval_definition(
@@ -269,12 +312,47 @@ class TestUpdateEvalDefinition:
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
-    async def test_operator_gets_insufficient_scope(
+    async def test_operator_can_update(
         self,
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        """FAR-735: operators may update eval definitions."""
         _set_context("operator")
+        existing = _make_eval_def(name="old", version=1, config_json={"foo": "bar"})
+        mock_session.return_value = _make_session_cm(None, side_effect=[existing, None, existing, None])
+
+        result = await update_eval_definition(
+            eval_id=str(existing.id),
+            name="new",
+        )
+
+        assert "error" not in result, result
+        assert result["name"] == "new"
+        assert result["version"] == 2
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_runner_gets_insufficient_scope(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        _set_context("runner")
+        mock_session.return_value = _make_session_cm(_make_eval_def())
+
+        result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="new")
+
+        assert result["error"] == "insufficient_scope"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    async def test_viewer_gets_insufficient_scope(
+        self,
+        mock_session: AsyncMock,
+        mock_validate_auth: AsyncMock,
+    ) -> None:
+        _set_context("viewer")
         mock_session.return_value = _make_session_cm(_make_eval_def())
 
         result = await update_eval_definition(eval_id=str(uuid.uuid4()), name="new")
@@ -377,6 +455,7 @@ class TestDeleteEvalDefinition:
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        """FAR-735: delete stays admin-only — operators are still denied."""
         _set_context("operator")
         mock_session.return_value = _make_session_cm(_make_eval_def())
 

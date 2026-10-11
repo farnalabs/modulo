@@ -83,6 +83,24 @@ describe('SchemaInferenceView', () => {
     expect(wrapper.text()).toContain('connector fetch exploded')
   })
 
+  it('offers Retry on a failed connectors load and re-fetches on click (FAR-1655)', async () => {
+    ;(api.GET as any).mockResolvedValue({ data: undefined, error: { detail: 'connector fetch exploded' } })
+    const wrapper = await mountView()
+    expect(wrapper.text()).toContain('connector fetch exploded')
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
+    await retry.trigger('click')
+    await nextTick()
+    await nextTick()
+
+    const connectors = (wrapper.vm as any).connectors as Connector[]
+    expect(connectors).toHaveLength(2)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
   it('disables the infer button until a connector and resource type are selected', async () => {
     ;(api.GET as any).mockResolvedValue({ data: { items: CONNECTORS }, error: undefined })
     const wrapper = await mountView()

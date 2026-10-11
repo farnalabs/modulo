@@ -44,10 +44,15 @@ ORG = uuid.UUID("7f000000-0000-0000-0000-000000000002")
 _SENTINEL = object()
 
 
-def _instance(allowed_operations: Any, *, visibility: str = "org") -> SimpleNamespace:
+def _instance(
+    allowed_operations: Any,
+    *,
+    visibility: str = "org",
+    connector_type_id: str = "rest",
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
-        connector_type_id="rest",
+        connector_type_id=connector_type_id,
         config_json={},
         allowed_operations=allowed_operations,
         visibility=visibility,
@@ -90,6 +95,38 @@ def test_write_only_allowlist_denies_polling_read() -> None:
     """A non-empty allowlist that excludes ``read`` must raise (fail closed)."""
     with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
         enforce_polling_read_acl(_instance(["write"]))
+
+
+def test_same_type_qualified_entry_grants_polling_read() -> None:
+    """A stored same-type qualified entry grants its bare capability (FAR-1616).
+
+    A ``["github.read"]`` allowlist on a connector whose OWN
+    ``connector_type_id`` is ``github`` is the FAR-1594 legacy spelling of
+    ``read``. The polling gate must thread the instance's type into
+    :class:`ConnectorACL` so it makes the SAME decision as the connector hub:
+    a same-type qualified entry GRANTS ``read``. Without the threaded type the
+    qualifier is unverifiable and the entry is rejected, so this read is denied
+    at the polling gate while the hub grants it.
+    """
+    assert (
+        enforce_polling_read_acl(
+            _instance(["github.read"], connector_type_id="github"),
+        )
+        is None
+    )
+
+
+def test_mis_typed_qualified_entry_denies_polling_read() -> None:
+    """A mis-typed qualified entry grants nothing (fail closed, FAR-1616).
+
+    A ``["filesystem.read"]`` entry on a connector whose own type is ``github``
+    names a DIFFERENT surface: it must be REJECTED, exactly as the hub rejects
+    it, so the polling read is denied and no credentials are exposed.
+    """
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        enforce_polling_read_acl(
+            _instance(["filesystem.read"], connector_type_id="github"),
+        )
 
 
 @pytest.mark.parametrize(

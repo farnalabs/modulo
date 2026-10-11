@@ -37,6 +37,28 @@ team that runs `manual_approval` for a pipeline, sees a streak of clean merges,
 and promotes it to `notify_on_complete` – then back to `manual_approval` if a
 bad change slips through – is practising *evidence-based* progressive autonomy.
 
+### 1.1 Earned autonomy (ADR 043 slice S1)
+
+Alongside the configured default and the ceiling, each pipeline now carries a
+runtime **earned autonomy level** (`pipelines.earned_autonomy_level`, NULL until
+set). It lives *outside* the run snapshot (like the circuit-breaker state)
+because it must change between runs without a pipeline edit. Behind the
+`autonomy_gating` feature flag (default OFF), every HITL gate resolves its
+`base` level from the earned level instead of the pinned default:
+
+- **Demotion is immediate and safe** — lowering autonomy only adds human review,
+  so it takes effect at the run's *next* gate, including in-flight runs.
+- **Promotion is never automatic** — an admin or the pipeline's owner team
+  approves it, capped at `max_autonomy_level`, and it applies only to runs
+  created after the approval. In-flight runs keep the lower level: the gate
+  resolves `min(pinned-at-run-start, live earned)`.
+
+The manual surfaces are `POST /api/v1/pipelines/{id}/autonomy/demote` and
+`.../promote` (plus the MCP `demote_pipeline_autonomy` /
+`promote_pipeline_autonomy` tools), each recording `pipeline.autonomy_demoted` /
+`pipeline.autonomy_promotion_decided` with the actor, previous/new level and
+reason. With the flag off, resolution is unchanged from S0.
+
 **Why this is defensible vs incumbents:** GitHub/GitLab expose "require review"
 as a static branch-protection boolean. They produce no cross-agent evidence
 record of *what autonomy was granted, to whom, and what happened next*. Modulo's
@@ -54,10 +76,10 @@ Discovered by reading the codebase at implementation time:
 | Pipeline autonomy **level *configured*** | ✅ | `pipeline.autonomy_level_changed` audit event (`api/routes/pipelines.py:_maybe_audit_autonomy_change`) |
 | HITL review **decisions** (claimed/approved/rejected/expired) | ✅ | `hitl_review_*` events; `core/hitl_manager` |
 | HITL review **eval result** (LLM-judge before interrupt) | ✅ | `hitl_review.eval_result` telemetry |
-| **Per-run effective autonomy** actually applied | ❌ *new* | **Now emitted**: `run.autonomy_level_applied` (`core/run_context/autonomy_telemetry.py`) |
-| **Gate-fire** (human path taken vs bypassed) per run | ❌ *new* | **Now emitted** as `gate_outcome` in the same event |
+| **Per-run effective autonomy** actually applied | ✅ | `run.autonomy_level_applied` (`core/run_context/autonomy_telemetry.py`) |
+| **Gate-fire** (human path taken vs bypassed) per run | ✅ | `gate_outcome` in the same event |
 | **Defect-escape** (autonomous change later reverted/fixed) | ❌ | Not yet – see §6 |
-| Autonomy level in the analytics fact table | ❌ | `run_daily_facts` has no autonomy column |
+| Autonomy level in the analytics fact table | ✅ | `run_daily_facts.autonomy_level` (FAR-1175) — populated at fact-write time from the run's latest `run.autonomy_level_applied` event |
 
 The two gaps closed by this change (`run.autonomy_level_applied`) are the
 minimum required to *measure* the claim. Everything else in §6 is a roadmap
@@ -189,7 +211,7 @@ environment with live runs.*
 
 | Item | Size | Notes |
 |---|---|---|
-| `autonomy_level` column on `run_daily_facts` | S | Enables direct analytics bucketing without audit-chain joins. |
+| ~~`autonomy_level` column on `run_daily_facts`~~ | ~~S~~ | **Done (FAR-1175)**: the column exists and is populated from the run's latest `run.autonomy_level_applied` event. |
 | Defect-escape derivation | M | Correlate reverted/fixed runs to originating autonomous run. |
 | Promotion/demotion dashboard | M | Surface `pipeline.autonomy_level_changed` over time per pipeline. |
 | Autonomy-by-change-class report | M | Group grant/escape rates by pipeline/folder/node type. |

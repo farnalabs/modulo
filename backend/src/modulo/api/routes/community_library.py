@@ -119,7 +119,12 @@ async def _fetch_entry_content(content_sha256: str) -> Any:
     except ValueError:
         _log.exception("community_library.get_entry_blob")
     finally:
-        await client.close()
+        # Teardown must never surface: a raising close() would replace the
+        # body's exception (or discard its ``return None``) — log and swallow.
+        try:
+            await client.close()
+        except Exception:
+            _log.exception("community_library.client_close_failed")
     return None
 
 

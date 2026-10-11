@@ -25,8 +25,8 @@ Deploy ordering (ADR 030): migrate FIRST, then roll code. Old code ignores the
 column; the nullable relaxation and the new CHECK constraints are inert for
 human rows.
 
-Revision ID: 0296_accounts_kind
-Revises: 0295_decision_record_event_identity
+Revision ID: 0298_accounts_kind
+Revises: 0297_autonomy_gating_s1
 Create Date: 2026-10-11
 """
 
@@ -35,8 +35,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0296_accounts_kind"
-down_revision: str | None = "0295_decision_record_event_identity"
+revision: str = "0298_accounts_kind"
+down_revision: str | None = "0297_autonomy_gating_s1"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

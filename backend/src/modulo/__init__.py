@@ -14,7 +14,7 @@ def get_build_tag() -> str:
     falls back to ``"build-local-dev"`` for local development.
     """
     sha = os.environ.get("GIT_SHA", "")
-    if sha and len(sha) >= _SHORT_SHA_LENGTH:
+    if len(sha) >= _SHORT_SHA_LENGTH:
         return f"build-{sha[:_SHORT_SHA_LENGTH]}"
     return "build-local-dev"
 

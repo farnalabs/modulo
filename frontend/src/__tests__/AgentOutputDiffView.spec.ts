@@ -175,6 +175,59 @@ describe('AgentOutputDiffView', () => {
     expect(wrapper.text()).toContain('Run not found')
   })
 
+  it('offers Retry on a compare failure and re-runs the compare on click (FAR-1655)', async () => {
+    // First compare fails; Retry (which re-invokes handleCompare) succeeds.
+    vi.mocked(api.POST as unknown as (url: string) => Promise<unknown>).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/runs/diff') {
+        const callCount = vi.mocked(api.POST).mock.calls.filter((c) => c[0] === '/api/v1/runs/diff').length
+        if (callCount <= 1) return { data: null, error: { status: 500, detail: 'diff backend down' } }
+        return {
+          data: {
+            run_id_a: 'aaa',
+            run_id_b: 'bbb',
+            node_output_a: { result: 'hello' },
+            node_output_b: { result: 'world' },
+            diff_lines: [{ type: 'added', content: 'world', line_a: null, line_b: 1 }],
+            has_diff: true,
+          },
+          error: undefined,
+        }
+      }
+      return { data: null, error: undefined }
+    })
+
+    router.push('/runs/diff')
+    await router.isReady()
+    const wrapper = mount(AgentOutputDiffView, {
+      global: { plugins: [router] },
+    })
+    await flushPromises()
+    await nextTick()
+
+    await wrapper.find('[data-testid="diff-run-id-a"]').setValue('run-a')
+    await wrapper.find('[data-testid="diff-node-id"]').setValue('node-1')
+    await wrapper.find('[data-testid="diff-run-id-b"]').setValue('run-b')
+    await wrapper.find('[data-testid="diff-compare-btn"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('diff backend down')
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+    await new Promise(r => setTimeout(r, 0))
+    await nextTick()
+
+    // The retried compare succeeded: POST /runs/diff called twice, error cleared.
+    const diffCalls = vi.mocked(api.POST).mock.calls.filter((c) => c[0] === '/api/v1/runs/diff')
+    expect(diffCalls).toHaveLength(2)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('diff backend down')
+  })
+
   it('renders pure-return node outputs with no telemetry keys', async () => {
     vi.mocked(api.POST as unknown as () => Promise<unknown>).mockResolvedValue({
       data: {
