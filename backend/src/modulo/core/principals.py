@@ -101,4 +101,4 @@ def clamp_service_role(role: str | None) -> str:
     for name, name_level in ORG_ROLE_HIERARCHY.items():
         if name_level == effective:
             return name
-    return ""
+    return ""  # pragma: no cover - unreachable: effective always equals a role's own level or the operator ceiling

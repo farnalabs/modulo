@@ -296,6 +296,18 @@ def _login(client: TestClient) -> str:
     return str(login_resp.json()["access_token"])
 
 
+def test_me_returns_404_for_a_service_principal(client: TestClient) -> None:
+    """FAR-1385: a service principal has no human identity, so /me is
+    unreachable for it — answered 404 byte-identically to a missing account."""
+    token = _login(client)
+    service_user = _make_mock_user()
+    service_user.kind = "service"
+    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=service_user)):
+        resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Account not found"
+
+
 def test_me_removed_member_returns_401(client: TestClient) -> None:
     """ADR 047: a removed/deactivated member gets 401 from /me, not a stale role."""
     from datetime import UTC, datetime
