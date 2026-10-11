@@ -42,6 +42,7 @@ vi.mock('../lib/api/client', () => ({
 
 import { api } from '../lib/api/client'
 import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const DEFAULT_GET_RESPONSE = {
   data: {
@@ -212,8 +213,19 @@ describe('SettingsObservabilityView', () => {
     expect(formError.exists()).toBe(true)
     expect(formError.text()).toContain('Save failed')
     expect(formError.text()).toContain('boom')
-    // Save-action errors carry no refetch loader, so the shared alert must
-    // render without a Retry control.
+
+    // The form error must be the SHARED ErrorAlert component, not a bespoke
+    // <div> — this fails if the conversion is reverted (a reverted view mounts
+    // no ErrorAlert at all here, because the load succeeded).
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.element).toBe(formError.element)
+    expect(alert.text()).toContain('Save failed')
+    expect(alert.text()).toContain('boom')
+
+    // Save-action errors carry no refetch loader, so the alert is explicitly
+    // non-retryable (:retryable="false") and renders no Retry control.
+    expect(alert.props('retryable')).toBe(false)
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 })
