@@ -2167,6 +2167,28 @@ class TestStopRunningStack:
         ):
             upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
 
+    def test_live_lock_holder_restarts_unit_and_refuses(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        unit_file = tmp_path / "test.service"
+        unit_file.write_text("[Unit]\n", encoding="utf-8")
+
+        holder = MagicMock(pid=4242)
+
+        with (
+            patch("modulo.launcher.service.default_unit_path", return_value=unit_file),
+            patch("modulo.launcher.service.UNIT_FILENAME", "test.service"),
+            patch("modulo.launcher.upgrade.subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("modulo.launcher.supervisor.request_stop"),
+            patch("modulo.launcher.upgrade._read_lock_holder", return_value=holder),
+            patch("modulo.launcher.upgrade._pid_alive", return_value=True),
+            patch("modulo.launcher.upgrade._restart_unit_best_effort") as mock_restart,
+            pytest.raises(UpgradeError, match="STILL locked by a live launcher"),
+        ):
+            upgrade_module.stop_running_stack(data_dir, unit_file=unit_file)
+
+        mock_restart.assert_called_once_with(why="post-stop abort: restoring the stopped service")
+
 
 class TestRestartUnitBestEffort:
     def test_no_unit_file_returns_silently(self, tmp_path, monkeypatch):

@@ -210,7 +210,7 @@ def _sso_provider_is_unrestricted(provider: Any) -> bool:
     return bool(getattr(provider, "auto_provision", False)) and not any(str(d).strip() for d in domains)
 
 
-async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID, session: AsyncSession) -> None:
+async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID) -> None:
     """Fail CLOSED at save time when the dangerous mode-3 state isn't unlocked.
 
     Raises HTTP 422 inside the caller's transaction so the write rolls back.
@@ -337,7 +337,7 @@ async def create_provider_endpoint(
             )
             # Fail CLOSED before commit when the dangerous mode-3 state is not
             # unlocked by the operator-level feature flag.
-            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
+            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -428,7 +428,7 @@ async def update_provider_endpoint(
             # Validate the MERGED provider state (update + existing) so an
             # auto_provision flip can't slip into dangerous mode 3.
             if provider is not None:
-                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
+                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
