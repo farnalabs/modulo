@@ -239,7 +239,9 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true, FolderTree: true },
+        // ErrorAlert NOT stubbed here: the drop-move banner is a real
+        // ErrorAlert now, and the test asserts its rendered message + dismiss.
+        stubs: { FolderTree: true },
       },
     })
     await flushPromises()
@@ -252,9 +254,14 @@ describe('PipelineListView', () => {
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Move failed')
 
-    // The banner's close control clears the move error and hides the banner.
-    const closeButton = banner.find('[data-testid="pipeline-list-move-error-close"]')
+    // The banner's dismiss control clears the move error and hides the banner.
+    // The top-level banner uses the icon-only dismiss (dismissIcon): the
+    // accessible name comes from aria-label, not a visible text label.
+    const closeButton = banner.find('[data-testid="error-alert-dismiss"]')
     expect(closeButton.exists()).toBe(true)
+    expect(closeButton.attributes('aria-label')).toBe('Close')
+    expect(closeButton.text()).toBe('')
+    expect(closeButton.find('svg').exists()).toBe(true)
     await closeButton.trigger('click')
     await nextTick()
     expect(wrapper.find('[data-testid="pipeline-list-move-error"]').exists()).toBe(false)
@@ -1066,5 +1073,105 @@ describe('PipelineListView', () => {
 
     expect(firstKey).not.toBe(initialKey)
     expect(secondKey).not.toBe(firstKey)
+  })
+
+  // FAR-1669: the move/rename/delete dialogs surface their in-place failure via
+  // the shared ErrorAlert (retryable=false — retry is clicking Save/Delete
+  // again). These error branches were uncovered, so the changed-lines coverage
+  // gate failed on the swapped-in component lines.
+  it('renders the in-dialog ErrorAlert when a move-to-folder save fails', async () => {
+    mockResponses['/api/v1/pipeline-folders'] = [
+      { id: 'f1', organisation_id: 'org1', name: 'Folder One', parent_id: null, sort_order: 0 },
+    ]
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Move Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z', folder_id: null }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openMoveToFolder: (p: typeof pipeline) => void }
+    patchMock.mockRejectedValueOnce(new Error('Move failed'))
+    vm.openMoveToFolder(pipeline)
+    await flushPromises()
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Move to Folder"]')
+    expect(dialog.exists()).toBe(true)
+    await dialog.findAll('button').find(b => b.text() === 'Save')!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = dialog.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Move failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders the in-dialog ErrorAlert when a rename save fails', async () => {
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Rename Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openRename: (p: typeof pipeline) => void }
+    ;(api.PATCH as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Rename failed'))
+    vm.openRename(pipeline)
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Rename Pipeline"]')
+    expect(dialog.exists()).toBe(true)
+    await dialog.findAll('button').find(b => b.text() === 'Save')!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = dialog.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Rename failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('renders the in-dialog ErrorAlert when a delete fails', async () => {
+    const plan = usePlanStore()
+    plan.features.pipeline_delete = true
+    const pipeline = { id: 'p1', organisation_id: 'org1', name: 'Delete Me', description: null, visibility: 'org', created_at: '2025-01-01T00:00:00Z', updated_at: '2025-01-01T00:00:00Z' }
+    mockResponses['/api/v1/pipelines?page_size=100'] = { items: [pipeline], total: 1, page: 1, page_size: 100 }
+    await router.push('/pipelines')
+    await router.isReady()
+    const wrapper = mount(PipelineListView, {
+      global: { plugins: [router], stubs: { FolderTree: true } },
+    })
+    await flushPromises()
+    await nextTick()
+
+    const vm = wrapper.vm as unknown as { openDelete: (p: typeof pipeline) => void }
+    ;(api.DELETE as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Delete failed'))
+    vm.openDelete(pipeline)
+    await nextTick()
+
+    const dialog = wrapper.find('[aria-label="Delete Pipeline"]')
+    expect(dialog.exists()).toBe(true)
+    await dialog.findAll('button').find(b => b.text() === 'Delete')!.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const alert = dialog.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Delete failed')
+    // Dense dialog context: the shared alert renders in its compact density.
+    expect(alert.props('compact')).toBe(true)
+    wrapper.unmount()
   })
 })

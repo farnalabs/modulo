@@ -3,13 +3,12 @@
     <div v-if="loading" class="text-center py-12 text-muted-foreground">
       {{ $t('views.LibraryView.loading') }}
     </div>
-    <div
+    <ErrorAlert
       v-else-if="error"
-      class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+      :message="error"
+      :on-retry="load"
       role="alert"
-    >
-      {{ error }}
-    </div>
+    />
     <div v-else-if="collection" class="max-w-2xl mx-auto mt-6 space-y-4">
       <PageHeader :title="collection.name" />
       <div class="text-sm text-muted-foreground">
@@ -44,15 +43,19 @@
           }}
         </Button>
       </div>
-      <div
+      <!--
+        FAR-1669: install is a non-idempotent POST (creates a CollectionInstall),
+        so a Retry that re-fires after a lost response could double-install.
+        retryable=false — the Install button above is the retry path.
+      -->
+      <ErrorAlert
         v-if="installError"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="installError"
+        :retryable="false"
         role="alert"
         aria-live="assertive"
         data-testid="collection-install-error"
-      >
-        {{ installError }}
-      </div>
+      />
       <div
         v-if="upgradeError"
         class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
@@ -112,13 +115,16 @@
           }}
         </Button>
       </div>
-      <div
+      <!--
+        FAR-1669: publish mutates collection status — not idempotent, so no
+        auto-retry. retryable=false — the Publish button above is the retry path.
+      -->
+      <ErrorAlert
         v-if="publishError"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="publishError"
+        :retryable="false"
         role="alert"
-      >
-        {{ publishError }}
-      </div>
+      />
 
       <!-- Installs section (FAR-764) -->
       <div v-if="installs.length > 0" class="border-t pt-4 space-y-4">
@@ -253,6 +259,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 

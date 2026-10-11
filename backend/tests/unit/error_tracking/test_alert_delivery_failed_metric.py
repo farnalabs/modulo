@@ -7,8 +7,6 @@ request/HTTP failure paths in ``alert_dispatcher``.
 
 from __future__ import annotations
 
-import sys
-import types
 import uuid
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,25 +35,6 @@ def _reset_metric_handles() -> Iterator[None]:
         metrics_mod._alert_delivery_failed_total,
         metrics_mod._alerts_suppressed_total,
     ) = saved
-
-
-@pytest.fixture
-def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
-    fake_metrics = types.ModuleType("opentelemetry.metrics")
-    meter = MagicMock()
-    meter.create_counter.return_value = MagicMock()
-    fake_metrics.get_meter_provider = MagicMock(return_value=None)
-    fake_otel = types.ModuleType("opentelemetry")
-    fake_otel.metrics = fake_metrics
-    patcher = patch.dict(
-        sys.modules,
-        {"opentelemetry": fake_otel, "opentelemetry.metrics": fake_metrics},
-    )
-    patcher.start()
-    try:
-        yield meter, fake_metrics
-    finally:
-        patcher.stop()
 
 
 class TestRecordAlertDeliveryFailed:
@@ -164,11 +143,12 @@ class TestWebhookFailurePath:
 
         client = AsyncMock()
         client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
         client.post.side_effect = httpx.ConnectError("connection refused")
 
         with (
             patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
-            patch.object(dispatcher_mod.httpx, "AsyncClient", return_value=client),
+            patch.object(dispatcher_mod, "pinned_async_client", new=AsyncMock(return_value=client)),
         ):
             from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 
@@ -200,11 +180,12 @@ class TestWebhookFailurePath:
 
         client = AsyncMock()
         client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
         client.post.return_value = response
 
         with (
             patch.object(dispatcher_mod, "record_alert_delivery_failed") as failed,
-            patch.object(dispatcher_mod.httpx, "AsyncClient", return_value=client),
+            patch.object(dispatcher_mod, "pinned_async_client", new=AsyncMock(return_value=client)),
         ):
             from modulo.core.error_tracking.alert_dispatcher import dispatch_alert
 

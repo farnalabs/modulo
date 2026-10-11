@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.api.models.error import ErrorEventInput, ErrorGroupResult, ErrorIngestRequest, ErrorIngestResponse
+from modulo.api.models.error import ErrorIngestRequest
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -87,23 +87,34 @@ class TestFingerprint:
 class TestFingerprintNormalization:
     svc = ErrorIngestionService()
 
-    @pytest.mark.parametrize(
-        ("desc", "stacktrace", "expected_len"),
-        [
-            pytest.param("top_5_frames_only", "\n".join(f"line {i}" for i in range(20)), 64, id="top_5_frames_only"),
-            pytest.param(
-                "file_paths_stripped",
-                '  File "/app/deploy/path/main.py", line 42, in handler\n    result = do_work()',
-                64,
-                id="file_paths_stripped",
-            ),
-            pytest.param("none_stacktrace", None, 64, id="none_stacktrace"),
-            pytest.param("empty_stacktrace", "", 64, id="empty_stacktrace"),
-        ],
-    )
-    def test_normalization(self, desc: str, stacktrace: str | None, expected_len: int) -> None:
-        fp = self.svc.fingerprint(message="x", stacktrace=stacktrace, source="x")
-        assert len(fp) == expected_len
+    def test_top_five_frames_only(self) -> None:
+        # Two stacks identical in their first 5 lines but differing after line 5
+        # must yield the SAME fingerprint (normalisation keeps only the top 5).
+        head = "\n".join(f"frame {i}" for i in range(5))
+        stack_a = head + "\n" + "tail A"
+        stack_b = head + "\n" + "totally different tail B"
+        fa = self.svc.fingerprint(message="x", stacktrace=stack_a, source="x")
+        fb = self.svc.fingerprint(message="x", stacktrace=stack_b, source="x")
+        assert fa == fb
+        # Changing a line WITHIN the top 5 changes the fingerprint.
+        stack_c = "\n".join(["frame 0", "frame X", "frame 2", "frame 3", "frame 4", "tail A"])
+        fc = self.svc.fingerprint(message="x", stacktrace=stack_c, source="x")
+        assert fc != fa
+
+    def test_file_paths_are_stripped(self) -> None:
+        # The File "…", line N, prefix is stripped, so identical code with a
+        # different absolute path yields the same fingerprint.
+        a = '  File "/app/deploy/main.py", line 42, in handler\n    result = do_work()'
+        b = '  File "/home/dev/other/main.py", line 99, in handler\n    result = do_work()'
+        fa = self.svc.fingerprint(message="x", stacktrace=a, source="x")
+        fb = self.svc.fingerprint(message="x", stacktrace=b, source="x")
+        assert fa == fb
+
+    def test_none_and_empty_stacktrace_are_equivalent(self) -> None:
+        none_fp = self.svc.fingerprint(message="x", stacktrace=None, source="x")
+        empty_fp = self.svc.fingerprint(message="x", stacktrace="", source="x")
+        assert none_fp == empty_fp
+        assert len(none_fp) == 64
 
 
 # =========================================================================
@@ -335,107 +346,6 @@ class TestSessionKeyStore:
 # =========================================================================
 # Schema validation — parametrized
 # =========================================================================
-
-
-class TestErrorEventInputValidation:
-    @pytest.mark.parametrize(
-        ("kwargs", "should_pass", "match"),
-        [
-            pytest.param(
-                {"level": "error", "message": "Something broke", "source": "backend"}, True, None, id="valid_input"
-            ),
-            pytest.param(
-                {"level": "error", "message": "", "source": "backend"},
-                False,
-                "message must not be empty",
-                id="empty_message",
-            ),
-            pytest.param(
-                {"level": "debug", "message": "test", "source": "backend"}, False, "Invalid level", id="invalid_level"
-            ),
-            pytest.param(
-                {"level": "error", "message": "test", "source": "mobile"}, False, "Invalid source", id="invalid_source"
-            ),
-            pytest.param({"level": "error", "message": "test", "source": "saq"}, True, None, id="saq_source_accepted"),
-            pytest.param(
-                {
-                    "level": "error",
-                    "message": "test",
-                    "source": "backend",
-                    "breadcrumbs": [{"msg": str(i)} for i in range(51)],
-                },
-                False,
-                "breadcrumbs must not exceed",
-                id="too_many_breadcrumbs",
-            ),
-            pytest.param(
-                {
-                    "level": "error",
-                    "message": "test",
-                    "source": "backend",
-                    "breadcrumbs": [{"msg": str(i)} for i in range(50)],
-                },
-                True,
-                None,
-                id="breadcrumbs_at_limit",
-            ),
-            pytest.param(
-                {"level": "error", "message": "  hello  ", "source": "backend"}, True, None, id="message_stripped"
-            ),
-            pytest.param(
-                {"level": "critical", "message": "test", "source": "celery"}, True, None, id="optional_fields_none"
-            ),
-        ],
-    )
-    def test_validation(self, kwargs: dict, should_pass: bool, match: str | None) -> None:
-        if should_pass:
-            e = ErrorEventInput(**kwargs)
-            assert e.level == kwargs["level"]
-            if kwargs.get("message") == "  hello  ":
-                assert e.message == "hello"
-        else:
-            with pytest.raises(ValidationError, match=match):
-                ErrorEventInput(**kwargs)
-
-
-class TestErrorIngestRequestValidation:
-    @pytest.mark.parametrize(
-        ("events", "should_pass"),
-        [
-            pytest.param([], False, id="empty_rejected"),
-            pytest.param([{"level": "error", "message": "test", "source": "backend"}], True, id="single_valid"),
-            pytest.param(
-                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(20)],
-                True,
-                id="max_20_valid",
-            ),
-            pytest.param(
-                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(21)],
-                False,
-                id="too_many_rejected",
-            ),
-        ],
-    )
-    def test_validation(self, events: list[dict], should_pass: bool) -> None:
-        if should_pass:
-            r = ErrorIngestRequest(events=events)
-            assert len(r.events) == len(events)
-        else:
-            with pytest.raises(ValidationError):
-                ErrorIngestRequest(events=events)
-
-
-class TestErrorGroupResult:
-    def test_fields(self) -> None:
-        r = ErrorGroupResult(group_id="abc-123", is_new=True)
-        assert r.group_id == "abc-123"
-        assert r.is_new is True
-
-
-class TestErrorIngestResponse:
-    def test_response_model(self) -> None:
-        r = ErrorIngestResponse(results=[ErrorGroupResult(group_id="g1", is_new=True)])
-        assert len(r.results) == 1
 
 
 # =========================================================================

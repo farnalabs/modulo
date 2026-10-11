@@ -438,3 +438,32 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     assert resp.status_code == 400
     assert "pipeline_template" in resp.json()["detail"]
     assert "schema" in resp.json()["detail"]
+
+
+def test_create_pipeline_from_template_rejects_declared_policy_gate(client: TestClient) -> None:
+    """FAR-1109: a library template declaring a policy_gate block fails loudly.
+
+    The create-pipeline path persists ``graph_nodes_json`` directly and the node
+    conversion does not carry a declared gate through, so the block must be
+    rejected rather than silently dropped/unenforced.
+    """
+    primitive_id = uuid.uuid4()
+    primitive = _make_primitive(pid=primitive_id)
+    primitive.content_json["graph_nodes"][0]["policy_gate"] = {
+        "eval_id": str(uuid.uuid4()),
+        "action": "block",
+    }
+
+    with (
+        patch("modulo.api.routes.library.get_primitive", return_value=primitive),
+        patch("modulo.api.routes.library.create_pipeline", return_value=_make_pipeline()),
+        patch("modulo.api.routes.library.set_rls_org"),
+        patch("modulo.api.routes.library.set_rls_user_context"),
+    ):
+        resp = client.post(
+            f"/api/v1/libraries/{primitive_id}/create-pipeline",
+            json={},
+        )
+
+    assert resp.status_code == 422
+    assert "policy_gate" in resp.json()["detail"]

@@ -112,6 +112,7 @@ from modulo.db.crud.pipeline import (
     create_pipeline,
     enforce_manual_node_output_schemas,
     get_pipeline,
+    reject_declared_policy_gates,
 )
 from modulo.db.crud.rating import (
     CopyToAdaptError,
@@ -1751,6 +1752,11 @@ def _build_pipeline_from_template(
     agents = content.get("agents", [])
     graph_nodes = content.get("graph_nodes", [])
     edges = content.get("edges", [])
+    # FAR-1109: the template install writes ``graph_nodes_json`` directly and
+    # the node conversion below does not carry a ``policy_gate`` block through,
+    # so a template declaring a gate must fail loudly rather than install
+    # silently unenforced.
+    reject_declared_policy_gates(graph_nodes, surface="Pipeline install from library template")
 
     name = name_override or getattr(primitive, "name", "Pipeline from Template")
     description = description_override or getattr(primitive, "description", None)

@@ -5,7 +5,7 @@
     </div>
 
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
-      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+      <ErrorAlert :message="pageError" :on-retry="loadData" />
     </div>
 
     <template v-else>
@@ -153,6 +153,7 @@ import StagePalette from './StagePalette.vue'
 import GraduationDialog from './GraduationDialog.vue'
 import VersionHistoryDropdown from './VersionHistoryDropdown.vue'
 import FlowControls from '../../shared/FlowControls.vue'
+import ErrorAlert from '../../shared/ErrorAlert.vue'
 import { useApi } from '../../../composables/useApi'
 import { formatApiError } from '../../../lib/api/formatError'
 import { computeLifecycleMapLayout } from '../../../stores/lifecycleMaps'
@@ -294,6 +295,10 @@ function edgeToBackend(edge: any): LifecycleEdge {
 }
 
 async function loadData() {
+  // Clear any previous page error before re-fetching, so a successful Retry
+  // (or a mapId switch) actually renders the editor instead of leaving the
+  // stale error alert on screen. Failures below re-set it.
+  pageError.value = null
   try {
     const [mapData, pipelinesData] = await Promise.all([
       get<any>(`/api/v1/lifecycle-maps/${props.mapId}`).catch(() => null),

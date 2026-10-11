@@ -33,6 +33,9 @@ vi.mock('../composables/useDataFetch', async () => {
         try {
           const result = await fetcher()
           ;(data as { value: unknown }).value = result.data ?? options?.initialValue
+          // Mirror the real composable: a successful refetch clears a prior
+          // error so retry-recovery flows can be asserted.
+          error.value = ''
         } catch {
           error.value = 'Failed to load'
         } finally {
@@ -158,6 +161,31 @@ describe('AdminUsersView', () => {
     await nextTick()
     expect(wrapper.exists()).toBe(true)
     expect(wrapper.text()).toContain('Users')
+  })
+
+  it('shows a shared ErrorAlert with retry when the users load fails, and recovers on retry', async () => {
+    const healthyGet = mockGet.getMockImplementation()!
+    mockGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/v1/admin/users?')) {
+        return Promise.reject(new Error('boom'))
+      }
+      return healthyGet(path)
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).toContain('Failed to load')
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    mockGet.mockImplementation(healthyGet)
+    await retry.trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.text()).not.toContain('Failed to load')
+    expect(wrapper.text()).toContain('alice@example.com')
   })
 
   it('shows "Never logged in" when last_login is null and relative time otherwise', async () => {

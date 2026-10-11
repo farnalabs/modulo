@@ -1560,7 +1560,7 @@ elements:
       - testid: hk-error
         type: element
         dynamic_testid: false
-      - testid: hk-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: hk-empty
@@ -2838,7 +2838,7 @@ elements:
       - testid: feedback-inbox-toggle-expand
         type: button
         dynamic_testid: false
-      - testid: feedback-inbox-retry
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: feedback-inbox-trigger-correction
@@ -3234,7 +3234,7 @@ elements:
       - testid: pipeline-list-breadcrumb-root
         type: button
         dynamic_testid: false
-      - testid: pipeline-list-move-error-close
+      - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
       - testid: pipeline-list-move-folder-option
@@ -4079,6 +4079,12 @@ elements:
         dynamic_testid: false
       - testid: json-viewer-string-expand
         type: button
+        dynamic_testid: false
+      - testid: run-detail-deadline-triage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-deadline-triage-entry
+        type: element
         dynamic_testid: false
     /runs/diff:
       - testid: diff-loading

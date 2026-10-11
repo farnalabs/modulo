@@ -398,6 +398,13 @@ describe('CollectionDetailView install action (FAR-826)', () => {
     await nextTick()
 
     expect(wrapper.find('[data-testid="collection-install-error"][role="alert"]').exists()).toBe(true)
+
+    // FAR-1669: install is a non-idempotent POST, so the shared ErrorAlert
+    // renders with retryable=false — no Retry button; the Install button is
+    // the retry path.
+    expect(vi.mocked(api.POST)).toHaveBeenCalledTimes(1)
+    expect(wrapper.findAll('button').find((b) => b.text() === 'Retry')).toBeUndefined()
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 })
 

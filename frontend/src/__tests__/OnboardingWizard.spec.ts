@@ -199,6 +199,8 @@ describe('OnboardingWizard — navigation & gating', () => {
     await clickNext(wrapper)
     expect(wrapper.text()).toContain('Failed to load connectors:')
     expect(wrapper.text()).toContain('connectors offline')
+    // FAR-1669: rendered via the shared ErrorAlert with a wired Retry.
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 
   it('previous returns to the prior step and skip-to-end jumps to Done', async () => {
@@ -387,6 +389,8 @@ describe('OnboardingWizard — library (step 4)', () => {
     await nextTick()
     expect(wrapper.text()).toContain('Failed to load library')
     expect(wrapper.text()).toContain('library offline')
+    // FAR-1669: rendered via the shared ErrorAlert with a wired Retry.
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Retry')).toHaveLength(1)
   })
 
   it('shows the empty library state', async () => {

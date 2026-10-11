@@ -4,14 +4,18 @@
       <h1 class="text-xl font-semibold">{{ $t('views.AcceptInviteView.title') }}</h1>
       <p class="mt-1 text-sm text-muted-foreground">{{ $t('views.AcceptInviteView.subtitle') }}</p>
 
-      <div
+      <!--
+        No invite token in the URL fragment: nothing to retry — the user must
+        open a fresh invite link.
+      -->
+      <ErrorAlert
         v-if="missingToken"
+        :message="$t('views.AcceptInviteView.missing_token')"
+        :retryable="false"
+        class="mt-4"
         role="alert"
         data-testid="accept-invite-missing-token"
-        class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-      >
-        {{ $t('views.AcceptInviteView.missing_token') }}
-      </div>
+      />
 
       <form v-else-if="!success" class="mt-5 space-y-4" novalidate @submit.prevent="submit">
         <div>
@@ -44,14 +48,17 @@
           <li>{{ $t('views.AcceptInviteView.requirement_length') }}</li>
           <li>{{ $t('views.AcceptInviteView.requirement_mixed') }}</li>
         </ul>
-        <p
+        <!--
+          Client-validation or submit failure: the user corrects the password
+          fields and submits again; no Retry is offered.
+        -->
+        <ErrorAlert
           v-if="error"
+          :message="error"
+          :retryable="false"
           role="alert"
           data-testid="accept-invite-error"
-          class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-        >
-          {{ error }}
-        </p>
+        />
         <button
           type="submit"
           :disabled="loading"
@@ -79,6 +86,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useApi } from '../composables/useApi'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { passwordRuleKey, validatePasswordClient } from '../lib/passwordRules'
 
 const { t } = useI18n()

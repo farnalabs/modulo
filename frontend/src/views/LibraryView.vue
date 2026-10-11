@@ -130,22 +130,20 @@
         </div>
       </div>
 
-      <div
+      <ErrorAlert
         v-else-if="error && section !== 'collections'"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="error"
+        :on-retry="loadPrimitives"
         role="alert"
         data-testid="library-error"
-      >
-        {{ error }}
-      </div>
-      <div
+      />
+      <ErrorAlert
         v-else-if="collectionsError && section === 'collections'"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="collectionsError"
+        :on-retry="loadCollections"
         role="alert"
         data-testid="library-collections-error"
-      >
-        {{ collectionsError }}
-      </div>
+      />
 
       <EmptyState
         v-else-if="section === 'community' && communityPrimitives.length === 0"
@@ -268,6 +266,7 @@ import { SlidersVertical, X } from '@lucide/vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import FilterBar from '../components/shared/FilterBar.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import LibraryPrimitiveCard from '../components/library/LibraryPrimitiveCard.vue'
 import { useDataFetch } from '../composables/useDataFetch'

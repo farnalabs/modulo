@@ -37,6 +37,7 @@ vi.mock('../lib/mustChangePassword', () => ({
 }))
 
 import OrgLoginView from '../views/OrgLoginView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('OrgLoginView', () => {
   beforeEach(() => {
@@ -81,6 +82,18 @@ describe('OrgLoginView', () => {
       expect(wrapper.find('[data-testid="org-login-not-found"]').exists()).toBe(true)
     })
     expect(wrapper.text()).toContain('Organisation not found')
+
+    // FAR-1669 prove-the-fix: the not-found box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div carried the same testid,
+    // role and text, so findComponent is what fails on a revert. Nothing to
+    // retry (`:retryable="false"`): the user picks another org.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('data-testid')).toBe('org-login-not-found')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('renders org name and password form when org is found', async () => {
@@ -238,6 +251,18 @@ describe('OrgLoginView', () => {
       expect(wrapper.find('[data-testid="org-login-error"]').exists()).toBe(true)
       expect(wrapper.text()).toContain('Invalid credentials')
     })
+
+    // FAR-1669 prove-the-fix: the login-failure box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div carried the same testid,
+    // role and text, so findComponent is what fails on a revert. No Retry:
+    // the user corrects the credentials and submits again.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('data-testid')).toBe('org-login-error')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('renders SAML button when saml is true', async () => {

@@ -8,12 +8,11 @@ meter provider or DB (``_get_meter`` is patched / OTel is stubbed via
 
 from __future__ import annotations
 
-import sys
-import types
-from collections.abc import Iterator
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from opentelemetry.trace import StatusCode
 
 import modulo.core.error_tracking.metrics as metrics_mod
 
@@ -29,6 +28,9 @@ def _reset_metric_handles() -> None:
         metrics_mod._runs_oldest_running_gauge,
         metrics_mod._runs_stall_reason_total,
         metrics_mod._runs_claim_count_histogram,
+        metrics_mod._alerts_suppressed_total,
+        metrics_mod._alert_delivery_failed_total,
+        metrics_mod._connector_unknown_total,
     )
     metrics_mod._errors_total = None
     metrics_mod._error_groups_active = None
@@ -37,6 +39,9 @@ def _reset_metric_handles() -> None:
     metrics_mod._runs_oldest_running_gauge = None
     metrics_mod._runs_stall_reason_total = None
     metrics_mod._runs_claim_count_histogram = None
+    metrics_mod._alerts_suppressed_total = None
+    metrics_mod._alert_delivery_failed_total = None
+    metrics_mod._connector_unknown_total = None
     yield
     (
         metrics_mod._errors_total,
@@ -46,6 +51,9 @@ def _reset_metric_handles() -> None:
         metrics_mod._runs_oldest_running_gauge,
         metrics_mod._runs_stall_reason_total,
         metrics_mod._runs_claim_count_histogram,
+        metrics_mod._alerts_suppressed_total,
+        metrics_mod._alert_delivery_failed_total,
+        metrics_mod._connector_unknown_total,
     ) = saved
 
 
@@ -55,31 +63,6 @@ def _make_meter() -> MagicMock:
     meter.create_gauge.return_value = MagicMock()
     meter.create_histogram.return_value = MagicMock()
     return meter
-
-
-@pytest.fixture
-def fake_otel() -> Iterator[tuple[MagicMock, MagicMock]]:
-    """Inject a fake ``opentelemetry`` / ``opentelemetry.metrics`` into ``sys.modules``
-    for the duration of the test and clean up afterwards so the stubs never shadow the
-    real OTel package for other test modules running in the same process.
-
-    Yields ``(meter, fake_metrics)`` where ``fake_metrics.get_meter_provider`` returns
-    ``None`` by default; tests may override it to point at a fake provider.
-    """
-    fake_metrics = types.ModuleType("opentelemetry.metrics")
-    meter = _make_meter()
-    fake_metrics.get_meter_provider = MagicMock(return_value=None)
-    fake_otel = types.ModuleType("opentelemetry")
-    fake_otel.metrics = fake_metrics
-    patcher = patch.dict(
-        sys.modules,
-        {"opentelemetry": fake_otel, "opentelemetry.metrics": fake_metrics},
-    )
-    patcher.start()
-    try:
-        yield meter, fake_metrics
-    finally:
-        patcher.stop()
 
 
 # =========================================================================
@@ -110,42 +93,43 @@ class TestGetMeter:
 
 
 class TestInitMetrics:
-    def test_no_meter_provider_leaves_handles_unset(self) -> None:
-        with patch.object(metrics_mod, "_get_meter", return_value=None), patch.object(metrics_mod, "_log") as log:
+    def test_no_meter_provider_leaves_handles_unset(self, caplog: pytest.LogCaptureFixture) -> None:
+        with patch.object(metrics_mod, "_get_meter", return_value=None):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is None
         assert metrics_mod._error_groups_active is None
-        log.warning.assert_called_once_with("metrics.no_meter_provider — OTel metrics disabled")
+        assert "metrics.no_meter_provider" in caplog.text
 
-    def test_registers_counter_and_gauge(self) -> None:
+    def test_registers_counter_and_gauge(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is meter.create_counter.return_value
         assert metrics_mod._error_groups_active is meter.create_gauge.return_value
         meter.create_counter.assert_called_once()
         meter.create_gauge.assert_called_once()
-        log.info.assert_called_once_with("metrics.registered")
+        assert "metrics.registered" in caplog.text
 
-    def test_idempotent_when_already_initialized(self) -> None:
+    def test_idempotent_when_already_initialized(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._errors_total = MagicMock()
         metrics_mod._error_groups_active = MagicMock()
-        with patch.object(metrics_mod, "_get_meter") as get_meter, patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter") as get_meter:
             metrics_mod.init_metrics()
         get_meter.assert_not_called()
-        log.info.assert_not_called()
+        assert "metrics.registered" not in caplog.text
 
-    def test_gauge_attribute_error_keeps_counter_only(self) -> None:
+    def test_gauge_attribute_error_keeps_counter_only(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
         meter.create_gauge.side_effect = AttributeError("gauge unsupported")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        caplog.set_level(logging.INFO)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is meter.create_counter.return_value
         assert metrics_mod._error_groups_active is None
-        log.warning.assert_called_once_with(
-            "metrics.gauge_not_supported — OTel SDK version does not support create_gauge"
-        )
-        log.info.assert_called_once_with("metrics.registered")
+        assert "metrics.gauge_not_supported" in caplog.text
+        assert "metrics.registered" in caplog.text
 
 
 # =========================================================================
@@ -154,13 +138,12 @@ class TestInitMetrics:
 
 
 class TestRecordErrorIngest:
-    def test_noop_when_counter_uninitialized(self) -> None:
-        counter = MagicMock()
-        with patch.object(metrics_mod, "_get_meter", return_value=None):
-            metrics_mod.record_error_ingest("critical", "sdk", "prod")
-        metrics_mod._errors_total = counter
+    def test_noop_when_counter_uninitialized(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # record_error_ingest does NOT lazily initialise: an unset counter must
+        # stay unset and no add may happen.
+        monkeypatch.setattr(metrics_mod, "_errors_total", None)
         metrics_mod.record_error_ingest("critical", "sdk", "prod")
-        assert metrics_mod._errors_total is counter
+        assert metrics_mod._errors_total is None
 
     def test_records_attributes(self) -> None:
         counter = MagicMock()
@@ -370,13 +353,37 @@ class TestInitAlertCounter:
             unit="1",
         )
 
-    def test_exception_leaves_counter_unset(self) -> None:
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_alert_counter()
-        assert metrics_mod._error_alerts_total is None
-        log.warning.assert_called_once_with("metrics.alert_counter_failed", exc_info=True)
+
+# =========================================================================
+# Lazy-init exception paths — every counter init leaves its handle unset and
+# logs the matching failure key when ``create_counter`` raises.
+# =========================================================================
+
+
+@pytest.mark.parametrize(
+    ("init_fn", "attr", "log_key"),
+    [
+        ("_init_alert_counter", "_error_alerts_total", "metrics.alert_counter_failed"),
+        ("_init_suppressed_counter", "_alerts_suppressed_total", "metrics.suppressed_counter_failed"),
+        ("_init_delivery_failed_counter", "_alert_delivery_failed_total", "metrics.delivery_failed_counter_failed"),
+        (
+            "_init_connector_unknown_counter",
+            "_connector_unknown_total",
+            "metrics.connector_unknown_counter_failed",
+        ),
+    ],
+    ids=["alert", "suppressed", "delivery_failed", "connector_unknown"],
+)
+def test_init_counter_exception_leaves_counter_unset(
+    init_fn: str, attr: str, log_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metrics_mod, attr, None)
+    meter = _make_meter()
+    meter.create_counter.side_effect = RuntimeError("boom")
+    with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
+        getattr(metrics_mod, init_fn)()
+    assert getattr(metrics_mod, attr) is None
+    log.warning.assert_called_once_with(log_key, exc_info=True)
 
 
 # =========================================================================
@@ -629,48 +636,61 @@ class TestSampleRunRuntimeMetrics:
 
 
 # =========================================================================
-# exception-path coverage for exc_info=True additions (PR #97)
+# record_connector_unknown / record_connector_unknown_span (FAR-410)
 # =========================================================================
 
 
-class TestInitSuppressedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._alerts_suppressed_total = None
+class TestRecordConnectorUnknown:
+    def test_record_connector_unknown_lazily_initialises_and_records(self) -> None:
         meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_suppressed_counter()
-        assert metrics_mod._alerts_suppressed_total is None
-        log.warning.assert_called_once_with("metrics.suppressed_counter_failed", exc_info=True)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.record_connector_unknown("github", "node-1")
+        counter = meter.create_counter.return_value
+        counter.add.assert_called_once_with(1, attributes={"connector": "github", "node_id": "node-1"})
 
-
-class TestInitDeliveryFailedCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._alert_delivery_failed_total = None
+    def test_record_connector_unknown_omits_empty_node_id(self) -> None:
         meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_delivery_failed_counter()
-        assert metrics_mod._alert_delivery_failed_total is None
-        log.warning.assert_called_once_with("metrics.delivery_failed_counter_failed", exc_info=True)
+        with patch.object(metrics_mod, "_get_meter", return_value=meter):
+            metrics_mod.record_connector_unknown("loki")
+        counter = meter.create_counter.return_value
+        counter.add.assert_called_once_with(1, attributes={"connector": "loki"})
 
+    def test_record_connector_unknown_span_marks_current_span(self) -> None:
+        span = MagicMock()
+        span.is_recording.return_value = True
+        with (
+            patch("opentelemetry.trace.get_current_span", return_value=span),
+            patch.object(metrics_mod, "record_connector_unknown") as record,
+        ):
+            metrics_mod.record_connector_unknown_span("sentry", "n1", "detail")
 
-class TestInitConnectorUnknownCounterException:
-    def test_exception_leaves_counter_unset(self) -> None:
-        metrics_mod._connector_unknown_total = None
-        meter = _make_meter()
-        meter.create_counter.side_effect = RuntimeError("boom")
-        with patch.object(metrics_mod, "_get_meter", return_value=meter), patch.object(metrics_mod, "_log") as log:
-            metrics_mod._init_connector_unknown_counter()
-        assert metrics_mod._connector_unknown_total is None
-        log.warning.assert_called_once_with("metrics.connector_unknown_counter_failed", exc_info=True)
+        status = span.set_status.call_args.args[0]
+        assert status.status_code == StatusCode.ERROR
+        assert status.description == metrics_mod._CODE_CONNECTOR_UNKNOWN
+        attrs = span.set_attributes.call_args.args[0]
+        assert attrs["error.code"] == metrics_mod._CODE_CONNECTOR_UNKNOWN
+        assert attrs["connector"] == "sentry"
+        assert attrs["node_id"] == "n1"
+        assert attrs["error.message"] == "detail"
+        record.assert_called_once_with("sentry", "n1")
+
+    def test_record_connector_unknown_span_swallows_span_failure(self) -> None:
+        with (
+            patch("opentelemetry.trace.get_current_span", side_effect=RuntimeError("no tracer")),
+            patch.object(metrics_mod, "record_connector_unknown") as record,
+        ):
+            metrics_mod.record_connector_unknown_span("loki", "n2", "detail")
+
+        # A tracing failure is swallowed (best-effort) and the plain counter
+        # record still runs.
+        record.assert_called_once_with("loki", "n2")
 
 
 class TestCreateRuntimeInstrumentException:
-    def test_generic_exception_returns_none(self) -> None:
+    def test_generic_exception_returns_none(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
         meter.create_gauge.side_effect = ValueError("boom")
-        with patch.object(metrics_mod, "_log") as log:
-            result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
+        result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
         assert result is None
-        log.warning.assert_called_once_with("metrics.runtime_instrument_failed — %s skipped", "my_gauge", exc_info=True)
+        assert "metrics.runtime_instrument_failed" in caplog.text
+        assert "my_gauge" in caplog.text

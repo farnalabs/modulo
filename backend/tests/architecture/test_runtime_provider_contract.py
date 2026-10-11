@@ -48,6 +48,7 @@ _ABC_METHODS = {
     "read_log_tail",
     "apply_isolation",
     "get_metrics",
+    "list_workspaces_by_identity",
 }
 
 # Constructors / factories that return a runtime-provider hub. Seeded so a

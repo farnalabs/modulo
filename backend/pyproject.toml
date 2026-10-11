@@ -142,7 +142,7 @@ dev = [
     "requests>=2.31.0",
     "factory-boy>=3.3.3",
     "mypy>=1.10.0",
-    "ruff>=0.16.5,<0.17",
+    "ruff>=0.17,<0.18",
     "bandit>=1.7.8",
     "semgrep>=1.70.0",
     "vulture>=2.16",
@@ -430,6 +430,12 @@ ignore = [
     "S101",     # assert allowed in tests
     "S105",     # hardcoded passwords (test fixtures have them)
     "B008",     # FastAPI Depends() in function defaults is the idiomatic pattern
+    # ICN001 (`datetime` must be imported as `dt`) is newly enforced by ruff 0.17
+    # and flags 16 pre-existing sites (bare `import datetime` / `import datetime
+    # as _dt`). Per the gate policy above, only rules with zero current
+    # violations are enabled; adopt the `dt` alias in a dedicated cleanup PR
+    # rather than bundling a mixed source+test rename into this dependency bump.
+    "ICN001",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -673,7 +679,7 @@ dev = [
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.5.0",
     "respx>=0.23.1",
-    "ruff>=0.16.5,<0.17",
+    "ruff>=0.17,<0.18",
     "semgrep>=1.70.0",
     "vulture>=2.16",
     "testcontainers[postgres]>=4.14.2",
