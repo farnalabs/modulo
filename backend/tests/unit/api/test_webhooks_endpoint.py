@@ -1408,3 +1408,50 @@ def test_receive_webhook_event_not_accepted_returns_400(client: TestClient) -> N
         and getattr(c.args[0], "validation_result", None) == "event_type_not_accepted"
         for c in session.add.call_args_list
     )
+
+
+async def test_record_rejected_delivery_without_org_returns_false() -> None:
+    """FAR-604 defensive guard: with no resolved org there is nothing to record
+    against, so the helper returns False (fail-closed) WITHOUT touching the
+    recorder. The route then refuses loudly instead of sending a false 2xx ack.
+    """
+    from modulo.api.routes.webhooks import _record_rejected_delivery
+
+    result = await _record_rejected_delivery(
+        kind="busy",
+        trigger_id=_TRIGGER_ID,
+        org_id=None,
+        raw_body=b'{"event": "test"}',
+        raw_payload={"event": "test"},
+    )
+
+    assert result is False
+
+
+def test_receive_webhook_trigger_busy_unresolvable_returns_429(client: TestClient) -> None:
+    """Defensive: TriggerBusyError can only fire after the bootstrap resolved
+    the org. If the post-unwind re-record reports nothing was recorded, the
+    route must refuse with 429 (+ Retry-After) — never a false 2xx ack that
+    would suppress the sender's retry with nothing recorded."""
+    from modulo.core.trigger_engine import TriggerBusyError
+
+    with (
+        patch("modulo.api.routes.webhooks._trigger_engine.handle_webhook", new_callable=AsyncMock) as m,
+        patch(
+            "modulo.api.routes.webhooks._record_rejected_delivery",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as record,
+        patch("modulo.api.routes.webhooks.set_rls_org"),
+    ):
+        m.side_effect = TriggerBusyError(_TRIGGER_ID)
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/webhook",
+            json={"event": "test"},
+            headers={"X-Modulo-Timestamp": str(int(time.time()))},
+        )
+
+    assert resp.status_code == 429
+    assert "retry" in resp.json()["detail"].lower()
+    assert resp.headers.get("Retry-After") == "5"
+    record.assert_awaited_once()
