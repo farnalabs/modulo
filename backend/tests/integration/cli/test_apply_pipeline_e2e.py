@@ -23,22 +23,34 @@ the REAL CLI normaliser (``resolve_graph``), then written through the exact
 CLI's HTTP transport is a synchronous httpx client and cannot attach to the
 in-process ASGI app, so the route is driven by the ASGI client with the CLI's
 own normalised payload.)
+
+The translation lives in the ONE shared graph-write transaction
+(``db.crud.pipeline.replace_pipeline_graph``), so the MCP
+``update_pipeline_graph`` tool must translate too. The second test drives that
+REAL MCP tool with a session on the same database and proves an MCP-declared
+gate creates a live row that ENFORCES, and an MCP removal soft-deletes it (the
+run stops being governed) — the cross-surface drift the route-only translation
+left behind.
 """
 
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.api import mcp_server as ms
 from modulo.auth.jwt import create_access_token
 from modulo.cli.apply.loader import parse_apply_documents
 from modulo.cli.apply.pipeline_apply import resolve_graph
 from modulo.core.pipeline_engine.executor import PipelineExecutor
 from modulo.db.crud.schema import create_schema, create_schema_version
+from modulo.db.rls import set_rls_org
 
 pytestmark = pytest.mark.integration
 
@@ -348,3 +360,112 @@ async def test_declared_gate_governs_run_then_removal_stops_governing(
     regoverned_dto, _ = await _resolve_runtime_gate(db_engine, scenario["org_id"], pipeline_id, _NODE_ID)
     assert regoverned_dto.failure_behaviour == "block"
     assert regoverned_dto.policy_gate_id == final_live[0].id
+
+
+# ---------------------------------------------------------------------------
+# MCP surface — the SAME shared graph-write transaction must translate too
+# ---------------------------------------------------------------------------
+
+
+def _mcp_node(schema_id: uuid.UUID, *, eval_id: uuid.UUID | None = None, action: str | None = None) -> dict:
+    """A valid MCP node payload, optionally carrying a declared gate block."""
+    node: dict = {
+        "id": str(_NODE_ID),
+        "node_type": "manual",
+        "label": "FAR-1109 MCP step",
+        "position": {"x": 0, "y": 0},
+        "output_schema_id": str(schema_id),
+    }
+    if eval_id is not None and action is not None:
+        node["policy_gate"] = {"action": action, "eval_id": str(eval_id)}
+    return node
+
+
+async def _mcp_write_graph(
+    db_engine: AsyncEngine,
+    scenario: dict,
+    *,
+    nodes: list[dict],
+    edges: list[dict] | None = None,
+) -> dict:
+    """Write a graph through the REAL MCP ``update_pipeline_graph`` tool.
+
+    ``mcp_server._session`` is replaced with a real session on ``db_engine``
+    (the pattern ``test_mcp_graph_update_lock_timeout.py`` establishes): the
+    tool's own transaction, row-lock bound and graph write all run against the
+    database the REST-seeded scenario lives in.
+    """
+    org_id = scenario["org_id"]
+
+    @asynccontextmanager
+    async def real_session(session_org_id: uuid.UUID):
+        factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
+        async with factory() as s, s.begin():
+            await set_rls_org(s, session_org_id)
+            yield s
+
+    tokens = (
+        ms._ctx_org_id.set(org_id),
+        ms._ctx_user_id.set(scenario["admin_id"]),
+        ms._ctx_role.set("admin"),
+    )
+    try:
+        with (
+            patch.object(ms, "_session", real_session),
+            patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=True)),
+            patch.object(ms, "_check_agent_tool_scope"),
+        ):
+            return await ms.update_pipeline_graph(
+                pipeline_id=str(scenario["pipeline_id"]),
+                nodes=nodes,
+                edges=edges or [],
+            )
+    finally:
+        ms._ctx_org_id.reset(tokens[0])
+        ms._ctx_user_id.reset(tokens[1])
+        ms._ctx_role.reset(tokens[2])
+
+
+async def test_mcp_declared_gate_creates_row_and_enforces_then_removal_soft_deletes(
+    integration_client: AsyncClient, db_engine: AsyncEngine
+) -> None:
+    """A gate declared through the MCP graph tool CREATES a live row that
+    ENFORCES; an MCP removal SOFT-deletes it and the run stops being governed."""
+    scenario = await _scenario(integration_client, db_engine)
+    eval_id = scenario["eval_id"]
+    pipeline_id = scenario["pipeline_id"]
+
+    # --- baseline: no live gate governs the run ---------------------------
+    assert all(row.is_deleted for row in await _gate_rows(db_engine, eval_id))
+    baseline_dto, _ = await _resolve_runtime_gate(db_engine, scenario["org_id"], pipeline_id, _NODE_ID)
+    assert baseline_dto.failure_behaviour == "warn"
+    assert baseline_dto.policy_gate_id is None
+
+    # --- MCP declares a gate -> live row + enforcement --------------------
+    declared = _mcp_node(scenario["schema_id"], eval_id=eval_id, action="block")
+    result = await _mcp_write_graph(db_engine, scenario, nodes=[declared])
+    assert "error" not in result, result
+
+    live = [row for row in await _gate_rows(db_engine, eval_id) if not row.is_deleted]
+    assert len(live) == 1, f"MCP-declared gate must create exactly one live row: {live}"
+    assert live[0].action == "block"
+    mcp_gate_id = live[0].id
+
+    governed_dto, _ = await _resolve_runtime_gate(db_engine, scenario["org_id"], pipeline_id, _NODE_ID)
+    assert governed_dto.failure_behaviour == "block"
+    assert governed_dto.policy_gate_id == mcp_gate_id
+
+    # --- MCP removes the block -> soft-delete + no governance -------------
+    removed = _mcp_node(scenario["schema_id"])
+    result = await _mcp_write_graph(db_engine, scenario, nodes=[removed])
+    assert "error" not in result, result
+
+    rows = await _gate_rows(db_engine, eval_id)
+    by_id = {row.id: row for row in rows}
+    assert mcp_gate_id in by_id, "MCP removal must SOFT-delete, never hard-delete, the gate row"
+    assert by_id[mcp_gate_id].is_deleted, "the removed gate row must be soft-deleted"
+    assert not any(not row.is_deleted for row in rows), f"no live gate may remain: {rows}"
+
+    ungoverned_dto, _ = await _resolve_runtime_gate(db_engine, scenario["org_id"], pipeline_id, _NODE_ID)
+    assert ungoverned_dto.failure_behaviour == "warn"
+    assert ungoverned_dto.policy_gate_id is None
