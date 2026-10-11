@@ -2958,7 +2958,12 @@ def _analytics_deep_link(result: dict[str, Any], params: AnalyticsParams) -> str
     return "/analytics?" + urlencode(parts)
 
 
-async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+async def _require_plan_feature(org_id: uuid.UUID, settings: Any, feature_name: str) -> dict[str, Any] | None:
+    """REST-parity plan-feature gate for an MCP tool (mirrors ``require_feature``).
+
+    Returns the standard ``feature_required`` error dict when the org's plan
+    does not enable ``feature_name``, else ``None``.
+    """
     from modulo.core.feature_flags import resolve_plan_context
     from modulo.db.crud.organisation import get_organisation
 
@@ -2966,9 +2971,16 @@ async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[s
         org = await get_organisation(s, org_id)
     async with _session(org_id) as s:
         plan_ctx = await resolve_plan_context(settings, s, org)
-    if not plan_ctx.feature_enabled("analytics_page"):
-        return {"error": "feature_required", "detail": "analytics_page is not available on your plan"}
+    if not plan_ctx.feature_enabled(feature_name):
+        return {
+            "error": "feature_required",
+            "detail": f"{feature_name} is not available on your plan",
+        }
     return None
+
+
+async def _require_analytics_feature(org_id: uuid.UUID, settings: Any) -> dict[str, Any] | None:
+    return await _require_plan_feature(org_id, settings, "analytics_page")
 
 
 def _parse_analytics_enums(
@@ -8924,6 +8936,10 @@ async def list_teams(page: int = 1, page_size: int = 20) -> dict[str, Any]:
         from modulo.db.crud.team import list_teams as db_list_teams
 
         org_id = _ctx_org_id_val()
+        # REST parity: GET /api/v1/teams is router-gated require_feature("team_rbac").
+        feat_err = await _require_plan_feature(org_id, get_settings(), "team_rbac")
+        if feat_err:
+            return feat_err
         pg = max(1, page)
         ps = max(1, min(page_size, 100))
 
@@ -9757,6 +9773,11 @@ async def get_pipeline_diff(
         _check_agent_tool_scope("get_pipeline_diff")
 
         org_id = _ctx_org_id_val()
+        # REST parity: POST /pipelines/{id}/snapshots/diff is gated
+        # require_feature("pipeline_diff_rollback").
+        feat_err = await _require_plan_feature(org_id, get_settings(), "pipeline_diff_rollback")
+        if feat_err:
+            return feat_err
         pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
         if pid_err:
             return pid_err

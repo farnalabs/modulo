@@ -8,7 +8,10 @@ get_schema_versions, get_pipeline_diff.
 Authz: every tool maps to the same permission key as the corresponding REST
 route and is gated through ``_check_agent_tool_scope``; list_feature_flags
 additionally enforces the strict system-admin gate REST's
-``require_system_permission`` applies. The pipeline-diff tool must mask
+``require_system_permission`` applies. list_teams and get_pipeline_diff also
+carry REST-parity plan-feature gates (``team_rbac`` /
+``pipeline_diff_rollback`` — the same features ``require_feature`` enforces on
+the REST routes). The pipeline-diff tool must mask
 credential-bearing node fields (FAR-1181 parity with the REST route), and the
 SSO listing must never surface client secrets.
 """
@@ -68,6 +71,29 @@ def _page(items: list, next_cursor: str | None = None, total: int | None = None)
     )
 
 
+class _EnabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return True
+
+
+class _DisabledPlan:
+    def feature_enabled(self, name: str) -> bool:
+        return False
+
+
+def _patch_plan(enabled: bool) -> tuple:
+    """Patch org lookup + plan resolution so the tools' feature gate is on/off."""
+    plan = _EnabledPlan() if enabled else _DisabledPlan()
+    return (
+        patch(
+            "modulo.db.crud.organisation.get_organisation",
+            new=AsyncMock(return_value=MagicMock(settings_json={})),
+        ),
+        patch("modulo.core.feature_flags.resolve_plan_context", new=AsyncMock(return_value=plan)),
+        patch("modulo.api.mcp_server.get_settings", return_value=MagicMock()),
+    )
+
+
 class TestFar696ToolRegistration:
     def test_all_tools_registered(self) -> None:
         for name in _EXPECTED_FAR696_TOOLS:
@@ -107,7 +133,9 @@ class TestListTeams(AuthContext):
         mock_list.return_value = _page([team])
         mock_session.return_value = make_session_context(AsyncMock())
 
-        result = await list_teams(page=1, page_size=10)
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_teams(page=1, page_size=10)
 
         assert result["total"] == 1
         (item,) = result["data"]
@@ -123,7 +151,13 @@ class TestListTeams(AuthContext):
         from modulo.core.mcp.scope_validator import check_tool_scope
 
         mock_session.return_value = make_session_context(AsyncMock())
-        with patch("modulo.db.crud.team.list_teams", new=AsyncMock(return_value=_page([]))):
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch("modulo.db.crud.team.list_teams", new=AsyncMock(return_value=_page([]))),
+        ):
             result = await list_teams()
         assert "error" not in result
         check_tool_scope("viewer", "list_teams")  # must not raise
@@ -149,12 +183,38 @@ class TestListTeams(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_session.return_value.__aenter__.return_value = AsyncMock()
-        with patch(
-            "modulo.db.crud.team.list_teams",
-            new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("no table"))),
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with (
+            org_patch,
+            plan_patch,
+            settings_patch,
+            patch(
+                "modulo.db.crud.team.list_teams",
+                new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception("no table"))),
+            ),
         ):
             result = await list_teams()
         assert result["error"] == "migration_required"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.db.crud.team.list_teams", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_list: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await list_teams()
+
+        assert result["error"] == "feature_required"
+        assert "team_rbac" in result["detail"]
+        # The gate must refuse BEFORE any team data is read.
+        mock_list.assert_not_awaited()
 
 
 class TestListUsers(AuthContext):
@@ -816,7 +876,9 @@ class TestGetPipelineDiff(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
 
         pid = str(uuid.uuid4())
-        result = await get_pipeline_diff(pid, str(uuid.uuid4()), str(uuid.uuid4()))
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_pipeline_diff(pid, str(uuid.uuid4()), str(uuid.uuid4()))
 
         assert "error" not in result
         # The raw credential must never survive into the MCP payload —
@@ -842,7 +904,9 @@ class TestGetPipelineDiff(AuthContext):
         mock_diff.return_value = None
         mock_session.return_value = make_session_context(AsyncMock())
 
-        result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
         assert result["error"] == "not_found"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -864,7 +928,9 @@ class TestGetPipelineDiff(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
         _ctx_team_id.set(team_b)
         try:
-            result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
+            org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+            with org_patch, plan_patch, settings_patch:
+                result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
         finally:
             _ctx_team_id.set(None)
         assert result["error"] == "team_boundary_violation"
@@ -878,6 +944,30 @@ class TestGetPipelineDiff(AuthContext):
         mock_validate: AsyncMock,
     ) -> None:
         mock_session.return_value = make_session_context(AsyncMock())
-        result = await get_pipeline_diff(str(uuid.uuid4()), "not-a-uuid", str(uuid.uuid4()))
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=True)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_pipeline_diff(str(uuid.uuid4()), "not-a-uuid", str(uuid.uuid4()))
         assert result["error"] == "invalid_id"
         assert result["field"] == "snapshot_a_id"
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.api.mcp_server._pipeline_owner_team_id", new_callable=AsyncMock)
+    @patch("modulo.db.crud.pipeline_snapshot_versioning.diff_snapshots", new_callable=AsyncMock)
+    async def test_feature_gate_off_returns_feature_required(
+        self,
+        mock_diff: AsyncMock,
+        mock_owner: AsyncMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        mock_session.return_value = make_session_context(AsyncMock())
+
+        org_patch, plan_patch, settings_patch = _patch_plan(enabled=False)
+        with org_patch, plan_patch, settings_patch:
+            result = await get_pipeline_diff(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))
+
+        assert result["error"] == "feature_required"
+        assert "pipeline_diff_rollback" in result["detail"]
+        # The gate must refuse BEFORE any snapshot data is read.
+        mock_diff.assert_not_awaited()
