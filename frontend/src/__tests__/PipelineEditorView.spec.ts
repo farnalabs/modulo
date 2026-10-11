@@ -112,15 +112,17 @@ const routePost = vi.hoisted(() => (
 vi.mock('../composables/useDataFetch', async () => {
   const { ref } = await import('vue')
   const loadingRef = ref(useDataLoading.value)
+  const loadMock = vi.fn(async () => {})
   const mod = {
     useDataFetch: () => ({
       loading: loadingRef,
       error: ref(null),
       data: ref(undefined),
       fetched: ref(true),
-      load: async () => {},
+      load: loadMock,
     }),
     __loadingRef: loadingRef,
+    __loadMock: loadMock,
   }
   return mod
 })
@@ -2201,6 +2203,13 @@ describe('PipelineEditorView — coverage: loading / error / edge cases', () => 
     expect(wrapper.text()).toContain('graph_unavailable')
     // The toolbar should not render while an error is shown
     expect(wrapper.find('[data-testid="pipeline-editor-toolbar"]').exists()).toBe(false)
+    // The page-level ErrorAlert wires retry to the useDataFetch loader.
+    const retryBtn = wrapper.findAll('button').find(b => b.text().trim() === 'Retry')
+    expect(retryBtn).toBeTruthy()
+    const { __loadMock } = (await import('../composables/useDataFetch')) as unknown as { __loadMock: ReturnType<typeof vi.fn> }
+    __loadMock.mockClear()
+    await retryBtn!.trigger('click')
+    expect(__loadMock).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

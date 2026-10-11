@@ -228,6 +228,8 @@ describe('FolderTree create flow', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('name taken')
+    // Operation errors are not retryable in place — retry = click Save again.
+    expect(wrapper.findAll('button').some(b => b.text().trim() === 'Retry')).toBe(false)
     expect(wrapper.find('[data-testid="dialog-stub"]').exists()).toBe(true)
   })
 

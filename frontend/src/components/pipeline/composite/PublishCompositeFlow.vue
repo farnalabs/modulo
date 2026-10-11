@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort } from "../../../types/pipeline";
 import Button from 'primevue/button'
+import ErrorAlert from '../../shared/ErrorAlert.vue'
 import { formatApiError } from "../../../lib/api/formatError";
 
 const props = defineProps<{
@@ -287,12 +288,8 @@ function goToLibrary() {
       </div>
 
       <!-- Error -->
-      <div
-        v-if="error && !success"
-        class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-      >
-        {{ error }}
-      </div>
+      <!-- retry = click Publish again; no separate loader -->
+      <ErrorAlert v-if="error && !success" :message="error" :retryable="false" class="mt-4" />
 
       <!-- Navigation -->
       <div v-if="!success" class="mt-6 flex justify-between">

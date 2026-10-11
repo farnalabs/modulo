@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import Button from 'primevue/button'
 import Select from '../../shared/AppSelect.vue'
+import ErrorAlert from '../../shared/ErrorAlert.vue'
 import { useApi } from "../../../composables/useApi";
 import type { ParameterPort, ParameterPortType } from "../../../types/pipeline";
 
@@ -333,12 +334,8 @@ async function detectPlaceholders() {
           />
         </div>
 
-        <div
-          v-if="formError"
-          class="rounded-lg border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive"
-        >
-          {{ formError }}
-        </div>
+        <!-- validation error shown while editing; corrected by editing the form, no loader to retry -->
+        <ErrorAlert v-if="formError" :message="formError" :retryable="false" />
 
         <div class="flex justify-end gap-2">
           <button type="button"

@@ -45,12 +45,17 @@
       </p>
 
       <main class="flex-1 page-wide min-w-0 overflow-y-auto">
-        <div v-if="moveError && !showMoveToFolder" class="mb-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive" role="alert" data-testid="pipeline-list-move-error">
-          <span>{{ moveError }}</span>
-          <button type="button" class="shrink-0 text-destructive/70 hover:text-destructive" :aria-label="$t('common.close')" data-testid="pipeline-list-move-error-close" @click="moveError = null">
-            <X :size="16" aria-hidden="true" />
-          </button>
-        </div>
+        <!-- retry = re-drop / re-save the move; banner is dismissible, no separate loader -->
+        <ErrorAlert
+          v-if="moveError && !showMoveToFolder"
+          :message="moveError"
+          :retryable="false"
+          :on-dismiss="() => (moveError = null)"
+          :dismiss-label="$t('common.close')"
+          class="mb-4"
+          role="alert"
+          data-testid="pipeline-list-move-error"
+        />
         <div v-if="loading || !foldersReady">
           <!-- Reserve the mobile folder-filter row and the breadcrumb row that the
                real content renders above the table, so the table does not drop
@@ -289,9 +294,8 @@
               {{ $t('views.PipelineListView.no_folder') }}
             </button>
           </div>
-          <div v-if="moveError" class="mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ moveError }}
-          </div>
+          <!-- retry = click Save again; no separate loader -->
+          <ErrorAlert v-if="moveError" :message="moveError" :retryable="false" class="mt-4" />
           <div class="mt-4 flex justify-end gap-2">
             <button type="button" class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent" data-testid="pipeline-list-move-cancel" @click="closeMoveToFolder">
               {{ $t('common.cancel') }}
@@ -324,9 +328,8 @@
                 @keyup.enter="handleRename"
               />
             </div>
-            <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-              {{ renameError }}
-            </div>
+            <!-- retry = click Save again; no separate loader -->
+            <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
             <div class="flex justify-end gap-2">
               <button
                 type="button"
@@ -357,9 +360,8 @@
           <p class="mb-4 text-sm text-muted-foreground">
             {{ $t('views.PipelineListView.delete_confirm') }}
           </p>
-          <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ deleteError }}
-          </div>
+          <!-- retry = click Delete again; no separate loader -->
+          <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" />
           <div class="flex justify-end gap-2">
             <button
               type="button"
@@ -418,7 +420,7 @@ import { useDataFetch } from '../composables/useDataFetch'
 import { usePlanStore } from '../stores/planStore'
 import { FOCUSABLE_SELECTOR, trapTabInElement } from '../composables/useFocusTrap'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
-import { ChevronRight, Folder, FolderOpen, MoreVertical, X, FileStack } from '@lucide/vue'
+import { ChevronRight, Folder, FolderOpen, MoreVertical, FileStack } from '@lucide/vue'
 import { formatApiError, throwOnError } from '../lib/api/formatError'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'

@@ -4,7 +4,7 @@
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
-      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+      <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
       <div class="flex min-w-0 flex-1 flex-col">
@@ -1283,9 +1283,8 @@
               {{ $t('views.PipelineEditorView.close') }}
             </button>
           </div>
-          <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ edgeSaveError }}
-          </div>
+          <!-- retry = click Save Edge again; no separate loader -->
+          <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" />
         </div>
       </aside>
     </template>
@@ -1347,9 +1346,8 @@
             <p class="mt-0.5 font-medium">{{ $t('views.PipelineEditorView.input_label') }} {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
-          <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ convertError }}
-          </div>
+          <!-- retry = click Convert again; no separate loader -->
+          <ErrorAlert v-if="convertError" :message="convertError" :retryable="false" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1385,9 +1383,8 @@
   </template>
 </Select>
         </div>
-        <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ revertError }}
-        </div>
+        <!-- retry = click Revert again; no separate loader -->
+        <ErrorAlert v-if="revertError" :message="revertError" :retryable="false" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1438,9 +1435,8 @@
             </label>
           </div>
         </div>
-        <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ saveAsError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="saveAsError" :message="saveAsError" :retryable="false" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1462,9 +1458,8 @@
             @keyup.enter="handleRename"
           />
         </div>
-        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ renameError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1477,9 +1472,8 @@
       <p class="mb-4 text-sm text-muted-foreground">
         {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
       </p>
-      <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ deleteError }}
-      </div>
+      <!-- retry = click Delete again; no separate loader -->
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" />
     </FormDialog>
 
     <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />
@@ -1498,6 +1492,7 @@ import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
@@ -3276,7 +3271,7 @@ async function loadLifecycleMaps() {
 // initialised before the fetcher can run.
 const pageError = ref<string | null>(null)
 
-const { loading } = useDataFetch<null>(
+const { loading, load: reloadPage } = useDataFetch<null>(
   async () => {
     pageError.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])

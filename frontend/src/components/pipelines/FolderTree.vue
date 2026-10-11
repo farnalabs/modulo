@@ -126,9 +126,8 @@
 </Select>
         </div>
 
-        <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ createError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="createError" :message="createError" :retryable="false" />
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
@@ -148,9 +147,8 @@
           <label for="folder-tree-rename-name" class="mb-1 block text-sm font-medium">{{ labels.folderName }}</label>
           <InputText id="folder-tree-rename-name" v-model="renameFolderName" placeholder="Folder name" class="w-full" @keyup.enter="handleRename" />
         </div>
-        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ renameError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" />
       </div>
       <template #footer>
         <div class="flex gap-2 justify-end">
@@ -166,9 +164,8 @@
         <div class="text-lg font-semibold text-destructive">{{ labels.deleteFolder }}</div>
       </template>
       <p class="text-sm text-muted-foreground">{{ deleteConfirmMessage }}</p>
-      <div v-if="deleteError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ deleteError }}
-      </div>
+      <!-- retry = click Delete again; no separate loader -->
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" />
       <template #footer>
         <div class="flex gap-2 justify-end">
           <Button severity="secondary" outlined @click="showDeleteConfirm = false">{{ $t('common.cancel') }}</Button>
@@ -188,6 +185,7 @@ import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Select from '../shared/AppSelect.vue'
+import ErrorAlert from '../shared/ErrorAlert.vue'
 
 interface FolderItem {
   id: string

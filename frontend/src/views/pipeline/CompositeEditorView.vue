@@ -120,9 +120,8 @@
               :placeholder="$t('views.CompositeEditorView.description_placeholder')"
             />
           </div>
-          <div v-if="saveAsError" role="alert" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ saveAsError }}
-          </div>
+          <!-- retry = click Save again; no separate loader -->
+          <ErrorAlert v-if="saveAsError" role="alert" :message="saveAsError" :retryable="false" />
           <div class="flex justify-end gap-2">
             <button type="button"
               data-testid="composite-save-as-cancel"

@@ -239,7 +239,9 @@ describe('PipelineListView', () => {
     const wrapper = mount(PipelineListView, {
       global: {
         plugins: [router],
-        stubs: { ErrorAlert: true, FolderTree: true },
+        // ErrorAlert NOT stubbed here: the drop-move banner is a real
+        // ErrorAlert now, and the test asserts its rendered message + dismiss.
+        stubs: { FolderTree: true },
       },
     })
     await flushPromises()
@@ -252,8 +254,8 @@ describe('PipelineListView', () => {
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toContain('Move failed')
 
-    // The banner's close control clears the move error and hides the banner.
-    const closeButton = banner.find('[data-testid="pipeline-list-move-error-close"]')
+    // The banner's dismiss control clears the move error and hides the banner.
+    const closeButton = banner.find('[data-testid="error-alert-dismiss"]')
     expect(closeButton.exists()).toBe(true)
     await closeButton.trigger('click')
     await nextTick()
