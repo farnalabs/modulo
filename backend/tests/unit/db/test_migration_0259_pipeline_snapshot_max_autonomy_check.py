@@ -42,7 +42,7 @@ Lenses:
     0292_audit_events_resource_lookup chains onto 0291_invitations_lookup_constraints, and
     0293_oauth_clients_team_id chains onto 0292_audit_events_resource_lookup, and
     0294_eval_results_org_fk chains onto 0293_oauth_clients_team_id, and
-    0295_decision_record_event_identity chains onto 0294_eval_results_org_fk as the
+    0296_benign_run_outcomes chains onto 0295_decision_record_event_identity as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -68,7 +68,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0295_decision_record_event_identity"
+_HEAD_MIGRATION = "0296_benign_run_outcomes"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)

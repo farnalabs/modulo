@@ -1210,6 +1210,7 @@ class TestExtractedBucketHelpers:
         b = {
             "count": 4,
             "complete": 3,
+            "benign": 0,
             "cost": Decimal("10.0"),
             "tokens": 100,
             "duration_sum": 800.0,
@@ -1770,3 +1771,114 @@ class TestExecutionOriginDimension:
         )
         assert out[0]["key"] is None
         assert out[0]["count"] == 1
+
+
+class TestFAR707BenignOutcomes:
+    """Business-expected outcomes leave every analytics failure rate (FAR-707)."""
+
+    def _compile(self, query: AnalyticsQuery) -> str:
+        stmt, _params = build_facts_query(query)
+        return str(stmt.compile(dialect=postgresql.dialect()))
+
+    def test_success_rate_drops_benign_from_the_denominator_only(self) -> None:
+        """1 complete + 1 REAL failure + 1 benign run.
+
+        ``count`` stays the raw volume (cost/token totals must keep including
+        the benign run); the RATE's denominator becomes 2, so the rate is 0.5
+        rather than the pre-FAR-707 1/3.
+        """
+        rows = [
+            _row(
+                date(2026, 8, 5),
+                count=3,
+                complete=1,
+                failure_count=1,
+                benign_count=1,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        bucket = out[0]
+        assert bucket["count"] == 3
+        assert bucket["failure_count"] == 1
+        assert bucket["success_rate"] == 0.5
+
+    def test_a_fully_benign_bucket_has_no_rate(self) -> None:
+        rows = [_row(date(2026, 8, 5), count=2, complete=0, failure_count=0, benign_count=2)]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        bucket = out[0]
+        assert bucket["count"] == 2
+        assert bucket["success_rate"] is None
+
+    def test_a_legacy_null_benign_marker_keeps_the_historical_rate(self) -> None:
+        """No ``benign_count`` attribute at all (a fact written before the
+        column existed) must read as zero benign, never crash."""
+        rows = [
+            SimpleNamespace(
+                run_date=date(2026, 8, 5),
+                count=2,
+                complete_count=1,
+                total_cost_usd=None,
+                total_tokens=None,
+                avg_duration_ms=None,
+                failure_count=1,
+                stall_count=0,
+                capacity_failure_count=0,
+                capacity_wait_sum=0.0,
+                capacity_wait_n=0,
+                avg_queue_wait_ms=None,
+                avg_dispatch_latency_ms=None,
+                avg_final_idle_ms=None,
+                avg_output_bytes=None,
+            ),
+        ]
+        out = bucket_rows(
+            rows,
+            group_by=AnalyticsGroupBy.DAY,
+            dimension=None,
+            date_from=date(2026, 8, 5),
+            date_to=date(2026, 8, 5),
+        )
+        assert out[0]["success_rate"] == 0.5
+
+    def test_the_failure_aggregates_carry_the_not_benign_filter(self) -> None:
+        """failure / stall / capacity sub-buckets all exclude benign rows, and
+        the per-day benign count is selected for the denominator."""
+        sql = self._compile(_query())
+        assert "benign_count" in sql
+        # ``benign IS NULL OR benign IS FALSE`` — the explicit NULL-safe form.
+        assert "run_daily_facts.benign IS NULL OR run_daily_facts.benign IS false" in sql
+        # It appears on the failure family aggregates, not only once.
+        assert sql.count("run_daily_facts.benign IS NULL OR run_daily_facts.benign IS false") >= 3
+
+    def test_an_error_code_breakdown_drops_benign_rows_entirely(self) -> None:
+        """The ``error_code`` DIMENSION is the cluster view — a benign rebase
+        conflict must never appear as an ``agent.failed`` slice.
+
+        Proven by occurrence count: the not-benign predicate appears in the
+        failure-family AGGREGATE filters on every query (the baseline), and the
+        error-code breakdown adds EXACTLY ONE more — the outer WHERE leg —
+        while no other dimension does.
+        """
+        predicate = "run_daily_facts.benign IS NULL OR run_daily_facts.benign IS false"
+        baseline = self._compile(_query()).count(predicate)
+        assert baseline >= 3, "the failure-family aggregates must carry the filter"
+        assert self._compile(_query(dimension=AnalyticsDimension.ERROR_CODE)).count(predicate) == baseline + 1
+
+    def test_a_non_error_dimension_keeps_benign_rows_in_the_series(self) -> None:
+        """Volume dimensions (trigger_type, pipeline, ...) still count benign
+        runs — only the error-code cluster and the failure rates exclude."""
+        predicate = "run_daily_facts.benign IS NULL OR run_daily_facts.benign IS false"
+        baseline = self._compile(_query()).count(predicate)
+        assert self._compile(_query(dimension=AnalyticsDimension.TRIGGER_TYPE)).count(predicate) == baseline
