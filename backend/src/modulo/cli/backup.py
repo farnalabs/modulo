@@ -50,6 +50,7 @@ import subprocess  # nosec B404 -- subprocess is used only to shell out to pg_du
 import sys
 import urllib.parse
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1212,6 +1213,264 @@ def _preview_restore(
     click.echo("\nDry run complete — no changes were made.")
 
 
+# ── restore command internals ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class _RestoreOptions:
+    """The restore command's click parameters, carried as one immutable value.
+
+    The phase helpers (`_validate_targets`, `_safety_dump`, `_restore_cluster`,
+    `_restore_data_dir`) share this snapshot of what the operator asked for
+    instead of threading eight positional arguments through every phase.
+    """
+
+    backup_dir: Path
+    db_url: str | None
+    yes: bool
+    previous_fernet_key: str | None
+    dry_run: bool
+    data_dir: Path | None
+    replace_cluster: bool
+    no_safety_dump: bool
+
+
+def _run_restore(opts: _RestoreOptions) -> None:
+    """Execute a restore from ``opts`` — the CLI command's whole body.
+
+    Phases, in order: validate targets (verify-before-wipe checks, then the
+    --dry-run preview short-circuit), the pre-restore safety dump, the
+    database-cluster restore (SQL dump, checkpoint JSON exports, credential
+    re-encryption, collation drift check), then launcher data-dir adoption
+    and the promoted bootstrap role-posture re-run. Any failure is logged,
+    echoed, and re-raised as a ClickException; a data-dir lock taken before
+    the phases is always released.
+    """
+    raw_url = _resolve_url(opts.db_url)
+    settings = get_settings()
+    from modulo.launcher.env_safety import scrub_os_environment
+
+    scrub_os_environment()
+
+    # Shape-validate the manifest FIRST — nothing about the archive is echoed
+    # before it parses, is a JSON object, and every echoed field is typed.
+    manifest = _read_and_validate_manifest(opts.backup_dir)
+    click.echo(f"Backup timestamp: {manifest.get('timestamp', 'unknown')}")
+    click.echo(f"Backup type: {manifest.get('backup_type', 'unknown')}")
+    click.echo(f"DB version at backup: {manifest.get('db_version', 'unknown')}")
+    click.echo(f"Schema versions: {', '.join(manifest.get('schema_versions', ['unknown']))}")
+
+    lock = None
+    if opts.data_dir is not None:
+        # Restore-while-running refuses BEFORE anything is verified as
+        # writable, let alone wiped (ADR 031 data-dir lock contract).
+        lock = _acquire_data_lock(opts.data_dir, mode="restore")
+
+    try:
+        if not _validate_targets(opts, manifest, raw_url, settings):
+            return
+
+        _safety_dump(opts, raw_url)
+        _restore_cluster(opts, manifest, raw_url, settings)
+        _restore_data_dir(opts, manifest)
+
+        admin_url = os.environ.get("DATABASE_ADMIN_URL") or raw_url
+        app_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        _ensure_restore_posture(admin_url, app_url)
+
+        click.echo("\nRestore complete.")
+    except Exception as exc:
+        _log.exception("Restore failed")
+        click.echo(f"Restore failed: {exc}", err=True)
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def _validate_targets(opts: _RestoreOptions, manifest: dict[str, Any], raw_url: str, settings: Any) -> bool:
+    """Verify-before-wipe phase: nothing is mutated until every check passes.
+
+    Runs the instance-identity check (when a data dir is in play), the disk
+    pre-flight, the overwrite confirmation prompt, the archive checksum and
+    JSON-export integrity checks, and — after the --dry-run preview
+    short-circuit — the schema-downgrade guard and the populated-database /
+    ``--replace-cluster`` guard.
+
+    Returns False when a --dry-run preview was emitted (the caller must
+    stop); True when the restore may proceed to mutation.
+    """
+    # Verify-before-wipe ordering: identity + disk before any mutation.
+    if opts.data_dir is not None:
+        _check_instance_identity(opts.data_dir, manifest, opts.replace_cluster)
+    _disk_preflight(opts.backup_dir, opts.data_dir)
+
+    if not opts.dry_run and not opts.yes:
+        click.confirm("\nThis will OVERWRITE the current database. Continue?", abort=True)
+
+    checksums = manifest.get("file_checksums")
+    if checksums:
+        click.echo("Verifying backup file integrity...")
+        _verify_file_checksums(opts.backup_dir, checksums)
+        click.echo("  All file checksums verified")
+
+    _verify_json_exports(opts.backup_dir)
+
+    if opts.dry_run:
+        _preview_restore(opts.backup_dir, manifest, settings, opts.previous_fernet_key)
+        return False
+
+    _check_schema_downgrade(manifest)
+
+    # Fresh-target exemption is about the DATA DIR, not the DATABASE: a
+    # populated production database behind a fresh/absent data dir is NOT
+    # eligible for the silent exemption — it must be --replace-cluster.
+    if (
+        opts.data_dir is not None
+        and _db_has_modulo_tables(raw_url)
+        and not (opts.data_dir / _LAUNCHER_STATE_FILE).exists()
+    ):
+        if not opts.replace_cluster:
+            raise click.ClickException(
+                "The target database ALREADY CONTAINS application tables, but its data dir is fresh "
+                "(no state.json) — this restore would silently overwrite an existing production "
+                "database. Pass --replace-cluster if you really intend to replace it, or point at a "
+                "clean database."
+            )
+        click.echo(
+            "REPLACING an existing POPULATED database whose data dir was fresh/absent (acknowledged via "
+            "--replace-cluster).",
+            err=True,
+        )
+    return True
+
+
+def _verify_file_checksums(backup_dir: Path, checksums: dict[str, str]) -> None:
+    """Refuse on any manifest-listed file that is missing or mis-hashed."""
+    for filename, expected_hash in checksums.items():
+        file_path = backup_dir / filename
+        if not file_path.exists():
+            raise click.ClickException(f"Backup file {filename} listed in manifest but not found on disk")
+        actual_hash = _file_checksum(file_path)
+        if actual_hash != expected_hash:
+            raise click.ClickException(f"Checksum mismatch for {filename}: expected {expected_hash}, got {actual_hash}")
+
+
+def _verify_json_exports(backup_dir: Path) -> None:
+    """Parse-check the checkpoint/credential JSON exports BEFORE the wipe."""
+    for json_name in (
+        _BLOBS_JSON_FILE,
+        _CHECKPOINTS_JSON_FILE,
+        _WRITES_JSON_FILE,
+        _CREDS_JSON_FILE,
+    ):
+        json_path = backup_dir / json_name
+        if json_path.exists():
+            try:
+                json.loads(json_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise click.ClickException(f"Corrupt JSON file {json_name}: {exc}") from exc
+
+
+def _safety_dump(opts: _RestoreOptions, raw_url: str) -> None:
+    """Pre-restore safety dump of the TARGET, taken before anything is wiped.
+
+    Skipped under --no-safety-dump (the loud explicit opt-out) and when the
+    archive carries no database.sql (no cluster wipe is planned, so there is
+    nothing to protect) — matching the pre-refactor placement exactly. The
+    dump leaves the previous cluster restorable: psql replays the --clean
+    dump's DROPs under -1 (single transaction), but a half-download or a
+    broken dump must never be the only way back.
+    """
+    if opts.no_safety_dump or not (opts.backup_dir / _DB_SQL_FILE).exists():
+        return
+    _take_safety_dump(raw_url)
+
+
+def _restore_cluster(opts: _RestoreOptions, manifest: dict[str, Any], raw_url: str, settings: Any) -> None:
+    """Restore the database cluster from the archive.
+
+    Applies the SQL dump via psql, re-inserts the checkpoint_blobs /
+    checkpoints / checkpoint_writes JSON exports, re-encrypts credentials
+    when the FERNET_KEY has changed (ORDERING locked by contract: the
+    ``--previous-fernet-key`` re-encryption runs AFTER the checkpoint JSON
+    exports and BEFORE the collation drift check), then checks
+    collation-version drift when a database.sql was applied.
+    """
+    backup_dir = opts.backup_dir
+    db_sql = backup_dir / _DB_SQL_FILE
+    if db_sql.exists():
+        click.echo("Restoring database schema and data via psql...")
+        _run_psql(raw_url, db_sql)
+        click.echo("  Database restored from SQL dump")
+    else:
+        click.echo("  No database.sql found — skipping full DB restore")
+
+    blobs_json = backup_dir / _BLOBS_JSON_FILE
+    if blobs_json.exists():
+        click.echo("Restoring checkpoint_blobs from JSON export...")
+        blobs: list[dict[str, Any]] = json.loads(blobs_json.read_text(encoding="utf-8"))
+        restored = _restore_checkpoint_blobs_sync(raw_url, blobs)
+        click.echo(f"  {restored} checkpoint blob records restored")
+    else:
+        click.echo("  No checkpoint_blobs.json found — skipping")
+
+    checkpoints_json = backup_dir / _CHECKPOINTS_JSON_FILE
+    if checkpoints_json.exists():
+        click.echo("Restoring checkpoints from JSON export...")
+        checkpoints_data: list[dict[str, Any]] = json.loads(checkpoints_json.read_text(encoding="utf-8"))
+        restored_cp = _restore_checkpoints_sync(raw_url, checkpoints_data)
+        click.echo(f"  {restored_cp} checkpoint records restored")
+    else:
+        click.echo("  No checkpoints.json found — skipping")
+
+    cwrites_json = backup_dir / _WRITES_JSON_FILE
+    if cwrites_json.exists():
+        click.echo("Restoring checkpoint_writes from JSON export...")
+        cwrites_data: list[dict[str, Any]] = json.loads(cwrites_json.read_text(encoding="utf-8"))
+        restored_cw = _restore_checkpoint_writes_sync(raw_url, cwrites_data)
+        click.echo(f"  {restored_cw} checkpoint write records restored")
+    else:
+        click.echo("  No checkpoint_writes.json found — skipping")
+
+    creds_json = backup_dir / _CREDS_JSON_FILE
+    current_key_hash = _fernet_key_hash(settings.fernet_key)
+    backup_key_hash = manifest.get("fernet_key_hash", "")
+
+    if creds_json.exists() and current_key_hash != backup_key_hash:
+        if not opts.previous_fernet_key:
+            raise click.ClickException(
+                "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
+            )
+        click.echo("Re-encrypting credentials with current FERNET_KEY...")
+        creds_data: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
+        counts = _re_encrypt_credentials_sync(raw_url, creds_data, opts.previous_fernet_key, settings.fernet_key)
+        for table, cnt in counts.items():
+            click.echo(f"  {cnt} {table} re-encrypted")
+    elif current_key_hash == backup_key_hash:
+        click.echo("FERNET_KEY unchanged — no credential re-encryption needed")
+
+    if db_sql.exists():
+        _check_collation_versions_sync(raw_url)
+
+
+def _restore_data_dir(opts: _RestoreOptions, manifest: dict[str, Any]) -> None:
+    """Adopt the archive's launcher artefacts into the data dir, if requested.
+
+    ORDERING (locked by test): launcher artefacts are adopted only AFTER the
+    database restore SUCCEEDS. Adopting first would leave a psql-failure data
+    dir carrying the ARCHIVE's credentials against the target's OLD database —
+    bricked in both directions (the old launcher no longer has its credentials;
+    restarting the new one hits a database that was never restored).
+    """
+    if opts.data_dir is None:
+        return
+    _check_archived_state_consistency(opts.backup_dir, manifest)
+    adopted = _restore_launcher_files(opts.backup_dir, opts.data_dir)
+    if adopted:
+        click.echo(f"Adopted launcher artefacts into {opts.data_dir}: {', '.join(adopted)}")
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -1468,172 +1727,18 @@ def restore(
     without touching the database. Against a launcher data dir, takes the
     exclusive lock (a still running launcher refuses with its holder PID).
     """
-    raw_url = _resolve_url(db_url)
-    settings = get_settings()
-    from modulo.launcher.env_safety import scrub_os_environment
-
-    scrub_os_environment()
-
-    # Shape-validate the manifest FIRST — nothing about the archive is echoed
-    # before it parses, is a JSON object, and every echoed field is typed.
-    manifest = _read_and_validate_manifest(backup_dir)
-    click.echo(f"Backup timestamp: {manifest.get('timestamp', 'unknown')}")
-    click.echo(f"Backup type: {manifest.get('backup_type', 'unknown')}")
-    click.echo(f"DB version at backup: {manifest.get('db_version', 'unknown')}")
-    click.echo(f"Schema versions: {', '.join(manifest.get('schema_versions', ['unknown']))}")
-
-    lock = None
-    if data_dir is not None:
-        # Restore-while-running refuses BEFORE anything is verified as
-        # writable, let alone wiped (ADR 031 data-dir lock contract).
-        lock = _acquire_data_lock(data_dir, mode="restore")
-
-    try:
-        # Verify-before-wipe ordering: identity + disk before any mutation.
-        if data_dir is not None:
-            _check_instance_identity(data_dir, manifest, replace_cluster)
-        _disk_preflight(backup_dir, data_dir)
-
-        if not dry_run and not yes:
-            click.confirm("\nThis will OVERWRITE the current database. Continue?", abort=True)
-
-        checksums = manifest.get("file_checksums")
-        if checksums:
-            click.echo("Verifying backup file integrity...")
-            for filename, expected_hash in checksums.items():
-                file_path = backup_dir / filename
-                if not file_path.exists():
-                    raise click.ClickException(f"Backup file {filename} listed in manifest but not found on disk")
-                actual_hash = _file_checksum(file_path)
-                if actual_hash != expected_hash:
-                    raise click.ClickException(
-                        f"Checksum mismatch for {filename}: expected {expected_hash}, got {actual_hash}"
-                    )
-            click.echo("  All file checksums verified")
-
-        for json_name in (
-            _BLOBS_JSON_FILE,
-            _CHECKPOINTS_JSON_FILE,
-            _WRITES_JSON_FILE,
-            _CREDS_JSON_FILE,
-        ):
-            json_path = backup_dir / json_name
-            if json_path.exists():
-                try:
-                    json.loads(json_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError as exc:
-                    raise click.ClickException(f"Corrupt JSON file {json_name}: {exc}") from exc
-
-        if dry_run:
-            _preview_restore(backup_dir, manifest, settings, previous_fernet_key)
-            return
-
-        _check_schema_downgrade(manifest)
-
-        # Fresh-target exemption is about the DATA DIR, not the DATABASE: a
-        # populated production database behind a fresh/absent data dir is NOT
-        # eligible for the silent exemption — it must be --replace-cluster.
-        if data_dir is not None and _db_has_modulo_tables(raw_url) and not (data_dir / _LAUNCHER_STATE_FILE).exists():
-            if not replace_cluster:
-                raise click.ClickException(
-                    "The target database ALREADY CONTAINS application tables, but its data dir is fresh "
-                    "(no state.json) — this restore would silently overwrite an existing production "
-                    "database. Pass --replace-cluster if you really intend to replace it, or point at a "
-                    "clean database."
-                )
-            click.echo(
-                "REPLACING an existing POPULATED database whose data dir was fresh/absent (acknowledged via "
-                "--replace-cluster).",
-                err=True,
-            )
-
-        db_sql = backup_dir / _DB_SQL_FILE
-        if db_sql.exists():
-            # Pre-restore safety dump of the TARGET (refused/patched via
-            # --no-safety-dump) so a mid-import psql failure leaves the
-            # previous cluster restorable — psql replays the --clean dump's
-            # DROPs under -1 (single transaction), but a half-download or a
-            # broken dump must never be the only way back.
-            if not no_safety_dump:
-                _take_safety_dump(raw_url)
-            click.echo("Restoring database schema and data via psql...")
-            _run_psql(raw_url, db_sql)
-            click.echo("  Database restored from SQL dump")
-        else:
-            click.echo("  No database.sql found — skipping full DB restore")
-
-        blobs_json = backup_dir / _BLOBS_JSON_FILE
-        if blobs_json.exists():
-            click.echo("Restoring checkpoint_blobs from JSON export...")
-            blobs: list[dict[str, Any]] = json.loads(blobs_json.read_text(encoding="utf-8"))
-            restored = _restore_checkpoint_blobs_sync(raw_url, blobs)
-            click.echo(f"  {restored} checkpoint blob records restored")
-        else:
-            click.echo("  No checkpoint_blobs.json found — skipping")
-
-        checkpoints_json = backup_dir / _CHECKPOINTS_JSON_FILE
-        if checkpoints_json.exists():
-            click.echo("Restoring checkpoints from JSON export...")
-            checkpoints_data: list[dict[str, Any]] = json.loads(checkpoints_json.read_text(encoding="utf-8"))
-            restored_cp = _restore_checkpoints_sync(raw_url, checkpoints_data)
-            click.echo(f"  {restored_cp} checkpoint records restored")
-        else:
-            click.echo("  No checkpoints.json found — skipping")
-
-        cwrites_json = backup_dir / _WRITES_JSON_FILE
-        if cwrites_json.exists():
-            click.echo("Restoring checkpoint_writes from JSON export...")
-            cwrites_data: list[dict[str, Any]] = json.loads(cwrites_json.read_text(encoding="utf-8"))
-            restored_cw = _restore_checkpoint_writes_sync(raw_url, cwrites_data)
-            click.echo(f"  {restored_cw} checkpoint write records restored")
-        else:
-            click.echo("  No checkpoint_writes.json found — skipping")
-
-        creds_json = backup_dir / _CREDS_JSON_FILE
-        current_key_hash = _fernet_key_hash(settings.fernet_key)
-        backup_key_hash = manifest.get("fernet_key_hash", "")
-
-        if creds_json.exists() and current_key_hash != backup_key_hash:
-            if not previous_fernet_key:
-                raise click.ClickException(
-                    "FERNET_KEY has changed since backup. Provide --previous-fernet-key to re-encrypt credentials."
-                )
-            click.echo("Re-encrypting credentials with current FERNET_KEY...")
-            creds_data: dict[str, list[dict[str, Any]]] = json.loads(creds_json.read_text(encoding="utf-8"))
-            counts = _re_encrypt_credentials_sync(raw_url, creds_data, previous_fernet_key, settings.fernet_key)
-            for table, cnt in counts.items():
-                click.echo(f"  {cnt} {table} re-encrypted")
-        elif current_key_hash == backup_key_hash:
-            click.echo("FERNET_KEY unchanged — no credential re-encryption needed")
-
-        if db_sql.exists():
-            _check_collation_versions_sync(raw_url)
-
-        if data_dir is not None:
-            # ORDERING (locked by test): launcher artefacts are adopted only
-            # AFTER the database restore SUCCEEDS. Adopting first would leave
-            # a psql-failure data dir carrying the ARCHIVE's credentials
-            # against the target's OLD database — bricked in both directions
-            # (the old launcher no longer has its credentials; restarting the
-            # new one hits a database that was never restored).
-            _check_archived_state_consistency(backup_dir, manifest)
-            adopted = _restore_launcher_files(backup_dir, data_dir)
-            if adopted:
-                click.echo(f"Adopted launcher artefacts into {data_dir}: {', '.join(adopted)}")
-
-        admin_url = os.environ.get("DATABASE_ADMIN_URL") or raw_url
-        app_url = raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        _ensure_restore_posture(admin_url, app_url)
-
-        click.echo("\nRestore complete.")
-
-    except Exception as exc:
-        _log.exception("Restore failed")
-        click.echo(f"Restore failed: {exc}", err=True)
-        raise click.ClickException(str(exc)) from exc
-    finally:
-        if lock is not None:
-            lock.release()
+    _run_restore(
+        _RestoreOptions(
+            backup_dir=backup_dir,
+            db_url=db_url,
+            yes=yes,
+            previous_fernet_key=previous_fernet_key,
+            dry_run=dry_run,
+            data_dir=data_dir,
+            replace_cluster=replace_cluster,
+            no_safety_dump=no_safety_dump,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
