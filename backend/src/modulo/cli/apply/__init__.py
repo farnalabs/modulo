@@ -97,17 +97,8 @@ def _render_policy_gate_changes(entries: Iterable[dict[str, Any]], *, scope: str
     ]
 
 
-def render_table(report: dict[str, Any]) -> str:
-    """Human-friendly plan/apply/drift report rendering.
-
-    Drift reports (``mode == "drift"``) are explicitly labelled: each verb
-    is prefixed (``drift create`` / ``drift update``), the summary line reads
-    ``drift summary``, and ``drift_detail`` renders a graph breakdown line
-    for drifted pipelines (plus per-field git-sourced content commit moves,
-    FAR-220) and a managed-field breakdown line for drifted schemas / model
-    backends / triggers.
-    """
-    drift_mode = report.get("mode") == "drift"
+def _render_change_lines(report: dict[str, Any], *, drift_mode: bool) -> list[str]:
+    """Create/update/block/fail/unchanged lines for a plan, apply or drift report."""
     verbs = {
         "created": "drift create" if drift_mode else "create",
         "updated": "drift update" if drift_mode else "update",
@@ -122,10 +113,23 @@ def render_table(report: dict[str, Any]) -> str:
             lines.append(line)
     lines.extend(f"fail {entry['kind']} {entry['name']!r}: {entry['error']}" for entry in report.get("failed", []))
     lines.extend(f"unchanged {entry['kind']} {entry['name']!r}" for entry in report.get("unchanged", []))
+    return lines
 
-    def _counts(section: dict[str, list[str]]) -> str:
-        return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
 
+def _counts(section: dict[str, list[str]]) -> str:
+    return f"+{len(section['added'])}/-{len(section['removed'])}/~{len(section['modified'])}"
+
+
+def _render_drift_detail(report: dict[str, Any]) -> list[str]:
+    """Per-entity drift breakdown lines, plus apply-report gate changes.
+
+    Drifted pipelines get a graph breakdown line (plus per-field git-sourced
+    content commit moves, FAR-220); drifted schemas / model backends /
+    triggers get a managed-field breakdown line. FAR-1109 gate changes render
+    as their own line — the node-level aggregate cannot tell a gate change
+    from any other node modification.
+    """
+    lines: list[str] = []
     for key, breakdown in sorted((report.get("drift_detail") or {}).items()):
         if "fields" in breakdown:
             kind, _, name = key.partition(":")
@@ -146,6 +150,22 @@ def render_table(report: dict[str, Any]) -> str:
         lines.extend(_render_policy_gate_changes(breakdown.get("policy_gates") or (), scope=key))
     # FAR-1109: an APPLY report lists gate changes as a distinct change class.
     lines.extend(_render_policy_gate_changes(report.get("gate_changes") or ()))
+    return lines
+
+
+def render_table(report: dict[str, Any]) -> str:
+    """Human-friendly plan/apply/drift report rendering.
+
+    Drift reports (``mode == "drift"``) are explicitly labelled: each verb
+    is prefixed (``drift create`` / ``drift update``), the summary line reads
+    ``drift summary``, and ``drift_detail`` renders a graph breakdown line
+    for drifted pipelines (plus per-field git-sourced content commit moves,
+    FAR-220) and a managed-field breakdown line for drifted schemas / model
+    backends / triggers.
+    """
+    drift_mode = report.get("mode") == "drift"
+    lines = _render_change_lines(report, drift_mode=drift_mode)
+    lines.extend(_render_drift_detail(report))
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
     lines.append(
