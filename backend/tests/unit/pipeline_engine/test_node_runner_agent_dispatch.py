@@ -21,6 +21,7 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -155,3 +156,22 @@ async def test_enforcement_record_survives_agent_node() -> None:
         assert row.schema_enforcement_json == expected
     finally:
         await engine.dispose()
+
+
+def test_build_repair_invoke_raises_when_hub_unavailable() -> None:
+    """``_build_repair_invoke`` fails loudly when no ModelBackendHub exists.
+
+    ``_build_repair_invoke`` captures the hub once and hands the returned
+    callable to the strict-mode repair loop. When the hub is absent at call
+    time the repair re-invoke MUST raise a clear ``RuntimeError`` rather than
+    silently no-op or hand ``json.loads`` an un-awaited coroutine - a missing
+    hub is a wiring error, and the node takes its documented hard-fail path.
+    """
+    with patch(
+        "modulo.core.pipeline_engine.decorator.get_model_backend_hub",
+        return_value=None,
+    ):
+        repair_fn = nr._build_repair_invoke(str(uuid.uuid4()))
+        assert repair_fn is not None
+        with pytest.raises(RuntimeError, match="ModelBackendHub not available"):
+            repair_fn("repair prompt")
