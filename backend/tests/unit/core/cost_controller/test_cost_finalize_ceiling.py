@@ -19,9 +19,12 @@ import pytest
 from modulo.core.cost_controller.finalize import (
     FinalizeMetricSink,
     _emit_duplicate_terminal,
+    _emit_finalize_deferred,
     _emit_limit_refused,
     _fallback_finalize,
+    _handle_ledger_write_failure,
     _ledger_block,
+    _LedgerEscapeContext,
     _MergedSets,
     _record_ledger_with_retry,
 )
@@ -706,3 +709,61 @@ def test_emit_duplicate_terminal_defers_with_sink_and_emits_inline_without() -> 
     with patch("modulo.core.cost_controller.finalize.record_duplicate_terminal") as inline:
         _emit_duplicate_terminal(None)
         inline.assert_called_once_with()
+
+
+def test_metric_sink_buffers_finalize_deferred_until_flush() -> None:
+    """``finalize_deferred`` queues on the sink and only emits on ``flush`` — a
+    rolled-back write-failure attempt must not count a deferred finalisation."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+        sink.finalize_deferred("write_failure", "team-a")
+        deferred.assert_not_called()
+
+        sink.flush()
+        deferred.assert_called_once_with(reason="write_failure", team="team-a")
+
+
+def test_emit_finalize_deferred_defers_with_sink_and_emits_inline_without() -> None:
+    """``_emit_finalize_deferred`` buffers when a retry-owning sink is present and
+    emits inline when it is not (the cancel path / any caller without a retry)."""
+    sink = FinalizeMetricSink()
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred:
+        _emit_finalize_deferred("write_failure", "team-a", sink)
+        deferred.assert_not_called()
+
+    with patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline:
+        _emit_finalize_deferred("write_failure", "team-a", None)
+        inline.assert_called_once_with(reason="write_failure", team="team-a")
+
+
+async def test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_without() -> None:
+    """``_handle_ledger_write_failure`` routes its ``finalize_deferred`` counter
+    through the sink when one is supplied (retry-owning caller) and emits inline
+    — exactly as before — when the sink is ``None`` (the no-retry path)."""
+    ctx = _LedgerEscapeContext(
+        run_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        status="complete",
+        finalize_fields={},
+        session_factory=None,
+        claim_token=None,
+    )
+    session = MagicMock()
+
+    with (
+        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()) as reduced_escape,
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+    ):
+        sink = FinalizeMetricSink()
+        await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=sink)
+        deferred.assert_not_called()
+        sink.flush()
+        deferred.assert_called_once_with(reason="write_failure", team="none")
+        reduced_escape.assert_awaited_once()
+
+    with (
+        patch("modulo.core.cost_controller.finalize._reduced_escape", new=AsyncMock()),
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as inline,
+    ):
+        await _handle_ledger_write_failure(session, ctx, None, "write_failure", metric_sink=None)
+        inline.assert_called_once_with(reason="write_failure", team="none")

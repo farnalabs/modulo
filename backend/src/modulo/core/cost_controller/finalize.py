@@ -228,7 +228,8 @@ class FinalizeMetricSink:
     rolled-back attempt commits nothing, so its non-transactional metric
     emissions must not fire: emitting inline would count a single run once per
     attempt, inflating ``modulo_cost_ledger_limit_refused_total`` /
-    ``modulo_cost_ledger_duplicate_terminal_total``.
+    ``modulo_cost_ledger_duplicate_terminal_total`` /
+    ``modulo_cost_ledger_finalize_deferred_total``.
 
     When a sink is supplied, the retry-affected emissions are BUFFERED instead
     of emitted immediately; the executor flushes them only AFTER the attempt's
@@ -253,6 +254,10 @@ class FinalizeMetricSink:
         """Queue a ``duplicate_terminal`` emission for the committing attempt."""
         self._pending.append(record_duplicate_terminal)
 
+    def finalize_deferred(self, reason: str, team: str) -> None:
+        """Queue a ``finalize_deferred`` emission for the committing attempt."""
+        self._pending.append(lambda: record_finalize_deferred(reason=reason, team=team))
+
     def flush(self) -> None:
         """Emit every buffered metric ONCE (called only after a commit)."""
         pending, self._pending = self._pending, []
@@ -274,6 +279,14 @@ def _emit_duplicate_terminal(sink: FinalizeMetricSink | None) -> None:
         record_duplicate_terminal()
     else:
         sink.duplicate_terminal()
+
+
+def _emit_finalize_deferred(reason: str, team: str, sink: FinalizeMetricSink | None) -> None:
+    """Emit (or defer) a ``finalize_deferred`` metric — see :class:`FinalizeMetricSink`."""
+    if sink is None:
+        record_finalize_deferred(reason=reason, team=team)
+    else:
+        sink.finalize_deferred(reason, team)
 
 
 # Union JSON size guardrail — log-only, not a cap (§4.2).
@@ -1757,6 +1770,7 @@ async def _ledger_block(
             ),
             owner_team_id,
             reason,
+            metric_sink=metric_sink,
         )
         return
 
@@ -1829,13 +1843,14 @@ async def _handle_ledger_write_failure(
     ctx: _LedgerEscapeContext,
     owner_team_id: uuid.UUID | None,
     reason: str | None,
+    metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
     """REDUCED terminalize-without-ledger escape, write_failure ONLY."""
     _log.error(
         "cost_ledger.finalize_deferred",
         extra={"reason": reason or "unknown", "run_id": str(ctx.run_id)},
     )
-    record_finalize_deferred(reason="write_failure", team=str(owner_team_id or "none"))
+    _emit_finalize_deferred("write_failure", str(owner_team_id or "none"), metric_sink)
     await _reduced_escape(session, ctx)
 
 
