@@ -457,7 +457,6 @@ def _parse_fallback_ids(row: Any) -> list[uuid.UUID] | None:
                     row.id,
                     exc,
                 )
-                continue
         elif isinstance(fid, uuid.UUID):
             parsed.append(fid)
         else:
@@ -466,7 +465,6 @@ def _parse_fallback_ids(row: Any) -> list[uuid.UUID] | None:
                 type(fid).__name__,
                 row.id,
             )
-            continue
     if not parsed:
         return None
     return parsed
