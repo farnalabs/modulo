@@ -142,6 +142,8 @@ from modulo.core.pipeline_engine.sandbox_mode import (
 )
 from modulo.core.run_context.autonomy import (
     AutonomyResolution,
+    is_autonomy_gating_enabled,
+    read_live_earned_autonomy,
     resolve_autonomy,
     should_notify_on_complete,
     should_skip_hitl_review,
@@ -5507,15 +5509,34 @@ def _hitl_review_eval_condition_skip(
 
 
 def _hitl_review_autonomy_result(
-    review_id: str, state: dict[str, Any], human_only: bool
+    review_id: str,
+    state: dict[str, Any],
+    human_only: bool,
+    *,
+    earned_live: str | None = None,
+    gating_enabled: bool = False,
 ) -> tuple[AutonomyResolution, dict[str, Any] | None]:
-    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any."""
+    """Resolve the ceiling-clamped autonomy level; return skip/auto-approve artifact, if any.
+
+    ``earned_live`` / ``gating_enabled`` (FAR-1175) are read by the async gate
+    caller (the pipeline's live earned level + the org's ``autonomy_gating``
+    flag) and forwarded to :func:`resolve_autonomy`, which combines the live
+    earned level with the run's pinned-at-start level. Defaults reproduce the
+    S0 signature exactly so existing callers/tests are unaffected.
+    """
     # Determine effective autonomy level from run_context (FAR-1163: a
     # context-setter's recommendation is clamped to the pipeline's
-    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``).
+    # max_autonomy_level ceiling pinned as ``_pipeline_max_autonomy``;
+    # FAR-1175 S1: with gating on, the base is the earned level — read live
+    # and combined with the run's pinned-at-start value inside resolve_autonomy).
     run_context: dict[str, Any] = state.get("run_context") or {}
     pipeline_default: str | None = run_context.get("_pipeline_default_autonomy")
-    resolution = resolve_autonomy(pipeline_default, run_context)
+    resolution = resolve_autonomy(
+        pipeline_default,
+        run_context,
+        earned_live=earned_live,
+        gating_enabled=gating_enabled,
+    )
     autonomy = resolution.effective
     human_only_effective: bool = human_only
 
@@ -5658,7 +5679,28 @@ def make_hitl_review_fn(
             return eval_condition_skip
 
         # --- Autonomy skip/approve. ---
-        resolution, autonomy_result = _hitl_review_autonomy_result(review_id, state, human_only)
+        # FAR-1175 S1: the org's ``autonomy_gating`` flag is resolved FIRST
+        # (fail-open, default OFF). Only when the flag is ON do we read the
+        # pipeline's live earned level — with the flag off (the default) the
+        # gate path costs NO extra per-gate SELECT and is byte-identical to S0.
+        # The live earned level is combined with the run's pinned-at-start value
+        # INSIDE resolve_autonomy so a demotion bites this in-flight run while a
+        # promotion does not.
+        gating_enabled = await is_autonomy_gating_enabled(org_id=org_id)
+        earned_live: str | None = None
+        if gating_enabled:
+            earned_live = await read_live_earned_autonomy(
+                session_factory,
+                org_id=org_id,
+                pipeline_id=state.get("_pipeline_id"),
+            )
+        resolution, autonomy_result = _hitl_review_autonomy_result(
+            review_id,
+            state,
+            human_only,
+            earned_live=earned_live,
+            gating_enabled=gating_enabled,
+        )
         autonomy = resolution.effective
         # FAR-1163 S0: when the recommendation was clamped to the ceiling,
         # record the clamp (requested/effective/ceiling) IN ADDITION to the

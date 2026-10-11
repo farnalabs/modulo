@@ -29,6 +29,9 @@ _EXPECTED_TOOLS = frozenset(
         "bind_connector_to_node",
         "set_pipeline_circuit_breaker",
         "set_pipeline_owners",
+        # FAR-1175: manual autonomy demote/promote.
+        "demote_pipeline_autonomy",
+        "promote_pipeline_autonomy",
         "update_pipeline",
         "trigger_pipeline",
         "get_run_status",

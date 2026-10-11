@@ -725,18 +725,26 @@ def test_load_config_resolves_patterns(tmp_path, monkeypatch):
 
 def test_consume_future_cancelled():
     """Cancelled futures are silently consumed."""
-    f = asyncio.Future()
-    f.cancel()
-    li._consume_future(f)
-    assert f.cancelled()
+    loop = asyncio.new_event_loop()
+    try:
+        f = loop.create_future()
+        f.cancel()
+        li._consume_future(f)
+        assert f.cancelled()
+    finally:
+        loop.close()
 
 
 def test_consume_future_exception():
     """Exception retrieval prevents 'never awaited' warnings."""
-    f = asyncio.Future()
-    f.set_exception(RuntimeError("boom"))
-    li._consume_future(f)
-    assert f.done()
+    loop = asyncio.new_event_loop()
+    try:
+        f = loop.create_future()
+        f.set_exception(RuntimeError("boom"))
+        li._consume_future(f)
+        assert f.done()
+    finally:
+        loop.close()
 
 
 # ---------------------------------------------------------------------------
