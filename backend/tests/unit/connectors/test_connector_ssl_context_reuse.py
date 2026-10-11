@@ -123,16 +123,17 @@ async def test_context_is_reused_after_the_previous_client_was_closed() -> None:
     ids=["unset", "empty", "one", "lower-true", "upper-true", "yes", "on", "off", "no", "zero", "padded-true"],
 )
 def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    """The CA-bundle trust-env read stays in lock-step with ``core.ssrf``.
+    """``connectors._egress`` shares the ONE ``core.ssrf`` trust-env resolver.
 
     ``connectors._egress`` imports the shared resolver from
     ``modulo.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
     ``connectors-do-not-import-core`` contract carries a deliberate per-module
-    allowance for the shared security primitive), so both sides are literally
-    the same function. This seam test keeps guarding that edge: if a future
-    edit re-introduces a parallel ``SSRF_TRUST_PROXY`` read here, it must at
-    least agree with ``core.ssrf`` — drift would silently change which CA
-    bundle connector egress trusts.
+    allowance for this shared security primitive). Pinning the bound name to
+    the SSRF module's function OBJECT is what stops drift: a future edit that
+    re-introduces a parallel ``SSRF_TRUST_PROXY`` read here would bind a
+    different callable and fail this test. Comparing return values alone would
+    not — since the dedup, both sides are the same function, so such a
+    comparison would only test that a function equals itself.
     """
     from modulo.connectors import _egress
     from modulo.core import ssrf
@@ -144,7 +145,16 @@ def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, 
     else:
         monkeypatch.setenv("SSRF_TRUST_PROXY", value)
 
-    assert _egress._egress_trust_env() == ssrf._default_trust_env()
+    # Dedup pin: both names must be the *same* function object, not two mirrors
+    # that happen to agree on today's inputs.
+    assert _egress._egress_trust_env is ssrf.default_trust_env
+
+    # Behavioural: the shared resolver maps ``SSRF_TRUST_PROXY`` exactly as
+    # documented (true/1/yes/on honour a proxy; anything else keeps the safe
+    # default), asserted against a concrete expectation rather than by
+    # comparing the function to itself.
+    expected = value.strip().lower() in ("1", "true", "yes", "on")
+    assert _egress._egress_trust_env() is expected
 
 
 def test_cached_context_trust_anchors_match_a_plain_verify_true_build(monkeypatch: pytest.MonkeyPatch) -> None:
