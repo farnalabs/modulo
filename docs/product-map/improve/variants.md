@@ -4,7 +4,10 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/api/routes/variants.py
-unit-tests: []
+unit-tests:
+  - backend/tests/unit/api/test_variants.py
+  - backend/tests/unit/api/test_variant_batches.py
+  - backend/tests/unit/api/test_variant_batches_coverage.py
 bdd:
   - backend/tests/bdd/features/variants/variant_groups.feature
   - backend/tests/bdd/steps/test_variant_groups.py

@@ -195,7 +195,9 @@ class PluginRegistry:
 
         try:
             builder = ep.load()
-        except (ImportError, TypeError, AttributeError, SyntaxError):
+        except asyncio.CancelledError:
+            raise
+        except Exception:
             logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
             detail = f"Failed to load entry point {ep.name}"
             with self._lock:

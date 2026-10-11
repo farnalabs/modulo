@@ -56,6 +56,20 @@ API surface ships and is gated by the `plugin_management` feature and the
 
 ## QA History
 
+- 2026-10-11: **Improve Architecture product-map walk** — fixed MAJOR
+  discovery-fragility gap against the tracked "`load()` raises → unhealthy,
+  never silently dropped" behaviour: `_load_entry_point` caught only
+  `(ImportError, TypeError, AttributeError, SyntaxError)`, so a poisoned entry
+  point raising anything else (`RuntimeError` from a missing optional
+  dependency, `ValueError`, `OSError`, …) aborted the ENTIRE `discover_plugins`
+  scan and every healthy plugin listed after it was never discovered. The guard
+  now records `Failed to load entry point …` for any `Exception` (with
+  `asyncio.CancelledError` still propagating) and the scan continues.
+  Regression tests: unexpected-error isolation (poisoned + healthy pair) and
+  cancellation propagation
+  (`tests/unit/plugin_registry/test_plugin_registry.py` — the isolation test
+  fails against the previous narrow except clause).
+
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-plugins` registry: the
   entry now reads `status: partial` (matching the manifest's unchecked

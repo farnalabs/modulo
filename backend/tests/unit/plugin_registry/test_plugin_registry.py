@@ -856,6 +856,58 @@ def test_discover_plugins_entry_point_load_failure():
     assert health["pkg-broken"].detail == "Failed to load entry point failing_con"
 
 
+def test_discover_plugins_entry_point_unexpected_load_error_isolated():
+    """An entry point whose load() raises outside the import-error family must not
+    abort discovery of the remaining plugins: it is recorded unhealthy and the
+    scan continues (e.g. a RuntimeError from a missing optional dependency)."""
+    registry = PluginRegistry()
+    poisoned_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "poisoned_con",
+        dist_name="pkg-poison",
+        load_side_effect=RuntimeError,
+    )
+    good_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "good_con",
+        dist_name="pkg-good",
+        load_result=_discovery_stub_builder,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[poisoned_ep, good_ep], [], [], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert [m.PLUGIN_ID for m in discovered] == ["pkg-good"]
+    assert registry.has_connector_type("good_con")
+    assert registry.entry_point_errors == {"pkg-poison": "Failed to load entry point poisoned_con"}
+    health = registry.health_check("pkg-poison")
+    assert health["pkg-poison"].ok is False
+    assert health["pkg-poison"].detail == "Failed to load entry point poisoned_con"
+
+
+def test_discover_plugins_entry_point_load_cancelled_error_propagates():
+    """Cancellation during entry-point load must still propagate, not be recorded
+    as an unhealthy plugin."""
+    registry = PluginRegistry()
+    cancelling_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "cancelling_con",
+        dist_name="pkg-cancel",
+        load_side_effect=asyncio.CancelledError,
+    )
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=[[cancelling_ep], [], [], []],
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        registry.discover_plugins()
+    assert "pkg-cancel" not in registry.entry_point_errors
+
+
 # ---------------------------------------------------------------------------
 # Property accessors
 # ---------------------------------------------------------------------------
