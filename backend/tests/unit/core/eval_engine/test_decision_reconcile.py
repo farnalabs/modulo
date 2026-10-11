@@ -93,7 +93,7 @@ async def test_clean_table_reports_no_anomalies() -> None:
         report = await reconcile_decision_records(session)
         assert report.scanned == 1
         assert report.total == 0
-        assert report.counts_by_kind() == {}
+        assert not report.counts_by_kind()
     finally:
         await session.close()
         await engine.dispose()

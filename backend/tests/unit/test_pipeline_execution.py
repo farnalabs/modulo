@@ -1659,11 +1659,14 @@ class TestSaqWorkerSettings:
         # + the FAR-604 sweeps (slot reconciliation, HITL park-on-expiry)
         # + memory_monitor_cron (FAR-776) — advisory guest-memory telemetry cron.
         # + health_readiness_alert (FAR-1446) — readiness-degradation alert cron.
+        # + decision_record_reconcile (FAR-1108 chunk 8b) — hourly read-only
+        #   decision-record corruption-detection sweep.
         cron_names = {c.function.__name__ for c in settings["cron_jobs"]}
         assert cron_names == {
             "analytics_facts_maintenance",
             "fire_due_triggers",
             "dispatcher_reconcile",
+            "decision_record_reconcile",
             "claim_expiry",
             "connector_health_checks",
             "hitl_overdue",

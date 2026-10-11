@@ -114,7 +114,7 @@ class TestUpgrade:
     def test_upgrade_creates_when_nothing_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_op = _FakeOp()
         _run(monkeypatch, fake_op, "upgrade")
-        assert fake_op.dropped_indexes == []
+        assert not fake_op.dropped_indexes
         assert len(fake_op.created_indexes) == 1
 
     def test_upgrade_idempotent_when_permanent_already_present(self, monkeypatch: pytest.MonkeyPatch) -> None:

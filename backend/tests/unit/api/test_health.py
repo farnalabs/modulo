@@ -1370,6 +1370,10 @@ class TestEventLoopStallGuard:
                 "modulo.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
             ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
+            ),
         ):
             resp = client.get("/healthz/ready")
         assert resp.status_code == 200
@@ -1394,6 +1398,10 @@ class TestEventLoopStallGuard:
             patch(
                 "modulo.api.routes.health._check_dispatcher_reconcile",
                 AsyncMock(return_value=_ok_check("dispatcher_reconcile")),
+            ),
+            patch(
+                "modulo.api.routes.health._check_decision_record_reconcile",
+                AsyncMock(return_value=_ok_check("decision_record_reconcile")),
             ),
         ):
             resp = client.get("/healthz/ready")
