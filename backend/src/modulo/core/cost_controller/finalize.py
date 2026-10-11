@@ -1845,7 +1845,47 @@ async def _handle_ledger_write_failure(
     reason: str | None,
     metric_sink: FinalizeMetricSink | None = None,
 ) -> None:
-    """REDUCED terminalize-without-ledger escape, write_failure ONLY."""
+    """REDUCED terminalize-without-ledger escape, write_failure ONLY.
+
+    ``finalize_deferred`` is routed through *metric_sink* (FAR-1642): when the
+    caller owns a whole-transaction lock retry, the counter is buffered on the
+    attempt's sink and flushed only after that attempt's transaction commits —
+    so a rolled-back attempt emits nothing and a retried finalisation emits
+    exactly one sample.
+
+    ACCEPTED TRADE — the buffer can DROP a real event. ``_reduced_escape``
+    commits the reduced terminal write in a FRESH, INDEPENDENT transaction, so
+    that write is durable the moment it returns regardless of this attempt's
+    outer transaction. If the outer transaction then aborts (a 40P01/55P03 lock)
+    before its own commit, the executor discards this attempt's sink and re-runs
+    the finalisation — the already-committed reduced escape's
+    ``finalize_deferred`` sample is lost, so
+    ``modulo_cost_ledger_finalize_deferred_total`` under-counts by one for that
+    finalisation.
+
+    This is deliberate and acceptable:
+
+    1. Money is unaffected. The reduced escape is the accounting authority and
+       it committed; the metric is a diagnostic, not a money fact.
+    2. The event is still LOUD. The ``cost_ledger.finalize_deferred`` ERROR log
+       above fires inline on every occurrence, independent of the sink, so the
+       condition is always visible in logs.
+    3. The alternative is worse. Emitting inline (or flushing this attempt's
+       sink from inside the reduced escape) reintroduces an OVER-count: the outer
+       retry re-attempts the ledger and can escape again, emitting one sample per
+       attempt — exactly the inflation FAR-1642's sink exists to prevent.
+       Under-counting a diagnostic counter under the rare double-fault (a ledger
+       write failure AND an outer lock abort) beats systematically over-counting
+       under a common transient lock.
+
+    There is no clean fix that emits iff the escape committed AND at most once
+    across the outer retry without a second mechanism: making the escape itself
+    idempotent would require a persisted per-run marker, and the only existing
+    one (``ledger_refused_at``) is the money guard that must stay unset so a
+    later attempt can still write the ledger. The trade is pinned by
+    ``test_handle_ledger_write_failure_defers_with_sink_and_emits_inline_without``
+    and the wire by the ``test_ledger_block_threads_sink_*`` tests.
+    """
     _log.error(
         "cost_ledger.finalize_deferred",
         extra={"reason": reason or "unknown", "run_id": str(ctx.run_id)},
