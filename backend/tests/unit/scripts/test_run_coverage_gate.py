@@ -2319,6 +2319,47 @@ class TestBranchCoverageEvaluation:
         assert result.branch_actual_pct is None
 
 
+class TestLineBranchThresholdTable:
+    """Line and branch thresholds are independent: each can trip alone."""
+
+    @pytest.mark.parametrize(
+        ("covered_line_count", "branch_tuple", "expected_line_passed", "expected_branch_passed"),
+        [
+            (100, (50, 100), True, False),  # line green, branch red
+            (97, (100, 100), False, True),  # line red, branch green
+            (100, (100, 100), True, True),  # both green
+            (97, (50, 100), False, False),  # both red
+        ],
+    )
+    def test_line_and_branch_thresholds_are_independent(
+        self, tmp_path, covered_line_count, branch_tuple, expected_line_passed, expected_branch_passed
+    ):
+        fake_report = tmp_path / "coverage.xml"
+        fake_report.write_text("<coverage/>")
+        json_report = {
+            "src_stats": {
+                "src/calc.py": {
+                    "percent_covered": 100.0,
+                    "covered_lines": list(range(covered_line_count)),
+                    "violation_lines": list(range(covered_line_count, 100)),
+                }
+            },
+            "total_num_lines": 100,
+            "total_num_violations": 100 - covered_line_count,
+            "total_percent_covered": float(covered_line_count),
+            "num_changed_lines": 100,
+        }
+        with (
+            patch.object(mod, "_get_changed_production_files", return_value={"src/calc.py": 100}),
+            patch.object(mod, "_run_diff_cover", return_value=(0, REAL_DIFF_COVER_PASS_STDOUT)),
+            patch.object(mod, "_get_diff_cover_json", return_value=json_report),
+            patch.object(mod, "_compute_branch_coverage_from_raw", return_value=(*branch_tuple, 0)),
+        ):
+            result = mod.evaluate("Python", fake_report, "origin/main", 98, branch_fail_under=98)
+        assert result.passed is expected_line_passed
+        assert result.branch_passed is expected_branch_passed
+
+
 # ---------------------------------------------------------------------------
 # Branch parser integration tests
 # ---------------------------------------------------------------------------
