@@ -1,6 +1,8 @@
 """Global fixtures for all unit tests."""
 
+import sys
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -116,8 +118,56 @@ def _provisioned_system_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_deps, "get_settings", lambda: _ProvisionedSystemSettings())
 
 
+#: The module whose import constructs the FastAPI application singleton
+#: (``modulo.api.main.app``). Loading it costs ~10 s of CPU-bound route and
+#: pydantic-model construction (measured 2026-10-11, FAR-1678), so the unit
+#: suite must only load it when a test can actually reach the app.
+_APP_MODULE = "modulo.api.main"
+
+#: Per-file cache for the lazy source scan below: file path -> does the file
+#: mention ``_APP_MODULE``? Filled on demand so the per-test gate costs a dict
+#: lookup after the first test of a module.
+_APP_MENTION_CACHE: dict[str, bool] = {}
+
+
+def _test_module_mentions_app(node: object) -> bool:
+    """True when *node*'s test module can import the app inside a body.
+
+    A module-level ``from modulo.api.main import app`` is already visible in
+    ``sys.modules`` at fixture-setup time (pytest imports test modules during
+    collection), so the caller's ``sys.modules`` probe covers it. A handful of
+    modules instead import the app lazily INSIDE a test or fixture body (e.g.
+    ``tests/unit/scim/test_scim_provisioning_programming_error.py``,
+    ``tests/unit/trigger_engine/test_trigger_engine.py``); for those,
+    ``sys.modules`` alone would wrongly skip the install and leave their
+    routes without the FAR-681 default. The module source is therefore scanned
+    once per file as the pre-import signal for that case. A mention in a
+    comment or docstring only costs the (cached) import — a false positive is
+    a performance no-op, never a behaviour change.
+    """
+    obj = getattr(node, "obj", None)
+    modname = getattr(obj, "__module__", None)
+    if not modname:
+        return False
+    module = sys.modules.get(modname)
+    path = getattr(module, "__file__", None)
+    if not path:
+        return False
+    cached = _APP_MENTION_CACHE.get(path)
+    if cached is not None:
+        return cached
+    try:
+        source = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        mentions = False
+    else:
+        mentions = _APP_MODULE in source
+    _APP_MENTION_CACHE[path] = mentions
+    return mentions
+
+
 @pytest.fixture(autouse=True)
-def _far681_any_credential_default() -> None:
+def _far681_any_credential_default(request: pytest.FixtureRequest) -> None:
     """Default any-credential principal for the apply-moved routes (FAR-681).
 
     The FAR-681 slice-1/slice-2 endpoints resolve via
@@ -146,7 +196,21 @@ def _far681_any_credential_default() -> None:
     401. The unit-level conftest's fixtures ride a node shared by every argv
     item under ``tests/unit/``, so they are stable under any interleaving.
     (FAR-1597 moved ``_provisioned_system_engine`` here for the same reason.)
+
+    FAR-1678: the app import is GATED. Installing the override needs the app
+    singleton, and importing it cost every unit-test module — including pure
+    logic packages that never touch the app — ~10 s of process startup. The
+    install now runs only when the app is (or will be) loaded anyway: either
+    ``modulo.api.main`` is already in ``sys.modules`` (a module-level import
+    in the test module or a conftest, resolved at collection time), or the
+    test module's source mentions it (the lazy in-body import case). A
+    pure-logic module pays neither cost, and its tests cannot observe the
+    difference: the override lives on the app singleton, which such a test
+    never constructs.
     """
+    if _APP_MODULE not in sys.modules and not _test_module_mentions_app(request.node):
+        return
+
     from fastapi import Depends
     from fastapi.security import HTTPAuthorizationCredentials
 

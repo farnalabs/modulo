@@ -10,9 +10,9 @@
     </template>
 
     <div class="space-y-4 py-2">
-      <div v-if="error" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ error }}
-      </div>
+      <!-- Graduation action error: emitted from the confirm handler; no
+           refetch loader — the Graduate button is the retry path. -->
+      <ErrorAlert v-if="error" :message="error" :retryable="false" />
 
       <div>
         <label for="graduationdialog-field-2" class="mb-2 flex items-center gap-2 text-sm font-medium">
@@ -83,6 +83,7 @@ import { ref, computed } from 'vue'
 import Dialog from 'primevue/dialog'
 import Button from 'primevue/button'
 import Select from '../../shared/AppSelect.vue'
+import ErrorAlert from '../../shared/ErrorAlert.vue'
 import type { PipelineSummary } from '../../../types/lifecycleMap'
 
 const props = defineProps<{

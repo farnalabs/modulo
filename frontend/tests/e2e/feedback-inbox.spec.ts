@@ -82,7 +82,7 @@ test.describe('Feedback Inbox', { tag: "@regression" }, () => {
 
     const alertBox = page.locator('div[role="alert"]')
     await expect(alertBox).toBeVisible()
-    await expect(alertBox.getByTestId('feedback-inbox-retry')).toBeVisible()
+    await expect(alertBox.getByTestId('error-alert-retry')).toBeVisible()
   })
 
   test('annotation result message uses role=status and aria-live=polite', { tag: "@regression" }, async ({ page, env }) => {

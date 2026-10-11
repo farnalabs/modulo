@@ -584,9 +584,11 @@ def decide_conformance(
 
     Keys that are not capabilities (``sandbox.egress``, ``docker``, ...) pass
     through untouched on both sides — their surfaces own their vocabulary. The
-    reported ``missing``/``unreadable`` names are canonicalised back to the
-    bare spelling (``_reported``) so consumers see the capability vocabulary,
-    not the binding spelling that was matched.
+    reported ``missing``/``unreadable`` names are spelled by ``_reported``,
+    which PRESERVES a type-qualified claim's qualifier (``github.read`` is
+    reported as ``github.read``, only the separator normalised) so the
+    operator can see WHICH type binding failed; bare claims report as their
+    canonical bare form (FAR-1615).
     """
     if not required_capabilities:
         return derive_conformance_state(required_capabilities, registered)

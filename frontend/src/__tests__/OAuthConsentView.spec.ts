@@ -28,6 +28,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import OAuthConsentView from '../views/OAuthConsentView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const TEAM_CONTEXT = {
   client_name: 'My MCP App',
@@ -139,8 +140,15 @@ describe('OAuthConsentView', () => {
     const body = JSON.parse(String(options.body)) as { state: string; granted_scopes: string[] }
     expect(body.state).toBe('st-1')
     expect(body.granted_scopes).toEqual(['trigger:run', 'hitl:review'])
-    // The 500 surfaces as a visible alert (no silent failure).
-    expect(wrapper.find('[data-testid="oauth-consent-error"]').text()).toContain('boom')
+    // The 500 surfaces as a visible alert (no silent failure) — and it is the
+    // SHARED ErrorAlert (FAR-1669), not a bespoke box. No Retry: the in-place
+    // Approve button below is the retry path.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('message')).toBe('boom')
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('boom')
   })
 
   it('shows the success state and redirects to the client on approve', async () => {

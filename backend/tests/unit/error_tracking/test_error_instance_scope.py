@@ -28,6 +28,7 @@ from modulo.api.routes.errors import router as errors_router
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.db.models.organisation import SYSTEM_ORG_ID
 from tests.unit.api.plan_stubs import all_features
+from tests.unit.error_tracking._factories import make_event, make_group
 
 _TENANT_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _GROUP_ID = uuid.UUID("00000000-0000-0000-0000-000000000010")
@@ -36,31 +37,16 @@ _NOW = datetime.now(UTC)
 
 
 def _make_group(**kw) -> MagicMock:
-    g = MagicMock()
-    g.id = kw.get("id", _GROUP_ID)
-    g.fingerprint = kw.get("fingerprint", "fp-instance")
-    g.status = kw.get("status", "new")
-    g.level_peak = kw.get("level_peak", "error")
-    g.count = kw.get("count", 3)
-    g.first_seen = kw.get("first_seen", _NOW)
-    g.last_seen = kw.get("last_seen", _NOW)
-    g.sample_event_id = kw.get("sample_event_id", _EVENT_ID)
-    g.assigned_to = kw.get("assigned_to")
-    return g
+    kw.setdefault("fingerprint", "fp-instance")
+    kw.setdefault("count", 3)
+    return make_group(**kw)
 
 
 def _make_event(**kw) -> MagicMock:
-    e = MagicMock()
-    e.id = kw.get("id", _EVENT_ID)
-    e.level = kw.get("level", "error")
-    e.message = kw.get("message", "Instance-level failure")
-    e.stacktrace = kw.get("stacktrace", "Traceback...")
-    e.context_json = kw.get("context_json", {"source": "public-ingest"})
-    e.source = kw.get("source", "frontend")
-    e.environment = kw.get("environment", "production")
-    e.version = kw.get("version", "1.0.0")
-    e.created_at = kw.get("created_at", _NOW)
-    return e
+    kw.setdefault("message", "Instance-level failure")
+    kw.setdefault("source", "frontend")
+    kw.setdefault("context_json", {"source": "public-ingest"})
+    return make_event(**kw)
 
 
 def _make_db_override():
@@ -113,8 +99,8 @@ class TestInstanceListRoute:
             patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=1)),
             patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=None)),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            TestClient(_make_app(is_system_admin=True)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=True))
             resp = client.get("/api/v1/errors/instance")
 
         # A 422 here would mean the static route lost to the /{error_id} UUID
@@ -135,8 +121,8 @@ class TestInstanceListRoute:
             patch("modulo.api.routes.errors.get_error_groups", AsyncMock()) as gm,
             patch("modulo.api.routes.errors.count_error_groups", AsyncMock()) as cm,
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            TestClient(_make_app(is_system_admin=False)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=False))
             resp = client.get("/api/v1/errors/instance")
 
         assert resp.status_code == 403
@@ -148,8 +134,10 @@ class TestInstanceListRoute:
         mock_rls.assert_not_awaited()
 
     def test_unauthenticated_caller_is_refused(self):
-        with patch("modulo.api.routes.errors.get_error_groups", AsyncMock()) as gm:
-            client = TestClient(_make_app(is_system_admin=False, with_principal=False))
+        with (
+            patch("modulo.api.routes.errors.get_error_groups", AsyncMock()) as gm,
+            TestClient(_make_app(is_system_admin=False, with_principal=False)) as client,
+        ):
             resp = client.get("/api/v1/errors/instance")
 
         assert resp.status_code == 401
@@ -162,8 +150,8 @@ class TestInstanceDetailAndEventsRoutes:
             patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=_make_group())) as gm,
             patch("modulo.api.routes.errors._fetch_sample_event", AsyncMock(return_value=_make_event())),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(is_system_admin=True)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=True))
             resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}")
 
         assert resp.status_code == 200, resp.text
@@ -175,8 +163,8 @@ class TestInstanceDetailAndEventsRoutes:
         with (
             patch("modulo.api.routes.errors.get_error_group", AsyncMock(return_value=None)),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(is_system_admin=True)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=True))
             resp = client.get(f"/api/v1/errors/instance/{uuid.uuid4()}")
 
         assert resp.status_code == 404
@@ -186,8 +174,8 @@ class TestInstanceDetailAndEventsRoutes:
             patch("modulo.api.routes.errors.get_error_group", AsyncMock()) as gm,
             patch("modulo.api.routes.errors.get_error_events_by_group", AsyncMock()) as ge,
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()) as mock_rls,
+            TestClient(_make_app(is_system_admin=False)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=False))
             detail_resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}")
             events_resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}/events")
 
@@ -205,8 +193,8 @@ class TestInstanceDetailAndEventsRoutes:
             patch("modulo.api.routes.errors.get_error_events_by_group", AsyncMock(return_value=evts)) as ge,
             patch("modulo.api.routes.errors.count_error_events_by_group", AsyncMock(return_value=5)),
             patch("modulo.api.routes.errors.set_rls_org", AsyncMock()),
+            TestClient(_make_app(is_system_admin=True)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=True))
             resp = client.get(f"/api/v1/errors/instance/{_GROUP_ID}/events")
 
         assert resp.status_code == 200, resp.text
@@ -232,8 +220,8 @@ class TestRlsContextCorrectness:
             patch("modulo.api.routes.errors.set_rls_org", _capture_rls),
             patch("modulo.api.routes.errors.get_error_groups", _capture_query),
             patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
+            TestClient(_make_app(is_system_admin=True)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=True))
             resp = client.get("/api/v1/errors/instance")
 
         assert resp.status_code == 200, resp.text
@@ -255,8 +243,8 @@ class TestRlsContextCorrectness:
             patch("modulo.api.routes.errors.set_rls_org", _capture_rls),
             patch("modulo.api.routes.errors.get_error_groups", _capture_query),
             patch("modulo.api.routes.errors.count_error_groups", AsyncMock(return_value=0)),
+            TestClient(_make_app(is_system_admin=False)) as client,
         ):
-            client = TestClient(_make_app(is_system_admin=False))
             resp = client.get("/api/v1/errors")
 
         assert resp.status_code == 200, resp.text

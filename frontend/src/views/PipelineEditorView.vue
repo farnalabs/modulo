@@ -4,7 +4,7 @@
       <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
     </div>
     <div v-else-if="pageError" class="flex flex-1 items-center justify-center">
-      <div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">{{ pageError }}</div>
+      <ErrorAlert :message="pageError" :on-retry="reloadPage" />
     </div>
     <template v-else>
       <div class="flex min-w-0 flex-1 flex-col">
@@ -580,9 +580,7 @@
                 data-testid="pipeline-editor-run-prompt"
               />
             </div>
-            <div v-if="runError" class="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              {{ runError }}
-            </div>
+            <ErrorAlert v-if="runError" :message="runError" :retryable="false" />
             <div v-if="emptyRunWarning" class="rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-text">
               {{ emptyRunWarning }}
             </div>
@@ -1283,9 +1281,8 @@
               {{ $t('views.PipelineEditorView.close') }}
             </button>
           </div>
-          <div v-if="edgeSaveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ edgeSaveError }}
-          </div>
+          <!-- retry = click Save Edge again; no separate loader -->
+          <ErrorAlert v-if="edgeSaveError" :message="edgeSaveError" :retryable="false" :compact="true" />
         </div>
       </aside>
     </template>
@@ -1347,9 +1344,8 @@
             <p class="mt-0.5 font-medium">{{ $t('views.PipelineEditorView.input_label') }} {{ agentSchemaName(selectedAgent, 'input') }}</p>
             <p class="font-medium">{{ $t('views.PipelineEditorView.output_label') }} {{ agentSchemaName(selectedAgent, 'output') }}</p>
           </div>
-          <div v-if="convertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ convertError }}
-          </div>
+          <!-- retry = click Convert again; no separate loader -->
+          <ErrorAlert v-if="convertError" :message="convertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1385,9 +1381,8 @@
   </template>
 </Select>
         </div>
-        <div v-if="revertError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ revertError }}
-        </div>
+        <!-- retry = click Revert again; no separate loader -->
+        <ErrorAlert v-if="revertError" :message="revertError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1438,9 +1433,8 @@
             </label>
           </div>
         </div>
-        <div v-if="saveAsError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ saveAsError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="saveAsError" :message="saveAsError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1462,9 +1456,8 @@
             @keyup.enter="handleRename"
           />
         </div>
-        <div v-if="renameError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-          {{ renameError }}
-        </div>
+        <!-- retry = click Save again; no separate loader -->
+        <ErrorAlert v-if="renameError" :message="renameError" :retryable="false" :compact="true" />
       </div>
     </FormDialog>
     <FormDialog
@@ -1477,9 +1470,8 @@
       <p class="mb-4 text-sm text-muted-foreground">
         {{ $t('views.PipelineEditorView.delete_pipeline_confirm') }}
       </p>
-      <div v-if="deleteError" class="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-        {{ deleteError }}
-      </div>
+      <!-- retry = click Delete again; no separate loader -->
+      <ErrorAlert v-if="deleteError" :message="deleteError" :retryable="false" class="mb-4" :compact="true" />
     </FormDialog>
 
     <PipelineSnapshotTimeline v-if="showVersionTimeline" :pipeline-id="pipelineId" @close="showVersionTimeline = false" />
@@ -1498,6 +1490,7 @@ import { formatApiError, throwOnError } from '../lib/api/formatError'
 import { usePlanStore } from '../stores/planStore'
 
 import FormDialog from '../components/shared/FormDialog.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
@@ -1803,31 +1796,82 @@ const retryPolicySaveBlocked = computed(
   () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
 )
 
+// FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
+// missing or null) renders as All-errors — the runtime resolves it to all
+// retryable events. An explicit `on` list renders as granular (a stored
+// empty list is retry-effectively-off, surfaced by the zero-selected
+// warning). A malformed non-list `on` fail-closes at runtime (no retry),
+// so it renders as granular with nothing selected to surface the warning.
+function _coverageFromStored(rp: RetryPolicy): { mode: 'all' | 'specific'; events: string[] } {
+  const stored = rp as Record<string, unknown>
+  if (stored.on === undefined || stored.on === null) {
+    return { mode: 'all', events: [] }
+  }
+  if (Array.isArray(stored.on)) {
+    return {
+      mode: 'specific',
+      events: (stored.on as unknown[]).filter((e): e is string =>
+        retryPolicyEventValues.has(e as string),
+      ),
+    }
+  }
+  return { mode: 'specific', events: [] }
+}
+
+function _maxRetriesFromStored(rp: RetryPolicy): number {
+  const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+  return Math.min(5, Math.max(0, max))
+}
+
+// FAR-525: the run-level backoff schedule. Out-of-range stored values are
+// clamped here for editing ONLY — the runtime resolver fails open to the
+// default 45s x 2.0 schedule, which the caller surfaces via `clamped`.
+function _scheduleFromStored(rp: RetryPolicy): {
+  delay: number
+  multiplier: number
+  clamped: boolean
+} {
+  const stored = rp as Record<string, unknown>
+  const schedule = stored.backoff_schedule
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) {
+    return { delay: 45, multiplier: 2, clamped: false }
+  }
+  const s = schedule as Record<string, unknown>
+  let clamped = false
+
+  const rawDelay = Number(s.delay_seconds)
+  let delay: number
+  if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
+    delay = Math.round(rawDelay)
+  } else {
+    delay = Number.isFinite(rawDelay) ? Math.min(300, Math.max(1, Math.round(rawDelay))) : 45
+    clamped = true
+  }
+
+  let multiplier: number
+  if (s.multiplier === undefined) {
+    multiplier = 2
+  } else {
+    const rawMult = Number(s.multiplier)
+    if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
+      multiplier = rawMult
+    } else {
+      multiplier = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
+      clamped = true
+    }
+  }
+
+  return { delay, multiplier, clamped }
+}
+
 function syncRetryPolicyFromPipeline() {
   const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
   retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
-    // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
-    // missing or null) renders as All-errors — the runtime resolves it to all
-    // retryable events. An explicit `on` list renders as granular (a stored
-    // empty list is retry-effectively-off, surfaced by the zero-selected
-    // warning). A malformed non-list `on` fail-closes at runtime (no retry),
-    // so it renders as granular with nothing selected to surface the warning.
-    const stored = rp as Record<string, unknown>
-    if (stored.on === undefined || stored.on === null) {
-      retryPolicyMode.value = 'all'
-      retryPolicyEvents.value = []
-    } else if (Array.isArray(stored.on)) {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
-        retryPolicyEventValues.has(e as string),
-      )
-    } else {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = []
-    }
-    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
-    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+    const coverage = _coverageFromStored(rp)
+    retryPolicyMode.value = coverage.mode
+    retryPolicyEvents.value = coverage.events
+    retryPolicyMaxRetries.value = _maxRetriesFromStored(rp)
 
     // FAR-525: keep the legacy node-level inherited `backoff` so a save can
     // re-send it losslessly (the editor rebuilds the policy from a whitelist).
@@ -1835,38 +1879,10 @@ function syncRetryPolicyFromPipeline() {
     retryPolicyLegacyBackoff.value =
       typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
 
-    // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
-    // stored values are clamped here for editing ONLY — the runtime resolver
-    // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
-    let scheduleClamped = false
-    const schedule = (rp as Record<string, unknown>).backoff_schedule
-    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
-      const s = schedule as Record<string, unknown>
-      const rawDelay = Number(s.delay_seconds)
-      if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
-        retryPolicyDelaySeconds.value = Math.round(rawDelay)
-      } else {
-        retryPolicyDelaySeconds.value = Number.isFinite(rawDelay)
-          ? Math.min(300, Math.max(1, Math.round(rawDelay)))
-          : 45
-        scheduleClamped = true
-      }
-      if (s.multiplier === undefined) {
-        retryPolicyMultiplier.value = 2
-      } else {
-        const rawMult = Number(s.multiplier)
-        if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
-          retryPolicyMultiplier.value = rawMult
-        } else {
-          retryPolicyMultiplier.value = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
-          scheduleClamped = true
-        }
-      }
-    } else {
-      retryPolicyDelaySeconds.value = 45
-      retryPolicyMultiplier.value = 2
-    }
-    if (scheduleClamped) {
+    const schedule = _scheduleFromStored(rp)
+    retryPolicyDelaySeconds.value = schedule.delay
+    retryPolicyMultiplier.value = schedule.multiplier
+    if (schedule.clamped) {
       retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
     }
   } else {
@@ -3276,7 +3292,7 @@ async function loadLifecycleMaps() {
 // initialised before the fetcher can run.
 const pageError = ref<string | null>(null)
 
-const { loading } = useDataFetch<null>(
+const { loading, load: reloadPage } = useDataFetch<null>(
   async () => {
     pageError.value = null
     await Promise.all([loadPipeline(), loadGraph(), loadCatalog(), loadFolders(), loadLifecycleMaps()])

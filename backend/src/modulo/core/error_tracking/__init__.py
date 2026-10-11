@@ -1083,12 +1083,18 @@ async def check_missed_fire_alerts(
 
     emitted = 0
     now = datetime.now(UTC)
-    redis_client = AsyncRedis.from_url(
-        get_settings().redis_url,
-        socket_connect_timeout=5,
-        socket_keepalive=True,
-    )
+    redis_client: AsyncRedis | None = None
     try:
+        # FAR-1674: construction lives INSIDE the guarded block. A malformed
+        # ``redis_url`` raises from ``from_url`` immediately, and before this
+        # fix that raise escaped the try/except entirely and took the caller's
+        # cron tick with it. Building the client here degrades a bad URL to the
+        # documented fail-open contract: log + return 0.
+        redis_client = AsyncRedis.from_url(
+            get_settings().redis_url,
+            socket_connect_timeout=5,
+            socket_keepalive=True,
+        )
         async with aengine.connect() as c:
             if org_id is not None:
                 org_ids: list[uuid.UUID] = [org_id]
@@ -1121,9 +1127,14 @@ async def check_missed_fire_alerts(
         _log.exception("error_tracking.missed_fire_check_failed")
         return 0
     finally:
-        try:
-            await redis_client.aclose()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning("error_tracking.missed_fire_redis_close_failed", exc_info=True)
+        # ``redis_client`` is None only when construction itself failed (FAR-1674)
+        # — there is no client to close, and the failure is already logged above.
+        # Guarded with ``is not None`` (never ``return``: a bare return here would
+        # swallow the in-flight return value / exception).
+        if redis_client is not None:
+            try:
+                await redis_client.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.warning("error_tracking.missed_fire_redis_close_failed", exc_info=True)

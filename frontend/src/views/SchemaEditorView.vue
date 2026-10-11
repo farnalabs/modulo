@@ -45,9 +45,12 @@
             </ul>
           </div>
 
-          <div v-if="saveError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
-            {{ saveError }}
-          </div>
+          <!--
+            saveError carries both schema-load and save failures; a Retry would
+            refetch the list, not resubmit the form, so none is offered — the
+            user re-clicks Save (or reloads) after reading the message.
+          -->
+          <ErrorAlert v-if="saveError" :message="saveError" :retryable="false" />
 
           <div v-if="saveSuccess" class="rounded-lg border border-success/50 bg-success/10 p-4 text-sm text-success">
             {{ saveSuccess }}
@@ -88,6 +91,7 @@ import { formatApiError } from '../lib/api/formatError'
 import { buildJsonSchema, parseDefinitionToFields, type SchemaField } from '../utils/schema-definition'
 import FeatureGate from '../components/FeatureGate.vue'
 import EmptyState from '../components/shared/EmptyState.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
 import PageTabs from "../components/PageTabs.vue"
 import Button from 'primevue/button'

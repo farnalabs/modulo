@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('../lib/api/client', () => ({
@@ -13,7 +13,38 @@ vi.mock('../lib/mustChangePassword', () => ({
   setMustChangePassword: vi.fn(),
 }))
 
+// FAR-1669: when armed, the mocked useMutation hands the view a `login` that
+// REJECTS outright — no fetch, no tanstack — so a test can pin the submit
+// handler's contract: the rejection must be caught by the handler while the
+// error still surfaces. Disarmed (null) the real composable is used, so every
+// other test in this file keeps its real behaviour.
+const loginFailure = vi.hoisted(() => ({ message: null as string | null }))
+
+vi.mock('../composables/useMutation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../composables/useMutation')>()
+  return {
+    ...actual,
+    useMutation: <TInput = void, TOutput = void>(fn: (input: TInput) => Promise<TOutput>) => {
+      const message = loginFailure.message
+      if (message === null) return actual.useMutation(fn)
+      // Armed: `mutate` rejects on call, and the error state carries the
+      // message (as tanstack's mutation store would after a failed login).
+      // It starts null so the ErrorAlert only appears AFTER the failed submit.
+      const surfaced = ref<string | null>(null)
+      return {
+        loading: ref(false),
+        error: computed(() => surfaced.value),
+        mutate: async (): Promise<TOutput | undefined> => {
+          surfaced.value = message
+          throw new Error(message)
+        },
+      }
+    },
+  }
+})
+
 import LoginView from '../views/LoginView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('LoginView - login-context integration', () => {
   beforeEach(() => {
@@ -180,6 +211,136 @@ describe('LoginView - login-context integration', () => {
       // Falls through to basic login form (email + password) — no org slug entry
       expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
     })
+  })
+
+  it('surfaces a failed login through the shared ErrorAlert with assertive aria-live (FAR-1669)', async () => {
+    // Keyed by URL so the login failure is deterministic regardless of how the
+    // fire-and-forget SSO discovery request interleaves with the submit.
+    vi.spyOn(global, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/v1/auth/login')) {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          statusText: 'Unauthorized',
+          json: () => Promise.resolve({ detail: 'Invalid credentials' }),
+        } as Response)
+      }
+      if (url.includes('/api/v1/auth/login-context')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            multi_org: false,
+            org: { slug: 'acme', name: 'Acme Corp' },
+          }),
+        } as Response)
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ oidc: [], saml: false }),
+      } as Response)
+    })
+
+    // The login mutation rejects by design (401). Vue's dev-mode error path
+    // rethrows an event-handler rejection from inside its own `.catch`, which
+    // Node reports as an unhandled rejection and fails the run — install a
+    // scoped errorHandler on THIS mount so the rejection stays handled. The
+    // rendered error state comes from tanstack's own mutation store and is
+    // unaffected by the handler.
+    const wrapper = mount(LoginView, {
+      global: {
+        stubs: {
+          Button: { template: '<button><slot /></button>' },
+        },
+        config: { errorHandler: () => {} },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+    })
+
+    await wrapper.find('[data-testid="login-email"]').setValue('user@test.com')
+    await wrapper.find('[data-testid="login-password"]').setValue('wrong')
+    await wrapper.find('form').trigger('submit.prevent')
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Invalid credentials')
+    })
+
+    // FAR-1669 prove-the-fix: the login-failure box must be the SHARED
+    // ErrorAlert — the pre-conversion bespoke div satisfies a text-only
+    // assertion, so findComponent is what fails on a revert. The a11y
+    // contract (role + assertive live region) rides through as fallthrough
+    // attributes, and no Retry is offered: the user corrects credentials.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.attributes('aria-live')).toBe('assertive')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
+  it('handles a rejected login: ErrorAlert surfaces the error and no unhandled rejection escapes the submit handler (FAR-1669)', async () => {
+    // Arm the mocked useMutation so `login` REJECTS outright — this isolates
+    // the handler contract (the pre-fix `() => login()` let that rejection
+    // escape; OrgLoginView's pattern is `login().catch(() => {})`).
+    loginFailure.message = 'Invalid credentials'
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    // Node reports an unhandled rejection on a later tick than the rejection
+    // itself, so collect them process-wide for the duration of this test.
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      vi.spyOn(global, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/api/v1/auth/login-context')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              multi_org: false,
+              org: { slug: 'acme', name: 'Acme Corp' },
+            }),
+          } as Response)
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ oidc: [], saml: false }),
+        } as Response)
+      })
+
+      // Deliberately NO errorHandler shim: the rejection must be prevented by
+      // the component's own handler, not absorbed by Vue's error path.
+      const wrapper = mountView()
+      await vi.waitFor(() => {
+        expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
+      })
+
+      await wrapper.find('[data-testid="login-email"]').setValue('user@test.com')
+      await wrapper.find('[data-testid="login-password"]').setValue('wrong')
+      await wrapper.find('form').trigger('submit.prevent')
+
+      // (1) The real error is NOT swallowed: the shared ErrorAlert renders it.
+      await vi.waitFor(() => {
+        expect(wrapper.text()).toContain('Invalid credentials')
+      })
+      const alert = wrapper.findComponent(ErrorAlert)
+      expect(alert.exists()).toBe(true)
+      expect(alert.text()).toContain('Invalid credentials')
+      expect(alert.props('retryable')).toBe(false)
+      expect(alert.attributes('role')).toBe('alert')
+
+      // (2) No unhandled rejection escaped the handler. This is a settling
+      // window for an event that must NOT occur (not a wait-for condition):
+      // one macrotask turn lets Node's unhandled-rejection checkpoint fire
+      // before we assert it did not.
+      await new Promise((resolve) => setTimeout(resolve, 25))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+      loginFailure.message = null
+    }
   })
 
   it('renders the login form within ONE timeout budget when login-context hangs', async () => {

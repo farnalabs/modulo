@@ -46,7 +46,7 @@
           </Button>
           <button type="button"
             data-testid="settings-notification-log-reset"
-            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @click="resetFilters"
           >
             {{ $t('views.AdminNotificationDeliveryLogView.reset') }}
@@ -58,16 +58,26 @@
       </div>
     </div>
 
-    <LoadingSpinner v-if="loading" />
+    <!-- STATE-3 (ux-conformance): the column layout is known before the first
+         row arrives, so the loading placeholder is a determinate table
+         skeleton (shared TableSkeleton) instead of an indeterminate spinner.
+         The column count (6) matches the <th> row below. -->
+    <TableSkeleton
+      v-if="loading"
+      :columns="6"
+      :rows="5"
+      :aria-label="$t('common.loading')"
+      data-testid="settings-notification-log-loading"
+    />
 
     <ErrorAlert v-else-if="error" :message="error" :on-retry="loadDeliveries" />
 
-    <div v-else-if="items.length === 0" class="rounded-lg border bg-card p-8 text-center">
-      <p class="text-lg font-medium">{{ $t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found') }}</p>
-      <p class="mt-1 text-sm text-muted-foreground">
-        {{ $t('views.AdminNotificationDeliveryLogView.try_adjusting_filters') }}
-      </p>
-    </div>
+    <EmptyState
+      v-else-if="items.length === 0"
+      data-testid="settings-notification-log-empty"
+      :title="$t('views.AdminNotificationDeliveryLogView.no_delivery_logs_found')"
+      :description="$t('views.AdminNotificationDeliveryLogView.try_adjusting_filters')"
+    />
 
     <template v-else>
       <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
@@ -94,7 +104,7 @@
               </td>
               <td class="px-4 py-3">
                 <span :class="statusBadge(entry.status)" class="capitalize">
-                  {{ entry.status }}
+                  {{ statusLabel(entry.status) }}
                 </span>
               </td>
               <td class="px-4 py-3 text-sm text-muted-foreground">{{ entry.attempt_count }}</td>
@@ -113,7 +123,7 @@
         <button type="button"
           :disabled="cursorStack.length === 0"
           data-testid="settings-notification-log-previous"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToPreviousPage()"
         >
           {{ $t('views.AdminNotificationDeliveryLogView.previous') }}
@@ -124,7 +134,7 @@
         <button type="button"
           :disabled="!nextCursor"
           data-testid="settings-notification-log-next"
-          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
+          class="rounded-lg border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30 disabled:cursor-not-allowed"
           @click="goToNextPage()"
         >
           {{ $t('views.AdminNotificationDeliveryLogView.next') }}
@@ -136,13 +146,20 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '../lib/api/client'
+import type { paths } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
 import PageHeader from '../components/shared/PageHeader.vue'
-import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
+import TableSkeleton from '../components/shared/TableSkeleton.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
+import EmptyState from '../components/shared/EmptyState.vue'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
+
+const { t } = useI18n()
+
+type DeliveryLogQuery = NonNullable<paths['/api/v1/admin/notifications/deliveries']['get']>['parameters']['query']
 
 const cursorStack = ref<(string | null)[]>([])
 const currentCursor = ref<string | null>(null)
@@ -150,13 +167,13 @@ const nextCursor = ref<string | null>(null)
 
 const { loading, error, data: responseData, load: loadDeliveries } = useDataFetch(
   async () => {
-    const params: Record<string, unknown> = { limit: 50 }
+    const params: DeliveryLogQuery = { limit: 50 }
     if (currentCursor.value) params.cursor = currentCursor.value
     if (filterStatus.value !== '__all__') params.status = filterStatus.value
     if (filterDateFrom.value) params.from = filterDateFrom.value
     if (filterDateTo.value) params.to = filterDateTo.value
     const res = await api.GET('/api/v1/admin/notifications/deliveries', {
-      params: { query: params as any },
+      params: { query: params },
     })
     if (res.data) {
       nextCursor.value = res.data.next_cursor ?? null
@@ -189,6 +206,16 @@ function statusBadge(status: string): string {
   if (status === 'dead_lettered') return 'badge badge-context-slate'
   if (status === 'pending') return 'badge badge-status-warning'
   return 'badge badge-context-slate'
+}
+
+// I18N-1 (ux-conformance): the status column shows a translated label, never
+// the raw API value (e.g. "dead_lettered"). All keys already exist.
+function statusLabel(status: string): string {
+  if (status === 'delivered') return t('views.SettingsNotificationLogView.delivered')
+  if (status === 'failed') return t('views.SettingsNotificationLogView.failed')
+  if (status === 'dead_lettered') return t('views.AdminNotificationDeliveryLogView.dead_lettered')
+  if (status === 'pending') return t('views.AdminNotificationDeliveryLogView.pending')
+  return status
 }
 
 function goToPreviousPage() {

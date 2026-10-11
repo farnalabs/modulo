@@ -14,6 +14,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import ParameterSchemasView from '../views/ParameterSchemasView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 
 async function flush() {
@@ -228,6 +229,17 @@ describe('ParameterSchemasView — editor', () => {
     await flush()
     expect(wrapper.text()).toContain('name conflict')
     expect(wrapper.text()).not.toContain('Schema saved as new version.')
+
+    // FAR-1669 prove-the-fix: saveError must render through the SHARED
+    // ErrorAlert — the pre-conversion bespoke div also showed the message
+    // under the same markup, so findComponent is what fails on a revert.
+    // Exactly one error surface, and it is non-retryable: the user fixes the
+    // form and clicks Save again (an automatic Retry could double-create).
+    const alerts = wrapper.findAllComponents(ErrorAlert)
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].props('retryable')).toBe(false)
+    expect(alerts[0].text()).toContain('name conflict')
+    expect(alerts[0].find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('creates a new schema via POST when no schema is being edited (new-schema path)', async () => {

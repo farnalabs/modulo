@@ -463,166 +463,195 @@ class ConnectorHub:
             self._redactors.clear()
             fetch_scope: set[str] | None = set(allowed_connectors) if allowed_connectors is not None else None
             for ci in instances:
-                if fetch_scope is not None and not _in_fetch_scope(ci, fetch_scope):
-                    continue
-                try:
-                    try:
-                        raw_str = await asyncio.wait_for(
-                            self._secrets_backend.get_secret(str(ci.id)),
-                            timeout=30.0,
-                        )
-                    except KeyError:
-                        # Fall back to credentials_ciphertext column
-                        ciphertext = getattr(ci, "credentials_ciphertext", None)
-                        if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
-                            try:
-                                from cryptography.fernet import Fernet
-
-                                from modulo.settings import get_settings
-
-                                _settings = get_settings()
-                                f = Fernet(_settings.fernet_key.encode())
-                                plaintext = f.decrypt(ciphertext).decode("utf-8")
-                                # Multi-field creds round-trip: a JSON dict in the
-                                # ciphertext is used as-is (REST auth_mode/token/
-                                # api_key/...); a bare scalar is wrapped under the
-                                # connector type's own single credential key
-                                # (FAR-496 read-side heal — see
-                                # _bare_credential_key), falling back to the
-                                # legacy single api_key wrapper for unlisted types.
-                                try:
-                                    parsed_plain = json.loads(plaintext)
-                                except json.JSONDecodeError:
-                                    parsed_plain = None
-                                if isinstance(parsed_plain, dict):
-                                    raw_str = plaintext
-                                else:
-                                    # Wrap the bare scalar under the connector
-                                    # type's OWN credential key so token-keyed
-                                    # types (github, linear, slack, ...) heal
-                                    # instead of failing with
-                                    # "Missing credential key 'token'" (FAR-496).
-                                    cred_key = _bare_credential_key(ci.connector_type_id)
-                                    raw_str = json.dumps({cred_key: plaintext})
-                            except Exception:
-                                logger.warning(
-                                    "Failed to decrypt credentials_ciphertext for connector %s", ci.id, exc_info=True
-                                )
-                                raise ConnectorDecryptError(ci.id) from None
-                        else:
-                            raw_str = "{}"
-                    if raw_str is None:
-                        raw_str = "{}"
-                    try:
-                        parsed = json.loads(raw_str)
-                    except json.JSONDecodeError as exc:
-                        raise ConnectorDecryptError(ci.id) from exc
-                    if not isinstance(parsed, dict):
-                        raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
-                    creds: dict[str, Any] = parsed
-                    # FAR-1651Fix3: bind a redactor to the decrypted creds
-                    # BEFORE attempting the build. Exceptions raised below (in
-                    # _build_connector, e.g. a stem check that echoes
-                    # ``auth_target``) and any later health-sweep error on this
-                    # instance redact through the connector's own redactor —
-                    # the reflected-auth-header wire forms (_.basic b64) are
-                    # NOT covered by raw credential values, which is precisely
-                    # what _record_skip / the health sweep must scrub.
-                    self._redactors[ci.id] = CredentialRedactor.from_creds(creds)
-                    connector = _build_connector(
-                        ci.connector_type_id,
-                        ci.config_json,
-                        creds,
-                        runtime_provider=self._runtime_provider,
-                        runtime_provider_hub=self._runtime_provider_hub,
-                        # NOTE (FAR-439 trade-off): the shared Redis client is
-                        # constructed for EVERY connector row here, not only for
-                        # rate-limited REST connectors. A malformed ``redis_url``
-                        # therefore fail-closes runs whose connectors would never
-                        # touch the shared budget (GitHub / Linear / non-rate-limited
-                        # REST). This is accepted deliberately: a misconfigured
-                        # Redis URL is a fleet-wide configuration error and must fail
-                        # loud rather than silently per-process for some connectors
-                        # and shared for others. ``get_settings()`` is re-read here
-                        # after the executor already read it; the cache makes this a
-                        # cheap lookup, not a second DB round-trip.
-                        redis_client=self._shared_redis_client(),
-                        tenant_id=str(self._org_id) if self._org_id else None,
-                    )
-                    # FAR-1564: the raw column is passed through unchanged —
-                    # ``None``/``[]`` mean UNRESTRICTED (the unset value every
-                    # REST/MCP/UI-created connector stores), a non-empty list is
-                    # the allowlist. ConnectorACL owns that interpretation.
-                    # FAR-1616: the instance's OWN type is threaded in so a
-                    # mis-typed legacy allowlist entry (``github.write`` on a
-                    # filesystem connector) is REJECTED (fail closed) instead
-                    # of granting bare ``write`` on the wrong surface.
-                    acl = ConnectorACL(
-                        visibility=ci.visibility,
-                        allowed_operations=ci.allowed_operations,
-                        connector_type_id=ci.connector_type_id,
-                    )
-                    traced = _TracedConnector(
-                        connector,
-                        tracer=self._tracer,
-                        org_id=self._org_id,
-                        acl=acl,
-                    )
-                    self._connectors[ci.id] = traced
-                    self._acls[ci.id] = acl
-                    self.healthy.add(ci.id)
-                except (
-                    ValueError,
-                    TypeError,
-                    KeyError,
-                    OSError,
-                ) as exc:
-                    # FAR-495: record the degraded marker (skip) so callers can
-                    # persist it. FAR-465: dedup the skip-warning so one
-                    # misconfigured connector does not flood worker logs with full
-                    # tracebacks on every initialise(). Check-and-add is
-                    # synchronous (no await between) so it is race-free under
-                    # asyncio.
-                    # FAR-495: record the degraded marker so callers can persist
-                    # it. FAR-465: dedup the skip-warning so one misconfigured
-                    # connector does not flood worker logs with full tracebacks
-                    # on every initialise(). Check-and-add is synchronous (no
-                    # await between) so it is race-free under asyncio.
-                    self._record_skip(ci, exc)
-                    skip_key = (str(ci.id), ci.connector_type_id, type(exc).__name__ + ": " + str(exc))
-                    if skip_key in _SKIP_WARN_SEEN:
-                        logger.warning(
-                            "Skipping connector %s (%s) (repeat; full traceback logged earlier)",
-                            ci.id,
-                            ci.connector_type_id,
-                        )
-                    else:
-                        logger.warning(
-                            "Skipping connector %s (%s)",
-                            ci.id,
-                            ci.connector_type_id,
-                            exc_info=True,
-                        )
-                        _SKIP_WARN_SEEN.add(skip_key)
-                except SharedBudgetUnavailableError:
-                    # A configured-but-unconstructable shared Redis client is a
-                    # hard config error (FAR-439): degrade to the local bucket
-                    # would reconstruct the fleet-wide fail-open. Propagate so the
-                    # run fails closed (loudly) instead of silently mis-limiting.
-                    raise
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    # FAR-495: unexpected failures land in `skipped` too — every
-                    # skipped instance must reach the degraded-marker persist,
-                    # regardless of failure class.
-                    self._record_skip(ci, exc)
-                    logger.exception(
-                        "Unexpected error skipping connector %s (%s) — programming bug",
-                        ci.id,
-                        ci.connector_type_id,
-                    )
+                await self._initialise_one(ci, fetch_scope)
             self._initialised = True
+
+    async def _initialise_one(self, ci: ConnectorInstance, fetch_scope: set[str] | None) -> None:
+        """Initialise a single instance within an ``initialise()`` pass.
+
+        Out-of-scope instances (FAR-418 fetch scoping) are skipped before any
+        credential is decrypted. Failures are classified exactly as the
+        monolithic ``initialise`` loop did:
+
+        - ``ValueError``/``TypeError``/``KeyError``/``OSError`` (incl.
+          :class:`ConnectorDecryptError`, a ``ValueError``): recorded as a
+          skip (FAR-495) with a deduplicated warning (FAR-465).
+        - :class:`SharedBudgetUnavailableError`: a configured-but-unconstructable
+          shared Redis client is a hard config error (FAR-439) — propagate so
+          the run fails closed (loudly) instead of silently mis-limiting;
+          degrading to the local bucket would reconstruct the fleet-wide fail-open.
+        - ``asyncio.CancelledError``: re-raised untouched.
+        - any other ``Exception``: recorded as a skip too (FAR-495 — every
+          skipped instance must reach the degraded-marker persist, regardless
+          of failure class) and logged as a programming bug.
+        """
+        if fetch_scope is not None and not _in_fetch_scope(ci, fetch_scope):
+            return
+        try:
+            creds = await self._decrypt_credentials(ci)
+            self._register_connector(ci, creds)
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            OSError,
+        ) as exc:
+            # FAR-495: record the degraded marker so callers can persist it.
+            # FAR-465: dedup the skip-warning so one misconfigured connector
+            # does not flood worker logs with full tracebacks on every
+            # initialise(). Check-and-add is synchronous (no await between)
+            # so it is race-free under asyncio.
+            self._record_skip(ci, exc)
+            self._warn_skip_once(ci, exc)
+        except SharedBudgetUnavailableError:
+            raise
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._record_skip(ci, exc)
+            logger.exception(
+                "Unexpected error skipping connector %s (%s) — programming bug",
+                ci.id,
+                ci.connector_type_id,
+            )
+
+    def _warn_skip_once(self, ci: ConnectorInstance, exc: Exception) -> None:
+        """FAR-465: log a skip warning once per (id, type, message); repeats get a one-liner."""
+        skip_key = (str(ci.id), ci.connector_type_id, type(exc).__name__ + ": " + str(exc))
+        if skip_key in _SKIP_WARN_SEEN:
+            logger.warning(
+                "Skipping connector %s (%s) (repeat; full traceback logged earlier)",
+                ci.id,
+                ci.connector_type_id,
+            )
+        else:
+            # ``exc_info=exc`` (not ``True``): the helper is no longer lexically
+            # inside the ``except`` block, so pass the caught exception
+            # explicitly — logging formats the same traceback.
+            logger.warning(
+                "Skipping connector %s (%s)",
+                ci.id,
+                ci.connector_type_id,
+                exc_info=exc,
+            )
+            _SKIP_WARN_SEEN.add(skip_key)
+
+    async def _decrypt_credentials(self, ci: ConnectorInstance) -> dict[str, Any]:
+        """Fetch and parse an instance's credentials into a dict.
+
+        Raises :class:`ConnectorDecryptError` on unparseable or non-dict
+        credential text. A ``None`` secret (or ciphertext fallback) becomes
+        ``"{}"`` — an empty-creds dict, matching the pre-extraction path.
+        """
+        raw_str = await self._fetch_raw_credentials(ci)
+        if raw_str is None:
+            raw_str = "{}"
+        try:
+            parsed = json.loads(raw_str)
+        except json.JSONDecodeError as exc:
+            raise ConnectorDecryptError(ci.id) from exc
+        if not isinstance(parsed, dict):
+            raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
+        creds: dict[str, Any] = parsed
+        return creds
+
+    async def _fetch_raw_credentials(self, ci: ConnectorInstance) -> str | None:
+        """Fetch the raw credential text: secrets backend first, ciphertext column on KeyError."""
+        try:
+            return await asyncio.wait_for(
+                self._secrets_backend.get_secret(str(ci.id)),
+                timeout=30.0,
+            )
+        except KeyError:
+            return self._decrypt_ciphertext_credentials(ci)
+
+    def _decrypt_ciphertext_credentials(self, ci: ConnectorInstance) -> str:
+        """FAR-496 read-side heal: decrypt the ``credentials_ciphertext`` column fallback.
+
+        A JSON dict in the ciphertext is used as-is (REST auth_mode/token/
+        api_key/...); a bare scalar is wrapped under the connector type's own
+        single credential key (see ``_bare_credential_key``), falling back to
+        the legacy single api_key wrapper for unlisted types — so token-keyed
+        types (github, linear, slack, ...) heal instead of failing with
+        "Missing credential key 'token'". No ciphertext (or a non-bytes /
+        empty value) yields ``"{}"``. A decrypt/parse failure logs and raises
+        :class:`ConnectorDecryptError` — it never silently degrades.
+        """
+        ciphertext = getattr(ci, "credentials_ciphertext", None)
+        if not (ciphertext and isinstance(ciphertext, bytes) and ciphertext != b""):
+            return "{}"
+        try:
+            from cryptography.fernet import Fernet
+
+            from modulo.settings import get_settings
+
+            _settings = get_settings()
+            f = Fernet(_settings.fernet_key.encode())
+            plaintext = f.decrypt(ciphertext).decode("utf-8")
+            try:
+                parsed_plain = json.loads(plaintext)
+            except json.JSONDecodeError:
+                parsed_plain = None
+            if isinstance(parsed_plain, dict):
+                return plaintext
+            cred_key = _bare_credential_key(ci.connector_type_id)
+            return json.dumps({cred_key: plaintext})
+        except Exception:
+            logger.warning("Failed to decrypt credentials_ciphertext for connector %s", ci.id, exc_info=True)
+            raise ConnectorDecryptError(ci.id) from None
+
+    def _register_connector(self, ci: ConnectorInstance, creds: dict[str, Any]) -> None:
+        """Bind a redactor, build + wrap the connector, and store it with its ACL."""
+        # FAR-1651Fix3: bind a redactor to the decrypted creds BEFORE
+        # attempting the build. Exceptions raised during the build (e.g. a
+        # stem check that echoes ``auth_target``) and any later health-sweep
+        # error on this instance redact through the connector's own redactor —
+        # the reflected-auth-header wire forms (_.basic b64) are NOT covered
+        # by raw credential values, which is precisely what _record_skip / the
+        # health sweep must scrub.
+        self._redactors[ci.id] = CredentialRedactor.from_creds(creds)
+        connector = _build_connector(
+            ci.connector_type_id,
+            ci.config_json,
+            creds,
+            runtime_provider=self._runtime_provider,
+            runtime_provider_hub=self._runtime_provider_hub,
+            # NOTE (FAR-439 trade-off): the shared Redis client is
+            # constructed for EVERY connector row here, not only for
+            # rate-limited REST connectors. A malformed ``redis_url``
+            # therefore fail-closes runs whose connectors would never
+            # touch the shared budget (GitHub / Linear / non-rate-limited
+            # REST). This is accepted deliberately: a misconfigured
+            # Redis URL is a fleet-wide configuration error and must fail
+            # loud rather than silently per-process for some connectors
+            # and shared for others. ``get_settings()`` is re-read here
+            # after the executor already read it; the cache makes this a
+            # cheap lookup, not a second DB round-trip.
+            redis_client=self._shared_redis_client(),
+            tenant_id=str(self._org_id) if self._org_id else None,
+        )
+        # FAR-1564: the raw column is passed through unchanged —
+        # ``None``/``[]`` mean UNRESTRICTED (the unset value every
+        # REST/MCP/UI-created connector stores), a non-empty list is
+        # the allowlist. ConnectorACL owns that interpretation.
+        # FAR-1616: the instance's OWN type is threaded in so a
+        # mis-typed legacy allowlist entry (``github.write`` on a
+        # filesystem connector) is REJECTED (fail closed) instead
+        # of granting bare ``write`` on the wrong surface.
+        acl = ConnectorACL(
+            visibility=ci.visibility,
+            allowed_operations=ci.allowed_operations,
+            connector_type_id=ci.connector_type_id,
+        )
+        traced = _TracedConnector(
+            connector,
+            tracer=self._tracer,
+            org_id=self._org_id,
+            acl=acl,
+        )
+        self._connectors[ci.id] = traced
+        self._acls[ci.id] = acl
+        self.healthy.add(ci.id)
 
     def _get_or_raise(self, connector_id: uuid.UUID) -> ConnectorBase:
         if not self._initialised:

@@ -77,6 +77,7 @@ vi.mock('../stores/planStore', () => ({
 
 import { api } from '../lib/api/client'
 import SchemaEditorView from '../views/SchemaEditorView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 describe('SchemaEditorView', () => {
   beforeEach(() => {
@@ -621,6 +622,18 @@ describe('SchemaEditorView', () => {
     const vm = wrapper.vm as any
     expect(vm.saveError).toBeTruthy()
     expect(vm.saveError).toContain('create_failed')
+
+    // FAR-1669 prove-the-fix: saveError must render through the SHARED
+    // ErrorAlert. The old bespoke div also showed the text and offered no
+    // Retry, so `toContain` + a zero-retry count passed against the
+    // pre-conversion code — findComponent fails if the box is reverted, and
+    // the prop assertion fails if `:retryable="false"` is dropped.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('message')).toBe(vm.saveError)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.text()).toContain('create_failed')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
   it('handles version creation failure after schema is created', async () => {

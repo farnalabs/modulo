@@ -175,9 +175,13 @@
               data-testid="lifecycle-map-list-create-description"
             />
           </div>
-          <div v-if="createError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-            {{ createError }}
-          </div>
+          <!-- Create action error: no refetch loader; the Create button is
+               the retry path. -->
+          <ErrorAlert
+            v-if="createError"
+            :message="createError"
+            :retryable="false"
+          />
           <div class="flex justify-end gap-2">
             <button type="button"
               class="rounded-lg border border-input bg-background px-4 py-2 text-sm hover:bg-accent"
