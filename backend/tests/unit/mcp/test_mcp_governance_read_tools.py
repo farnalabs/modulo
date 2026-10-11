@@ -1056,7 +1056,7 @@ class TestListUsersEdgeCases(AuthContext):
         mock_session.return_value = make_session_context(AsyncMock())
         result = await list_users()
         assert result["total"] == 0
-        assert result["data"] == []
+        assert not result["data"]
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -1207,7 +1207,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
             _ctx_is_system_admin.set(False)
 
         assert "error" not in result
-        assert result["flags"] == []
+        assert not result["flags"]
         assert result["license"]["has_license_key"] is True
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
@@ -1252,7 +1252,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
             _ctx_is_system_admin.set(False)
 
         assert "error" not in result
-        assert result["flags"] == []
+        assert not result["flags"]
 
 
 class TestGetAuditLogErrorArms(AuthContext):
@@ -1372,7 +1372,7 @@ class TestListNotificationDeliveriesEdgeCases(AuthContext):
         mock_session.return_value = make_session_context(session)
 
         result = await list_notification_deliveries()
-        assert result["data"] == []
+        assert not result["data"]
         assert result["total"] == 0
         assert result["next_cursor"] is None
 
