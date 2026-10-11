@@ -266,6 +266,16 @@ async def backfill_facts(session: Any, day: date) -> int:
         ),
         else_=None,
     )
+    # FAR-707: the business-expected-outcome marker, mirrored from the run's
+    # terminal classification. The LIVE writer stamps it at finalize; this is
+    # the repair path, and without it a backfilled fact would sit at the
+    # column's NULL default forever (NULL still reads as "not benign", so the
+    # failure rate would keep counting a benign run). NULL (not False) when the
+    # classification has not landed, matching the live writer's contract.
+    benign_expr = sa.case(
+        (Run.run_classification["value"].as_string() == "benign", True),
+        else_=sa.null(),
+    )
     # ``graph_json`` is ``json`` on SQLite/MariaDB and promoted to ``jsonb`` on
     # Postgres by migration 0147 — but the promotion is non-blocking and the ORM
     # model keeps the generic ``JSON`` type, so the column type is not guaranteed
@@ -335,6 +345,7 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.total_tokens,
             duration_ms_expr.label("duration_ms"),
             Run.error_code.label("error_code"),
+            benign_expr.label("benign"),
             Run.claim_count.label("claim_count"),
             queue_wait_ms_expr.label("queue_wait_ms"),
             final_idle_ms_expr.label("final_idle_ms"),
@@ -406,6 +417,7 @@ async def backfill_facts(session: Any, day: date) -> int:
                 RunDailyFact.total_tokens,
                 RunDailyFact.duration_ms,
                 RunDailyFact.error_code,
+                RunDailyFact.benign,
                 RunDailyFact.claim_count,
                 RunDailyFact.queue_wait_ms,
                 RunDailyFact.final_idle_ms,

@@ -36,6 +36,7 @@ from modulo.core.pipeline_engine.classify import (
     PR_URL_PROVENANCE_DECLARED,
     PR_URL_PROVENANCE_MATCHED,
     PR_URL_PROVENANCE_VALUES,
+    REASON_BENIGN,
     REASON_BUDGET_EXCEEDED,
     REASON_CANCELLED,
     REASON_COMPENSATION_FAILED,
@@ -53,12 +54,15 @@ from modulo.core.pipeline_engine.classify import (
     classify_and_persist_run,
     classify_run,
     collect_pr_urls,
+    matches_benign_signature,
+    normalize_benign_signatures,
     persist_classification,
     reconcile_missing_classifications,
 )
 from modulo.core.pipeline_engine.error_codes import class_for
 from modulo.db.crud.run import update_run_status
 from modulo.db.models.base import Base
+from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.run import TERMINAL_STATUSES, Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 from tests.unit._store_seed import seed_run_blobs
@@ -1046,6 +1050,10 @@ _TABLES: list[Table] = cast(
         # FAR-583: the classification hook's blob reads go through the
         # run_node_outputs repo reader — the table must exist on this engine.
         RunNodeOutput.__table__,
+        # FAR-707: ``classify_and_persist_run`` reads the pipeline's
+        # ``benign_signatures`` config inside the same transaction, so the
+        # pipeline table must exist for the end-to-end config-wiring test.
+        Pipeline.__table__,
     ],
 )
 
@@ -1906,3 +1914,262 @@ class TestPeriodicWiring:
         record = await _read_classification(engine, run_id)
         assert record is not None
         assert record["value"] == "no_delivery"
+
+
+# ---------------------------------------------------------------------------
+# FAR-707 — business-expected ("benign") outcome classification
+# ---------------------------------------------------------------------------
+
+_MERGE_QUEUE_SIGNATURES = [
+    {"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+    {"error_code": "agent.no_op"},
+]
+
+
+class TestBenignSignatures:
+    """The EXPLICIT per-pipeline config shape — never inference (FAR-707)."""
+
+    def test_normalise_keeps_only_well_formed_entries(self) -> None:
+        """A malformed entry is DROPPED, never raised: a config defect must
+        degrade to "no benign outcomes" (the historical counting), never break
+        a terminalization transaction."""
+        raw = [
+            {"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+            {"error_code": "agent.no_op"},  # detail key optional
+            {"error_code": "  agent.stall  ", "error_detail_contains": "  quiet  "},  # stripped
+            {"error_code": ""},  # empty code -> dropped
+            {"error_detail_contains": "no code"},  # missing code -> dropped
+            {"error_code": 123},  # non-string code -> dropped
+            {"error_code": "agent.failed", "error_detail_contains": 5},  # non-string detail -> dropped
+            "not-a-dict",
+            None,
+        ]
+        assert normalize_benign_signatures(raw) == [
+            {"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+            {"error_code": "agent.no_op", "error_detail_contains": ""},
+            {"error_code": "agent.stall", "error_detail_contains": "quiet"},
+        ]
+
+    @pytest.mark.parametrize(
+        "raw",
+        [None, {}, "nope", 3, [], [{"nope": 1}], [{"error_code": None}], [{"error_code": "  "}], [None, 7]],
+        ids=[
+            "none",
+            "empty-dict",
+            "string",
+            "int",
+            "empty-list",
+            "unknown-keys",
+            "null-code",
+            "blank-code",
+            "non-dict-entries",
+        ],
+    )
+    def test_normalise_degrades_every_unusable_shape_to_empty(self, raw: Any) -> None:
+        assert not normalize_benign_signatures(raw)
+
+    def test_match_requires_a_signature_list_and_an_error_code(self) -> None:
+        assert not matches_benign_signature(None, error_code="agent.failed", error_detail="Rebase conflict")
+        assert not matches_benign_signature([], error_code="agent.failed", error_detail="Rebase conflict")
+        # An empty/absent error code has nothing to key on.
+        assert not matches_benign_signature(_MERGE_QUEUE_SIGNATURES, error_code=None, error_detail="Rebase conflict")
+        assert not matches_benign_signature(_MERGE_QUEUE_SIGNATURES, error_code="  ", error_detail="Rebase conflict")
+
+    def test_match_is_exact_on_code_and_case_insensitive_substring_on_detail(self) -> None:
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        # Exact code + case-insensitive substring.
+        assert matches_benign_signature(sigs, error_code="agent.failed", error_detail="Rebase conflict")
+        assert matches_benign_signature(sigs, error_code="agent.failed", error_detail="merge stopped: REBASE CONFLICT")
+        # A different code never matches, even with a matching detail.
+        assert not matches_benign_signature(sigs, error_code="node_cancelled", error_detail="Rebase conflict")
+        # Substring, not equality.
+        assert not matches_benign_signature(sigs, error_code="agent.failed", error_detail="Conflict")
+        # An empty detail key matches ANY detail for that code.
+        assert matches_benign_signature(sigs, error_code="agent.no_op", error_detail="nothing to merge")
+        assert matches_benign_signature(sigs, error_code="agent.no_op", error_detail=None)
+
+
+class TestBenignClassification:
+    """The decision-table escape: countable failure -> ``benign``, opt-in only."""
+
+    def test_failed_with_matching_signature_is_benign(self) -> None:
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        result = classify_run(
+            "failed",
+            "agent.failed",
+            error_detail="Rebase conflict",
+            benign_signatures=sigs,
+        )
+        assert result.value == RunClassificationValue.benign
+        assert result.reason == REASON_BENIGN
+
+    def test_without_signatures_a_failed_run_still_counts(self) -> None:
+        """The DEFAULT is byte-identical to the pre-FAR-707 decision table."""
+        result = classify_run(
+            "failed",
+            "agent.failed",
+            error_detail="Rebase conflict",
+            benign_signatures=None,
+        )
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_DELIVERY
+
+    def test_every_countable_failure_status_can_be_benign(self) -> None:
+        sigs = normalize_benign_signatures([{"error_code": "agent.failed"}])
+        for status in ("failed", "eval_failed", "stalled", "compensation_failed"):
+            result = classify_run(status, "agent.failed", benign_signatures=sigs)
+            assert result.value == RunClassificationValue.benign, status
+            assert result.reason == REASON_BENIGN, status
+
+    def test_a_signature_never_downgrades_a_delivery(self) -> None:
+        """``complete`` is NOT in the countable bucket: a delivered run is
+        never a failure, so a signature cannot re-route it."""
+        sigs = normalize_benign_signatures([{"error_code": "agent.failed"}])
+        outputs = {"n1": _node_return_with_pr(_PR)}
+        result = classify_run(
+            "complete",
+            "agent.failed",
+            outputs_json=outputs,
+            telemetry_json={"n1": {}},
+            benign_signatures=sigs,
+        )
+        assert result.value == RunClassificationValue.delivered
+
+    def test_a_signature_never_relabels_an_excluded_status(self) -> None:
+        """``excluded`` statuses are already never counted; a signature must not
+        silently rewrite their operator-visible reason."""
+        sigs = normalize_benign_signatures([{"error_code": "agent.failed"}])
+        result = classify_run("cancelled", "agent.failed", benign_signatures=sigs)
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason == REASON_CANCELLED
+
+    def test_a_signature_never_escapes_the_non_terminal_guard(self) -> None:
+        sigs = normalize_benign_signatures([{"error_code": "agent.failed"}])
+        result = classify_run("running", "agent.failed", benign_signatures=sigs)
+        assert result.value == RunClassificationValue.excluded
+        assert result.reason.startswith("unrecognized_status")
+
+    def test_no_match_falls_through_to_the_normal_reason(self) -> None:
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        result = classify_run("failed", "agent.failed", error_detail="Sandbox died", benign_signatures=sigs)
+        assert result.value == RunClassificationValue.no_delivery
+        assert result.reason == REASON_NO_DELIVERY
+
+    def test_the_benign_record_is_the_standard_eight_key_shape(self) -> None:
+        sigs = normalize_benign_signatures(_MERGE_QUEUE_SIGNATURES)
+        record = classify_run(
+            "failed",
+            "agent.failed",
+            error_detail="Rebase conflict",
+            benign_signatures=sigs,
+        ).to_dict()
+        assert set(record) == {
+            "value",
+            "reason",
+            "delivered_pr_urls",
+            "computed_at",
+            "work_intact",
+            "declared_success_nodes",
+            "pr_url_provenance",
+            "delivery_confidence",
+        }
+        assert record["value"] == "benign"
+        assert record["reason"] == "benign_outcome"
+
+    def test_db_layer_benign_literal_stays_in_lockstep_with_the_enum(self) -> None:
+        """ANTI-DRIFT (FAR-707): ``db.crud.run``'s stats exclusion keys off a
+        LITERAL (the db layer must not import the classifier on the CRUD hot
+        path), so this test pins the two spellings together — the same
+        convention the ``unclassified`` marker lockstep test uses."""
+        from modulo.db.crud.run import _RUN_CLASSIFICATION_BENIGN
+
+        assert RunClassificationValue.benign.value == _RUN_CLASSIFICATION_BENIGN
+        assert RunClassificationValue.benign.value == "benign"
+
+
+class TestBenignConfigWiring:
+    """End-to-end: the classifier reads the PIPELINE's stored signatures."""
+
+    async def _seed_pipeline(
+        self,
+        session: AsyncSession,
+        *,
+        signatures: Any,
+    ) -> None:
+        session.add(
+            Pipeline(
+                id=_PIPELINE,
+                organisation_id=_ORG,
+                name="Merge Queue",
+                account_id=uuid.uuid4(),
+                benign_signatures=signatures,
+            )
+        )
+        await session.flush()
+
+    async def test_terminalization_reads_the_pipeline_signatures(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """PROVE THE FIX: a failed agent.failed run on a pipeline configured
+        with the rebase-conflict signature classifies ``benign``; the same run
+        on an unconfigured pipeline still classifies ``no_delivery``."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(session, signatures=_MERGE_QUEUE_SIGNATURES)
+            run = await _seed_run(session, run_id, status="failed", error_code="agent.failed")
+            run.error_detail = "Rebase conflict"
+            await session.flush()
+            assert await classify_and_persist_run(session, run) is True
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "benign"
+        assert record["reason"] == "benign_outcome"
+
+    async def test_an_unconfigured_pipeline_keeps_the_historical_verdict(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(session, signatures=None)
+            run = await _seed_run(session, run_id, status="failed", error_code="agent.failed")
+            run.error_detail = "Rebase conflict"
+            await session.flush()
+            assert await classify_and_persist_run(session, run) is True
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "no_delivery"
+
+    async def test_a_malformed_stored_config_never_blocks_terminalization(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+    ) -> None:
+        """Fail-open: a garbage stored value logs and classifies as before —
+        it must never raise out of the terminalization hook."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(session, signatures="not-a-list")
+            run = await _seed_run(session, run_id, status="failed", error_code="agent.failed")
+            run.error_detail = "Rebase conflict"
+            await session.flush()
+            assert await classify_and_persist_run(session, run) is True
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        assert record["value"] == "no_delivery"
+
+    async def test_non_terminal_runs_never_touch_the_signature_query(
+        self,
+        session: AsyncSession,
+    ) -> None:
+        """The signature read is gated on a COUNTABLE failure status carrying an
+        error code, so a ``complete`` terminalization pays no extra statement."""
+        from modulo.core.pipeline_engine.classify import _load_benign_signatures
+
+        run = SimpleNamespace(status="complete", error_code="agent.failed", pipeline_id=_PIPELINE, organisation_id=_ORG)
+        assert not await _load_benign_signatures(session, run)
+        run = SimpleNamespace(status="failed", error_code=None, pipeline_id=_PIPELINE, organisation_id=_ORG)
+        assert not await _load_benign_signatures(session, run)

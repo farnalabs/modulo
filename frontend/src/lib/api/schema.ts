@@ -16226,6 +16226,10 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /** Benign Signatures */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
@@ -16366,6 +16370,13 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Benign Signatures
+             * @description Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). Shape: [{"error_code": "<exact runs.error_code>", "error_detail_contains": "<case-insensitive substring, optional>"}]. A terminal failure whose (error_code, error_detail) matches one is classified `benign` — a distinct class excluded from analytics failure rates and error-code clusters — instead of counting as a failure. Null clears (no signatures = historical behaviour).
+             */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included). Send null to disable; omit to leave unchanged.

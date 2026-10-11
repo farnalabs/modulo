@@ -355,6 +355,32 @@ async def _snapshot_graph_dimensions(
     return _derive_graph_dimensions(graph_json)
 
 
+def _fact_is_benign(run: Run) -> bool | None:
+    """The fact's ``benign`` marker from the run's terminal classification (FAR-707).
+
+    ``True`` when ``runs.run_classification`` carries value ``benign`` (a
+    business-expected outcome — an explicit per-pipeline benign signature
+    matched at terminalization), ``False`` when the run IS classified but is
+    not benign, and ``None`` when the run has no usable classification record
+    yet — a raw-SQL terminalizer writes its fact BEFORE the reconcile sweep
+    backfills the classification, and a partial/malformed record must not be
+    read as a confident verdict. Every analytics reader treats NULL as "not
+    benign" (the historical counting), so this degrades fail-open.
+
+    The enum is imported lazily: this module is on the finalize hot path and
+    the classifier pulls in the pipeline-engine package.
+    """
+    record = getattr(run, "run_classification", None)
+    if not isinstance(record, dict):
+        return None
+    value = record.get("value")
+    if not isinstance(value, str):
+        return None
+    from modulo.core.pipeline_engine.classify import RunClassificationValue
+
+    return value == RunClassificationValue.benign.value
+
+
 async def record_run_facts(session: AsyncSession, run: Run) -> None:
     """Upsert the daily fact for a terminal run — NEVER raises (fail-open).
 
@@ -423,6 +449,10 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "total_tokens": run.total_tokens,
             "duration_ms": _fact_duration_ms(run),
             "error_code": getattr(run, "error_code", None),
+            # FAR-707: business-expected-outcome marker copied from the run's
+            # terminal classification so the analytics read path can drop it
+            # from failure rates without joining ``runs`` (ADR 020).
+            "benign": _fact_is_benign(run),
             "claim_count": getattr(run, "claim_count", None),
             "queue_wait_ms": _fact_queue_wait_ms(run),
             "final_idle_ms": _fact_final_idle_ms(run),
@@ -483,6 +513,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "created_at": stmt.excluded.created_at,
                 "duration_ms": stmt.excluded.duration_ms,
                 "error_code": stmt.excluded.error_code,
+                "benign": stmt.excluded.benign,
                 "claim_count": stmt.excluded.claim_count,
                 "queue_wait_ms": stmt.excluded.queue_wait_ms,
                 "final_idle_ms": stmt.excluded.final_idle_ms,

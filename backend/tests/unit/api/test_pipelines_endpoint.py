@@ -20,6 +20,7 @@ from modulo.api.routes.pipelines import (
     HITL_DESCRIPTION_MIN_LENGTH,
     HitlReviewConfig,
     PipelineGraphNode,
+    PipelineUpdate,
     _resolve_graph_references,
 )
 from modulo.auth.dependencies import get_current_user
@@ -3035,3 +3036,47 @@ class TestCompositeValidation:
             },
         )
         assert any(i["code"] == "COMPOSITE_VALIDATION_REGEX_INVALID" for i in issues)
+
+
+class TestBenignSignaturesSurface:
+    """FAR-707 — the per-pipeline benign-signature config's wire surface.
+
+    Strict on the WRITE side (a typo cannot silently disable a signature the
+    operator believes is active) and normalising (the same strip the storage
+    reader applies) so what is stored is what the classifier matches.
+    """
+
+    def test_valid_signatures_round_trip(self) -> None:
+        req = PipelineUpdate.model_validate(
+            {
+                "benign_signatures": [
+                    {"error_code": "agent.failed", "error_detail_contains": "  rebase conflict "},
+                    {"error_code": "agent.no_op"},
+                ]
+            }
+        )
+        assert req.benign_signatures == [
+            {"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+            {"error_code": "agent.no_op", "error_detail_contains": ""},
+        ]
+
+    def test_null_clears_the_signatures(self) -> None:
+        assert PipelineUpdate.model_validate({"benign_signatures": None}).benign_signatures is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not-a-list",
+            {"error_code": "agent.failed"},
+            [{"no_error_code": True}],
+            [{"error_code": ""}],
+            [{"error_code": "agent.failed", "error_detail_contains": 5}],
+            [{"error_code": None}],
+            ["not-a-dict"],
+        ],
+    )
+    def test_malformed_signatures_are_rejected_on_the_wire(self, payload: Any) -> None:
+        """422, never a silent drop: an entry the operator believes is active
+        must not vanish from the stored config."""
+        with pytest.raises(ValidationError):
+            PipelineUpdate.model_validate({"benign_signatures": payload})
