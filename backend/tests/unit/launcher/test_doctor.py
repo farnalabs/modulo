@@ -1056,3 +1056,9 @@ def test_probe_cloud_sync_hit_exhausts_ancestor_walk(tmp_path: Path) -> None:
         deep = deep / name
     deep.mkdir(parents=True)
     assert doctor_module._probe_cloud_sync_hit(tmp_path, deep) is None
+
+
+def test_probe_cloud_sync_hit_stops_at_filesystem_root(tmp_path: Path) -> None:
+    """The ancestor walk stops at the filesystem root (``parent == current``)
+    instead of stepping past it -> honest None, exercising the ``break`` arm."""
+    assert doctor_module._probe_cloud_sync_hit(tmp_path, Path("/")) is None
