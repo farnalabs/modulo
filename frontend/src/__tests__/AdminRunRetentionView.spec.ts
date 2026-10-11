@@ -333,9 +333,63 @@ describe('AdminRunRetentionView', () => {
     const error = wrapper.find('[data-testid="admin-run-retention-error"]')
     expect(error.exists()).toBe(true)
     expect(error.text()).toContain('export boom')
+    // Export/purge action errors carry no refetch loader — no Retry control.
+    expect(error.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
 
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
+  })
+
+  it('surfaces a purge error when the purge endpoint fails', async () => {
+    ;(api.POST as Mock).mockResolvedValue({ data: undefined, error: { detail: 'purge boom' } })
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="admin-run-retention-purge"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const confirmBtn = document.body.querySelector('[data-testid="admin-run-retention-purge-confirm"]') as HTMLElement
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn.click()
+    for (let i = 0; i < 5; i++) await flushPromises()
+
+    const error = wrapper.find('[data-testid="admin-run-retention-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('purge boom')
+    // Export/purge action errors carry no refetch loader — no Retry control.
+    expect(error.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
+  it('surfaces a candidates load error with Retry and recovers on retry', async () => {
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/pipelines') {
+        return { data: mockPipelines, error: undefined }
+      }
+      if (url === '/api/v1/admin/run-retention/candidates') {
+        return { data: undefined, error: { detail: 'candidates boom' } }
+      }
+      return { data: null, error: undefined }
+    })
+    const wrapper = await mountView()
+
+    const errorMsg = wrapper.find('[data-testid="admin-run-retention-error-msg"]')
+    expect(errorMsg.exists()).toBe(true)
+    expect(errorMsg.text()).toContain('candidates boom')
+
+    const retry = errorMsg.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    ;(api.GET as Mock).mockImplementation(async (url: string) => {
+      if (url === '/api/v1/pipelines') {
+        return { data: mockPipelines, error: undefined }
+      }
+      return { data: mockCandidates, error: undefined }
+    })
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="admin-run-retention-error-msg"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="admin-run-retention-total-runs"]').exists()).toBe(true)
   })
 
   it('uses the server-side terminal total (not the page-capped count) in the confirm dialog', async () => {

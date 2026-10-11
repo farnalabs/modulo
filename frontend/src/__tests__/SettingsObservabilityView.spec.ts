@@ -42,6 +42,7 @@ vi.mock('../lib/api/client', () => ({
 
 import { api } from '../lib/api/client'
 import SettingsObservabilityView from '../views/SettingsObservabilityView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const DEFAULT_GET_RESPONSE = {
   data: {
@@ -186,5 +187,45 @@ describe('SettingsObservabilityView', () => {
 
     expect(wrapper.find('[data-testid="settings-observability-form-success"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Settings saved successfully')
+  })
+
+  it('shows the form-error ErrorAlert (no retry) when saving settings fails', async () => {
+    vi.mocked(api.PUT as unknown as () => Promise<unknown>).mockResolvedValue({
+      data: undefined,
+      error: { status: 500, detail: 'boom' },
+    })
+
+    const wrapper = mount(SettingsObservabilityView, {
+      global: {
+        plugins: [createPinia()],
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+      },
+    })
+    await nextTick()
+    await nextTick()
+
+    const saveBtn = wrapper.find('[data-testid="settings-observability-save"]')
+    await saveBtn.trigger('submit')
+    await nextTick()
+    await nextTick()
+
+    const formError = wrapper.find('[data-testid="settings-observability-form-error"]')
+    expect(formError.exists()).toBe(true)
+    expect(formError.text()).toContain('Save failed')
+    expect(formError.text()).toContain('boom')
+
+    // The form error must be the SHARED ErrorAlert component, not a bespoke
+    // <div> — this fails if the conversion is reverted (a reverted view mounts
+    // no ErrorAlert at all here, because the load succeeded).
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.element).toBe(formError.element)
+    expect(alert.text()).toContain('Save failed')
+    expect(alert.text()).toContain('boom')
+
+    // Save-action errors carry no refetch loader, so the alert is explicitly
+    // non-retryable (:retryable="false") and renders no Retry control.
+    expect(alert.props('retryable')).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 })
