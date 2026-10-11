@@ -257,6 +257,222 @@ def build_desired_views(
     return desired, blocked
 
 
+def _graph_write_required(
+    graph: dict[str, Any] | None,
+    current_graph: dict[str, Any],
+    *,
+    refresh_secrets: bool,
+) -> bool:
+    """FAR-1232: decide whether the declared graph must be re-sent on PATCH.
+
+    Hashes BOTH sides through the same symmetric redaction the plan hash
+    used (``strip_secret_shaped_graph``) — comparing the raw declaration
+    against the API-masked read would re-send the graph (and churn a
+    snapshot) on every updated-pipeline run: a masked placeholder means
+    "unchanged" on the same instance and is never re-sent as a literal.
+    With ``refresh_secrets``, a secret-declaring graph is re-sent outright
+    (the TRUE declared values write through; the masked read is never the
+    write payload).
+    """
+    if graph is None:
+        return False
+    if canonical_hash(strip_secret_shaped_graph(graph)) != canonical_hash(strip_secret_shaped_graph(current_graph)):
+        return True
+    return bool(refresh_secrets and graph_declares_secrets(graph))
+
+
+def _create_payload(
+    entity: PipelineEntity,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+) -> dict[str, Any]:
+    """Build the POST /pipelines body for a declared pipeline."""
+    payload: dict[str, Any] = {
+        "name": entity.name,
+        "description": entity.description,
+        "max_concurrent_runs": entity.max_concurrent_runs,
+        # Always sent: managed_view unconditionally compares this key, so the
+        # create path must carry the declared value (explicit null = no
+        # override).
+        "stdout_retention_config": entity.stdout_retention_config,
+        # Always sent (incl. explicit null): managed unconditionally like
+        # stdout_retention_config — omission means null (inherit
+        # org/instance default).
+        "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        "max_autonomy_level": entity.max_autonomy_level,
+        "business_owner_id": business_owner_id,
+        "reliability_owner_id": reliability_owner_id,
+    }
+    if entity.manages_circuit_breaker:
+        payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
+    # FAR-1294: the two runtime limits are sent only when the config
+    # DECLARES them, so an omitted key falls through to the server default
+    # (300 / 3600) instead of being written as an explicit null (which
+    # PipelineCreate would reject).
+    if entity.manages_node_timeout:
+        payload["node_timeout_seconds"] = entity.node_timeout_seconds
+    if entity.manages_max_duration:
+        payload["max_duration_seconds"] = entity.max_duration_seconds
+    return payload
+
+
+def _patch_payload(
+    entity: PipelineEntity,
+    status: str,
+    *,
+    business_owner_id: str | None,
+    reliability_owner_id: str | None,
+    graph: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the PATCH /pipelines/{id} body for a declared pipeline.
+
+    *graph* is the resolved graph to write, or None when the graph must not
+    be re-sent (undeclared or unchanged — a graph write snapshots the
+    pipeline, so an unchanged graph must not churn snapshots).
+    """
+    payload: dict[str, Any] = {
+        "description": entity.description,
+        "max_concurrent_runs": entity.max_concurrent_runs,
+        # Always sent (including explicit null): the drift hash compares this
+        # key unconditionally, so the write path must be able to set AND
+        # clear it (PipelineUpdate accepts null; the PATCH route uses
+        # exclude_unset so an explicit null clears the stored override).
+        "stdout_retention_config": entity.stdout_retention_config,
+        # Always sent (including explicit null): managed unconditionally like
+        # stdout_retention_config, so the declared null must be able to CLEAR
+        # a UI/API-set per-pipeline override (PipelineUpdate accepts null).
+        "hitl_review_window_seconds": entity.hitl_review_window_seconds,
+        "business_owner_id": business_owner_id,
+        "reliability_owner_id": reliability_owner_id,
+    }
+    if status == "updated" and entity.manages_circuit_breaker:
+        payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
+    # FAR-1163/FAR-1221: send the ceiling only when DECLARED — an omitted
+    # ceiling must never clear a UI-set one as a side effect (mirrors the
+    # managed-view omission above), while a DECLARED null sends an explicit
+    # null so the REST PATCH clears the column back to "inherit the
+    # default".
+    if entity.manages_max_autonomy:
+        payload["max_autonomy_level"] = entity.max_autonomy_level
+    # FAR-1599: the environment-profile binding is sent only when DECLARED
+    # (opt-in like the ceiling above): a DECLARED id binds, a DECLARED null
+    # clears the binding, and an omitted key is never sent so a UI/API-set
+    # binding survives untouched. PipelineCreate does not accept the field,
+    # so a CREATED pipeline binds through this PATCH (the caller force-sends
+    # it when the config declares the key, even with no graph) — the server
+    # validates the binding with the shared FAR-1558 predicate and a
+    # refusal fails the entity loudly.
+    if entity.manages_environment_profile:
+        # Stringify: the field parses to a uuid.UUID, but the wire payload
+        # is JSON — send the id in the API's string space (None serialises
+        # as the clearing null).
+        payload["environment_profile_id"] = (
+            None if entity.environment_profile_id is None else str(entity.environment_profile_id)
+        )
+    # FAR-1294: same opt-in gate as the create path. A DECLARED limit is
+    # always sent as a concrete int (the drift hash compares the key, so the
+    # write must be able to change it); an OMITTED limit is never sent, so a
+    # UI/API-tuned timeout or duration cap survives an apply that does not
+    # declare it.
+    if entity.manages_node_timeout:
+        payload["node_timeout_seconds"] = entity.node_timeout_seconds
+    if entity.manages_max_duration:
+        payload["max_duration_seconds"] = entity.max_duration_seconds
+    if graph is not None:
+        payload["graph_json"] = graph
+    return payload
+
+
+def _apply_one_pipeline(
+    executor: ApplyExecutor,
+    entity: PipelineEntity,
+    status: str,
+    *,
+    agents: dict[str, Any],
+    current_pipelines: dict[str, dict[str, Any]],
+    current_entities: dict[str, dict[str, dict[str, Any]]],
+    refresh_secrets: bool,
+    git_resolver: Callable[[GitContentRef], str] | None,
+) -> str:
+    """Create or update ONE pipeline; returns its pipeline id.
+
+    Raises ApplyHttpError / httpx.HTTPError / KeyError / ValueError on
+    failure — the caller isolates each pipeline in its own try/except so one
+    bad pipeline never aborts the run.
+
+    Create: POST /pipelines, then a graph PATCH (PATCH /{id} graph_json)
+    when the config declares a graph. Update: PATCH /{id} with the managed
+    top-level fields; graph_json is included only when the graph hash
+    differs from the fetched current graph (decided by
+    :func:`_graph_write_required`), with ``refresh_secrets`` re-sending
+    secret-declaring graphs outright (true declared values, never the
+    masked read).
+    """
+    graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
+    business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
+    if status == "created":
+        response = executor._post("/pipelines", _create_payload(entity, business_owner_id, reliability_owner_id))
+        pipeline_id = str(response["id"])
+        # FAR-1530: a declared run_enabled (only ever false) pauses the
+        # pipeline IMMEDIATELY after create — before the graph PATCH below,
+        # so a later failure leaves the row paused (fail closed), never
+        # silently running. The pause rides the dedicated /pause route (the
+        # single transition surface with its audit + 409 traps), not PATCH.
+        if entity.manages_run_enabled:
+            executor._post(f"/pipelines/{pipeline_id}/pause")
+        graph_differs = entity.graph is not None
+    else:
+        current = current_pipelines[entity.name]
+        pipeline_id = str(current["id"])
+        current_graph = current.get("graph") or _EMPTY_GRAPH
+        graph_differs = _graph_write_required(graph, current_graph, refresh_secrets=refresh_secrets)
+    patch_payload = _patch_payload(
+        entity,
+        status,
+        business_owner_id=business_owner_id,
+        reliability_owner_id=reliability_owner_id,
+        graph=graph if graph_differs else None,
+    )
+    # FAR-1599: a create with a declared binding must PATCH even without a
+    # graph — PipelineCreate cannot carry environment_profile_id, so the
+    # bind rides the follow-up PATCH.
+    if status == "updated" or entity.graph is not None or entity.manages_environment_profile:
+        executor._patch(f"/pipelines/{pipeline_id}", patch_payload)
+    # FAR-1530: converge a declared run_enabled (only ever false) by POSTing
+    # the dedicated /pause route AFTER the field PATCH — pause is idempotent
+    # server-side (first cause owns the reason), so this is safe when the
+    # entry was marked updated for an unrelated key while the pipeline is
+    # already paused. The PATCH never carries run_enabled: the pause/resume
+    # routes are the single transition surface (audit + 409 traps live
+    # there), and config can never express a resume.
+    if status == "updated" and entity.manages_run_enabled:
+        executor._post(f"/pipelines/{pipeline_id}/pause")
+    return pipeline_id
+
+
+def _record_pipeline_failure(
+    report: dict[str, list[dict[str, Any]]],
+    status: str,
+    entry: dict[str, Any],
+    entity: PipelineEntity | None,
+    exc: Exception,
+    pipeline_ids: dict[str, str],
+) -> None:
+    """Move a failed pipeline entry to ``report['failed']`` (isolated per pipeline).
+
+    A JUST-CREATED pipeline whose apply failed must not hand dependent
+    triggers an id that points at a graph-less half-created row, so its id
+    is dropped from *pipeline_ids*.
+    """
+    message = _failure_message(exc)
+    displayed_name = entity.name if entity else entry["name"]
+    _log.warning("apply pipeline failed: %s: %s", displayed_name, message)
+    report[status].remove(entry)
+    report["failed"].append({"kind": KIND_PIPELINE, "name": entry["name"], "error": message})
+    if status == "created" and entity is not None:
+        pipeline_ids.pop(entity.name, None)
+
+
 def apply_pipelines(
     executor: ApplyExecutor,
     entities: dict[str, list[tuple[str, Any]]],
@@ -268,13 +484,9 @@ def apply_pipelines(
 ) -> dict[str, str]:
     """Create/update pipelines per the plan report, capturing failures.
 
-    Create: POST /pipelines, then a graph PATCH (PATCH /{id} graph_json)
-    when the config declares a graph. Update: PATCH /{id} with the managed
-    top-level fields; graph_json is included only when the graph hash
-    differs from the fetched current graph (a graph write snapshots the
-    pipeline, so an unchanged graph must not churn snapshots) — both sides
-    hashed through the symmetric FAR-1232 graph redaction, with
-    ``refresh_secrets`` re-sending secret-declaring graphs outright.
+    Per-pipeline semantics (payload contents, FAR-1232 graph-write
+    decision, FAR-1530 pause routing) live in :func:`_apply_one_pipeline`;
+    this orchestrator owns phase order and failure isolation.
 
     The accountability-owner keys (FAR-1161) are ALWAYS sent on both POST
     and PATCH: the resolved id, or null when the config declares no owner
@@ -288,13 +500,6 @@ def apply_pipelines(
     an omitted key must leave a UI/API-tuned value untouched instead of
     failing the entity with a 422 (or, on create, fall through to the server
     default of 300 / 3600).
-
-    ``run_enabled`` (FAR-1530) is never sent on POST/PATCH at all: a declared
-    value (only ever ``false``) is converged by POSTing the dedicated
-    ``/pipelines/{id}/pause`` route — immediately after create (so a later
-    failure leaves the row paused) and after the update PATCH. The PATCH never
-    carries the key, keeping the pause/resume routes the single transition
-    surface (they own the audit events and the resume-while-tripped 409 trap).
 
     ``environment_profile_id`` (FAR-1599) is sent on PATCH only when DECLARED
     (opt-in): a declared id binds, a declared null clears, an omitted key is
@@ -318,151 +523,22 @@ def apply_pipelines(
         for entry in list(report[status]):
             if entry["kind"] != KIND_PIPELINE:
                 continue
-            entity = None
+            entity: PipelineEntity | None = None
             try:
                 entity = _find(entities[KIND_PIPELINE], entry["name"])
                 assert isinstance(entity, PipelineEntity)
-                graph = resolve_graph(entity, agents, git_resolver=git_resolver) if entity.graph is not None else None
-                business_owner_id, reliability_owner_id = resolve_owner_ids(entity, current_entities)
-                if status == "created":
-                    create_payload: dict[str, Any] = {
-                        "name": entity.name,
-                        "description": entity.description,
-                        "max_concurrent_runs": entity.max_concurrent_runs,
-                        # Always sent: managed_view unconditionally compares
-                        # this key, so the create path must carry the
-                        # declared value (explicit null = no override).
-                        "stdout_retention_config": entity.stdout_retention_config,
-                        # Always sent (incl. explicit null): managed
-                        # unconditionally like stdout_retention_config —
-                        # omission means null (inherit org/instance default).
-                        "hitl_review_window_seconds": entity.hitl_review_window_seconds,
-                        "max_autonomy_level": entity.max_autonomy_level,
-                        "business_owner_id": business_owner_id,
-                        "reliability_owner_id": reliability_owner_id,
-                    }
-                    if entity.manages_circuit_breaker:
-                        create_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
-                    # FAR-1294: the two runtime limits are sent only when the
-                    # config DECLARES them, so an omitted key falls through to
-                    # the server default (300 / 3600) instead of being written
-                    # as an explicit null (which PipelineCreate would reject).
-                    if entity.manages_node_timeout:
-                        create_payload["node_timeout_seconds"] = entity.node_timeout_seconds
-                    if entity.manages_max_duration:
-                        create_payload["max_duration_seconds"] = entity.max_duration_seconds
-                    response = executor._post("/pipelines", create_payload)
-                    pipeline_id = str(response["id"])
-                    # FAR-1530: a declared run_enabled (only ever false) pauses
-                    # the pipeline IMMEDIATELY after create — before the graph
-                    # PATCH below, so a later failure leaves the row paused
-                    # (fail closed), never silently running. The pause rides
-                    # the dedicated /pause route (the single transition surface
-                    # with its audit + 409 traps), not PATCH.
-                    if entity.manages_run_enabled:
-                        executor._post(f"/pipelines/{pipeline_id}/pause")
-                    graph_differs = entity.graph is not None
-                else:
-                    current = current_pipelines[entity.name]
-                    pipeline_id = str(current["id"])
-                    current_graph = current.get("graph") or _EMPTY_GRAPH
-                    # FAR-1232: the graph drift decision hashes BOTH sides
-                    # through the same symmetric redaction the plan hash
-                    # used (``strip_secret_shaped_graph``) — comparing the
-                    # raw declaration against the API-masked read would
-                    # re-send the graph (and churn a snapshot) on every
-                    # updated-pipeline run. With ``refresh_secrets``, a
-                    # secret-declaring graph is re-sent outright (real
-                    # values write through).
-                    graph_differs = (
-                        entity.graph is not None
-                        and graph is not None
-                        and (
-                            canonical_hash(strip_secret_shaped_graph(graph))
-                            != canonical_hash(strip_secret_shaped_graph(current_graph))
-                            or (refresh_secrets and graph_declares_secrets(graph))
-                        )
-                    )
-                pipeline_ids[entity.name] = pipeline_id
-                patch_payload: dict[str, Any] = {
-                    "description": entity.description,
-                    "max_concurrent_runs": entity.max_concurrent_runs,
-                    # Always sent (including explicit null): the drift hash
-                    # compares this key unconditionally, so the write path
-                    # must be able to set AND clear it (PipelineUpdate
-                    # accepts null; the PATCH route uses exclude_unset so an
-                    # explicit null clears the stored override).
-                    "stdout_retention_config": entity.stdout_retention_config,
-                    # Always sent (including explicit null): managed
-                    # unconditionally like stdout_retention_config, so the
-                    # declared null must be able to CLEAR a UI/API-set
-                    # per-pipeline override (PipelineUpdate accepts null).
-                    "hitl_review_window_seconds": entity.hitl_review_window_seconds,
-                    "business_owner_id": business_owner_id,
-                    "reliability_owner_id": reliability_owner_id,
-                }
-                if status == "updated" and entity.manages_circuit_breaker:
-                    patch_payload["circuit_breaker_threshold"] = entity.circuit_breaker_threshold
-                # FAR-1163/FAR-1221: send the ceiling only when DECLARED — an
-                # omitted ceiling must never clear a UI-set one as a side
-                # effect (mirrors the managed-view omission above), while a
-                # DECLARED null sends an explicit null so the REST PATCH
-                # clears the column back to "inherit the default".
-                if entity.manages_max_autonomy:
-                    patch_payload["max_autonomy_level"] = entity.max_autonomy_level
-                # FAR-1599: the environment-profile binding is sent only when
-                # DECLARED (opt-in like the ceiling above): a DECLARED id binds,
-                # a DECLARED null clears the binding, and an omitted key is
-                # never sent so a UI/API-set binding survives untouched.
-                # PipelineCreate does not accept the field, so a CREATED
-                # pipeline binds through this PATCH (the condition below force-
-                # sends the PATCH when the config declares the key, even with
-                # no graph) — the server validates the binding with the shared
-                # FAR-1558 predicate and a refusal fails the entity loudly.
-                if entity.manages_environment_profile:
-                    # Stringify: the field parses to a uuid.UUID, but the wire
-                    # payload is JSON — send the id in the API's string space
-                    # (None serialises as the clearing null).
-                    patch_payload["environment_profile_id"] = (
-                        None if entity.environment_profile_id is None else str(entity.environment_profile_id)
-                    )
-                # FAR-1294: same opt-in gate as the create path. A DECLARED
-                # limit is always sent as a concrete int (the drift hash
-                # compares the key, so the write must be able to change it);
-                # an OMITTED limit is never sent, so a UI/API-tuned timeout or
-                # duration cap survives an apply that does not declare it.
-                if entity.manages_node_timeout:
-                    patch_payload["node_timeout_seconds"] = entity.node_timeout_seconds
-                if entity.manages_max_duration:
-                    patch_payload["max_duration_seconds"] = entity.max_duration_seconds
-                if entity.graph is not None and graph is not None and graph_differs:
-                    patch_payload["graph_json"] = graph
-                # FAR-1599: a create with a declared binding must PATCH even
-                # without a graph — PipelineCreate cannot carry
-                # environment_profile_id, so the bind rides the follow-up PATCH.
-                if status == "updated" or entity.graph is not None or entity.manages_environment_profile:
-                    executor._patch(f"/pipelines/{pipeline_id}", patch_payload)
-                # FAR-1530: converge a declared run_enabled (only ever false)
-                # by POSTing the dedicated /pause route AFTER the field PATCH —
-                # pause is idempotent server-side (first cause owns the
-                # reason), so this is safe when the entry was marked updated
-                # for an unrelated key while the pipeline is already paused.
-                # The PATCH never carries run_enabled: the pause/resume routes
-                # are the single transition surface (audit + 409 traps live
-                # there), and config can never express a resume.
-                if status == "updated" and entity.manages_run_enabled:
-                    executor._post(f"/pipelines/{pipeline_id}/pause")
+                pipeline_ids[entity.name] = _apply_one_pipeline(
+                    executor,
+                    entity,
+                    status,
+                    agents=agents,
+                    current_pipelines=current_pipelines,
+                    current_entities=current_entities,
+                    refresh_secrets=refresh_secrets,
+                    git_resolver=git_resolver,
+                )
             except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
-                message = _failure_message(exc)
-                displayed_name = entity.name if entity else entry["name"]
-                _log.warning("apply pipeline failed: %s: %s", displayed_name, message)
-                report[status].remove(entry)
-                report["failed"].append({"kind": KIND_PIPELINE, "name": entry["name"], "error": message})
-                # A JUST-CREATED pipeline whose apply failed must not hand
-                # dependent triggers an id that points at a graph-less
-                # half-created row.
-                if status == "created" and entity is not None:
-                    pipeline_ids.pop(entity.name, None)
+                _record_pipeline_failure(report, status, entry, entity, exc, pipeline_ids)
     return pipeline_ids
 
 

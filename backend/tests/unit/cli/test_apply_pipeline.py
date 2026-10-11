@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -546,6 +547,34 @@ class TestGraphRefreshSecrets:
         assert [e["name"] for e in report["unchanged"] if e["kind"] == "pipeline"] == ["sample"]
         assert not report["updated"]
         assert not report["drift_detail"]
+
+    @respx.mock
+    def test_refresh_secrets_never_writes_masked_placeholder(self) -> None:
+        """FAR-1232 invariant: with --refresh-secrets the PATCH carries the
+        TRUE declared values in EVERY secret carrier (env_vars,
+        context_files, parameter_overrides) — the API-masked read's
+        placeholder is never re-sent as a literal (it would clobber the
+        stored real secret with the mask)."""
+        existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
+        routes = _mock_current_with_pipelines([existing], graphs={"sample": _MASKED_SECRET_GRAPH})
+        config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            report = executor.run(config, dry_run=False, refresh_secrets=True)
+        assert not report["failed"]
+        patch_payload = json.loads(routes["pipeline_patch"].calls.last.request.content)
+        update = PipelineUpdate.model_validate(patch_payload)
+        assert update.graph_json is not None
+        node = update.graph_json.nodes[0]
+        assert node.env_vars is not None
+        assert node.env_vars["MODULO_USERS"] == "admin:pw123"
+        assert node.context_files is not None
+        assert node.context_files["runbook.md"] == "token ghp_00112233445566778899aabbccddeeff00112233"
+        assert node.parameter_overrides is not None
+        nested = node.parameter_overrides["nested"]
+        assert nested["api_key"] == "s3cr3t"
+        # No masked sentinel survives anywhere in the written graph.
+        assert "••••••" not in json.dumps(patch_payload)
 
 
 class TestExecution:
@@ -1340,6 +1369,42 @@ class TestFailureIsolation:
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
             return executor.run(config, dry_run=False)
+
+    @respx.mock
+    def test_one_failure_applies_sibling_and_exits_nonzero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End-to-end through the CLI command: one pipeline's POST fails, the
+        sibling still applies, and the process exit code is non-zero (the
+        report's failed list gates the exit code via has_blockers)."""
+        import click
+        from click.testing import CliRunner
+
+        from modulo.cli.apply import register_apply
+
+        monkeypatch.setenv("MODULO_URL", "https://api.test")
+        monkeypatch.setenv("MODULO_API_KEY", "key")
+        routes = _mock_current_with_pipelines([])
+        routes["pipelines_post"].mock(
+            side_effect=[
+                httpx.Response(500, json={"detail": "injected failure"}),
+                httpx.Response(201, json=_pipeline_item("second", str(uuid.uuid4()))),
+            ]
+        )
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(self._two_pipeline_config_text(), encoding="utf-8")
+        group = click.Group("test")
+        register_apply(group)
+        runner = CliRunner()
+        result = runner.invoke(group, ["apply", "-f", str(config_path), "--output", "json"])
+        assert result.exit_code == 1, result.output
+        parsed = json.loads(result.output)
+        failed_names = [e["name"] for e in parsed["failed"]]
+        assert failed_names == ["first"]
+        created_names = [e["name"] for e in parsed["created"] if e["kind"] == "pipeline"]
+        assert created_names == ["second"]
 
 
 class TestGraphlessUpdateDoesNotDriftOnGraph:
