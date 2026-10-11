@@ -121,12 +121,18 @@ async def test_create_workspace_creates_sandbox(
     # permissive boolean explicitly rather than leaving it to the SDK default).
     # ``timeout`` is the forwarded sandbox lifetime (spec default 3600) —
     # see test_e2b_sandbox_lifetime.py for the FAR-487/FAR-489 coverage.
-    mock_sandbox_cls.create.assert_called_once_with(
-        template="ubuntu-22.04",
-        api_key="sk-test",
-        allow_internet_access=True,
-        timeout=3600,
-    )
+    # FAR-1275: ``metadata`` rides EVERY create with the provider's reserved
+    # identity keys (deployment identity + creation marker), so it is part
+    # of the exact-kwargs pin.
+    kwargs = mock_sandbox_cls.create.call_args.kwargs
+    assert set(kwargs) == {"template", "api_key", "allow_internet_access", "timeout", "metadata"}
+    assert kwargs["template"] == "ubuntu-22.04"
+    assert kwargs["api_key"] == "sk-test"
+    assert kwargs["allow_internet_access"] is True
+    assert kwargs["timeout"] == 3600
+    assert kwargs["metadata"]["modulo.machine.id"]
+    assert int(kwargs["metadata"]["modulo.created_at"]) > 0
+    mock_sandbox_cls.create.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -138,12 +144,16 @@ async def test_create_workspace_default_template(mock_sandbox_cls: MagicMock) ->
         image_ref="",
     )
     await provider.create_workspace(spec)
-    mock_sandbox_cls.create.assert_called_once_with(
-        template="base",
-        api_key="sk-test",
-        allow_internet_access=True,
-        timeout=3600,
-    )
+    # Exact-kwargs pin including the FAR-1275 reserved identity metadata
+    # (stamped on every create, even with an empty spec).
+    kwargs = mock_sandbox_cls.create.call_args.kwargs
+    assert set(kwargs) == {"template", "api_key", "allow_internet_access", "timeout", "metadata"}
+    assert kwargs["template"] == "base"
+    assert kwargs["api_key"] == "sk-test"
+    assert kwargs["allow_internet_access"] is True
+    assert kwargs["timeout"] == 3600
+    assert kwargs["metadata"]["modulo.machine.id"]
+    mock_sandbox_cls.create.assert_called_once()
 
 
 @pytest.mark.asyncio

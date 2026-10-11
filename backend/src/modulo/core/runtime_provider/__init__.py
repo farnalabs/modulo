@@ -43,6 +43,7 @@ __all__ = [
     "UnknownRefError",
     "WorkspaceFileInfo",
     "WorkspaceGoneError",
+    "WorkspaceListEntry",
     "WorkspaceMetrics",
     "WorkspaceNetworkValidationError",
     "WorkspaceSpec",
@@ -434,6 +435,29 @@ class WorkspaceMetrics:
     disk_total: float | None = None
 
 
+@dataclass(frozen=True)
+class WorkspaceListEntry:
+    """One identity-scoped workspace entry (FAR-1275).
+
+    Carrier for :meth:`RuntimeProvider.list_workspaces_by_identity`:
+
+    - ``provider_ref``: the ref :meth:`RuntimeProvider.destroy_workspace_by_ref`
+      addresses for reclamation;
+    - ``run_id``: the run attribution the orphan sweep cross-references
+      against active runs — ``""`` when the workspace carries no run
+      attribution, in which case the CALLER decides whether an
+      unattributed workspace is a destroy candidate (the sweep skips it,
+      exactly as on Docker/Kubernetes);
+    - ``created_age_s``: seconds since the provider's creation marker —
+      ``0.0`` when the substrate reports none, which the sweep reads as
+      "cannot establish a grace age" and therefore never destroys.
+    """
+
+    provider_ref: str
+    run_id: str = ""
+    created_age_s: float = 0.0
+
+
 @dataclass
 class ExecResult:
     """Result of executing a command in a workspace."""
@@ -799,6 +823,52 @@ class RuntimeProvider(ABC):
         """
         raise ProviderCapabilityUnsupportedError(
             f"Runtime provider '{self.__class__.__name__}' does not implement get_metrics"
+        )
+
+    # ------------------------------------------------------------------
+    # Identity-scoped enumeration primitive (FAR-1275 — non-Docker orphan
+    # reclamation)
+    # ------------------------------------------------------------------
+
+    async def list_workspaces_by_identity(self, identity: str) -> list[WorkspaceListEntry]:
+        """Enumerate THIS deployment's workspaces on the substrate (FAR-1275).
+
+        The listing primitive behind non-Docker orphan reclamation: the
+        caller supplies the deployment identity (``modulo.machine.id`` —
+        the same value ``MODULO_RUNNER_MACHINE_ID``/hostname stamps onto
+        every workspace the provider creates) and every returned entry is a
+        workspace this deployment provisioned. It is the enumeration
+        counterpart to :meth:`destroy_workspace_by_ref`: the reconciler
+        cross-references the returned ``run_id`` values against ACTIVE
+        runs, then destroys the orphans through the same by-ref primitive.
+
+        Contract:
+
+        - **Identity-scoped, fail-closed**: a workspace whose identity
+          marker does not EXACTLY match *identity* is never returned — two
+          Modulo deployments sharing one substrate (one E2B account, one
+          Docker engine, one namespace) must never see, and therefore never
+          destroy, each other's workspaces. A caller-supplied empty or
+          whitespace identity returns no entries at all rather than
+          enumerating unattributed workspaces;
+        - entries may carry ``run_id == ""`` (no run attribution) and
+          ``created_age_s == 0.0`` (no creation marker); the enumeration
+          does NOT apply the sweep's skip policy — the caller owns the
+          cross-reference and grace/max-lifetime rules;
+        - **listing failures PROPAGATE**: a configured-but-unreachable
+          substrate surfaces as a reported sweep failure
+          (``ReconcilerSweepError``), never a silent empty list (an empty
+          list means "no workspaces", never "could not list");
+        - optional base-class method (ADR 040 "Error honesty": the same
+          carve-out from the contract freeze as ``exec_command_stream``,
+          ``destroy_workspace_by_ref``, ``read_log_tail``,
+          ``apply_isolation`` and ``get_metrics``): providers that do not
+          override it raise the typed
+          :class:`ProviderCapabilityUnsupportedError` — never a raw
+          ``NotImplementedError``.
+        """
+        raise ProviderCapabilityUnsupportedError(
+            f"Runtime provider '{self.__class__.__name__}' does not implement list_workspaces_by_identity"
         )
 
     @abstractmethod

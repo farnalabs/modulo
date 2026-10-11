@@ -8,7 +8,9 @@ Covers:
    ``ProviderNotConfiguredError`` / ``UnknownProviderTypeError`` tree is
    neither re-parented under the new base nor caught by it.
 3. The ABC's ``exec_command_stream`` default raises the typed
-   ``StreamingUnsupportedError`` (ADR 040 "Error honesty" carve-out).
+   ``StreamingUnsupportedError``, and the ``list_workspaces_by_identity``
+   default (FAR-1275) raises the typed
+   ``ProviderCapabilityUnsupportedError`` (ADR 040 "Error honesty").
 4. Per-site catchability reconciliation: every production
    ``except ProviderNotConfiguredError`` handler around provider dispatch
    is exercised to prove the new family is NOT swallowed by it (and, where
@@ -188,6 +190,21 @@ async def test_abc_default_exec_command_stream_raises_typed_streaming_unsupporte
         await _BareProvider().exec_command_stream("ref", ["echo"])
     # The typed error is a RuntimeProviderError member and is NOT the raw
     # NotImplementedError the pre-ADR default raised.
+    assert isinstance(exc_info.value, RuntimeProviderError)
+    assert not isinstance(exc_info.value, NotImplementedError)
+    assert "BareProvider" in str(exc_info.value)
+
+
+async def test_abc_default_list_workspaces_by_identity_raises_typed_capability_unsupported() -> None:
+    """FAR-1275 + ADR 040 "Error honesty": the enumeration default raises
+    the typed ``ProviderCapabilityUnsupportedError``, never a raw
+    ``NotImplementedError`` — the same carve-out as the other optional
+    primitives (``exec_command_stream``, ``destroy_workspace_by_ref``,
+    ``read_log_tail``, ``apply_isolation``, ``get_metrics``)."""
+    with pytest.raises(ProviderCapabilityUnsupportedError, match="list_workspaces_by_identity") as exc_info:
+        await _BareProvider().list_workspaces_by_identity("deployment-a")
+    # Typed new-family member, catchable as RuntimeProviderError, and NOT
+    # the NotImplementedError an un-carved ABC default would raise.
     assert isinstance(exc_info.value, RuntimeProviderError)
     assert not isinstance(exc_info.value, NotImplementedError)
     assert "BareProvider" in str(exc_info.value)

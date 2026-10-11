@@ -2,16 +2,21 @@
 
 Lists labelled workspace containers from the deployment's Docker engine AND
 labelled workspace pods from the deployment's Kubernetes namespace (FAR-1051),
-cross-references ACTIVE runs, and destroys orphans past the grace period.
-Leak-repair WITHOUT the never-built ``WorkspaceLease``: the periodic sweep
-is the whole repair mechanism.
+AND running E2B sandboxes carrying this deployment's identity metadata
+(FAR-1275), cross-references ACTIVE runs, and destroys orphans past the
+grace period. Leak-repair WITHOUT the never-built ``WorkspaceLease``: the
+periodic sweep is the whole repair mechanism.
 
 Provider-neutral shape (FAR-1051): each tier contributes a workspace SOURCE
 (list + destroy + close) behind the same structural boundary, so the sweep
 logic — grace period, active-run spare, destroy-path re-check, max-lifetime
 backstop, fail-safe abort — is written ONCE and applies to every tier. The
 Docker source's behaviour is unchanged; the Kubernetes source reclaims
-``modulo-ws-*`` pods through the provider's own ref-only destroy primitive.
+``modulo-ws-*`` pods through the provider's own ref-only destroy primitive;
+the E2B source (FAR-1275) reclaims sandboxes through the provider's
+identity-scoped enumeration primitive (``list_workspaces_by_identity``) and
+its ref-only destroy — closing the non-Docker gap where a workspace whose
+ref was lost (worker restart / crash / force-drop) was unreclaimable.
 
 Semantics committed by this delivery:
   - **Orphan = a labelled workspace whose ``modulo.run.id`` label
@@ -21,8 +26,9 @@ Semantics committed by this delivery:
     nothing, and emits** ``runner.reconciler.sweep_aborted``.
   - **Machine-scoped via the deployment-identity label**
     (``modulo.machine.id``, sourced from ``MODULO_RUNNER_MACHINE_ID`` with a
-    hostname fallback): two Modulo deployments sharing one engine (or one
-    Kubernetes namespace) never destroy each other's workspaces.
+    hostname fallback): two Modulo deployments sharing one engine, one
+    Kubernetes namespace or one E2B account never destroy each other's
+    workspaces.
   - **Log-only soak mode first** (settings flag
     ``runner_reconciler_destroy_enabled``, default False): orphans are
     logged loudly, not destroyed, until the operator flips the flag.
@@ -38,9 +44,10 @@ Semantics committed by this delivery:
     ``DOCKER_CONTEXT``, no Docker context, and no local socket aiodocker
     would auto-detect), the Docker half is NOT APPLICABLE — it skips with
     ``runner.reconciler.skipped`` + an explicit reason instead of
-    attempting (and permanently failing) an engine connection. The
-    Kubernetes half has its own skip reason (provider not registered); a
-    sweep reports the skip envelope only when NEITHER tier is applicable.
+    attempting (and permanently failing) an engine connection. Each of the
+    other tiers has its own skip reason (Kubernetes/E2B: provider not
+    registered); a sweep reports the skip envelope only when NO tier is
+    applicable.
 
 Runs under the system-cron path in a bypass-RLS session (the sweep is
 machine-scoped by deployment identity, not org-scoped).
@@ -176,6 +183,7 @@ class _WorkspaceSource(Protocol):
 
 
 _KUBERNETES_PROVIDER_MODULE = "modulo.core.runtime_provider.k8s"
+_E2B_PROVIDER_MODULE = "modulo.core.runtime_provider.e2b"
 
 
 class _KubernetesWorkspaceSource:
@@ -240,6 +248,77 @@ class _KubernetesWorkspaceSource:
         destroyed = await self._get_provider().destroy_workspace_by_ref(container_id)
         if not destroyed:
             raise RuntimeError(f"Kubernetes workspace pod {container_id!r} could not be confirmed destroyed")
+
+    async def close(self) -> None:
+        if self._provider is not None:
+            provider, self._provider = self._provider, None
+            await provider.close()
+
+
+class _E2BWorkspaceSource:
+    """E2B sandbox boundary for the reconciler (FAR-1275).
+
+    The non-Docker orphan-reclamation path: reuses the provider's
+    identity-scoped enumeration primitive
+    (``list_workspaces_by_identity``) rather than a hand-rolled E2B
+    listing — the provider owns the API-key resolution, the reserved
+    deployment-identity / creation-marker metadata it stamps at create
+    time, and the fail-closed identity re-check, and it owns the ref-only
+    destroy primitive (idempotent: an already-gone sandbox is a confirmed
+    ``True``, so the sweep's destroy decision is the only gate). The
+    concrete provider module is imported dynamically (the
+    ``no-concrete-runtime-provider-imports`` contract keeps concrete
+    providers inside the ``runtime_provider`` package boundary), and only
+    when the E2B half of the sweep is actually applicable.
+    """
+
+    def __init__(self) -> None:
+        self._provider: Any = None
+
+    def _get_provider(self) -> Any:
+        if self._provider is None:
+            import importlib
+
+            module = importlib.import_module(_E2B_PROVIDER_MODULE)
+            self._provider = module.E2BRuntimeProvider()
+        return self._provider
+
+    async def list_labelled_workspaces(self) -> list[_LabelledContainer]:
+        """List this deployment's sandboxes + their ages.
+
+        The enumeration returns every identity-matched sandbox; the run id
+        and creation marker are read from the returned entries exactly as
+        the Docker source reads them from container labels. Sandboxes
+        without a ``modulo.run.id`` are skipped for the same reason as on
+        Docker/Kubernetes: without a run id there is no cross-reference to
+        fail-safe on. Listing failures propagate (the ABC contract) so a
+        configured-but-unreachable E2B API surfaces as a reported sweep
+        failure, never a silent empty list.
+        """
+        entries = await self._get_provider().list_workspaces_by_identity(deployment_identity())
+        listed: list[_LabelledContainer] = []
+        for entry in entries:
+            if not entry.run_id:
+                continue
+            listed.append(
+                _LabelledContainer(
+                    id=str(entry.provider_ref),
+                    run_id=str(entry.run_id),
+                    created_age_s=float(entry.created_age_s or 0.0),
+                )
+            )
+        return listed
+
+    async def destroy_by_container_id(self, container_id: str) -> None:
+        # destroy_workspace_by_ref is idempotent (an already-gone sandbox is
+        # a confirmed no-op), so the sweep's decision is the only gate. An
+        # UNCONFIRMED destroy (``False``) is NOT swallowed: it raises so the
+        # sweep aborts with partial counts and SAQ's retry + /healthz
+        # attribution engage — parity with the Docker/Kubernetes sources,
+        # whose destroy raises on failure.
+        destroyed = await self._get_provider().destroy_workspace_by_ref(container_id)
+        if not destroyed:
+            raise RuntimeError(f"E2B sandbox {container_id!r} could not be confirmed destroyed")
 
     async def close(self) -> None:
         if self._provider is not None:
@@ -329,29 +408,35 @@ async def reconcile_runner_workspaces(
     engages) with the PARTIAL counts already achieved — a silently dead
     sweep must never re-open the labelled-workspace leak invisibly.
 
-    FAR-1201 follow-up + FAR-1051: each tier has its own applicability check
-    (see :func:`docker_endpoint_skip_reason` and
-    :func:`kubernetes_endpoint_skip_reason`). A tier that is NOT APPLICABLE
-    is skipped with ``runner.reconciler.skipped`` + its explicit reason
+    FAR-1201 follow-up + FAR-1051 + FAR-1275: each tier has its own
+    applicability check (see :func:`docker_endpoint_skip_reason`,
+    :func:`kubernetes_endpoint_skip_reason` and
+    :func:`e2b_endpoint_skip_reason`). A tier that is NOT APPLICABLE is
+    skipped with ``runner.reconciler.skipped`` + its explicit reason
     instead of attempting (and permanently failing) a connection; a
     CONFIGURED-but-unreachable tier still raises: outage stays a reported
     failure, only "not applicable at all" skips. When NO tier is applicable
     the historical skip envelope is returned — ``{"scanned": 0,
     "orphans_destroyed": 0, "skipped": <docker reason>}`` — so the
     single-source contract every existing consumer keys on is unchanged;
-    the other tier's reason is logged alongside it.
+    the other tiers' reasons are logged alongside it.
     """
     docker_skip = docker_endpoint_skip_reason()
     kubernetes_skip = await kubernetes_endpoint_skip_reason()
-    if docker_skip is not None and kubernetes_skip is not None:
+    e2b_skip = await e2b_endpoint_skip_reason()
+    if docker_skip is not None and kubernetes_skip is not None and e2b_skip is not None:
         if kubernetes_skip != docker_skip:
             _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
+        if e2b_skip != docker_skip:
+            _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
         _log.info("runner.reconciler.skipped reason=%s", docker_skip)
         return {"scanned": 0, "orphans_destroyed": 0, "skipped": docker_skip}
     if docker_skip is not None:
         _log.info("runner.reconciler.skipped reason=%s scope=docker", docker_skip)
     if kubernetes_skip is not None:
         _log.info("runner.reconciler.skipped reason=%s scope=kubernetes", kubernetes_skip)
+    if e2b_skip is not None:
+        _log.info("runner.reconciler.skipped reason=%s scope=e2b", e2b_skip)
 
     from modulo.settings import get_settings
 
@@ -362,6 +447,8 @@ async def reconcile_runner_workspaces(
         sources.append(("docker", _DockerWorkspaceSource(_resolve_docker_host())))
     if kubernetes_skip is None:
         sources.append(("kubernetes", _KubernetesWorkspaceSource()))
+    if e2b_skip is None:
+        sources.append(("e2b", _E2BWorkspaceSource()))
 
     scanned = 0
     orphans_destroyed = 0
@@ -591,6 +678,45 @@ async def kubernetes_endpoint_skip_reason() -> str | None:
                 "the Kubernetes runtime provider is not registered — set "
                 "MODULO_KUBERNETES_ENABLED to an enabling value (and install the "
                 "kubernetes-asyncio SDK) to enable the workspace-pod orphan sweep"
+            )
+        return None
+    finally:
+        await provider_hub.aclose()
+
+
+async def e2b_endpoint_skip_reason() -> str | None:
+    """Why the E2B half of the sweep is NOT APPLICABLE here, or ``None``.
+
+    FAR-1275: the non-Docker orphan-reclamation tier is applicable exactly
+    when the deployment would REGISTER the E2B runtime provider, so the
+    check delegates to the registration matrix itself
+    (:func:`modulo.core.runtime_provider.build_hub` — the
+    ``MODULO_E2B_API_KEY`` gate via the key bridge) instead of
+    re-implementing the flag semantics here and letting the two drift. That
+    is also why an unregistered provider is a SKIP and not a failure: no
+    provider means no sandboxes were ever created for this sweep to
+    reclaim.
+
+    ``None`` means a provider IS registered — after which a
+    configured-but-unreachable E2B API still surfaces as a reported sweep
+    failure (the listing call raises), never a skip. The probe's ephemeral
+    hub is disposed via :meth:`RuntimeProviderHub.aclose` before returning:
+    a freshly built provider holds no client connections and tracks no
+    sandboxes until first use, so the close is the ADR 029 bookkeeping pass
+    (the same shape as :func:`kubernetes_endpoint_skip_reason`).
+    """
+    from modulo.core.runtime_provider import build_hub
+
+    try:
+        provider_hub = build_hub()
+    except Exception:
+        _log.exception("runner.reconciler.e2b_probe_failed")
+        return "the runtime-provider hub could not be built — see logs; the E2B sandbox sweep cannot run"
+    try:
+        if provider_hub.get("e2b") is None:
+            return (
+                "the E2B runtime provider is not registered — set MODULO_E2B_API_KEY "
+                "to enable the E2B sandbox orphan sweep"
             )
         return None
     finally:

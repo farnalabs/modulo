@@ -13,6 +13,11 @@ FAR-1051: the Kubernetes workspace source — the provider-neutral sweep
 drives a second source so ``modulo-ws-*`` pods are reclaimed too, each tier
 keeping its own applicability check (``kubernetes_endpoint_skip_reason``).
 
+FAR-1275: the E2B workspace source — the non-Docker backstop built on the
+provider's identity-scoped enumeration primitive
+(``list_workspaces_by_identity``), its own applicability check
+(``e2b_endpoint_skip_reason``) and the three-tier skip envelope.
+
 FAR-1051 (qa-iterate): the dispatch-attribution test — the spec ``node_runner``
 actually builds carries ``modulo.run.id``, so the sweep's run-id filter can
 match a pod that outlives its dispatch.
@@ -35,6 +40,7 @@ from modulo.core.bundled_runner.runner_reconciler import (
     docker_endpoint_skip_reason,
     reconcile_runner_workspaces,
 )
+from modulo.core.runtime_provider import WorkspaceListEntry
 from modulo.core.runtime_provider.k8s import WorkspacePodRef
 
 
@@ -939,3 +945,194 @@ async def test_sweep_runs_kubernetes_tier_while_logging_the_docker_skip(
     assert result == {"scanned": 0, "orphans_destroyed": 0}
     docker_factory.assert_not_called()
     k8s_source.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# FAR-1275: the E2B workspace source (non-Docker orphan reclamation)
+# ---------------------------------------------------------------------------
+
+
+def _listed(ref: str, run_id: str, age_s: float) -> WorkspaceListEntry:
+    return WorkspaceListEntry(provider_ref=ref, run_id=run_id, created_age_s=age_s)
+
+
+async def test_e2b_source_maps_entries_and_skips_those_without_a_run_id() -> None:
+    """The provider's identity-scoped listing is translated into the sweep's
+    label vocabulary: an entry carrying ``run_id`` becomes a reclaim
+    candidate, one without it is skipped (no cross-reference to fail-safe
+    on), the creation age passes through untouched, and the enumeration is
+    scoped by THIS deployment's identity."""
+    source = runner_reconciler._E2BWorkspaceSource()
+    provider = MagicMock()
+    provider.list_workspaces_by_identity = AsyncMock(
+        return_value=[
+            _listed("sbx-1", "run-1", 42.0),
+            _listed("sbx-2", "", 7.0),
+        ]
+    )
+    source._provider = provider
+
+    listed = await source.list_labelled_workspaces()
+
+    provider.list_workspaces_by_identity.assert_awaited_once_with(deployment_identity())
+    assert [entry.id for entry in listed] == ["sbx-1"]
+    assert listed[0].run_id == "run-1"
+    assert listed[0].created_age_s == 42.0
+
+
+async def test_e2b_source_destroys_by_ref_and_closes_the_provider() -> None:
+    """Reclamation goes through the provider's ref-only destroy primitive
+    (idempotent) and the source disposes the provider it built."""
+    source = runner_reconciler._E2BWorkspaceSource()
+    provider = MagicMock()
+    provider.destroy_workspace_by_ref = AsyncMock(return_value=True)
+    provider.close = AsyncMock()
+    source._provider = provider
+
+    await source.destroy_by_container_id("sbx-1")
+    await source.close()
+
+    provider.destroy_workspace_by_ref.assert_awaited_once_with("sbx-1")
+    provider.close.assert_awaited_once()
+    assert source._provider is None
+
+
+async def test_e2b_source_raises_when_the_destroy_is_unconfirmed() -> None:
+    """An unconfirmed destroy (``False``) is NOT swallowed: the source raises
+    so the sweep aborts with partial counts and SAQ retries — parity with
+    the Docker/Kubernetes sources."""
+    source = runner_reconciler._E2BWorkspaceSource()
+    provider = MagicMock()
+    provider.destroy_workspace_by_ref = AsyncMock(return_value=False)
+    source._provider = provider
+
+    with pytest.raises(RuntimeError, match="could not be confirmed destroyed"):
+        await source.destroy_by_container_id("sbx-1")
+
+
+async def test_e2b_source_builds_its_provider_lazily_via_importlib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_get_provider`` imports the concrete provider module on first use and
+    caches the instance — the concrete import stays a STRING so the
+    ``no-concrete-runtime-provider-imports`` contract is never violated."""
+    source = runner_reconciler._E2BWorkspaceSource()
+    provider = MagicMock()
+    provider.list_workspaces_by_identity = AsyncMock(return_value=[])
+    fake_module = SimpleNamespace(E2BRuntimeProvider=MagicMock(return_value=provider))
+    monkeypatch.setattr("importlib.import_module", lambda name: fake_module)
+
+    listed = await source.list_labelled_workspaces()
+    await source.list_labelled_workspaces()  # cached — no second build
+
+    assert listed == []
+    assert source._provider is provider
+    fake_module.E2BRuntimeProvider.assert_called_once()
+
+
+async def test_e2b_source_close_without_a_provider_is_a_noop() -> None:
+    source = runner_reconciler._E2BWorkspaceSource()
+
+    await source.close()
+
+    assert source._provider is None
+
+
+async def test_e2b_skip_reason_names_the_registration_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unregistered provider is an EXPLICIT skip, never a silent one: the
+    reason names the env var that would register it."""
+    monkeypatch.delenv("MODULO_E2B_API_KEY", raising=False)
+
+    reason = await runner_reconciler.e2b_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "MODULO_E2B_API_KEY" in reason
+
+
+async def test_e2b_skip_reason_none_when_registered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The applicability check delegates to the registration matrix: with the
+    key set the sweep's E2B half runs."""
+    monkeypatch.setenv("MODULO_E2B_API_KEY", "test-key")
+
+    assert await runner_reconciler.e2b_endpoint_skip_reason() is None
+
+
+async def test_e2b_skip_reason_reports_a_hub_build_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hub-build failure is an explicit, named skip reason — never a crash."""
+    monkeypatch.setattr(
+        "modulo.core.runtime_provider.build_hub",
+        MagicMock(side_effect=RuntimeError("hub down")),
+    )
+
+    reason = await runner_reconciler.e2b_endpoint_skip_reason()
+
+    assert reason is not None
+    assert "hub could not be built" in reason
+
+
+async def test_sweep_reclaims_orphans_through_the_e2b_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The E2B tier contributes to ONE sweep under the same
+    grace/active-run/destroy rules as every other tier."""
+    e2b_source = _fake_source([_container("gone-run", 9999.0, "sbx-1")])
+    monkeypatch.setattr(runner_reconciler, "_E2BWorkspaceSource", lambda: e2b_source)
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(True))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 1, "orphans_destroyed": 1}
+    e2b_source.destroy_by_container_id.assert_has_awaits([(("sbx-1",), {})])
+    e2b_source.close.assert_awaited_once()
+
+
+async def test_sweep_skips_the_e2b_source_when_the_provider_is_unregistered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unregistered tier is skipped WITH a logged reason while the
+    applicable tier keeps sweeping — the skip is per-tier, never
+    all-or-nothing."""
+    e2b_factory = MagicMock(
+        side_effect=AssertionError("_E2BWorkspaceSource must not be built when the provider is unregistered")
+    )
+    monkeypatch.setattr(runner_reconciler, "_E2BWorkspaceSource", e2b_factory)
+    monkeypatch.setattr(
+        runner_reconciler,
+        "e2b_endpoint_skip_reason",
+        AsyncMock(return_value="the E2B runtime provider is not registered"),
+    )
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
+    docker_source = _fake_source([_container("gone-run", 9999.0, "c-9")])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: _settings(False))
+
+    result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 1, "orphans_destroyed": 0}
+    e2b_factory.assert_not_called()
+
+
+async def test_sweep_envelope_when_no_tier_is_applicable_logs_the_e2b_reason_alongside(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Three-tier skip envelope: the historical Docker reason is still the
+    returned envelope, and every distinct tier reason is logged — the E2B
+    one included (never a silent third skip)."""
+    monkeypatch.setattr(runner_reconciler, "docker_endpoint_skip_reason", lambda: "docker-reason")
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value="k8s-reason"))
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value="e2b-reason"))
+
+    with caplog.at_level(logging.INFO):
+        result = await reconcile_runner_workspaces(_engine_with_active_runs([]))
+
+    assert result == {"scanned": 0, "orphans_destroyed": 0, "skipped": "docker-reason"}
+    assert "scope=e2b" in caplog.text
+    assert "e2b-reason" in caplog.text
