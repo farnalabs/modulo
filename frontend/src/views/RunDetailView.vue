@@ -1,7 +1,7 @@
 <template>
     <div class="page-wide">
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadRun" />
     <template v-else-if="run">
       <nav :aria-label="$t('views.RunDetailView.breadcrumb')" class="mb-4 flex items-center gap-1 text-sm text-muted-foreground">
         <router-link to="/runs" data-testid="run-detail-breadcrumb-runs" class="hover:text-foreground transition-colors">{{ $t('views.RunDetailView.runs') }}</router-link>
@@ -2308,7 +2308,7 @@ interface RunFetchResult {
   io: RunIOResponse | null
 }
 
-const { loading, error } = useDataFetch<RunFetchResult>(
+const { loading, error, load: loadRun } = useDataFetch<RunFetchResult>(
   async () => {
     const runId = route.params.id as string
     if (!runId) {

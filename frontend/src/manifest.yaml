@@ -1508,6 +1508,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -1912,6 +1915,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: org-hitl-review-window-load-error
@@ -4044,6 +4050,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: json-viewer
         type: element
         dynamic_testid: false
@@ -4109,7 +4118,10 @@ elements:
       - testid: schema-list-move-error
         type: element
         dynamic_testid: false
-      - testid: schema-list-dismiss-move-error
+      - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: schema-list-mobile-folder-select
@@ -4412,6 +4424,9 @@ elements:
       - testid: error-alert-dismiss
         type: button
         dynamic_testid: false
+      - testid: error-alert-retry
+        type: button
+        dynamic_testid: false
       - testid: feature-gate
         type: element
         dynamic_testid: false
@@ -4585,6 +4600,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: error-alert-dismiss
+        type: button
+        dynamic_testid: false
+      - testid: error-alert-retry
         type: button
         dynamic_testid: false
       - testid: hitl-review-fetch-error
