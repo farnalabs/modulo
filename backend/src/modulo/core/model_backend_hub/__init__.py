@@ -163,125 +163,60 @@ class ModelBackendHub:
         credential JSON is ALSO retained per backend id (FAR-592: the
         provision-time binding resolution reads raw credential fields, e.g.
         ``api_key``, via :meth:`creds_for`).
+
+        Each instance is processed by :meth:`_register_with_isolation`, so one
+        broken backend row is logged and skipped without preventing the others
+        from registering.
         """
         if instances is None:
             raise ValueError("instances must not be None")
 
-        backends_to_register: list[tuple[uuid.UUID, ModelBackendBase]] = []
-        fallback_map: dict[uuid.UUID, list[uuid.UUID]] = {}
-
+        registered = 0
         for mb in instances:
-            try:
-                try:
-                    raw_str = await asyncio.wait_for(
-                        secrets_backend.get_secret(str(mb.id)),
-                        timeout=_SECRET_FETCH_TIMEOUT,
-                    )
-                except TimeoutError:
-                    logger.warning("Timeout fetching secret for backend %s", mb.id)
-                    continue
-                except KeyError:
-                    ciphertext = getattr(mb, "credentials_ciphertext", None)
-                    if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
-                        try:
-                            from cryptography.fernet import Fernet
+            if await self._register_with_isolation(mb, secrets_backend):
+                registered += 1
 
-                            from modulo.settings import get_settings
-
-                            _settings = get_settings()
-                            f = Fernet(_settings.fernet_key.encode())
-                            plaintext = f.decrypt(ciphertext)
-                            raw_str = json.dumps({"api_key": plaintext.decode()})
-                        except Exception:
-                            logger.warning(
-                                "Failed to decrypt credentials_ciphertext for backend %s", mb.id, exc_info=True
-                            )
-                            raise BackendDecryptError(mb.id) from None
-                    else:
-                        # FAR-1526: no secrets row AND no credentials_ciphertext —
-                        # there are no stored credentials for this backend. The old
-                        # bare ``raise`` re-threw the secrets backend's
-                        # ``KeyError('<backend-uuid>')``, which the generic handler
-                        # below logged WITH A FULL TRACEBACK on every run's hub
-                        # init (prod: backend 4a170ce2-4598-4c38-b927-f9b491275ad6,
-                        # a KeyError every ~40-70s) — unactionable and easily
-                        # mistaken for a cache/registry lookup bug. Raise the typed
-                        # error instead: the message names the backend, the provider
-                        # and the remedy, and the handler below logs it once per
-                        # process rather than once per run.
-                        raise BackendCredentialsMissingError(
-                            mb.id, provider=getattr(mb, "provider", "") or ""
-                        ) from None
-                try:
-                    raw_creds: Any = json.loads(raw_str)
-                except json.JSONDecodeError as exc:
-                    logger.warning("Malformed secret JSON for backend %s: %s", mb.id, exc)
-                    continue
-                if not isinstance(raw_creds, dict):
-                    logger.warning("Secret for backend %s is not a JSON object", mb.id)
-                    continue
-                creds: dict[str, Any] = raw_creds
-                self._creds[mb.id] = creds
-                backend = _build_backend(mb.provider, mb.model_id, creds, mb.default_params or {})
-                backends_to_register.append((mb.id, backend))
-
-                raw_fallback_ids = getattr(mb, "fallback_backend_ids", None)
-                if raw_fallback_ids is not None:
-                    if not isinstance(raw_fallback_ids, list | tuple):
-                        logger.warning(
-                            "Non-iterable fallback_backend_ids for backend %s: %r",
-                            mb.id,
-                            raw_fallback_ids,
-                        )
-                        continue
-                    parsed: list[uuid.UUID] = []
-                    for fid in raw_fallback_ids:
-                        if isinstance(fid, str):
-                            try:
-                                parsed.append(uuid.UUID(fid))
-                            except ValueError as exc:
-                                logger.warning(
-                                    "Invalid fallback ID string %r for backend %s: %s",
-                                    fid,
-                                    mb.id,
-                                    exc,
-                                )
-                                continue
-                        elif isinstance(fid, uuid.UUID):
-                            parsed.append(fid)
-                        else:
-                            logger.warning(
-                                "Unexpected fallback ID type %r for backend %s",
-                                type(fid).__name__,
-                                mb.id,
-                            )
-                            continue
-                    if parsed:
-                        fallback_map[mb.id] = parsed
-            except (AttributeError, TypeError, ValueError, KeyError):
-                # FAR-1526: hub.initialise() runs at the start of EVERY run, so
-                # a permanently-broken backend row used to log a full traceback
-                # on every run (observed as a KeyError hot-loop every ~40-70s).
-                # Log the full detail once per backend id per process, then a
-                # compact repeat line that still names the backend — never
-                # silent, never a traceback flood.
-                if mb.id in _INIT_FAILURE_WARNED:
-                    logger.warning(
-                        "Failed to initialise backend %s (repeat; full detail logged earlier)",
-                        mb.id,
-                    )
-                else:
-                    _INIT_FAILURE_WARNED.add(mb.id)
-                    logger.exception("Failed to initialise backend %s", mb.id)
-                continue
-
-        if not backends_to_register:
+        if registered == 0:
             logger.warning("No backends were registered during initialise — all instances failed or none provided")
 
-        for backend_id, backend in backends_to_register:
-            self.register(backend_id, backend)
+    async def _register_with_isolation(self, row: Any, secrets_backend: SecretsBackend) -> bool:
+        """Resolve, build and register ONE backend row, isolating its failure.
 
-        self._fallbacks.update(fallback_map)
+        Returns ``True`` when this row produced a registration. A row that
+        fails resolution or construction is logged and skipped (FAR-1526:
+        full detail once per backend id per process, then a compact repeat
+        line) so the remaining backends still register — never a bare pass,
+        never a traceback flood. Credential VALUES are never logged.
+        """
+        registered = False
+        try:
+            creds = await _resolve_backend_credentials(row, secrets_backend)
+            if creds is None:
+                # Already logged and skipped (timeout / malformed secret).
+                return False
+            self._creds[row.id] = creds
+            backend = _instantiate_backend(row, creds)
+            self.register(row.id, backend)
+            registered = True
+            fallback_ids = _parse_fallback_ids(row)
+            if fallback_ids is not None:
+                self._fallbacks[row.id] = fallback_ids
+        except (AttributeError, TypeError, ValueError, KeyError):
+            # FAR-1526: hub.initialise() runs at the start of EVERY run, so
+            # a permanently-broken backend row used to log a full traceback
+            # on every run (observed as a KeyError hot-loop every ~40-70s).
+            # Log the full detail once per backend id per process, then a
+            # compact repeat line that still names the backend — never
+            # silent, never a traceback flood.
+            if row.id in _INIT_FAILURE_WARNED:
+                logger.warning(
+                    "Failed to initialise backend %s (repeat; full detail logged earlier)",
+                    row.id,
+                )
+            else:
+                _INIT_FAILURE_WARNED.add(row.id)
+                logger.exception("Failed to initialise backend %s", row.id)
+        return registered
 
     def _find_healthy_fallback(self, backend_id: uuid.UUID) -> uuid.UUID | None:
         """Return the first healthy fallback ID, or None if none are healthy."""
@@ -423,6 +358,118 @@ class ModelBackendHub:
     @property
     def backend_ids(self) -> frozenset[uuid.UUID]:
         return frozenset(self._backends)
+
+
+async def _resolve_backend_credentials(row: Any, secrets_backend: SecretsBackend) -> dict[str, Any] | None:
+    """Fetch and decrypt one backend row's credential JSON (FAR-592).
+
+    Resolution order: the secrets backend first; when the secrets row is
+    absent (``KeyError``), the row's raw ``credentials_ciphertext`` field is
+    decrypted with the configured Fernet key (the FAR-592 raw-credential-field
+    fallback).
+
+    Returns ``None`` when the row must be skipped — secret fetch timeout,
+    malformed secret JSON, or a non-object secret — with each case logged
+    WITHOUT the credential value. Raises :class:`BackendDecryptError` when a
+    stored ciphertext cannot be decrypted (fail-closed for this backend) and
+    :class:`BackendCredentialsMissingError` when there are no stored
+    credentials at all (FAR-1526).
+    """
+    try:
+        raw_str = await asyncio.wait_for(
+            secrets_backend.get_secret(str(row.id)),
+            timeout=_SECRET_FETCH_TIMEOUT,
+        )
+    except TimeoutError:
+        logger.warning("Timeout fetching secret for backend %s", row.id)
+        return None
+    except KeyError:
+        ciphertext = getattr(row, "credentials_ciphertext", None)
+        if ciphertext and isinstance(ciphertext, bytes) and ciphertext != b"":
+            try:
+                from cryptography.fernet import Fernet
+
+                from modulo.settings import get_settings
+
+                _settings = get_settings()
+                f = Fernet(_settings.fernet_key.encode())
+                plaintext = f.decrypt(ciphertext)
+                raw_str = json.dumps({"api_key": plaintext.decode()})
+            except Exception:
+                logger.warning("Failed to decrypt credentials_ciphertext for backend %s", row.id, exc_info=True)
+                raise BackendDecryptError(row.id) from None
+        else:
+            # FAR-1526: no secrets row AND no credentials_ciphertext —
+            # there are no stored credentials for this backend. The old
+            # bare ``raise`` re-threw the secrets backend's
+            # ``KeyError('<backend-uuid>')``, which the generic handler
+            # logged WITH A FULL TRACEBACK on every run's hub
+            # init (prod: backend 4a170ce2-4598-4c38-b927-f9b491275ad6,
+            # a KeyError every ~40-70s) — unactionable and easily
+            # mistaken for a cache/registry lookup bug. Raise the typed
+            # error instead: the message names the backend, the provider
+            # and the remedy, and the handler logs it once per
+            # process rather than once per run.
+            raise BackendCredentialsMissingError(row.id, provider=getattr(row, "provider", "") or "") from None
+    try:
+        raw_creds: Any = json.loads(raw_str)
+    except json.JSONDecodeError as exc:
+        logger.warning("Malformed secret JSON for backend %s: %s", row.id, exc)
+        return None
+    if not isinstance(raw_creds, dict):
+        logger.warning("Secret for backend %s is not a JSON object", row.id)
+        return None
+    creds: dict[str, Any] = raw_creds
+    return creds
+
+
+def _instantiate_backend(row: Any, creds: dict[str, Any]) -> ModelBackendBase:
+    """Provider-class dispatch: build the adapter for one configured row."""
+    return _build_backend(row.provider, row.model_id, creds, row.default_params or {})
+
+
+def _parse_fallback_ids(row: Any) -> list[uuid.UUID] | None:
+    """Parse one row's ``fallback_backend_ids``; ``None`` means no entry.
+
+    Individual invalid entries are logged and dropped; a non-iterable
+    attribute logs and yields ``None`` (the backend itself still registers).
+    An empty parse also yields ``None`` — there is nothing to record.
+    """
+    raw_fallback_ids = getattr(row, "fallback_backend_ids", None)
+    if raw_fallback_ids is None:
+        return None
+    if not isinstance(raw_fallback_ids, list | tuple):
+        logger.warning(
+            "Non-iterable fallback_backend_ids for backend %s: %r",
+            row.id,
+            raw_fallback_ids,
+        )
+        return None
+    parsed: list[uuid.UUID] = []
+    for fid in raw_fallback_ids:
+        if isinstance(fid, str):
+            try:
+                parsed.append(uuid.UUID(fid))
+            except ValueError as exc:
+                logger.warning(
+                    "Invalid fallback ID string %r for backend %s: %s",
+                    fid,
+                    row.id,
+                    exc,
+                )
+                continue
+        elif isinstance(fid, uuid.UUID):
+            parsed.append(fid)
+        else:
+            logger.warning(
+                "Unexpected fallback ID type %r for backend %s",
+                type(fid).__name__,
+                row.id,
+            )
+            continue
+    if not parsed:
+        return None
+    return parsed
 
 
 _NON_OPENAI_COMPATIBLE: dict[str, str] = {
