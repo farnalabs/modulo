@@ -699,6 +699,108 @@ def test_wrap_command_downgraded_block_does_not_kill(monkeypatch, capsys):
     assert "MODULO_BRIDGE_BLOCKED" not in out
 
 
+def test_wrap_command_empty_argv_guard_runs_before_launch(monkeypatch, capsys):
+    """An empty argv is refused with exit 2 BEFORE any child is launched —
+    the guard must stay ahead of the spawn path."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    launched = False
+
+    def _recording_popen(*args, **kwargs):
+        nonlocal launched
+        launched = True
+        raise AssertionError("Popen must not be called for an empty argv")
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _recording_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command([], client)
+
+    assert code == 2
+    assert launched is False
+    err = capsys.readouterr().err
+    assert "--wrap requires a command" in err
+
+
+def test_wrap_command_launches_exactly_the_shaped_argv(monkeypatch):
+    """The orchestrator shapes argv inline (``/bin/sh -c "<joined argv>"``)
+    and the launcher execs exactly that fixed list — never shell=True."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    captured: dict = {}
+
+    def _recording_popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _FakeProc([], wait_code=0)
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _recording_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push", "--set-upstream", "origin main"], client)
+
+    assert code == 0
+    assert captured["args"] == ["/bin/sh", "-c", "git push --set-upstream origin main"]
+    assert captured["kwargs"]["shell"] is False
+    assert captured["kwargs"]["stdout"] is sb.subprocess.PIPE
+    assert captured["kwargs"]["stderr"] is sb.subprocess.STDOUT
+
+
+def test_spawn_and_collect_launch_failure_is_fail_closed(monkeypatch, capsys):
+    """An OSError from the launch reports the error and returns 1 — the
+    wrapper never proceeds without a child (fail-closed)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    def _failing_popen(*args, **kwargs):
+        raise OSError("No such file or directory")
+
+    monkeypatch.setattr(sb.subprocess, "Popen", _failing_popen)
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["definitely-missing-command"], client)
+
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "failed to start wrapped command" in err
+
+
+def test_spawn_and_collect_missing_stdout_fails_closed(monkeypatch):
+    """A child started without a stdout stream raises instead of running with
+    no event interception (collection failure is fail-closed)."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    class _NoStdoutProc:
+        stdout = None
+
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: _NoStdoutProc())
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    with pytest.raises(RuntimeError, match="without a stdout stream"):
+        sb._wrap_command(["git", "push"], client)
+
+
+def test_wrap_command_malformed_event_forwards_empty_tool(monkeypatch, capsys):
+    """A malformed event payload (invalid JSON) is treated as an empty event:
+    forwarded with an empty tool name, fail-open, and never echoed to stdout."""
+    import modulo.core.guardrails.sandbox_bridge as sb
+
+    event_line = b"MODULO_BRIDGE_EVENT: {broken json"
+    proc = _FakeProc([event_line], wait_code=0)
+    monkeypatch.setattr(sb.subprocess, "Popen", lambda *a, **k: proc)
+    seen: list[tuple[str, dict]] = []
+
+    def _record_decide(self, tool, args):
+        seen.append((tool, args))
+        return True, None, "pass"
+
+    monkeypatch.setattr(sb.BridgeClient, "decide_before", _record_decide)
+
+    client = sb.BridgeClient("http://127.0.0.1:9", timeout=0.5)
+    code = sb._wrap_command(["git", "push"], client)
+
+    assert code == 0
+    assert proc.killed is False
+    assert seen == [("", {})]
+    out = capsys.readouterr().out
+    assert "MODULO_BRIDGE_EVENT" not in out
+
+
 def test_load_config_resolves_patterns(tmp_path, monkeypatch):
     """``_load_config`` resolves intercepted_tool_patterns from the config file
     and falls back to defaults when the field is absent/malformed."""
