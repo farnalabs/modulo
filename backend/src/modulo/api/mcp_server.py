@@ -2747,7 +2747,10 @@ async def _apply_mcp_autonomy_change(
         pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
         if pid_err:
             return pid_err
-        assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
+        # _parse_uuid_param returns (None, error) only on failure, already handled
+        # above; cast narrows for mypy without an assert inside the except-Exception
+        # block (SonarCloud S5779).
+        pid = cast(uuid.UUID, pid)
         try:
             target_level = AutonomyLevel(level)
         except ValueError:
