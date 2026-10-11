@@ -143,14 +143,6 @@ def enforce_polling_read_acl(connector_instance: Any) -> None:
     ConnectorACL(
         visibility=visibility,
         allowed_operations=getattr(connector_instance, "allowed_operations", None),
-        # FAR-1616: a type-qualified legacy entry (``github.read``) only
-        # certifies its bare capability when the SURFACE type is supplied and
-        # matches the qualifier. The hub passes ``ci.connector_type_id`` at its
-        # construction site; without the same argument here the polling seam
-        # rejects a SAME-TYPE legacy grant that every other gate honours
-        # (FAR-1628) — a mis-typed qualifier still fails closed, since
-        # ``canonical_capability_set`` compares this value against the
-        # entry's own qualifier.
         connector_type_id=getattr(connector_instance, "connector_type_id", None),
     ).check("read")
 
