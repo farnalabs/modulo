@@ -193,7 +193,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for rule in .semgrep/no-raw-httpx-client.yml; do
+          for rule in .semgrep/no-raw-httpx-client.yml .semgrep/connector-egress-verify-required.yml; do
             base="$(basename "$rule" .yml)"
             if [ -f ".semgrep/tests/${base}.py" ]; then
               uv run --no-build --project backend --no-sync semgrep --config="$rule" --test ".semgrep/tests/${base}.py"
