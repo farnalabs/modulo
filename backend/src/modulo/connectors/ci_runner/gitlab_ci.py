@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
@@ -59,6 +60,7 @@ class GitLabCIRunner(CIRunnerBase):
             base_url=self._base_url,
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     def _parse_run(self, raw: dict[str, Any], project_ref: str = "") -> CIRun:

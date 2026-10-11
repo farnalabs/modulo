@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -73,6 +74,7 @@ class AzureReposConnector(ConnectorBase):
             base_url=self._base_url,
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -88,6 +90,7 @@ class AzureReposConnector(ConnectorBase):
                 "https://app.vssps.visualstudio.com",
                 headers=self._headers(),
                 timeout=30,
+                verify=egress_ssl_context(self),
             ) as client:
                 r = await client.get(
                     "https://app.vssps.visualstudio.com/_apis/profile/profiles/me",

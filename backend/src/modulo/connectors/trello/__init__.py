@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -60,6 +61,7 @@ class TrelloConnector(ConnectorBase):
             base_url=_TRELLO_API,
             params={"key": self._api_key, "token": self._token},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _request(

@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records_list as _safe_records_list
 from modulo.connectors.base import (
     ConnectorBase,
@@ -69,6 +70,7 @@ class GiteaConnector(ConnectorBase):
             base_url=f"{self._base_url}/api/v1",
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def _get_missing_scopes(self) -> frozenset[str]:

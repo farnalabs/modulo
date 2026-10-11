@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -36,10 +37,7 @@ class NpmConnector(ConnectorBase):
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return pinned_async_client_sync(
-            _API_BASE,
-            base_url=_API_BASE,
-            headers=headers,
-            timeout=30,
+            _API_BASE, base_url=_API_BASE, headers=headers, timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:

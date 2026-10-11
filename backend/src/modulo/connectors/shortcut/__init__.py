@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -63,6 +64,7 @@ class ShortcutConnector(ConnectorBase):
             base_url=_SHORTCUT_API,
             headers={"Shortcut-Token": self._token, "Content-Type": "application/json"},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:

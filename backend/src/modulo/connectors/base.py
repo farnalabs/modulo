@@ -1,6 +1,7 @@
 """Connector base types, ABCs, and ACL enforcement."""
 
 import logging
+import ssl
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -916,6 +917,13 @@ class CIRunLog:
 
 class ConnectorBase(ABC):
     """Abstract base for all external tool connectors."""
+
+    # FAR-1650: the TLS context for this connector's egress clients, built at
+    # most once per instance by ``modulo.connectors._egress.egress_ssl_context``
+    # (the ``None`` class default means an instance that never makes an outbound
+    # call pays nothing). Typed here — not built here — so this module stays a
+    # stdlib-only leaf; ``httpx`` is imported only by ``_egress``.
+    _egress_ssl_context: ssl.SSLContext | None = None
 
     @property
     @abstractmethod
