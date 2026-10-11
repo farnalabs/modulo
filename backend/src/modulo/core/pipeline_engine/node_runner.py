@@ -10896,7 +10896,7 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             # System env vars first — provide defaults from the host. DO NOT
             # move pipeline env before these: pipelines need to override
             # GITHUB_TOKEN for identity separation (e.g. PR Reviewer uses
-            # modulo-reviewbot PAT, not the system default farnalabs bot).
+            # modulo-reviewbot PAT, not the default GITHUB_TOKEN identity).
             # The reserved-prefix validator already prevents overriding
             # MODULO_* vars, so update() below is the sanctioned override.
             # FAR-592 (D6): ``_runner_bindings`` was resolved BEFORE the sandbox
