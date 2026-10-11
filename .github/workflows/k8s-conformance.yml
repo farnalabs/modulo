@@ -170,7 +170,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Path detection diffs against the base; no credentials persisted.
           fetch-depth: 0
@@ -435,7 +435,7 @@ jobs:
     env:
       KUBECONFIG: ${{ github.workspace }}/.kube/conformance.yaml
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
