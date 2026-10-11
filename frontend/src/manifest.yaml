@@ -4062,6 +4062,12 @@ elements:
       - testid: json-viewer-string-expand
         type: button
         dynamic_testid: false
+      - testid: run-detail-deadline-triage
+        type: element
+        dynamic_testid: false
+      - testid: run-detail-deadline-triage-entry
+        type: element
+        dynamic_testid: false
     /runs/diff:
       - testid: diff-loading
         type: element
