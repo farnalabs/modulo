@@ -335,7 +335,7 @@ class TestSoftDeleteDeclaredGate:
         assert audit.await_args.kwargs["event_type"] == "policy_gate.deleted"
 
         # A soft-deleted gate is no longer live.
-        assert await _live_gates(session) == []
+        assert not await _live_gates(session)
 
 
 class TestReconcileGraphPolicyGates:
@@ -403,7 +403,7 @@ class TestReconcileGraphPolicyGates:
             )
             await session.flush()
 
-        assert await _live_gates(session) == []
+        assert not await _live_gates(session)
         assert [call.kwargs["event_type"] for call in audit.await_args_list] == [
             "policy_gate.created",
             "policy_gate.deleted",
