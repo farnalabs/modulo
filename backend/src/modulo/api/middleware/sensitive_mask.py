@@ -428,6 +428,68 @@ def mask_pipeline_graph_node(node: dict[str, Any]) -> dict[str, Any]:
         return scrubbed
 
 
+def _scrub_fail_closed(incoming_field: dict[str, Any], stored_field: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one flat secret field against its stored counterpart (FAR-1181).
+
+    An incoming value containing ``SENSITIVE_VALUE_MASK`` means "unchanged":
+    it resolves to the stored value. A masked echo with NO stored counterpart
+    is dropped (fail closed — never persisted, never leaked). Keys absent from
+    the incoming field remain removed, so full-replace semantics are preserved
+    for non-echo keys.
+    """
+    merged: dict[str, Any] = {}
+    for key, value in incoming_field.items():
+        if isinstance(value, str) and SENSITIVE_VALUE_MASK in value:
+            restored = stored_field.get(key)
+            if restored is not None:
+                merged[key] = restored
+            # else: mask echo with no stored counterpart — dropped.
+        else:
+            merged[key] = value
+    return merged
+
+
+def _resolve_mask_echo(node: dict[str, Any], live: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolve flat-field (``env_vars`` / ``context_files``) mask echoes against the stored node.
+
+    Each flat ``str`` dict is resolved via :func:`_scrub_fail_closed`. The
+    caller's ``node`` is never mutated — a NEW dict is returned.
+    """
+    updated = dict(node)
+    for field in ("env_vars", "context_files"):
+        incoming_field = updated.get(field)
+        if not isinstance(incoming_field, dict):
+            continue
+        stored_field = live.get(field) if live is not None else None
+        stored_field = stored_field if isinstance(stored_field, dict) else {}
+        updated[field] = _scrub_fail_closed(incoming_field, stored_field)
+    return updated
+
+
+def _merge_node(live: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+    """Merge ONE incoming node against its stored counterpart (FAR-1181).
+
+    Flat secret fields are resolved by :func:`_resolve_mask_echo`. For the deep
+    dicts (``composite_parameter_values`` / ``parameter_overrides``): a dict
+    containing a masked echo anywhere is deep-merged against the stored dict
+    via the shipped :func:`merge_masked_config_json` (a dict with no stored
+    counterpart resolves echoes by dropping them); an echo-free dict is taken
+    wholesale (full-replace semantics — no silent resurrection of removed
+    keys).
+    """
+    updated = _resolve_mask_echo(incoming, live)
+    for field in ("composite_parameter_values", "parameter_overrides"):
+        incoming_field = updated.get(field)
+        if not isinstance(incoming_field, dict):
+            continue
+        stored_field = live.get(field) if live is not None else None
+        if _contains_masked_echo(incoming_field):
+            base = stored_field if isinstance(stored_field, dict) else {}
+            updated[field] = merge_masked_config_json(base, incoming_field)
+        # else: echo-free — keep the caller's value wholesale.
+    return updated
+
+
 def merge_masked_graph_nodes(
     incoming_nodes: list[dict[str, Any]],
     stored_nodes: list[dict[str, Any]] | None,
@@ -438,19 +500,9 @@ def merge_masked_graph_nodes(
     ``composite_parameter_values`` / ``parameter_overrides``
     (:func:`mask_pipeline_graph_node`). A full-replace write round-tripping
     that masked read would otherwise persist the mask literals over the stored
-    secrets. Per node (matched by ``id``):
-
-    - ``env_vars`` / ``context_files`` (flat ``str`` dicts): an incoming value
-      containing ``SENSITIVE_VALUE_MASK`` is replaced with the stored value;
-      a masked echo with NO stored counterpart is dropped (fail closed).
-      Keys absent from the incoming field remain removed — full-replace
-      semantics are preserved for non-echo keys.
-    - ``composite_parameter_values`` / ``parameter_overrides``: a dict
-      containing a masked echo anywhere is deep-merged against the stored dict
-      via the shipped :func:`merge_masked_config_json`; an echo-free dict is
-      taken wholesale (full-replace semantics — no silent resurrection of
-      removed keys). A dict with no stored counterpart resolves echoes by
-      dropping them.
+    secrets. Per node (matched by ``id``), :func:`_merge_node` resolves the
+    echoes against the stored node — see its docstring for the per-field
+    rules. Non-dict entries pass through untouched.
     """
     stored_by_id: dict[str, dict[str, Any]] = {}
     for stored_node in stored_nodes or []:
@@ -462,34 +514,8 @@ def merge_masked_graph_nodes(
         if not isinstance(node, dict):
             resolved.append(node)
             continue
-        stored = stored_by_id.get(str(node["id"])) if node.get("id") is not None else None
-        updated = dict(node)
-        for field in ("env_vars", "context_files"):
-            incoming = updated.get(field)
-            if not isinstance(incoming, dict):
-                continue
-            stored_field = stored.get(field) if stored is not None else None
-            stored_field = stored_field if isinstance(stored_field, dict) else {}
-            merged: dict[str, Any] = {}
-            for key, value in incoming.items():
-                if isinstance(value, str) and SENSITIVE_VALUE_MASK in value:
-                    restored = stored_field.get(key)
-                    if restored is not None:
-                        merged[key] = restored
-                    # else: mask echo with no stored counterpart — dropped.
-                else:
-                    merged[key] = value
-            updated[field] = merged
-        for field in ("composite_parameter_values", "parameter_overrides"):
-            incoming = updated.get(field)
-            if not isinstance(incoming, dict):
-                continue
-            stored_field = stored.get(field) if stored is not None else None
-            if _contains_masked_echo(incoming):
-                base = stored_field if isinstance(stored_field, dict) else {}
-                updated[field] = merge_masked_config_json(base, incoming)
-            # else: echo-free — keep the caller's value wholesale.
-        resolved.append(updated)
+        live = stored_by_id.get(str(node["id"])) if node.get("id") is not None else None
+        resolved.append(_merge_node(live, node))
     return resolved
 
 
