@@ -25,13 +25,22 @@ export const useNotificationsStore = defineStore('notifications', () => {
   const recentNotifications = ref<NotificationResponse[]>([])
   const loadingRecent = ref(false)
   const markAllReadError = ref<string | null>(null)
+  /** Set when the dropdown's recent-list fetch fails (FAR-249 QA). */
+  const fetchError = ref<string | null>(null)
 
-  /** Refresh the unread badge count. Fail-open: any error leaves the last value. */
+  /**
+   * Refresh the unread badge count. Fail-open: any error leaves the last
+   * value. Zeroing on a transient error would falsely clear the badge and
+   * announce "0 unread" for notifications the user never saw.
+   */
   async function refreshUnreadCount(): Promise<void> {
     try {
       unreadCount.value = await fetchUnreadCount()
-    } catch {
-      unreadCount.value = 0
+    } catch (e: unknown) {
+      // Fail-open WITH a log: KEEP the previous count. Zeroing on a
+      // transient error would falsely clear the badge and announce
+      // "0 unread" for notifications the user never saw.
+      console.warn('[notifications] unread-count refresh failed; keeping last badge value', e)
     }
   }
 
@@ -39,15 +48,21 @@ export const useNotificationsStore = defineStore('notifications', () => {
    * Load the dropdown's recent list from the severity-filtered dashboard
    * feed. `total_unread` from the same response keeps the badge in step with
    * the list in one round-trip.
+   *
+   * On failure the previous list and badge are KEPT (fail-open) and
+   * `fetchError` is set so the dropdown renders an error state — never the
+   * "No notifications" empty state, which would falsely claim the feed is
+   * clear. A later successful fetch clears the flag.
    */
   async function fetchRecent(limit: number = DROPDOWN_LIMIT): Promise<void> {
     loadingRecent.value = true
+    fetchError.value = null
     try {
       const data = await fetchDashboardNotifications(limit)
       recentNotifications.value = data.notifications ?? []
       unreadCount.value = data.total_unread
-    } catch {
-      recentNotifications.value = []
+    } catch (e: unknown) {
+      fetchError.value = formatApiError(e)
     } finally {
       loadingRecent.value = false
     }
@@ -76,6 +91,7 @@ export const useNotificationsStore = defineStore('notifications', () => {
     recentNotifications,
     loadingRecent,
     markAllReadError,
+    fetchError,
     refreshUnreadCount,
     fetchRecent,
     markAllRead,

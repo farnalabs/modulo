@@ -710,12 +710,17 @@ class TestMarkAllRead:
         mock_session.add_all.assert_not_called()
         mock_session.flush.assert_not_awaited()
 
-    async def test_programming_error_returns_zero(self, mock_session: AsyncMock) -> None:
+    async def test_programming_error_is_propagated_not_swallowed(self, mock_session: AsyncMock) -> None:
+        """PROVE-THE-FIX (FAR-249 QA): this WRITE path used to catch the SELECT's
+        ``ProgrammingError`` and ``return 0``, so a DB/RLS failure answered the
+        route with HTTP 200 ``{marked: 0}`` instead of its intended 501. The
+        read paths degrade to empty; the write path must fail loud."""
         from modulo.db.crud.notifications import mark_all_read_for_user
 
         mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
 
-        assert await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID) == 0
+        with pytest.raises(ProgrammingError):
+            await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
 
     async def test_concurrent_duplicate_raises_value_error(self, mock_session: AsyncMock) -> None:
         """A concurrent self-dismissal of the same rows surfaces as ValueError."""

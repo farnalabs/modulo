@@ -49,6 +49,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 from httpx import Response
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.api.dependencies import get_db_session, get_plan_context
@@ -146,6 +147,7 @@ def _notification_client(
     *,
     notifications: Sequence[Notification],
     nullable_expiry: bool = False,
+    fail_execute_with: BaseException | None = None,
 ) -> Generator[tuple[TestClient, SimpleNamespace], None, None]:
     """Real-SQLite TestClient over the in-app notification routes.
 
@@ -157,6 +159,13 @@ def _notification_client(
     column nullable and 0110 only tightened it to NOT NULL when no NULL rows
     existed, so legacy deployments can still hold NULL-TTL rows (the F3 arm).
     The column metadata is restored on exit so no other test sees the flip.
+
+    ``fail_execute_with`` makes every ``session.execute`` on the session handed
+    to the ROUTE raise the given exception (seeding uses a separate session and
+    is unaffected). This injects a DBAPI-level failure at the driver boundary
+    while the route and the REAL CRUD code under it keep running — the only way
+    to simulate e.g. a pre-migration ``ProgrammingError`` on SQLite, which
+    never raises that class for a missing table.
     """
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'notif_lifecycle.db'}", echo=False)
     seeded = False
@@ -180,6 +189,13 @@ def _notification_client(
                     for row in rows:
                         session.add(row)
                 seeded = True
+            if fail_execute_with is not None:
+                exception = fail_execute_with
+
+                async def _failing_execute(*_args: object, **_kwargs: object) -> object:
+                    raise exception
+
+                session.execute = _failing_execute  # type: ignore[method-assign]
             yield session
 
     actor = SimpleNamespace(account_id=_USER_A, username="user-a", org_role="admin")
@@ -749,3 +765,29 @@ def test_mark_all_read_is_a_noop_when_already_clear(tmp_path: Path) -> None:
         again = client.post(f"{_BASE}/mark-all-read")
         assert again.status_code == 200, again.text
         assert again.json()["marked"] == 0
+
+
+def test_mark_all_read_db_error_surfaces_as_501_not_a_false_success(tmp_path: Path) -> None:
+    """PROVE-THE-FIX (FAR-249 QA): the REAL route + REAL ``mark_all_read_for_user``
+    (no CRUD stub) with a DBAPI-level ``ProgrammingError`` at the driver
+    boundary. The CRUD used to swallow the SELECT's error and return ``0``, so
+    this exact request answered HTTP 200 ``{marked: 0}`` — a DB/RLS failure
+    reported as a successful no-op write. The route's ``ProgrammingError`` →
+    501 handler must fire instead.
+
+    The stubbed route test (``test_in_app_notifications_routes``) cannot prove
+    this: it replaces ``mark_all_read_for_user`` wholesale, so the swallow that
+    masked the failure was never executed.
+    """
+    now = datetime.now(UTC)
+    with _notification_client(
+        tmp_path,
+        notifications=[
+            _notification(notification_id=_LIVE_ID, expires_at=now + timedelta(hours=72), title="live"),
+        ],
+        fail_execute_with=ProgrammingError("42P01", None, Exception("relation notifications does not exist")),
+    ) as (client, _actor):
+        resp = client.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 501, resp.text
+    assert resp.json()["detail"] == "Feature is not available. Run database migrations to enable it."

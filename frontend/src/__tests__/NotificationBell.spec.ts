@@ -140,6 +140,23 @@ describe('NotificationBell (FAR-250)', () => {
     expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('4')
   })
 
+  it('keeps the last badge value when the unread-count refresh fails', async () => {
+    h.mockFetchUnreadCount.mockResolvedValue(5)
+    const wrapper = await mountBell()
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('5')
+
+    const handler = h.mockSubscribe.mock.calls[0][1] as (e: Record<string, unknown>) => void
+    h.mockFetchUnreadCount.mockRejectedValue(new Error('transient'))
+    handler(notificationEvent({ category: 'hitl_overdue' }))
+    await flushPromises()
+
+    // Fail-open: a transient error must not zero the badge (which used to
+    // hide it entirely and announce "0 unread" for notifications the user
+    // never saw).
+    expect(wrapper.find('[data-testid="notification-unread-badge"]').text()).toBe('5')
+    expect(wrapper.find('[data-testid="notification-unread-live"]').text()).toContain('5')
+  })
+
   it('applies read-time suppression: no refetch for an opted-out category', async () => {
     await mountBell()
     const handler = h.mockSubscribe.mock.calls[0][1] as (e: Record<string, unknown>) => void

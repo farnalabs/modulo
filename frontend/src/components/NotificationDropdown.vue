@@ -42,6 +42,26 @@
     </p>
 
     <LoadingSpinner v-if="store.loadingRecent" />
+    <!-- Fetch failed AND there is nothing previously loaded to fall back to:
+         an error state, never the "No notifications" empty state, which would
+         falsely claim the feed is clear (FAR-249 QA). When earlier items ARE
+         kept (fail-open) the list below stays visible instead. -->
+    <div
+      v-else-if="store.recentNotifications.length === 0 && store.fetchError"
+      data-testid="notification-dropdown-error"
+      role="alert"
+      class="px-3 py-4 text-center text-sm text-destructive"
+    >
+      <p>{{ $t("components.NotificationDropdown.failed_to_load") }}</p>
+      <button
+        type="button"
+        data-testid="notification-dropdown-retry"
+        class="mt-2 rounded px-2 py-1 text-xs font-medium text-primary hover:bg-muted"
+        @click="store.fetchRecent()"
+      >
+        {{ $t("components.NotificationDropdown.retry") }}
+      </button>
+    </div>
     <p
       v-else-if="store.recentNotifications.length === 0"
       data-testid="notification-dropdown-empty"

@@ -84,6 +84,66 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(wrapper.find('[data-testid="notification-dropdown-empty"]').exists()).toBe(true)
   })
 
+  it('renders an error state, NOT the empty state, when the recent fetch fails', async () => {
+    h.mockFetchDashboard.mockRejectedValue(new Error('boom'))
+
+    const wrapper = await mountDropdown()
+
+    // The error state must replace the empty state: "No notifications" would
+    // falsely claim the feed is clear when the fetch simply failed.
+    expect(wrapper.find('[data-testid="notification-dropdown-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="notification-dropdown-error"]').attributes('role')).toBe('alert')
+    expect(wrapper.find('[data-testid="notification-dropdown-empty"]').exists()).toBe(false)
+  })
+
+  it('keeps the previous list and badge when a later fetchRecent fails', async () => {
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    const wrapper = await mountDropdown()
+    const store = useNotificationsStore()
+    expect(store.unreadCount).toBe(1)
+
+    h.mockFetchDashboard.mockRejectedValue(new Error('transient'))
+    await store.fetchRecent()
+    await flushPromises()
+
+    // Fail-open: the earlier items and badge survive the failed refresh.
+    expect(store.recentNotifications).toHaveLength(1)
+    expect(store.unreadCount).toBe(1)
+    expect(store.fetchError).toBeTruthy()
+    // With items still held, the list stays visible — the error region only
+    // replaces the EMPTY state.
+    expect(wrapper.findAll('[data-testid="notification-dropdown"] li')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="notification-dropdown-error"]').exists()).toBe(false)
+
+    // A later successful fetch clears the error flag.
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    await store.fetchRecent()
+    expect(store.fetchError).toBeNull()
+  })
+
+  it('retries the failed fetch from the error state', async () => {
+    h.mockFetchDashboard.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountDropdown()
+    const retry = wrapper.find('[data-testid="notification-dropdown-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    h.mockFetchDashboard.mockResolvedValue({
+      notifications: [notification()],
+      total_unread: 1,
+    })
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown-error"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="notification-dropdown"] li')).toHaveLength(1)
+  })
+
   it('renders a dialog with an accessible title', async () => {
     const wrapper = await mountDropdown()
     const dialog = wrapper.find('[data-testid="notification-dropdown"]')

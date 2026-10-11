@@ -564,6 +564,14 @@ async def mark_all_read_for_user(
     the INSERT on the ``uq_dismissal_user_notification`` unique constraint; the
     resulting ``IntegrityError`` is re-raised as ``ValueError`` so the route
     answers 400 instead of a generic 500.
+
+    **Fail-loud, unlike the READ paths.** This is a WRITE path, so a
+    ``ProgrammingError`` from the live-view SELECT is NOT swallowed the way
+    ``get_dashboard_notifications`` / ``get_unread_count`` degrade their reads
+    to an empty result. Swallowing here returned ``0`` and the route answered
+    HTTP 200 ``{marked: 0}`` for a genuine DB/RLS failure — the caller was told
+    the write "succeeded, nothing to do". The exception propagates so the
+    route's ``ProgrammingError`` → 501 handler fires.
     """
     q = select(Notification.id).where(
         Notification.organisation_id == org_id,
@@ -572,11 +580,8 @@ async def mark_all_read_for_user(
         _not_expired_clause(),
     )
     q = apply_prefs_filter(q, account_id=user_id)
-    try:
-        result = await session.execute(q)
-        notification_ids = [uuid.UUID(str(row[0])) for row in result.all()]
-    except ProgrammingError:
-        return 0
+    result = await session.execute(q)
+    notification_ids = [uuid.UUID(str(row[0])) for row in result.all()]
     if not notification_ids:
         return 0
 
