@@ -1433,7 +1433,26 @@ def _restore_cluster(opts: _RestoreOptions, manifest: dict[str, Any], raw_url: s
     else:
         click.echo("  No checkpoint_writes.json found — skipping")
 
-    creds_json = backup_dir / _CREDS_JSON_FILE
+    _re_encrypt_credentials_if_needed(opts, manifest, raw_url, settings)
+
+    if db_sql.exists():
+        _check_collation_versions_sync(raw_url)
+
+
+def _re_encrypt_credentials_if_needed(
+    opts: _RestoreOptions,
+    manifest: dict[str, Any],
+    raw_url: str,
+    settings: Any,
+) -> None:
+    """Re-encrypt archived credentials when the FERNET_KEY changed since backup.
+
+    ORDERING (locked by contract): called AFTER the checkpoint JSON exports
+    and BEFORE the collation drift check. A no-op when the archive carries no
+    credentials_references.json, and a transcript-only branch when the key is
+    unchanged (parity with the pre-refactor command).
+    """
+    creds_json = opts.backup_dir / _CREDS_JSON_FILE
     current_key_hash = _fernet_key_hash(settings.fernet_key)
     backup_key_hash = manifest.get("fernet_key_hash", "")
 
@@ -1449,9 +1468,6 @@ def _restore_cluster(opts: _RestoreOptions, manifest: dict[str, Any], raw_url: s
             click.echo(f"  {cnt} {table} re-encrypted")
     elif current_key_hash == backup_key_hash:
         click.echo("FERNET_KEY unchanged — no credential re-encryption needed")
-
-    if db_sql.exists():
-        _check_collation_versions_sync(raw_url)
 
 
 def _restore_data_dir(opts: _RestoreOptions, manifest: dict[str, Any]) -> None:
