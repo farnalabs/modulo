@@ -340,6 +340,26 @@ describe('AdminRunRetentionView', () => {
     vi.restoreAllMocks()
   })
 
+  it('surfaces a purge error when the purge endpoint fails', async () => {
+    ;(api.POST as Mock).mockResolvedValue({ data: undefined, error: { detail: 'purge boom' } })
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-testid="admin-run-retention-purge"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const confirmBtn = document.body.querySelector('[data-testid="admin-run-retention-purge-confirm"]') as HTMLElement
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn.click()
+    for (let i = 0; i < 5; i++) await flushPromises()
+
+    const error = wrapper.find('[data-testid="admin-run-retention-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('purge boom')
+    // Export/purge action errors carry no refetch loader — no Retry control.
+    expect(error.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+  })
+
   it('surfaces a candidates load error with Retry and recovers on retry', async () => {
     ;(api.GET as Mock).mockImplementation(async (url: string) => {
       if (url === '/api/v1/pipelines') {

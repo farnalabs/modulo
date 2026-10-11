@@ -100,7 +100,7 @@
             </div>
             <ErrorAlert
               v-else-if="detailError[record.id]"
-              :message="detailError[record.id] ?? undefined"
+              :message="detailError[record.id]"
               :on-retry="() => loadDetail(record.id)"
               role="alert"
             />
