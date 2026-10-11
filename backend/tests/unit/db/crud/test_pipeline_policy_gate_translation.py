@@ -41,6 +41,7 @@ from modulo.db.crud.pipeline import (
     _reject_duplicate_policy_gates,
     _soft_delete_declared_gate,
     reconcile_graph_policy_gates,
+    reject_declared_policy_gates,
 )
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
@@ -163,6 +164,20 @@ class TestRejectDuplicatePolicyGates:
     def test_distinct_evals_are_allowed(self) -> None:
         nodes = [_gate_node("n1"), _gate_node("n2", eval_id=str(_OTHER_EVAL_ID))]
         assert _reject_duplicate_policy_gates(nodes) is None
+
+
+class TestRejectDeclaredPolicyGates:
+    """FAR-1109: the guard for graph writers that do NOT translate gates."""
+
+    def test_declared_block_fails_loudly(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            reject_declared_policy_gates([_gate_node("n1")], surface="Pipeline import")
+        assert exc.value.status_code == 422
+        assert "Pipeline import" in exc.value.detail
+        assert str(_EVAL_ID) in exc.value.detail
+
+    def test_gate_free_graph_is_a_noop(self) -> None:
+        assert reject_declared_policy_gates([{"id": "n1", "node_type": "agent"}], surface="Pipeline import") is None
 
 
 class TestLoadGateEvalForNode:

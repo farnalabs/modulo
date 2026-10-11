@@ -1417,13 +1417,20 @@ def graph_update_audit_payload(
 # the graph write must translate each declared block into the corresponding row
 # lifecycle (create / update / soft-delete).
 #
-# The translation lives HERE, in the single shared graph-write transaction,
-# rather than in any one caller. Every surface that writes a graph — the REST
-# graph endpoints, the MCP ``update_pipeline_graph`` tool, the PATCH
+# The translation lives HERE, in the shared graph-REPLACE transaction, rather
+# than in any one caller. Every surface that REPLACES an existing graph — the
+# REST graph endpoints, the MCP ``update_pipeline_graph`` tool, the PATCH
 # ``graph_json`` path, node conversions, snapshot rollback, onboarding and the
-# demo seed — funnels through ``replace_pipeline_graph``, so no writer can
-# bypass it: a gate declared through MCP is translated exactly like one declared
-# through REST, and a removal soft-deletes its row on both surfaces.
+# demo seed's edge convergence — funnels through ``replace_pipeline_graph``, so
+# a gate declared through MCP is translated exactly like one declared through
+# REST, and a removal soft-deletes its row on both surfaces.
+#
+# A few writers persist ``graph_nodes_json`` DIRECTLY on a pipeline they are
+# CREATING rather than replacing (workflow import, library/template install and
+# the demo seed's initial row) and so do NOT run this translation. Those
+# surfaces call ``reject_declared_policy_gates`` instead: a graph that declares
+# a ``policy_gate`` block fails loudly rather than being stored with no
+# governing row (silent, plan-hash-invisible non-enforcement).
 #
 # The per-eval advisory lock key MUST stay identical to the FAR-1106 authoring
 # routes' ``modulo.api.routes.evals._with_gate_advisory_lock``
@@ -1505,6 +1512,36 @@ def _reject_duplicate_policy_gates(nodes: list[dict[str, Any]]) -> None:
                 ),
             )
         seen[eval_id] = node_id
+
+
+def reject_declared_policy_gates(nodes: list[dict[str, Any]], *, surface: str) -> None:
+    """Fail closed when a direct graph writer is handed a declared policy gate.
+
+    ``replace_pipeline_graph`` is the ONLY graph-write surface that translates a
+    node ``policy_gate`` block into its ``PolicyGate`` row. A handful of writers
+    (workflow import, library/template install, the demo-seed row creation)
+    persist ``graph_nodes_json`` DIRECTLY and do not run that translation, so a
+    declared block reaching one of them would be stored with no governing row —
+    silent non-enforcement the run-time plan hash cannot see (both plan sides
+    hash the block equally, so the graph reads unchanged). Those surfaces call
+    this guard instead: a declared block fails loudly rather than being
+    persisted unenforced.
+
+    ``surface`` names the caller for the error message.
+    """
+    declared = _declared_policy_gates(nodes)
+    if not declared:
+        return
+    eval_ids = ", ".join(sorted(declared))
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail=(
+            f"{surface} cannot persist a declared policy_gate block (eval_id(s): {eval_ids}); "
+            "only the pipeline graph write (REST graph PATCH / MCP update_pipeline_graph) "
+            "translates a declared gate into a PolicyGate row. Author the gate through that "
+            "path instead of storing it directly in graph_nodes_json."
+        ),
+    )
 
 
 async def _load_gate_eval_for_node(
@@ -1941,11 +1978,14 @@ async def replace_pipeline_graph(
     await session.flush()
 
     # FAR-1109: translate the new graph's declared ``policy_gate`` blocks into
-    # the PolicyGate row lifecycle IN THE SAME TRANSACTION. This is the one
-    # shared graph-write transaction, so EVERY writer (REST, MCP, node
-    # conversion, snapshot rollback, onboarding, demo seed) translates — a
+    # the PolicyGate row lifecycle IN THE SAME TRANSACTION. Every surface that
+    # REPLACES a graph (REST, MCP, node conversion, snapshot rollback,
+    # onboarding, demo-seed edge convergence) funnels through here, so a
     # declarative gate can never be stored in ``graph_nodes_json`` without a
-    # governing row, and a removal can never leave a live row behind.
+    # governing row and a removal can never leave a live row behind. Writers
+    # that persist a CREATED pipeline's graph directly (workflow import,
+    # library/template install, demo-seed row creation) do not translate; they
+    # reject a declared block via ``reject_declared_policy_gates`` instead.
     await reconcile_graph_policy_gates(
         session,
         org_id=org_id,
