@@ -429,6 +429,14 @@ _ctx_user_keys_enabled: contextvars.ContextVar[bool] = contextvars.ContextVar("m
 _ctx_node_allowed_tools: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "mcp_node_allowed_tools", default=None
 )
+# FAR-696: the principal's ``is_system_admin`` flag, lifted by the auth paths
+# so system-admin-only tools (``list_feature_flags`` — REST
+# ``require_system_permission``) can enforce the SAME strict gate MCP-side.
+# Fail-closed default False: API keys and OAuth tokens never carry the flag
+# (mirroring REST, where API-key principals are constructed with
+# ``is_system_admin=False`` and OAuth claims do not carry it); only a regular
+# JWT whose decoded principal holds the flag sets it True.
+_ctx_is_system_admin: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_is_system_admin", default=False)
 
 
 def _bind_org_context(
@@ -524,6 +532,16 @@ def _ctx_node_allowed_tools_val() -> list[str] | None:
     default) preserves pre-scope behaviour; an empty list is deny-by-default.
     """
     return _ctx_node_allowed_tools.get(None)
+
+
+def _ctx_is_system_admin_val() -> bool:
+    """FAR-696: True when the request's principal holds ``is_system_admin``.
+
+    Fail-closed: unset resolves to False (the ContextVar default), so only the
+    auth paths that explicitly lifted the flag can ever pass a system-admin
+    gate — the same strict ``require_system_permission`` posture REST uses.
+    """
+    return bool(_ctx_is_system_admin.get(False))
 
 
 def _check_agent_tool_scope(tool_name: str, action: str | None = None) -> None:
@@ -1488,6 +1506,10 @@ async def _authenticate_api_key(
         # rows) on the fail-closed None; real rows always carry a string.
         _ctx_key_scope.set(key.scope if isinstance(key.scope, str) else None)
         _ctx_key_grants.set(key_grants)
+        # FAR-696: an API-key principal is never a system admin — REST
+        # constructs API-key tenants with ``is_system_admin=False`` and the
+        # strict ``require_system_permission`` gates deny them; mirror that.
+        _ctx_is_system_admin.set(False)
         # FAR-436: a run-scoped sandbox key narrows the agent's MCP tool-call
         # loop to the node's capability_scope.allowed_tools (deny-by-default
         # within the scope). Non-run keys / scoped-less nodes resolve to None
@@ -1638,6 +1660,10 @@ async def _authenticate_oauth_jwt(
         _ctx_key_scope.set("user")
         _ctx_key_grants.set(None)
         _ctx_team_id.set(None)  # user tokens carry no team boundary
+        # FAR-696: lift the principal's system-admin flag so system-admin-only
+        # tools can enforce the same strict gate REST's
+        # ``require_system_permission`` applies (fail-closed False elsewhere).
+        _ctx_is_system_admin.set(bool(principal.is_system_admin))
         request.scope["auth_principal"] = {
             "type": "user",
             "org_id": str(principal.organisation_id) if principal.organisation_id else "",
@@ -1784,6 +1810,10 @@ async def _finalize_oauth_principal(
     # before an exclusion tightened is denied at the very next call.
     _ctx_key_grants.set(oauth_grant_set(claims.scopes))
     _ctx_team_id.set(client_team_id)  # FAR-1476: client's team boundary (None = org-wide)
+    # FAR-696: OAuth access-token claims do not carry ``is_system_admin`` —
+    # fail closed (False), matching REST where such tokens are not system
+    # admins either.
+    _ctx_is_system_admin.set(False)
     request.scope["auth_principal"] = {
         "type": "user",
         "org_id": str(claims.organisation_id),
@@ -8868,6 +8898,922 @@ async def get_agent(agent_id: str) -> dict[str, Any]:
     except Exception as exc:
         _log.exception("get_agent failed")
         return _tool_exception_error("Failed to get agent", exc, "mcp.get_agent")
+
+
+# ---------------------------------------------------------------------------
+# FAR-696: governance-entity read/list tools.
+#
+# Read-only MCP surface for entities that previously had REST routes only.
+# Each tool maps to the SAME permission key as its corresponding REST route
+# (registered in ``core/mcp/scope_validator.py``) and mirrors that route's
+# org scoping; no write tools in this block.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="list_teams",
+    description=("List teams in the organisation with page-based pagination (mirrors GET /api/v1/teams)."),
+)
+@_RETRY_DB
+async def list_teams(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_teams")
+
+        from modulo.db.crud.team import list_teams as db_list_teams
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_teams(s, org_id=org_id, page=pg, page_size=ps)
+
+        return {
+            "data": [
+                {
+                    "id": str(t.id),
+                    "name": t.name,
+                    "description": t.description,
+                    "account_id": str(t.account_id),
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                }
+                for t in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_teams failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_teams failed")
+        return _tool_exception_error("Failed to list teams", exc, "mcp.list_teams")
+
+
+@mcp.tool(
+    name="list_users",
+    description=(
+        "List organisation members (accounts + org roles) with page-based "
+        "pagination and optional search/role filters (mirrors GET "
+        "/api/v1/admin/users — admin-only)."
+    ),
+)
+@_RETRY_DB
+async def list_users(
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+    role: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_users")
+
+        if role is not None and role not in ("admin", "operator", "runner", "viewer"):
+            return {
+                "error": "validation_failed",
+                "detail": f"Invalid role filter: {role!r} (expected admin|operator|runner|viewer)",
+            }
+        if search is not None and not search.strip():
+            return {"error": "validation_failed", "detail": "search must be a non-empty string"}
+
+        from modulo.api.routes.admin import _list_org_accounts, _to_user_list_item
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 1000))
+
+        async with _session(org_id) as s:
+            accounts_memberships, total = await _list_org_accounts(
+                s,
+                org_id=org_id,
+                page=pg,
+                page_size=ps,
+                search=search,
+                role_filter=role,
+            )
+
+        return {
+            "data": [_to_user_list_item(a, m.role, org_membership=m).model_dump() for a, m in accounts_memberships],
+            "total": total,
+            "page": pg,
+            "page_size": ps,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_users failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_users failed")
+        return _tool_exception_error("Failed to list users", exc, "mcp.list_users")
+
+
+@mcp.tool(
+    name="list_feature_flags",
+    description=(
+        "List the instance feature-flag registry with the calling org's "
+        "effective tier and per-flag overrides (mirrors GET "
+        "/api/v1/admin/feature-flags — SYSTEM-ADMIN only)."
+    ),
+)
+@_RETRY_DB
+async def list_feature_flags() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_feature_flags")
+        # FAR-696: the REST route is ``require_system_permission`` — a STRICT
+        # is_system_admin gate with no org-role fall-through. The scope-map
+        # entry pins the org-role floor; this check is the load-bearing
+        # system-admin gate (API keys and OAuth tokens always fail it).
+        if not _ctx_is_system_admin_val():
+            return {
+                "error": "insufficient_scope",
+                "detail": "list_feature_flags requires system admin role",
+            }
+
+        from modulo.core.feature_flags import FeatureFlagRegistry
+        from modulo.core.license import get_license
+        from modulo.db.crud.organisation import get_organisation
+
+        settings = get_settings()
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            org = await get_organisation(s, org_id)
+            plan_ctx = await resolve_plan_context(settings, s, org)
+            lic = get_license()
+            has_key = bool(settings.modulo_license_key) or lic is not None
+            org_settings = getattr(org, "settings_json", None)
+            if not has_key and isinstance(org_settings, dict):
+                has_key = bool(org_settings.get("license_key"))
+            registry = await FeatureFlagRegistry.from_db(s, plan_ctx.tier(), has_license_key=has_key)
+
+            # Best-effort overlay of the org's per-flag overrides (same
+            # semantics as the REST endpoint); a failed read falls back to
+            # the registry defaults rather than failing the request.
+            org_overrides: dict[str, bool] = {}
+            if isinstance(org_settings, dict):
+                raw_overrides = org_settings.get("feature_overrides")
+                if isinstance(raw_overrides, dict):
+                    org_overrides = {k: bool(v) for k, v in raw_overrides.items()}
+
+        return {
+            "license": {
+                "tier": registry.current_tier,
+                "has_license_key": registry.has_license_key,
+                "is_valid": True,
+            },
+            "dev_mode": settings.modulo_dev_mode,
+            "flags": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "currently_active": org_overrides.get(f.name, f.currently_active),
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.list_flags()
+            ],
+            "would_activate": [
+                {
+                    "name": f.name,
+                    "description": f.description,
+                    "tier": f.tier,
+                    "depends_on": f.depends_on,
+                }
+                for f in registry.tier_gap_flags()
+                if f.name not in org_overrides
+            ],
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_feature_flags failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_feature_flags failed")
+        return _tool_exception_error("Failed to list feature flags", exc, "mcp.list_feature_flags")
+
+
+@mcp.tool(
+    name="get_audit_log",
+    description=(
+        "Paged read of the organisation's audit trail with cursor pagination "
+        "and filters (mirrors GET /api/v1/admin/audit)."
+    ),
+)
+@_RETRY_DB
+async def get_audit_log(
+    cursor: str | None = None,
+    limit: int = 50,
+    event_type: str | None = None,
+    actor_user_id: str | None = None,
+    resource_type: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_audit_log")
+
+        actor_uid: uuid.UUID | None = None
+        if actor_user_id is not None:
+            actor_uid, actor_err = _parse_uuid_param(actor_user_id, "actor_user_id")
+            if actor_err:
+                return actor_err
+        from_dt: datetime | None = None
+        if from_date is not None:
+            try:
+                from_dt = datetime.fromisoformat(from_date)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "from_date",
+                    "detail": f"Invalid from_date format: {from_date!r} (expected ISO 8601)",
+                }
+        to_dt: datetime | None = None
+        if to_date is not None:
+            try:
+                to_dt = datetime.fromisoformat(to_date)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "to_date",
+                    "detail": f"Invalid to_date format: {to_date!r} (expected ISO 8601)",
+                }
+
+        from modulo.core.audit_logger import list_audit_events
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 200))
+
+        async with _session(org_id) as s:
+            return await list_audit_events(
+                s,
+                org_id,
+                cursor=cursor,
+                limit=lim,
+                event_type=event_type,
+                actor_user_id=actor_uid,
+                resource_type=resource_type,
+                from_date=from_dt,
+                to_date=to_dt,
+            )
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_audit_log failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_audit_log failed")
+        return _tool_exception_error("Failed to read audit log", exc, "mcp.get_audit_log")
+
+
+@mcp.tool(
+    name="list_notification_deliveries",
+    description=(
+        "List notification delivery-log entries (webhook/in-app delivery "
+        "attempts) with cursor pagination and filters (mirrors GET "
+        "/api/v1/admin/notifications/deliveries)."
+    ),
+)
+@_RETRY_DB
+async def list_notification_deliveries(
+    cursor: str | None = None,
+    limit: int = 25,
+    status: str | None = None,
+    event_type: str | None = None,
+    endpoint_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_notification_deliveries")
+
+        endpoint_uid: uuid.UUID | None = None
+        if endpoint_id is not None:
+            endpoint_uid, endpoint_err = _parse_uuid_param(endpoint_id, "endpoint_id")
+            if endpoint_err:
+                return endpoint_err
+        from_dt: datetime | None = None
+        if date_from is not None:
+            try:
+                from_dt = datetime.fromisoformat(date_from)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "date_from",
+                    "detail": f"Invalid date_from format: {date_from!r} (expected ISO 8601)",
+                }
+        to_dt: datetime | None = None
+        if date_to is not None:
+            try:
+                to_dt = datetime.fromisoformat(date_to)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "date_to",
+                    "detail": f"Invalid date_to format: {date_to!r} (expected ISO 8601)",
+                }
+        cursor_dt: datetime | None = None
+        if cursor is not None:
+            try:
+                cursor_dt = datetime.fromisoformat(cursor)
+            except ValueError:
+                return {
+                    "error": "validation_failed",
+                    "field": "cursor",
+                    "detail": f"Invalid cursor format: {cursor!r} (expected ISO 8601)",
+                }
+
+        from sqlalchemy import func as sa_func
+
+        from modulo.db.models.notification_delivery import NotificationDeliveryLog
+        from modulo.db.models.notification_endpoint import NotificationEndpoint
+
+        org_id = _ctx_org_id_val()
+        lim = max(1, min(limit, 100))
+
+        async with _session(org_id) as s:
+            # Same query shape as the REST route's _list_deliveries: org-
+            # scoped, endpoint URL joined for display, created_at DESC with a
+            # limit+1 probe for the next-cursor decision. Reimplemented here
+            # (rather than importing the route helper) because the MCP
+            # ``_session`` already owns the transaction and the route helper
+            # opens its own ``session.begin()``.
+            query = (
+                select(
+                    NotificationDeliveryLog,
+                    NotificationEndpoint.url,
+                )
+                .outerjoin(
+                    NotificationEndpoint,
+                    NotificationDeliveryLog.endpoint_id == NotificationEndpoint.id,
+                )
+                .where(
+                    NotificationDeliveryLog.organisation_id == org_id,
+                )
+            )
+            if status:
+                query = query.where(NotificationDeliveryLog.status == status)
+            if event_type:
+                query = query.where(NotificationDeliveryLog.event_type == event_type)
+            if endpoint_uid:
+                query = query.where(NotificationDeliveryLog.endpoint_id == endpoint_uid)
+            if from_dt:
+                query = query.where(NotificationDeliveryLog.created_at >= from_dt)
+            if to_dt:
+                query = query.where(NotificationDeliveryLog.created_at <= to_dt)
+            if cursor_dt:
+                query = query.where(NotificationDeliveryLog.created_at < cursor_dt)
+            query = query.order_by(NotificationDeliveryLog.created_at.desc()).limit(lim + 1)
+
+            rows = list((await s.execute(query)).all())
+
+            count_query = select(sa_func.count(NotificationDeliveryLog.id)).where(
+                NotificationDeliveryLog.organisation_id == org_id,
+            )
+            if status:
+                count_query = count_query.where(NotificationDeliveryLog.status == status)
+            if event_type:
+                count_query = count_query.where(NotificationDeliveryLog.event_type == event_type)
+            if endpoint_uid:
+                count_query = count_query.where(NotificationDeliveryLog.endpoint_id == endpoint_uid)
+            if from_dt:
+                count_query = count_query.where(NotificationDeliveryLog.created_at >= from_dt)
+            if to_dt:
+                count_query = count_query.where(NotificationDeliveryLog.created_at <= to_dt)
+            total = (await s.execute(count_query)).scalar() or 0
+
+        has_more = len(rows) > lim
+        if has_more:
+            rows = rows[:lim]
+
+        next_cursor: str | None = None
+        if has_more and rows and rows[-1][0].created_at:
+            next_cursor = rows[-1][0].created_at.isoformat()
+
+        return {
+            "data": [
+                {
+                    "id": str(d[0].id),
+                    "event_type": d[0].event_type,
+                    "status": d[0].status,
+                    "attempt_count": d[0].attempt_count,
+                    "response_code": d[0].response_code,
+                    "last_error": d[0].last_error,
+                    "response_body": d[0].response_body,
+                    "endpoint_url": d[1] or "",
+                    "endpoint_id": str(d[0].endpoint_id) if d[0].endpoint_id else None,
+                    "created_at": d[0].created_at.isoformat() if d[0].created_at else "",
+                }
+                for d in rows
+            ],
+            "total": total,
+            "next_cursor": next_cursor,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_notification_deliveries failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_notification_deliveries failed")
+        return _tool_exception_error("Failed to list notification deliveries", exc, "mcp.list_notification_deliveries")
+
+
+@mcp.tool(
+    name="list_lifecycle_maps",
+    description=(
+        "List lifecycle maps in the organisation with page-based pagination (mirrors GET /api/v1/lifecycle-maps)."
+    ),
+)
+@_RETRY_DB
+async def list_lifecycle_maps(
+    page: int = 1,
+    page_size: int = 20,
+    owner_team_id: str | None = None,
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_lifecycle_maps")
+
+        owner_team: uuid.UUID | None = None
+        if owner_team_id is not None:
+            owner_team, owner_err = _parse_uuid_param(owner_team_id, "owner_team_id")
+            if owner_err:
+                return owner_err
+
+        from modulo.core.lifecycle_map.service import list_lifecycle_maps as db_list_lifecycle_maps
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            result = await db_list_lifecycle_maps(
+                s,
+                page=pg,
+                page_size=ps,
+                owner_team_id=owner_team,
+                include_archived=include_archived,
+            )
+
+        return {
+            "data": [
+                {
+                    "id": str(m.id),
+                    "name": m.name,
+                    "description": m.description,
+                    "owner_team_id": str(m.owner_team_id) if m.owner_team_id else None,
+                    "visibility": m.visibility,
+                    "version": m.version,
+                    "content_json": m.content_json,
+                    "archived_at": m.archived_at.isoformat() if m.archived_at else None,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
+                    "updated_at": m.updated_at.isoformat() if m.updated_at else None,
+                }
+                for m in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_lifecycle_maps failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_lifecycle_maps failed")
+        return _tool_exception_error("Failed to list lifecycle maps", exc, "mcp.list_lifecycle_maps")
+
+
+@mcp.tool(
+    name="get_lifecycle_map",
+    description=(
+        "Get a single lifecycle map by ID including its content_json "
+        "(mirrors GET /api/v1/lifecycle-maps/{lifecycle_map_id})."
+    ),
+)
+@_RETRY_DB
+async def get_lifecycle_map(lifecycle_map_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_lifecycle_map")
+
+        org_id = _ctx_org_id_val()
+        lmid, lmid_err = _parse_uuid_param(lifecycle_map_id, "lifecycle_map_id")
+        if lmid_err:
+            return lmid_err
+        if lmid is None:
+            return {"error": "invalid_id", "field": "lifecycle_map_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        from modulo.core.lifecycle_map.service import get_lifecycle_map as db_get_lifecycle_map
+
+        async with _session(org_id) as s:
+            lm = await db_get_lifecycle_map(s, lmid)
+
+        # Belt-and-braces org check (mirrors the REST get route) — RLS already
+        # scopes the row, but a cross-org id must read as not_found even if
+        # RLS were misconfigured.
+        if lm is None or lm.organisation_id != org_id:
+            return {"error": "not_found", "detail": f"Lifecycle map {lifecycle_map_id} not found"}
+        # Team-scoped-key boundary (same pattern as get_pipeline_graph): a
+        # team-A key must not read a map owned by team B.
+        if _team_scoped_key_mismatch(lm.owner_team_id):
+            return _team_scope_error("lifecycle_map", lifecycle_map_id)
+
+        return {
+            "id": str(lm.id),
+            "name": lm.name,
+            "description": lm.description,
+            "owner_team_id": str(lm.owner_team_id) if lm.owner_team_id else None,
+            "visibility": lm.visibility,
+            "version": lm.version,
+            "content_json": lm.content_json,
+            "archived_at": lm.archived_at.isoformat() if lm.archived_at else None,
+            "created_at": lm.created_at.isoformat() if lm.created_at else None,
+            "updated_at": lm.updated_at.isoformat() if lm.updated_at else None,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_lifecycle_map failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_lifecycle_map failed")
+        return _tool_exception_error("Failed to get lifecycle map", exc, "mcp.get_lifecycle_map")
+
+
+@mcp.tool(
+    name="list_plugins",
+    description=(
+        "List installed plugins with health status (mirrors GET /api/v1/plugins). Read-only registry metadata."
+    ),
+)
+async def list_plugins() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_plugins")
+
+        from modulo.core.plugin_registry import get_plugin_registry
+
+        _ctx_org_id_val()  # fail closed when no authenticated org context
+
+        registry = get_plugin_registry()
+        health_results = registry.health_check()
+        plugins = registry.list_plugins()
+        data: list[dict[str, Any]] = []
+        for pid, manifest in plugins.items():
+            health = health_results.get(pid)
+            data.append(
+                {
+                    "id": manifest.PLUGIN_ID,
+                    "display_name": manifest.display_name,
+                    "description": manifest.description,
+                    "version": manifest.version,
+                    "capabilities": sorted(manifest.capabilities),
+                    "health_ok": health.ok if health is not None else False,
+                    "health_detail": health.detail if health is not None else "Unknown",
+                    "health_checked_at": (
+                        health.checked_at.isoformat() if health is not None and health.checked_at else None
+                    ),
+                }
+            )
+        return {"data": data, "total": len(data)}
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except Exception as exc:
+        _log.exception("list_plugins failed")
+        return _tool_exception_error("Failed to list plugins", exc, "mcp.list_plugins")
+
+
+@mcp.tool(
+    name="list_sso_providers",
+    description=(
+        "List the organisation's SSO provider configurations, metadata only — "
+        "client secrets are never returned (mirrors GET "
+        "/api/v1/admin/sso/providers). Read-only; configuration changes stay "
+        "human-only."
+    ),
+)
+@_RETRY_DB
+async def list_sso_providers() -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_sso_providers")
+
+        from modulo.db.crud.sso_provider import list_providers
+
+        org_id = _ctx_org_id_val()
+
+        async with _session(org_id) as s:
+            providers = await list_providers(s, org_id=org_id)
+
+        # Client secrets (and bulky raw SAML metadata XML) are deliberately
+        # omitted — config exposure stays human-only (FAR-696).
+        return {
+            "data": [
+                {
+                    "id": str(p.id),
+                    "provider_type": p.provider_type,
+                    "name": p.name,
+                    "provider_id": p.provider_id,
+                    "client_id": p.client_id,
+                    "enabled": p.enabled,
+                    "auto_provision": p.auto_provision,
+                    "default_role": p.default_role,
+                    "allowed_domains": p.allowed_domains or [],
+                    "preset": p.preset,
+                    "tenant_domain": p.tenant_domain,
+                    "discovery_url": p.discovery_url,
+                    "metadata_url": p.metadata_url,
+                    "entity_id": p.entity_id,
+                    "scopes": p.scopes,
+                    "created_at": p.created_at.isoformat() if p.created_at else None,
+                    "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+                }
+                for p in providers
+            ],
+            "total": len(providers),
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_sso_providers failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_sso_providers failed")
+        return _tool_exception_error("Failed to list SSO providers", exc, "mcp.list_sso_providers")
+
+
+@mcp.tool(
+    name="list_eval_suites",
+    description=(
+        "List eval suites in the organisation with page-based pagination (mirrors GET /api/v1/evals/eval-suites)."
+    ),
+)
+@_RETRY_DB
+async def list_eval_suites(page: int = 1, page_size: int = 20) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("list_eval_suites")
+
+        from sqlalchemy import func as sa_func
+
+        from modulo.db.models.eval_suite import EvalSuite
+
+        org_id = _ctx_org_id_val()
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            total = (
+                await s.execute(select(sa_func.count(EvalSuite.id)).where(EvalSuite.organisation_id == org_id))
+            ).scalar() or 0
+            q = (
+                select(EvalSuite)
+                .where(EvalSuite.organisation_id == org_id)
+                .order_by(EvalSuite.created_at.desc())
+                .offset((pg - 1) * ps)
+                .limit(ps)
+            )
+            rows = list((await s.execute(q)).scalars().all())
+
+        return {
+            "data": [_eval_suite_item(suite) for suite in rows],
+            "total": total,
+            "page": pg,
+            "page_size": ps,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("list_eval_suites failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("list_eval_suites failed")
+        return _tool_exception_error("Failed to list eval suites", exc, "mcp.list_eval_suites")
+
+
+@mcp.tool(
+    name="get_eval_suite",
+    description=("Get a single eval suite by ID (mirrors GET /api/v1/evals/eval-suites/{suite_id})."),
+)
+@_RETRY_DB
+async def get_eval_suite(suite_id: str) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_eval_suite")
+
+        from modulo.db.models.eval_suite import EvalSuite
+
+        org_id = _ctx_org_id_val()
+        sid, sid_err = _parse_uuid_param(suite_id, "suite_id")
+        if sid_err:
+            return sid_err
+        if sid is None:
+            return {"error": "invalid_id", "field": "suite_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        async with _session(org_id) as s:
+            result = await s.execute(
+                select(EvalSuite).where(
+                    EvalSuite.id == sid,
+                    EvalSuite.organisation_id == org_id,
+                )
+            )
+            suite = result.scalar_one_or_none()
+
+        if suite is None:
+            return {"error": "not_found", "detail": f"Eval suite {suite_id} not found"}
+        # Team-scoped-key boundary (same pattern as get_pipeline_graph).
+        if _team_scoped_key_mismatch(suite.owner_team_id):
+            return _team_scope_error("eval_suite", suite_id)
+
+        return _eval_suite_item(suite)
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_eval_suite failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_eval_suite failed")
+        return _tool_exception_error("Failed to get eval suite", exc, "mcp.get_eval_suite")
+
+
+def _eval_suite_item(suite: Any) -> dict[str, Any]:
+    """Serialize one ``EvalSuite`` row (mirrors the REST EvalSuiteResponse)."""
+    return {
+        "id": str(suite.id),
+        "name": suite.name,
+        "description": suite.description,
+        "version": suite.version,
+        "owner_team_id": str(suite.owner_team_id) if suite.owner_team_id else None,
+        "visibility": suite.visibility,
+        "eval_definition_ids": [str(eid) for eid in (suite.eval_definition_ids or [])],
+        "created_at": suite.created_at.isoformat() if suite.created_at else None,
+        "updated_at": suite.updated_at.isoformat() if suite.updated_at else None,
+    }
+
+
+@mcp.tool(
+    name="get_schema_versions",
+    description=("List the version history of a schema (mirrors GET /api/v1/schemas/{schema_id}/versions)."),
+)
+@_RETRY_DB
+async def get_schema_versions(
+    schema_id: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_schema_versions")
+
+        from modulo.db.crud.schema import get_schema, list_schema_versions
+
+        org_id = _ctx_org_id_val()
+        schid, schid_err = _parse_uuid_param(schema_id, "schema_id")
+        if schid_err:
+            return schid_err
+        if schid is None:
+            return {"error": "invalid_id", "field": "schema_id", "detail": _MSG_UUID_PARSE_FAILED}
+        pg = max(1, page)
+        ps = max(1, min(page_size, 100))
+
+        async with _session(org_id) as s:
+            schema = await get_schema(s, schid)
+            # Belt-and-braces org check (mirrors the REST route's 404).
+            if schema is None or schema.organisation_id != org_id:
+                return {"error": "not_found", "detail": f"Schema {schema_id} not found"}
+            result = await list_schema_versions(s, schid, page=pg, page_size=ps)
+
+        return {
+            "data": [
+                {
+                    "id": str(sv.id),
+                    "schema_id": str(sv.schema_id),
+                    "version": sv.version,
+                    "version_number": sv.version_number,
+                    "definition_json": sv.definition_json,
+                    "published": sv.published,
+                    "created_by": str(sv.account_id) if sv.account_id else None,
+                    "created_at": sv.created_at.isoformat() if sv.created_at else None,
+                    "updated_at": sv.updated_at.isoformat() if sv.updated_at else None,
+                }
+                for sv in result.items
+            ],
+            "total": result.total,
+            "page": result.page,
+            "page_size": result.page_size,
+        }
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_schema_versions failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_schema_versions failed")
+        return _tool_exception_error("Failed to list schema versions", exc, "mcp.get_schema_versions")
+
+
+@mcp.tool(
+    name="get_pipeline_diff",
+    description=(
+        "Diff two snapshots of a pipeline (mirrors POST "
+        "/api/v1/pipelines/{pipeline_id}/snapshots/diff). Node credentials "
+        "in the snapshot graphs are masked, exactly like the REST surface."
+    ),
+)
+@_RETRY_DB
+async def get_pipeline_diff(
+    pipeline_id: str,
+    snapshot_a_id: str,
+    snapshot_b_id: str,
+) -> dict[str, Any]:
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_pipeline_diff")
+
+        org_id = _ctx_org_id_val()
+        pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
+        if pid_err:
+            return pid_err
+        if pid is None:
+            return {"error": "invalid_id", "field": "pipeline_id", "detail": _MSG_UUID_PARSE_FAILED}
+        snap_a, snap_a_err = _parse_uuid_param(snapshot_a_id, "snapshot_a_id")
+        if snap_a_err:
+            return snap_a_err
+        if snap_a is None:
+            return {"error": "invalid_id", "field": "snapshot_a_id", "detail": _MSG_UUID_PARSE_FAILED}
+        snap_b, snap_b_err = _parse_uuid_param(snapshot_b_id, "snapshot_b_id")
+        if snap_b_err:
+            return snap_b_err
+        if snap_b is None:
+            return {"error": "invalid_id", "field": "snapshot_b_id", "detail": _MSG_UUID_PARSE_FAILED}
+
+        from modulo.db.crud.pipeline_snapshot_versioning import diff_snapshots
+
+        async with _session(org_id) as s:
+            # Team-scoped-key boundary (same pattern as get_pipeline_graph).
+            owner_team_id = await _pipeline_owner_team_id(s, pid)
+            if _team_scoped_key_mismatch(owner_team_id):
+                return _team_scope_error("pipeline", pipeline_id)
+            result = await diff_snapshots(s, snap_a, snap_b, pipeline_id=pid)
+
+        if result is None:
+            return {"error": "not_found", "detail": "One or both snapshots not found"}
+
+        # FAR-1181 (echo of the REST parity in routes/pipelines.py): the
+        # diff payload carries raw node dicts copied from the stored
+        # snapshots — mask them exactly like the snapshot-detail graph read.
+        masked: dict[str, Any] = dict(result)
+        for key in ("snapshot_a", "snapshot_b"):
+            snapshot_payload = masked.get(key)
+            if isinstance(snapshot_payload, dict):
+                graph = snapshot_payload.get("graph")
+                masked_graph = graph
+                if isinstance(graph, dict):
+                    graph_copy = dict(graph)
+                    nodes = graph.get("nodes")
+                    if isinstance(nodes, list):
+                        graph_copy["nodes"] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in nodes]
+                    masked_graph = graph_copy
+                masked[key] = {**snapshot_payload, "graph": masked_graph}
+        for key in ("nodes_added", "nodes_removed"):
+            entries = masked.get(key)
+            if isinstance(entries, list):
+                masked[key] = [mask_pipeline_graph_node(n) if isinstance(n, dict) else n for n in entries]
+        return masked
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except ProgrammingError:
+        _log.exception("get_pipeline_diff failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except Exception as exc:
+        _log.exception("get_pipeline_diff failed")
+        return _tool_exception_error("Failed to diff pipeline snapshots", exc, "mcp.get_pipeline_diff")
 
 
 _doc_index: DocumentationIndex | None = None

@@ -478,6 +478,20 @@ class TestConstants:
             "update_parameter_set",
             "delete_parameter_set",
             "restore_parameter_set",
+            # FAR-696: governance-entity read/list tools (list_feature_flags
+            # is READ_ONLY_TOOLS-pinned, not in this map).
+            "list_teams",
+            "list_users",
+            "get_audit_log",
+            "list_notification_deliveries",
+            "list_lifecycle_maps",
+            "get_lifecycle_map",
+            "list_plugins",
+            "list_sso_providers",
+            "list_eval_suites",
+            "get_eval_suite",
+            "get_schema_versions",
+            "get_pipeline_diff",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 

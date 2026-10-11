@@ -176,6 +176,11 @@ PERMISSIONS: dict[str, str] = {
     "team.delete": "admin",
     "team.manage": "admin",
     "team.list": "viewer",
+    # FAR-696: org member directory (GET /api/v1/admin/users). The REST route
+    # uses a bare admin-role check (``_require_admin``); this key gives the
+    # MCP scope registry the same admin floor with a grant-set-expressible
+    # name.
+    "user.list": "admin",
     # audit
     "audit.list": "viewer",
     "audit.manage": "admin",

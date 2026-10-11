@@ -168,6 +168,28 @@ _TOOL_SCOPE_REQUIREMENTS: dict[str, str] = {
     "update_parameter_set": "parameter_schema.set.update",
     "delete_parameter_set": "parameter_schema.set.delete",
     "restore_parameter_set": "parameter_schema.set.update",
+    # FAR-696: governance-entity read/list tools. Each maps to the SAME
+    # permission key as the corresponding REST route (team.list /
+    # user.list / audit.manage / admin.notification.manage /
+    # lifecycle_map.list / plugin.list / sso.manage / eval.list /
+    # schema.list / pipeline.list). ``list_feature_flags`` is pinned at
+    # ``resource.read_only`` via READ_ONLY_TOOLS below because the REST
+    # route's real gate is the strict ``require_system_permission`` check,
+    # which the tool enforces in-body from the is_system_admin context —
+    # mapping it to the ``system.config.manage`` placeholder role would let
+    # an org admin through the role leg.
+    "list_teams": "team.list",
+    "list_users": "user.list",
+    "get_audit_log": "audit.manage",
+    "list_notification_deliveries": "admin.notification.manage",
+    "list_lifecycle_maps": "lifecycle_map.list",
+    "get_lifecycle_map": "lifecycle_map.list",
+    "list_plugins": "plugin.list",
+    "list_sso_providers": "sso.manage",
+    "list_eval_suites": "eval.list",
+    "get_eval_suite": "eval.list",
+    "get_schema_versions": "schema.list",
+    "get_pipeline_diff": "pipeline.list",
 }
 
 TOOL_SCOPE_REQUIREMENTS: types.MappingProxyType[str, str] = types.MappingProxyType(_TOOL_SCOPE_REQUIREMENTS)
@@ -186,6 +208,12 @@ READ_ONLY_TOOLS: frozenset[str] = frozenset(
         "get_available_features",
         "list_schemas",
         "validate_payload",
+        # FAR-696: the REST route's real gate is the strict
+        # ``require_system_permission`` check (no org-role fall-through),
+        # which the tool enforces in-body from the is_system_admin context.
+        # Pinning here keeps the role leg from inventing an org-admin
+        # fall-through the REST surface does not have.
+        "list_feature_flags",
     }
 )
 
