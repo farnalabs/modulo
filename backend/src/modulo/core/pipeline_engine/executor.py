@@ -126,6 +126,7 @@ from modulo.core.pipeline_engine.runtime_retry import COMPENSATION_FAILED_CODE, 
 from modulo.core.run_context.autonomy import (
     PIPELINE_EARNED_AT_START_KEY,
     PIPELINE_MAX_AUTONOMY_KEY,
+    AutonomyLevel,
     autonomy_level_rank,
 )
 from modulo.core.run_provenance import run_provenance_fields
@@ -1895,6 +1896,22 @@ def _interrupt_subject_leaf_key(gate_payload: dict[str, Any]) -> str | None:
     """
     result = gate_payload.get("subject_leaf_key")
     return result if isinstance(result, str) else None
+
+
+def _clamp_to_ceiling(base_level: AutonomyLevel, ceiling: str | None) -> str:
+    """Clamp ``base_level`` to a raw ceiling string, by rank (FAR-1175).
+
+    Levels are not lexicographic, so the clamp compares ``autonomy_level_rank``.
+    An absent or unparseable ceiling imposes no constraint — the base wins.
+    """
+    if isinstance(ceiling, str) and ceiling:
+        try:
+            ceiling_level = AutonomyLevel(ceiling)
+        except ValueError:
+            ceiling_level = None
+        if ceiling_level is not None and autonomy_level_rank(ceiling_level) < autonomy_level_rank(base_level):
+            return ceiling_level.value
+    return base_level.value
 
 
 class PipelineExecutor:
@@ -3713,6 +3730,35 @@ class PipelineExecutor:
             )
             return None, False
 
+    async def _read_live_earned_for_pin(self, pipeline_id: uuid.UUID, org_id: uuid.UUID) -> str | None:
+        """Read the pipeline's live ``earned_autonomy_level`` for the run-start pin.
+
+        Failure-isolated (FAR-1175): any read error degrades to ``None`` so a
+        transient DB failure can never seed a PIN of ``None`` — the caller then
+        falls back to the pinned default. Cancellation still propagates.
+        """
+        try:
+            from modulo.db.crud.pipeline import get_pipeline
+
+            async with self._session_factory() as session, session.begin():
+                from modulo.db.rls import set_rls_org
+
+                await set_rls_org(session, org_id)
+                pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
+                if pipeline is not None:
+                    earned = getattr(pipeline, "earned_autonomy_level", None)
+                    if isinstance(earned, str) and earned:
+                        return earned
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log.warning(
+                "pipeline.executor.earned_autonomy_read_failed",
+                extra={"run_pipeline_id": str(pipeline_id), "org_id": str(org_id)},
+                exc_info=True,
+            )
+        return None
+
     async def _resolve_earned_at_start(
         self,
         pipeline_id: uuid.UUID,
@@ -3736,46 +3782,17 @@ class PipelineExecutor:
         """
         default_level = getattr(snapshot, "default_autonomy_level", None)
         ceiling = getattr(snapshot, "max_autonomy_level", None)
-        earned_live: str | None = None
-        try:
-            from modulo.db.crud.pipeline import get_pipeline
-
-            async with self._session_factory() as session, session.begin():
-                from modulo.db.rls import set_rls_org
-
-                await set_rls_org(session, org_id)
-                pipeline = await get_pipeline(session, pipeline_id, organisation_id=org_id)
-                if pipeline is not None:
-                    earned = getattr(pipeline, "earned_autonomy_level", None)
-                    if isinstance(earned, str) and earned:
-                        earned_live = earned
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.warning(
-                "pipeline.executor.earned_autonomy_read_failed",
-                extra={"run_pipeline_id": str(pipeline_id), "org_id": str(org_id)},
-                exc_info=True,
-            )
+        earned_live = await self._read_live_earned_for_pin(pipeline_id, org_id)
 
         base = earned_live or (default_level if isinstance(default_level, str) and default_level else None)
         if base is None:
             return None
         # Clamp to the ceiling using the rank map (levels are not lexicographic).
-        from modulo.core.run_context.autonomy import AutonomyLevel
-
         try:
             base_level = AutonomyLevel(base)
         except ValueError:
             return None
-        if isinstance(ceiling, str) and ceiling:
-            try:
-                ceiling_level = AutonomyLevel(ceiling)
-            except ValueError:
-                ceiling_level = None
-            if ceiling_level is not None and autonomy_level_rank(ceiling_level) < autonomy_level_rank(base_level):
-                return ceiling_level.value
-        return base_level.value
+        return _clamp_to_ceiling(base_level, ceiling)
 
     async def resume(
         self,

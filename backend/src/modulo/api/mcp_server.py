@@ -2624,6 +2624,103 @@ def _ctx_autonomy_change_allowed(owner_team_id: uuid.UUID | None) -> bool:
     return owner_team_id is not None and key_team_id == owner_team_id
 
 
+_AUTONOMY_CHANGE_DENIED = "Only an organisation admin or the pipeline's owner team may change its autonomy level"
+
+
+def _mcp_autonomy_levels(pipeline: Any) -> tuple[Any, Any]:
+    """Resolve a pipeline's ``(current earned-or-default, ceiling)`` (FAR-1175).
+
+    ``current`` is the earned level when set and valid, else the pipeline
+    default; ``ceiling`` is ``max_autonomy_level`` when set and valid, else the
+    current level (an absent/invalid ceiling never constrains the change).
+    """
+    from modulo.core.run_context.autonomy import AutonomyLevel
+
+    default = pipeline.default_autonomy_level or AutonomyLevel.default().value
+    earned = getattr(pipeline, "earned_autonomy_level", None)
+    try:
+        current_level = AutonomyLevel(earned) if isinstance(earned, str) and earned else AutonomyLevel(default)
+    except ValueError:
+        current_level = AutonomyLevel(default)
+    ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
+    try:
+        ceiling = AutonomyLevel(ceiling_raw) if isinstance(ceiling_raw, str) and ceiling_raw else current_level
+    except ValueError:
+        ceiling = current_level
+    return current_level, ceiling
+
+
+def _mcp_autonomy_direction_error(
+    promote: bool,
+    target_level: Any,
+    current_level: Any,
+    ceiling: Any,
+) -> dict[str, Any] | None:
+    """Direction-validation error for a changed target, or ``None`` (FAR-1175).
+
+    Promote must strictly raise and never exceed the ceiling; demote must
+    strictly lower. Mirrors the REST ``_apply_manual_autonomy_change`` rules.
+    """
+    from modulo.core.run_context.autonomy import autonomy_level_rank
+
+    target = target_level.value
+    if promote:
+        if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
+            return {
+                "error": "validation_failed",
+                "field": "level",
+                "detail": f"Promotion must raise autonomy above {current_level.value}: {target}",
+            }
+        if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
+            return {
+                "error": "validation_failed",
+                "field": "level",
+                "detail": f"Promotion to {target} exceeds the max_autonomy_level ceiling ({ceiling.value})",
+            }
+    elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
+        return {
+            "error": "validation_failed",
+            "field": "level",
+            "detail": f"Demotion must lower autonomy below {current_level.value}: {target}",
+        }
+    return None
+
+
+async def _append_mcp_autonomy_audit(
+    session: Any,
+    *,
+    org_id: uuid.UUID,
+    account_id: uuid.UUID | None,
+    pipeline_id: uuid.UUID,
+    current_level: Any,
+    target: str,
+    reason: str | None,
+    ceiling: Any,
+    promote: bool,
+    event_type: str,
+) -> None:
+    """Append the promote/demote audit event in the write transaction (FAR-1175)."""
+    from modulo.core.audit_logger import append_audit_event
+
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type=event_type,
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "pipeline_id": str(pipeline_id),
+            "previous_level": current_level.value,
+            "new_level": target,
+            "reason": reason,
+            "actor": str(account_id),
+            "ceiling": ceiling.value,
+            "direction": "promote" if promote else "demote",
+        },
+    )
+
+
 async def _apply_mcp_autonomy_change(
     pipeline_id: str,
     level: str,
@@ -2644,14 +2741,13 @@ async def _apply_mcp_autonomy_change(
             return _tool_auth_error(_MSG_TOKEN_REVOKED)
         _check_agent_tool_scope(tool_name)
 
-        from modulo.core.run_context.autonomy import AutonomyLevel, autonomy_level_rank
+        from modulo.core.run_context.autonomy import AutonomyLevel
         from modulo.db.crud.pipeline import get_pipeline, set_earned_autonomy_level
 
         pid, pid_err = _parse_uuid_param(pipeline_id, "pipeline_id")
         if pid_err:
             return pid_err
-        if pid is None:
-            return {"error": "invalid_id", "detail": _MSG_UUID_PARSE_FAILED}
+        assert pid is not None  # nosec B101 -- _parse_uuid_param returns (None, error) only on failure, already handled above
         try:
             target_level = AutonomyLevel(level)
         except ValueError:
@@ -2668,64 +2764,28 @@ async def _apply_mcp_autonomy_change(
             if pipeline is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
             if not _ctx_autonomy_change_allowed(owner_team_id):
-                return {
-                    "error": "permission_denied",
-                    "detail": "Only an organisation admin or the pipeline's owner team may change its autonomy level",
-                }
-            earned = getattr(pipeline, "earned_autonomy_level", None)
-            default = pipeline.default_autonomy_level or AutonomyLevel.default().value
-            try:
-                current_level = AutonomyLevel(earned) if isinstance(earned, str) and earned else AutonomyLevel(default)
-            except ValueError:
-                current_level = AutonomyLevel(default)
-            ceiling_raw = getattr(pipeline, "max_autonomy_level", None)
-            try:
-                ceiling = AutonomyLevel(ceiling_raw) if isinstance(ceiling_raw, str) and ceiling_raw else current_level
-            except ValueError:
-                ceiling = current_level
+                return {"error": "permission_denied", "detail": _AUTONOMY_CHANGE_DENIED}
 
-            if promote:
-                if autonomy_level_rank(target_level) <= autonomy_level_rank(current_level):
-                    return {
-                        "error": "validation_failed",
-                        "field": "level",
-                        "detail": f"Promotion must raise autonomy above {current_level.value}: {target}",
-                    }
-                if autonomy_level_rank(target_level) > autonomy_level_rank(ceiling):
-                    return {
-                        "error": "validation_failed",
-                        "field": "level",
-                        "detail": f"Promotion to {target} exceeds the max_autonomy_level ceiling ({ceiling.value})",
-                    }
-            elif autonomy_level_rank(target_level) >= autonomy_level_rank(current_level):
-                return {
-                    "error": "validation_failed",
-                    "field": "level",
-                    "detail": f"Demotion must lower autonomy below {current_level.value}: {target}",
-                }
+            current_level, ceiling = _mcp_autonomy_levels(pipeline)
+            direction_error = _mcp_autonomy_direction_error(promote, target_level, current_level, ceiling)
+            if direction_error is not None:
+                return direction_error
 
             updated = await set_earned_autonomy_level(s, org_id=org_id, pipeline_id=pid, level=target)
             if updated is None:
                 return {"error": "pipeline_not_found", "pipeline_id": pipeline_id}
-            from modulo.core.audit_logger import append_audit_event
-
             event_type = "pipeline.autonomy_promotion_decided" if promote else "pipeline.autonomy_demoted"
-            await append_audit_event(
+            await _append_mcp_autonomy_audit(
                 s,
                 org_id=org_id,
+                account_id=account_id,
+                pipeline_id=pid,
+                current_level=current_level,
+                target=target,
+                reason=reason,
+                ceiling=ceiling,
+                promote=promote,
                 event_type=event_type,
-                actor_user_id=account_id,
-                resource_type="pipeline",
-                resource_id=pid,
-                payload_json={
-                    "pipeline_id": str(pid),
-                    "previous_level": current_level.value,
-                    "new_level": target,
-                    "reason": reason,
-                    "actor": str(account_id),
-                    "ceiling": ceiling.value,
-                    "direction": "promote" if promote else "demote",
-                },
             )
             return {
                 "pipeline_id": pipeline_id,
@@ -2737,10 +2797,10 @@ async def _apply_mcp_autonomy_change(
     except MCPAuthorizationError as exc:
         return {"error": "insufficient_scope", "detail": str(exc)}
     except ProgrammingError:
-        _log.exception("%s failed", tool_name)
+        _log_tool_failure(tool_name)
         return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
     except Exception as exc:
-        _log.exception("%s failed", tool_name)
+        _log_tool_failure(tool_name)
         return _tool_exception_error("Failed to change pipeline autonomy", exc, f"mcp.{tool_name}")
 
 

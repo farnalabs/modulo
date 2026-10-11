@@ -138,6 +138,34 @@ def _min_level(a: AutonomyLevel, b: AutonomyLevel) -> AutonomyLevel:
     return a if autonomy_level_rank(a) <= autonomy_level_rank(b) else b
 
 
+def _earned_base_source(
+    earned_start_raw: str | None,
+    earned_live: str | None,
+    base_default: AutonomyLevel,
+    *,
+    gating_enabled: bool,
+) -> AutonomyLevel:
+    """Select the pre-ceiling ``base`` from the earned sources (FAR-1175).
+
+    With gating off this is the pinned default (byte-identical to S0). With it
+    on, ``min(pinned_at_start, live)`` gives the dimmer behaviour the ADR
+    requires: a demotion (live < pinned) bites the run, a promotion (live >
+    pinned) does not. When only one source is present it is used directly; when
+    neither is, ``base`` falls back to the pinned default.
+    """
+    if not gating_enabled:
+        return base_default
+    earned_start = _try_autonomy(earned_start_raw, "run_context _pipeline_earned_at_start")
+    earned_live_level = _try_autonomy(earned_live, "live earned_autonomy_level")
+    if earned_start is not None and earned_live_level is not None:
+        return _min_level(earned_start, earned_live_level)
+    if earned_live_level is not None:
+        return earned_live_level
+    if earned_start is not None:
+        return earned_start
+    return base_default
+
+
 def resolve_autonomy(
     pipeline_default: str | None,
     run_context: dict[str, Any] | None = None,
@@ -189,21 +217,14 @@ def resolve_autonomy(
     )
     base_default = default_level or AutonomyLevel.default()
 
-    if gating_enabled:
-        earned_start = _try_autonomy(earned_start_raw, "run_context _pipeline_earned_at_start")
-        earned_live_level = _try_autonomy(earned_live, "live earned_autonomy_level")
-        if earned_start is not None and earned_live_level is not None:
-            # In-flight pin: demotion (live lower) wins, promotion (live higher)
-            # does not — min() gives exactly the dimmer behaviour (ADR 043 §3).
-            base_source = _min_level(earned_start, earned_live_level)
-        elif earned_live_level is not None:
-            base_source = earned_live_level
-        elif earned_start is not None:
-            base_source = earned_start
-        else:
-            base_source = base_default
-    else:
-        base_source = base_default
+    # In-flight pin (ADR 043 §3): min(pinned-at-start, live) so a demotion wins
+    # and a promotion never loosens the run.
+    base_source = _earned_base_source(
+        earned_start_raw,
+        earned_live,
+        base_default,
+        gating_enabled=gating_enabled,
+    )
     base = _min_level(base_source, ceiling)
 
     if rec is None:

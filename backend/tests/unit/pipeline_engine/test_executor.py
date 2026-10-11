@@ -1561,6 +1561,35 @@ async def test_resolve_earned_at_start_cancellation_propagates(
         await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
 
 
+async def test_resolve_earned_at_start_unparseable_ceiling_imposes_no_clamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stored ceiling the enum cannot parse must not clamp (falls back to the
+    base) — mirrors runtime resolution's lenient ceiling handling."""
+    executor = _earned_executor(monkeypatch, live="notify_on_complete")
+    snap = _earned_snapshot(default="manual_approval", ceiling="banana")
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
+async def test_resolve_earned_at_start_missing_pipeline_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No pipeline row (deleted between scheduling and execution) reads as no
+    live earned level, so the run pins the default rather than nothing."""
+    monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", AsyncMock(return_value=None))
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    executor = PipelineExecutor(MagicMock())
+    executor._session_factory = _make_session_factory(_make_session(_make_snapshot()))
+    snap = _earned_snapshot(default="notify_on_complete", ceiling=None)
+
+    result = await executor._resolve_earned_at_start(uuid.uuid4(), uuid.uuid4(), snap)
+
+    assert result == "notify_on_complete"
+
+
 async def test_execute_seeds_pinned_earned_autonomy_at_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
