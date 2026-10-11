@@ -274,6 +274,12 @@ ignore_imports =
     modulo.connectors.shortcut -> modulo.core.ssrf
     modulo.connectors.snyk -> modulo.core.ssrf
     modulo.connectors.trello -> modulo.core.ssrf
+    # FAR-1650: the shared egress TLS-context factory (connectors/_egress.py)
+    # resolves its cached context's trust_env through core.ssrf's
+    # default_trust_env (the single SSRF_TRUST_PROXY read). Same narrow
+    # shared-security-primitive category as every entry above: no other core
+    # logic flows into the connectors layer.
+    modulo.connectors._egress -> modulo.core.ssrf
 
 [importlinter:contract:no-concrete-runtime-provider-imports]
 name = Concrete runtime providers are only imported inside core/runtime_provider (FAR-587)

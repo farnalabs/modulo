@@ -779,12 +779,13 @@ class RestConnector(ConnectorBase):
 
         Issues a ``GET`` against ``base_url`` + the configured ``path`` after
         validating the target through the SSRF/allowlist guard, sending the
-        credentials (``apply_auth`` headers + query params). ``_send`` raises a
-        status error for any response at or above 300, so a returned response is
-        always a sub-400 success. Every non-2xx outcome (invalid request-spec,
-        REST status/send errors, ``httpx`` errors) is degraded into a not-ok
-        ``HealthResult`` and credential-redacted, like the other connectors.
-        ``asyncio.CancelledError`` is re-raised, not swallowed.
+        credentials (``apply_auth`` headers + query params). Redirects are not
+        followed, and ``_send`` raises ``RESTStatusError`` (a ``ValueError``) for
+        any response status >= 300, so the observable OK band is exactly 2xx: a
+        returned response is always a 2xx success. Every non-2xx outcome (a 3xx/4xx/
+        5xx status error, an invalid request-spec, an ``httpx`` transport error) is
+        degraded into a not-ok, credential-redacted ``HealthResult``; the method
+        never raises except ``asyncio.CancelledError``, which is re-raised.
         """
         try:
             request = await self._build_health_request()

@@ -123,13 +123,17 @@ async def test_context_is_reused_after_the_previous_client_was_closed() -> None:
     ids=["unset", "empty", "one", "lower-true", "upper-true", "yes", "on", "off", "no", "zero", "padded-true"],
 )
 def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    """The CA-bundle trust-env read stays in lock-step with ``core.ssrf``.
+    """``connectors._egress`` shares the ONE ``core.ssrf`` trust-env resolver.
 
-    ``connectors._egress`` may not import ``modulo.core`` (import-linter's
-    ``connectors-do-not-import-core`` contract), so the one-line
-    ``SSRF_TRUST_PROXY`` read is duplicated. This parity test is the structural
-    guard that stops the two implementations drifting — which would silently
-    change which CA bundle connector egress trusts.
+    ``connectors._egress`` imports the shared resolver from
+    ``modulo.core.ssrf`` under the name ``_egress_trust_env`` (import-linter's
+    ``connectors-do-not-import-core`` contract carries a deliberate per-module
+    allowance for this shared security primitive). Pinning the bound name to
+    the SSRF module's function OBJECT is what stops drift: a future edit that
+    re-introduces a parallel ``SSRF_TRUST_PROXY`` read here would bind a
+    different callable and fail this test. Comparing return values alone would
+    not — since the dedup, both sides are the same function, so such a
+    comparison would only test that a function equals itself.
     """
     from modulo.connectors import _egress
     from modulo.core import ssrf
@@ -141,4 +145,43 @@ def test_egress_trust_env_matches_ssrf_default(monkeypatch: pytest.MonkeyPatch, 
     else:
         monkeypatch.setenv("SSRF_TRUST_PROXY", value)
 
-    assert _egress._egress_trust_env() == ssrf._default_trust_env()
+    # Dedup pin: both names must be the *same* function object, not two mirrors
+    # that happen to agree on today's inputs.
+    assert _egress._egress_trust_env is ssrf.default_trust_env
+
+    # Behavioural: the shared resolver maps ``SSRF_TRUST_PROXY`` exactly as
+    # documented (true/1/yes/on honour a proxy; anything else keeps the safe
+    # default), asserted against a concrete expectation rather than by
+    # comparing the function to itself.
+    expected = value.strip().lower() in ("1", "true", "yes", "on")
+    assert _egress._egress_trust_env() is expected
+
+
+def test_cached_context_trust_anchors_match_a_plain_verify_true_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cached context is a drop-in for the plain ``verify=True`` build.
+
+    Every connector passes ``verify=egress_ssl_context(self)`` to the pinned
+    egress factory, so the instance's cached context replaces httpx's own
+    per-call build. Pin the TRUST STORE behind that swap: for the default path
+    (``SSRF_TRUST_PROXY`` unset — both builds then load the same certifi CA
+    bundle) the cached context has the same CA count, ``verify_mode`` and
+    ``check_hostname`` a plain ``verify=True`` context has. A context built
+    with different anchors would silently change which certificate authorities
+    every connector egress trusts.
+    """
+    from modulo.connectors._egress import egress_ssl_context
+
+    monkeypatch.delenv("SSRF_TRUST_PROXY", raising=False)
+
+    connector = AsanaConnector(TOKEN)
+    cached = egress_ssl_context(connector)
+    plain = httpx.create_ssl_context(verify=True, trust_env=False)
+
+    plain_anchors = plain.get_ca_certs()
+    cached_anchors = cached.get_ca_certs()
+    assert len(cached_anchors) == len(plain_anchors)
+    assert len(plain_anchors) > 0
+    assert cached.verify_mode == plain.verify_mode
+    assert plain.verify_mode == ssl.CERT_REQUIRED
+    assert cached.check_hostname is plain.check_hostname
+    assert cached.check_hostname is True
