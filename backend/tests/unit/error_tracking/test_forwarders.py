@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import types
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+from sqlalchemy.exc import ProgrammingError
+
+from modulo.core.error_tracking import (
+    _dispatch_forwarders,
+    _dispatch_one_forwarder,
+    _load_per_org_configs,
+)
 from modulo.core.error_tracking.forwarders import (
     DatadogErrorForwarder,
     ForwarderRegistry,
@@ -101,6 +110,47 @@ class TestSentryErrorForwarder:
                 {"dsn": "https://key@sentry.io/123", "org_slug": "test-org", "project_slug": "test-project"},
             )
         assert result is True
+        # Pins the API-fallback path: the pinned client's POST was actually
+        # awaited (the result alone could come from the SDK path).
+        mock_client.return_value.__aenter__.return_value.post.assert_awaited_once()
+
+    async def test_api_fallback_omits_authorization_header_without_userinfo(self) -> None:
+        fwd = SentryErrorForwarder()
+
+        with _patch_pinned("sentry") as mock_client:
+            instance = AsyncMock()
+            instance.post = AsyncMock()
+            resp = AsyncMock()
+            resp.is_success = True
+            instance.post.return_value = resp
+            mock_client.return_value.__aenter__.return_value = instance
+
+            result = await fwd.forward(
+                _ORG_ID,
+                _make_error_group(),
+                _make_error_event(),
+                {"dsn": "https://sentry.io/123", "org_slug": "o", "project_slug": "p"},
+            )
+
+        assert result is True
+        # A DSN with no userinfo yields no auth token, so no Authorization header
+        # (pins ``_parse_dsn_token`` returning None).
+        headers = mock_client.return_value.__aenter__.return_value.post.call_args.kwargs["headers"]
+        assert "Authorization" not in headers
+
+    async def test_sdk_capture_failure_returns_false(self) -> None:
+        fwd = SentryErrorForwarder()
+        sentry_sdk = MagicMock()
+        sentry_sdk.capture_message.side_effect = RuntimeError("boom")
+
+        with patch.dict("sys.modules", {"sentry_sdk": sentry_sdk}):
+            result = await fwd.forward(
+                _ORG_ID,
+                _make_error_group(),
+                _make_error_event(),
+                {"dsn": "https://key@sentry.io/123"},
+            )
+        assert result is False
 
     async def test_api_fallback_failure_logged(self) -> None:
         fwd = SentryErrorForwarder()
@@ -211,6 +261,47 @@ class TestDatadogErrorForwarder:
             mock_client.return_value.__aenter__.return_value = instance
             result = await fwd.forward(_ORG_ID, _make_error_group(), _make_error_event(), {"api_key": "key"})
         assert result is False
+
+    @pytest.mark.parametrize(
+        ("level", "expected"),
+        [("error", "error"), ("critical", "error"), ("warning", "warning")],
+    )
+    async def test_alert_type_follows_level(self, level: str, expected: str) -> None:
+        fwd = DatadogErrorForwarder()
+
+        with _patch_pinned("datadog") as mock_client:
+            instance = AsyncMock()
+            instance.post = AsyncMock()
+            resp = AsyncMock()
+            resp.is_success = True
+            instance.post.return_value = resp
+            mock_client.return_value.__aenter__.return_value = instance
+
+            result = await fwd.forward(
+                _ORG_ID,
+                _make_error_group(),
+                _make_error_event(level=level),
+                {"api_key": "k"},
+            )
+        assert result is True
+        assert instance.post.call_args.kwargs["json"]["alert_type"] == expected
+
+    def test_build_text_includes_group_count_env_version_and_stacktrace(self) -> None:
+        group = _make_error_group(fingerprint="fp123", count=7)
+        event = _make_error_event(environment="prod", version="9.9.9")
+
+        text = DatadogErrorForwarder._build_text(_ORG_ID, group, event)
+
+        assert "fp123" in text
+        assert "7" in text
+        assert "prod" in text
+        assert "9.9.9" in text
+        assert event.stacktrace in text
+
+        # An empty stacktrace must not render the "Stacktrace" section.
+        event.stacktrace = ""
+        text_without_stacktrace = DatadogErrorForwarder._build_text(_ORG_ID, group, event)
+        assert "Stacktrace" not in text_without_stacktrace
 
 
 # =========================================================================
@@ -608,3 +699,103 @@ class TestForwarderFailureIsolation:
         finally:
             configure_forwarders(original_configs)
         assert result is None
+
+
+# =========================================================================
+# Non-success responses -> False (PagerDuty / Loki / OpsGenie)
+# =========================================================================
+
+
+class TestForwarderNonSuccessResponse:
+    """The ``is_success is False -> return False`` branch of each forwarder."""
+
+    @pytest.mark.parametrize(
+        ("forwarder_cls", "module", "config"),
+        [
+            (PagerDutyErrorForwarder, "pagerduty", {"routing_key": "pd-key"}),
+            (LokiErrorForwarder, "loki", {"push_url": "https://loki.example.com/loki/api/v1/push"}),
+            (OpsGenieErrorForwarder, "opsgenie", {"api_key": "og-key"}),
+        ],
+        ids=["pagerduty", "loki", "opsgenie"],
+    )
+    async def test_returns_false_on_non_success_response(self, forwarder_cls, module, config) -> None:
+        fwd = forwarder_cls()
+
+        with _patch_pinned(module) as mock_client:
+            instance = AsyncMock()
+            instance.post = AsyncMock()
+            resp = AsyncMock()
+            resp.is_success = False
+            resp.status_code = 500
+            instance.post.return_value = resp
+            mock_client.return_value.__aenter__.return_value = instance
+
+            result = await fwd.forward(
+                _ORG_ID,
+                _make_error_group(),
+                _make_error_event(level="critical"),
+                config,
+            )
+        assert result is False
+
+
+# =========================================================================
+# Org-config forwarder dispatch (_load_per_org_configs / _dispatch_forwarders)
+# =========================================================================
+
+
+class TestForwarderDispatchConfig:
+    async def test_dispatch_one_forwarder_unknown_type_is_noop(self, caplog: pytest.LogCaptureFixture) -> None:
+        # An unregistered forwarder type must be skipped (logged), never raised.
+        await _dispatch_one_forwarder(_ORG_ID, _make_error_group(), _make_error_event(), "nope", {})
+        assert "dispatch_forwarders.unknown_type" in caplog.text
+
+    async def test_load_per_org_configs_reads_enabled_org_rows(self) -> None:
+        enabled_row = types.SimpleNamespace(forwarder_type="datadog", config_json={"api_key": "x"})
+        no_config_row = types.SimpleNamespace(forwarder_type="loki", config_json=None)
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = [enabled_row, no_config_row]
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=result)
+
+        configs = await _load_per_org_configs(session, _ORG_ID)
+
+        assert configs == {"datadog": {"api_key": "x"}}
+        # The query must be org-scoped and enabled-filtered.
+        stmt_str = str(session.execute.call_args[0][0])
+        assert "error_forwarder_configs" in stmt_str
+        assert "organisation_id" in stmt_str
+        assert "enabled" in stmt_str
+
+    async def test_dispatch_forwarders_prefers_org_config_over_default(self) -> None:
+        with (
+            patch(
+                "modulo.core.error_tracking._load_per_org_configs",
+                new=AsyncMock(return_value={"datadog": {"api_key": "org"}}),
+            ),
+            patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
+        ):
+            await _dispatch_forwarders(_ORG_ID, _make_error_group(), _make_error_event(), {}, session=object())
+
+        dispatch.assert_awaited_once()
+        assert dispatch.call_args.args[3] == "datadog"
+        assert dispatch.call_args.args[4] == {"api_key": "org"}
+
+    async def test_dispatch_forwarders_falls_back_to_default_without_session(self) -> None:
+        default_config = {"loki": {"push_url": "https://loki.example.com/push"}}
+        with (
+            patch("modulo.core.error_tracking._DEFAULT_FORWARDER_CONFIGS", default_config),
+            patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
+        ):
+            await _dispatch_forwarders(_ORG_ID, _make_error_group(), _make_error_event(), {})
+
+        dispatch.assert_awaited_once()
+        assert dispatch.call_args.args[3] == "loki"
+        assert dispatch.call_args.args[4] == default_config["loki"]
+
+    async def test_load_per_org_configs_reraises_programming_error(self) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=ProgrammingError("SELECT 1", {}, Exception("boom")))
+
+        with pytest.raises(ProgrammingError):
+            await _load_per_org_configs(session, _ORG_ID)
