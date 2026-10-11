@@ -136,6 +136,7 @@ class TestFunctionsWiring:
         assert "runner_marker_sweep" in names
         assert "runner_health_probe" in names
         assert "journey_reconcile" in names
+        assert "decision_record_reconcile" in names
         assert "check_missed_fire_alerts_cron" in names
         assert "library_sync" in names
         assert "connector_health_checks" in names
@@ -177,6 +178,7 @@ class TestFunctionsWiring:
             "cost_probe",
             "analytics_facts_maintenance",
             "journey_reconcile",
+            "decision_record_reconcile",
             "check_missed_fire_alerts_cron",
             "library_sync",
             "metrics_dump",
@@ -275,6 +277,16 @@ class TestFunctionsWiring:
         assert jr.heartbeat == 30
         assert jr.ttl == 300
         assert jr.unique is True
+        # decision_record_reconcile: hourly (FAR-1108 chunk 8b) — read-only
+        # corruption detection, unique so ticks cannot interleave, failures
+        # re-raise so retries=2 engages.
+        drr = jobs["decision_record_reconcile"]
+        assert drr.cron == "0 * * * *"
+        assert drr.timeout == 300
+        assert drr.retries == 2
+        assert drr.heartbeat == 30
+        assert drr.ttl == 300
+        assert drr.unique is True
         # library_sync: cadence derives from modulo_library_sync_interval_seconds
         # (default 300s -> */5 * * * *), fail-open (retries=1, never raises).
         ls = jobs["library_sync"]

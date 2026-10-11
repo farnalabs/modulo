@@ -1,11 +1,13 @@
 """GitLab CI runner — triggers and observes pipeline runs via the GitLab API."""
 
 import logging
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
@@ -40,6 +42,9 @@ class GitLabCIRunner(CIRunnerBase):
         self._token = token
         self._base_url = base_url.rstrip("/")
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     def _headers(self) -> dict[str, str]:
         return {
             "PRIVATE-TOKEN": self._token,
@@ -59,6 +64,7 @@ class GitLabCIRunner(CIRunnerBase):
             base_url=self._base_url,
             headers=self._headers(),
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     def _parse_run(self, raw: dict[str, Any], project_ref: str = "") -> CIRun:
@@ -100,14 +106,14 @@ class GitLabCIRunner(CIRunnerBase):
                     return HealthResult(ok=True)
                 if r.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPError as exc:
-            return HealthResult(ok=False, detail=f"HTTP error: {exc}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP error: {exc}")[:200])
         except ValueError as exc:
             # The outbound SSRF guard in _client() rejects a private/internal
             # base_url. Report unhealthy with the remediation text instead of
             # raising, matching the base_url-bearing connectors.
-            return HealthResult(ok=False, detail=str(exc)[:200])
+            return HealthResult(ok=False, detail=self._redacted_detail(str(exc))[:200])
 
     async def trigger_run(
         self,
@@ -140,7 +146,9 @@ class GitLabCIRunner(CIRunnerBase):
                     )
                 return run
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -156,7 +164,9 @@ class GitLabCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 return self._parse_run(r.json(), project_ref=project_id)
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -213,7 +223,9 @@ class GitLabCIRunner(CIRunnerBase):
                     truncated=skipped_jobs > 0,
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 
@@ -251,7 +263,9 @@ class GitLabCIRunner(CIRunnerBase):
                 raw_runs: list[dict[str, Any]] = r.json()
                 return [self._parse_run(run, project_ref=pipeline_id) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitLab API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitLab API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitLab API connection error: {exc}") from exc
 

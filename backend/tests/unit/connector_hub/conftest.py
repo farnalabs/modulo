@@ -14,6 +14,22 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _reset_skip_warn_registry():
+    """Keep the module-level skip-warning dedup registry isolated between tests (FAR-465).
+
+    Package-wide (previously only in test_connector_hub.py) so every module in
+    this package sees a clean ``_SKIP_WARN_SEEN`` per test — a skip observed by
+    one module can never silence the first-traceback logging another module
+    asserts on.
+    """
+    from modulo.core.connector_hub import _SKIP_WARN_SEEN
+
+    _SKIP_WARN_SEEN.clear()
+    yield
+    _SKIP_WARN_SEEN.clear()
+
+
+@pytest.fixture(autouse=True)
 def _pin_settings_for_tenant_paths() -> None:
     # MagicMock default is truthy for every attribute; explicitly make the
     # shared Redis budget look unconfigured so the tenant path resolves None.

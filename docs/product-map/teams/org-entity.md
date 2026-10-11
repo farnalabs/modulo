@@ -34,14 +34,13 @@ depends-on:
   - feat-auth-jwt-auth
   - feat-core-db-abstraction-core
   - feat-core-run-context
-  - feat-org
 status: covered
 ---
 
 # Teams Org Entity
 
 The Organisation entity is the root tenant entity in Modulo's multi-tenant architecture.
-Every resource belongs to an organisation (route `feat-org` / `/admin/org`). Postgres
+Every resource belongs to an organisation (feature `feat-org` / route `/admin/org`). Postgres
 Row-Level Security (RLS) enforces tenant isolation at the database layer, and
 `OrgMembership` scopes users (`admin | operator | runner | viewer`) to organisations.
 Referenced by ADR 047/018 as the product-map entry updated during centralized
@@ -73,7 +72,8 @@ authorization cleanup.
       `tests/integration/test_system_audit_org_deletion.py`)
 - [x] RLS tenant isolation: org-scoped tables carry `organisation_id`, `SET LOCAL
       app.organisation_id` in transactions, pool-checkout org reset, ORM tenant filter
-      for non-Postgres backends, `organisations` table itself excluded (root tenant)
+      for non-Postgres backends, `organisations` (root tenant) and `invitations` tables
+      excluded
 - [x] License management via `/api/v1/admin/orgs/{org_id}/license` (Ed25519 verified,
       422 on invalid key, falls back to system license)
 - [x] ViewModel `current` supplies org context, plan, team memberships, preferences

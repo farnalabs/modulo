@@ -21,40 +21,6 @@ def test_connector_type(connector: CodeClimateConnector) -> None:
 
 
 @respx.mock
-async def test_health_check_ok(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": []}))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "Code Climate API token validated"
-
-
-@respx.mock
-async def test_health_check_invalid_token(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Invalid" in result.detail
-
-
-@respx.mock
-async def test_health_check_network_error(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(side_effect=httpx.ConnectError("connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "connection refused" in result.detail
-
-
-@respx.mock
-async def test_health_check_http_error(connector: CodeClimateConnector) -> None:
-    respx.get(f"{_BASE}/repos", params={"limit": 1}).mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "HTTP 500" in result.detail
-
-
-@respx.mock
 async def test_query_repos(connector: CodeClimateConnector) -> None:
     repos = {
         "data": [

@@ -321,17 +321,18 @@ async def test_query_transport_error_detail_redacts_credentials(connector):
 @respx.mock
 async def test_health_check_transport_error_raises_request_error(connector):
     """FAR-507: a transport error escaping ``health_check`` is a bare ``httpx``
-    error.
-
-    NOTE: unlike ``query``/``write``, ``health_check`` is not ``@redacting``-
-    wrapped, so a transport error's ``exc.request.url`` still carries the live
-    ``key``/``token``. That is an out-of-scope ``backend/src/`` source gap,
-    surfaced by this test-only pass and reported as an outstanding item; this
-    test pins only the observable exception type so the path stays exercised.
+    error that carries the live ``key``/``token`` in ``exc.request.url`` (the
+    URL is the query string), so the connector redactor is built with
+    ``scrub_url=True`` and the ``@redacting`` wrapper must scrub that URL —
+    assert the leak it guards against is actually plugged.
     """
     respx.get(f"{_BASE}/members/me").mock(side_effect=httpx.ConnectError("Connection refused"))
-    with pytest.raises(httpx.RequestError):
+    with pytest.raises(httpx.RequestError) as exc_info:
         await connector.health_check()
+    exc = exc_info.value
+    assert hasattr(exc, "request")
+    assert API_KEY not in str(exc.request.url)
+    assert TOKEN not in str(exc.request.url)
 
 
 @respx.mock

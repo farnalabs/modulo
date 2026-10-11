@@ -56,6 +56,11 @@ _MAX_EXPANDED_NODES = 10_000
 # LRU cache size per (profile, provider) combination
 _LRU_MAX_SIZE = 256
 
+# JSON Schema metaschema keywords referenced by the unsupported-keyword sets
+# and the inline-ref pass (S1192).
+_KEY_SCHEMA = "$schema"
+_KEY_DEFS = "$defs"
+
 
 @dataclass
 class RenderWarning:
@@ -91,8 +96,8 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
     "openai": frozenset(
         {
             "$id",
-            "$schema",
-            "$defs",
+            _KEY_SCHEMA,
+            _KEY_DEFS,
             "definitions",
             "default",
             "examples",
@@ -114,8 +119,8 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
     "anthropic": frozenset(
         {
             "$id",
-            "$schema",
-            "$defs",
+            _KEY_SCHEMA,
+            _KEY_DEFS,
             "definitions",
             "default",
             "examples",
@@ -138,8 +143,8 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
     "google": frozenset(
         {
             "$id",
-            "$schema",
-            "$defs",
+            _KEY_SCHEMA,
+            _KEY_DEFS,
             "definitions",
             "default",
             "examples",
@@ -162,8 +167,8 @@ _PROVIDER_UNSUPPORTED: dict[str, frozenset[str]] = {
     "deepseek": frozenset(
         {
             "$id",
-            "$schema",
-            "$defs",
+            _KEY_SCHEMA,
+            _KEY_DEFS,
             "definitions",
             "default",
             "examples",
@@ -201,7 +206,7 @@ _ALWAYS_KEEP = frozenset(
         "enum",
         "const",
         "$ref",
-        "$defs",
+        _KEY_DEFS,
     }
 )
 
@@ -357,7 +362,7 @@ def _flatten_refs(
 def _strip_local_defs(schema: dict[str, Any]) -> dict[str, Any]:
     """Remove $defs/definitions keys from the top level after flattening."""
     result = dict(schema)
-    result.pop("$defs", None)
+    result.pop(_KEY_DEFS, None)
     result.pop("definitions", None)
     return result
 

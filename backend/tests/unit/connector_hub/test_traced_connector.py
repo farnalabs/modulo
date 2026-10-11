@@ -3,14 +3,12 @@
 Uses OTel's InMemorySpanExporter — no network, no DB.
 """
 
-import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from cryptography.fernet import Fernet
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
@@ -30,6 +28,8 @@ from modulo.connectors.base import (
 from modulo.connectors.ci_runner.base import CIRunnerBase
 from modulo.core.connector_hub import ConnectorHub, _TracedConnector
 from modulo.core.secrets_backend import create_secrets_backend
+
+from .secrets_helpers import SHARED_FERNET_KEY, encrypt_credentials
 
 
 @pytest.fixture
@@ -186,10 +186,6 @@ class _FakeCI:
     allowed_operations: list[str] | None = None
 
 
-def _encrypt_with(key: str, d: dict[str, Any]) -> bytes:
-    return Fernet(key.encode()).encrypt(json.dumps(d).encode())
-
-
 def test_traced_connector_getattr_proxies_to_inner(traced: _TracedConnector) -> None:
     """Unknown attributes are proxied to the inner connector."""
     inner = traced._inner
@@ -309,15 +305,14 @@ async def test_hub_integration_health_check(tmp_path, otel_span_exporter: InMemo
     """ConnectorHub wiring produces spans in health_check."""
     otel_span_exporter.clear()
 
-    key = Fernet.generate_key().decode()
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt_with(key, {}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
 
-    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    backend = create_secrets_backend(fernet_key=SHARED_FERNET_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend, org_id="org-42")
         async with hub:
@@ -340,15 +335,14 @@ async def test_hub_integration_query_and_write(tmp_path, otel_span_exporter: InM
     """org_id flows through hub to query and write spans."""
     otel_span_exporter.clear()
 
-    key = Fernet.generate_key().decode()
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt_with(key, {}),
+        credentials_ciphertext=encrypt_credentials({}),
     )
 
-    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    backend = create_secrets_backend(fernet_key=SHARED_FERNET_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         hub = ConnectorHub(secrets_backend=backend, org_id="tenant-abc")
         async with hub:
@@ -381,16 +375,15 @@ async def test_hub_org_connector_is_shared_with_team_scoped_invocations(tmp_path
 
     (tmp_path / "team.txt").write_text("x")
 
-    key = Fernet.generate_key().decode()
     ci = _FakeCI(
         id=uuid.uuid4(),
         connector_type_id="filesystem",
         config_json={"base_path": str(tmp_path)},
-        credentials_ciphertext=_encrypt_with(key, {}),
+        credentials_ciphertext=encrypt_credentials({}),
         visibility="org",
     )
 
-    backend = create_secrets_backend(fernet_key=key, backend_name="fernet")
+    backend = create_secrets_backend(fernet_key=SHARED_FERNET_KEY, backend_name="fernet")
     with patch.object(backend, "get_secret", return_value="{}"):
         # Structural guard: no request-visibility axis to thread a team scope
         # through (re-adding it fails here before any behaviour can regress).

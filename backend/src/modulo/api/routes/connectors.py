@@ -36,7 +36,12 @@ from modulo.connectors.github import GitHubConnector, is_fine_grained_pat
 from modulo.connectors.rest import RestConnector
 from modulo.core.audit_coverage import audited
 from modulo.core.connector_hub import ConnectorDecryptError, ConnectorHub
-from modulo.core.secrets_backend import create_secrets_backend
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    create_secrets_backend,
+    is_secret_ref,
+    resolve_credential,
+)
 from modulo.core.team_visibility import (
     ConnectorTeamMismatch,
     connector_team_mismatch,
@@ -317,6 +322,8 @@ def _reconcile_rest_credentials(existing: Any, incoming_credentials: str, settin
 class ConnectorCreate(TeamVisibilityMixin):
     name: str = Field(..., min_length=1, max_length=255)
     connector_type_id: str = Field(..., min_length=1, max_length=128)
+    # Literal credentials, or a ``secretref://<key>`` vault reference the
+    # SERVER resolves at write time (FAR-1640).
     credentials: str = Field(..., min_length=1)
     config_json: dict[str, Any] = Field(default_factory=dict)
     allowed_operations: list[str] = Field(default_factory=list)
@@ -478,7 +485,37 @@ async def _verify_github_credentials(credentials: str) -> None:
         )
 
 
-def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
+async def _resolve_create_credentials(
+    session: AsyncSession,
+    credentials: str,
+    principal: TenantPrincipal,
+    settings: Settings,
+) -> str:
+    """Resolve a create's ``secretref://<key>`` credential source to a literal (FAR-1640).
+
+    A literal credential passes through untouched (no secrets backend
+    constructed), so the historical create path is byte-identical for the
+    common case and never depends on the vault being configured. A
+    ``secretref://`` token is resolved under a short RLS transaction so the
+    vault read is org-scoped; a missing/foreign/empty key is a typed 422 naming
+    only the offending key — never a silent empty credential, never a 500.
+    """
+    if not is_secret_ref(credentials):
+        return credentials
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
+            return await resolve_credential(secrets_backend, credentials)
+    except CredentialReferenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.validation_detail(["body", "credentials"]),
+        ) from None
+
+
+def _validate_rest_connector_payload(credentials: str, config_json: dict[str, Any]) -> None:
     """Validate a REST connector's credential and config contracts (FAR-466/532).
 
     A REST connector's credentials are ALWAYS a JSON object. Validate the
@@ -486,9 +523,12 @@ def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
     boundary so a direct POST cannot save a broken credential (e.g.
     ``{"auth_mode":"bearer"}`` with no token) that the connector will reject at
     run time. This mirrors the PATCH overlay validation.
+
+    *credentials* is the RESOLVED credential (a vault reference is resolved
+    server-side before this runs, FAR-1640).
     """
     try:
-        rest_creds = json.loads(req.credentials)
+        rest_creds = json.loads(credentials)
     except (ValueError, TypeError):
         rest_creds = None
     if not isinstance(rest_creds, dict):
@@ -507,7 +547,7 @@ def _validate_rest_connector_payload(req: ConnectorCreate) -> None:
     # an invalid on_unknown would otherwise be saved and brick every bound
     # node at run time (RestConnector.__init__ raises).
     try:
-        _validate_rest_config(req.config_json)
+        _validate_rest_config(config_json)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -597,13 +637,18 @@ async def create_connector_endpoint(
     principal: TenantPrincipal = require_permission("connector.create"),
     settings: Settings = Depends(get_settings),
 ) -> ConnectorResponse:
+    # FAR-1640: resolve a secretref:// vault reference under
+    # the caller's org context BEFORE any verification/encryption — the token
+    # verification and REST payload checks run against the RESOLVED credential.
+    resolved_credentials = await _resolve_create_credentials(session, req.credentials, principal, settings)
+
     if req.connector_type_id == "github":
-        await _verify_github_credentials(req.credentials)
+        await _verify_github_credentials(resolved_credentials)
 
     if req.connector_type_id == "rest":
-        _validate_rest_connector_payload(req)
+        _validate_rest_connector_payload(resolved_credentials, req.config_json)
 
-    ciphertext = _encrypt(req.credentials, settings.fernet_key)
+    ciphertext = _encrypt(resolved_credentials, settings.fernet_key)
     ci = await _create_connector(session, req, principal, ciphertext)
     return _to_response(ci)
 
@@ -812,6 +857,21 @@ async def update_connector_endpoint(
             existing = await get_connector_instance(session, connector_id)
             if existing is None or existing.organisation_id != principal.organisation_id:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+            if credentials_updated and new_credentials is not None and is_secret_ref(new_credentials):
+                # FAR-1640: resolve a ``secretref://`` vault reference under the
+                # caller's org context before the credential is reconciled or
+                # encrypted. A literal skips this entirely (no secrets backend
+                # constructed).
+                try:
+                    new_credentials = await resolve_credential(
+                        create_secrets_backend(fernet_key=settings.fernet_key, session=session),
+                        new_credentials,
+                    )
+                except CredentialReferenceError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                        detail=exc.validation_detail(["body", "credentials"]),
+                    ) from None
             if existing is not None and "config_json" in updates and updates["config_json"] is not None:
                 current_cfg = existing.config_json or {}
                 updates["config_json"] = merge_masked_config_json(current_cfg, updates["config_json"])

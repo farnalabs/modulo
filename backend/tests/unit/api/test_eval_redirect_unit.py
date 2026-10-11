@@ -440,7 +440,6 @@ class TestGuardrailConfigSoftDeletes:
         account_id = uuid.uuid4()
 
         await _apply_guardrail_deletes(
-            MagicMock(),
             {
                 "no-longer-proposed": org_level,
                 "also-absent": node_bound,

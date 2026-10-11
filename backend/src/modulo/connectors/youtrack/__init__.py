@@ -1,11 +1,13 @@
 """YouTrackConnector — async YouTrack REST API connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     ConnectorBase,
     ConnectorPayload,
@@ -56,6 +58,9 @@ class YouTrackConnector(ConnectorBase):
         self._token = token
         self._base_url = base_url
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.YOUTRACK
@@ -71,6 +76,7 @@ class YouTrackConnector(ConnectorBase):
             base_url=self._base_url,
             headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"},
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -85,12 +91,12 @@ class YouTrackConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         match q.resource:

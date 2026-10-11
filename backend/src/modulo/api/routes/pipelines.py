@@ -164,6 +164,9 @@ _CODE_PIPELINE_LIST = "pipeline.list"
 _CODE_ROUTES_PIPELINES = "routes.pipelines"
 _CODE_PIPELINE_GRAPH_UPDATE = "pipeline.graph.update"
 _CODE_PIPELINE_UPDATE = "pipeline.update"
+
+_MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+
 # FAR-1184: raising or clearing a pipeline's spend circuit-breaker threshold
 # requires the same org-admin permission as the circuit-breaker reset.
 _CODE_COST_MANAGE = "cost.manage"
@@ -3223,7 +3226,7 @@ async def _reapply_team_gate_inside_mutation_txn(
             session,
             account_id=principal.account_id,
             team_id=current.owner_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
     return current
 
@@ -3340,7 +3343,7 @@ async def _assert_team_transition_allowed(
             session,
             account_id=principal.account_id,
             team_id=current_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
 
     # New team gate: reassigning to a team requires membership of the NEW team.
@@ -4091,7 +4094,7 @@ async def _clone_pipeline_into_org(
             session,
             account_id=account_id,
             team_id=clone_team_id,
-            denial_detail="Not a member of the team that owns this resource",
+            denial_detail=_MSG_NOT_TEAM_MEMBER,
         )
 
     await append_audit_event(

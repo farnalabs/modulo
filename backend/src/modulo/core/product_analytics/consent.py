@@ -57,6 +57,27 @@ def get_product_analytics_block(org_settings_json: dict[str, Any] | None) -> dic
     return result
 
 
+def org_consent_level(settings_json: Any) -> str:
+    """Return an organisation's product-analytics consent level (``all`` / ``off``).
+
+    The single canonical reader for the stored consent level. Both consumers —
+    the transparency endpoint (what the page reports) and the metrics dump (what
+    actually egresses) — read it through here, so the reported posture cannot
+    drift from the egress decision. A missing/blank level, a missing block, or a
+    malformed (non-dict) ``settings_json`` degrades to ``off`` (fail-closed)
+    rather than raising.
+    """
+    if not isinstance(settings_json, dict):
+        return LEVEL_OFF
+    raw_level = get_product_analytics_block(settings_json).get("level")
+    return str(raw_level) if raw_level else LEVEL_OFF
+
+
+def is_org_consenting(settings_json: Any) -> bool:
+    """Return True when an organisation's settings enable the ``all`` level."""
+    return org_consent_level(settings_json) == LEVEL_ALL
+
+
 def merge_product_analytics_block(
     org_settings_json: dict[str, Any] | None,
     updates: dict[str, Any],

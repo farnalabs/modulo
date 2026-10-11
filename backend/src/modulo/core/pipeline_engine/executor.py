@@ -55,7 +55,7 @@ from modulo.core.audit_logger.labels import (
     short_id,
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
-from modulo.core.cost_controller.finalize import derive_node_type_map, finalize_cost
+from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -85,6 +85,7 @@ from modulo.core.pipeline_engine.decorator import (
 )
 from modulo.core.pipeline_engine.error_codes import (
     _CODE_SANDBOX_AGENT_FAILED,
+    _CODE_SANDBOX_NO_OUTPUT_JSON,
     map_legacy_code,
     sanitize_error_text,
 )
@@ -115,6 +116,7 @@ from modulo.core.pipeline_engine.node_runner import (
     SupersededNodeError,
     _idempotency_gate_skipped_envelope,
     _marker_delivery_done_for_node,
+    _resolve_llm_judge_callable,
     set_conformance_ctx,
 )
 from modulo.core.pipeline_engine.output_filter import OutputRejectedError
@@ -127,6 +129,7 @@ from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_c
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
 from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
 from modulo.db.crud.pipeline import get_pipeline
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     ERROR_CODE_ORG_CAPACITY_LIMITED,
     ERROR_CODE_PIPELINE_CAPACITY,
@@ -150,7 +153,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 from modulo.db.models.policy_gate import PolicyGate
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from modulo.db.rls import set_rls_execution_context, set_rls_org
-from modulo.db.sqlstates import is_lock_abort, sqlstate_of
+from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, is_lock_abort, sqlstate_of
 from modulo.otel_bridge import LangGraphOtelBridge, trace_id_for_thread
 
 _WORKER_ID: str = f"{socket.gethostname()}:{os.getpid()}"
@@ -1728,7 +1731,7 @@ def _stream_terminal_reason(
         return _terminal_failure(
             broker,
             "failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _sanitize_detail(state.session_lost_reason, limit=5000),
             usage,
         )
@@ -2029,9 +2032,51 @@ class PipelineExecutor:
         )
         org_run_limit: int | None = await self._read_org_run_concurrency_limit(org_id)
 
+        try:
+            return await self._claim_under_capacity(
+                run_id=run_id,
+                org_id=org_id,
+                pipeline_id=pipeline_id,
+                max_concurrent=max_concurrent,
+                org_sandbox_cap=org_sandbox_cap,
+                org_sandbox_host_only=org_sandbox_host_only,
+                org_sandbox_population=org_sandbox_population,
+                org_run_limit=org_run_limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            recovered = await self._recover_capacity_lock_timeout(exc, run_id=run_id, org_id=org_id)
+            if recovered is None:
+                raise
+            return recovered
+
+    async def _claim_under_capacity(
+        self,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+        pipeline_id: uuid.UUID,
+        max_concurrent: int,
+        org_sandbox_cap: int | None,
+        org_sandbox_host_only: bool,
+        org_sandbox_population: str,
+        org_run_limit: int | None,
+    ) -> Run:
+        """Claim the run or demote it to pending, in one bounded transaction.
+
+        FAR-1610: ``set_mutation_row_lock_timeout`` bounds the hot ``runs``
+        row-lock wait BEFORE this transaction's first lock (``get_run`` below
+        is a plain read; the first lock is the cancel/claim/demote write). This
+        claim-time write is a RECOVERY path — the run was already claimed
+        ``running`` by ``claim_run_async``, so a contended row must NOT
+        terminal-fail it. Issued in the caller's transaction; the shared
+        ``update_run_status`` stays unbounded (FAR-1601).
+        """
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -2116,6 +2161,41 @@ class PipelineExecutor:
                 raise RunNotFoundError(run_id)
             return pending_run
 
+    async def _recover_capacity_lock_timeout(
+        self,
+        exc: Exception,
+        *,
+        run_id: uuid.UUID,
+        org_id: uuid.UUID,
+    ) -> Run | None:
+        """Recover from a 55P03 on ``_claim_under_capacity``'s write, else ``None``.
+
+        FAR-1610: the bounded row-lock wait expired (55P03) on a claim-time
+        write. The transaction rolled back whole, so NO status change was
+        applied — the run is left exactly as it was (the SAQ claim already set
+        it ``running``). This is the same fail-open-admit posture the capacity
+        READ failures already take (see ``_check_capacity``'s docstring): WARN,
+        re-read the row, and let the caller proceed; a concurrent cancel-request
+        is still caught by the stream path's DB cancellation check. Never
+        silent.
+
+        Returns the re-read run on a 55P03; returns ``None`` for any other
+        exception so ``_check_capacity`` re-raises it unchanged.
+        """
+        if sqlstate_of(exc) != LOCK_NOT_AVAILABLE_SQLSTATE:
+            return None
+        _log.warning(
+            "pipeline.capacity_check_lock_timeout run=%s — bounded "
+            "mutation_row_lock_timeout_ms wait expired on the claim-time write; no "
+            "status change applied, proceeding with the run's current state",
+            run_id,
+            exc_info=True,
+        )
+        async with self._session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            return await get_run(session, run_id)
+
     async def _check_spend_ceiling_gate(
         self,
         *,
@@ -2144,6 +2224,14 @@ class PipelineExecutor:
             async with self._session_factory() as session, session.begin():
                 await set_rls_org(session, org_id)
                 await set_rls_execution_context(session)
+                # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+                # transaction's first lock (the terminalizing
+                # ``update_run_status`` below). Issued in the caller's
+                # transaction; the shared ``update_run_status`` stays unbounded
+                # (FAR-1601). A 55P03 lands in this method's existing fail-open
+                # ``except Exception`` (WARNING + return None) — the ledger block
+                # remains the authoritative hard ceiling.
+                await set_mutation_row_lock_timeout(session)
                 # FAR-1025: opt out of the global soft-delete filter — a
                 # pending-deletion org (deleted_at stamped at initiate) is still
                 # operationally live.  Skipping here means the pre-dispatch
@@ -2825,6 +2913,11 @@ class PipelineExecutor:
             org_id=org_id,
             session_factory=self._session_factory,
             node_id=node_id,
+            # FAR-315: mirror the HITL-gate path (FAR-307) — resolve the LLM
+            # judge callable from eval_def.config["model_backend_id"] via the
+            # ModelBackendHub, so llm_judge evals score against a real judge
+            # instead of returning the fail-closed 0.0 "callable not provided".
+            resolve_llm_judge=_resolve_llm_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
 
@@ -3431,7 +3524,7 @@ class PipelineExecutor:
             return None
         if final_status == "failed" and error_code in (
             "agent.failed",
-            "sandbox.no_output_json",
+            _CODE_SANDBOX_NO_OUTPUT_JSON,
             _CODE_SANDBOX_AGENT_FAILED,
         ):
             return False
@@ -3636,6 +3729,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE this
+            # transaction's first lock (the ``update_run_status`` claim below).
+            # Issued in the caller's transaction; the shared
+            # ``update_run_status`` stays unbounded (FAR-1601). A 55P03
+            # propagates to the resume caller's error handling — a request
+            # (HITL approve) path fails visibly, never silently.
+            await set_mutation_row_lock_timeout(session)
             run = await get_run(session, run_id)
             if run is None:
                 raise RunNotFoundError(run_id)
@@ -4218,8 +4318,16 @@ class PipelineExecutor:
         The bounded retry rides out transient contention; if it persists, the
         exception propagates — ``run_executor_with_watchdog`` terminal-fails the
         run as ``executor_failed`` (truthful, non-silent), never a raw 500.
+
+        FAR-1642 retry-idempotent metrics: each attempt buffers its
+        ``limit_refused`` / ``duplicate_terminal`` counters on a FRESH
+        :class:`FinalizeMetricSink` and the sink is flushed only AFTER this
+        attempt's transaction commits — so a rolled-back attempt emits nothing
+        and a retried finalisation emits exactly one sample per event, instead
+        of one per attempt. A discarded sink (attempt failed) is simply dropped.
         """
         for attempt in range(1, FINALIZE_LOCK_RETRY_ATTEMPTS + 1):
+            metric_sink = FinalizeMetricSink()
             try:
                 async with self._session_factory() as session, session.begin():
                     await set_rls_org(session, org_id)
@@ -4237,8 +4345,11 @@ class PipelineExecutor:
                         is_terminal=final_status in _TERMINAL_STATUSES,
                         session_factory=self._session_factory,
                         claim_token=self._claim_token,
+                        metric_sink=metric_sink,
                     )
                     await _apply_work_intact_best_effort(session, run_id, work_intact, claim_token=self._claim_token)
+                # Committed — the buffered counters are now real (exactly once).
+                metric_sink.flush()
                 return
             except asyncio.CancelledError:
                 raise
@@ -4452,6 +4563,13 @@ class PipelineExecutor:
         async with self._session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
+            # FAR-1610: bound the hot ``runs`` row-lock wait BEFORE the
+            # transaction's first lock (``_check_policy_gate_pin``'s
+            # terminalizing ``update_run_status``). Issued in the caller's
+            # transaction; the shared ``update_run_status`` stays unbounded
+            # (FAR-1601). A 55P03 propagates to ``execute()``'s caller and
+            # terminal-fails the run visibly (executor_failed) — never silent.
+            await set_mutation_row_lock_timeout(session)
             pin_run = await self._check_policy_gate_pin(
                 session,
                 run_id=run_id,
@@ -4742,8 +4860,6 @@ class PipelineExecutor:
             error_code=error_code,
             error_detail=error_detail,
             completed_node_outputs=completed_node_outputs,
-            broker=broker,
-            gate_suppressed=gate_suppressed,
             model_backend_hub=model_backend_hub,
             connector_hub=connector_hub,
         )
@@ -5581,7 +5697,7 @@ class PipelineExecutor:
                 # while its code resolves to ``node.cancelled`` — that marker
                 # keeps the generic code.
                 if isinstance(exc, SandboxNodeFailedError) and "likely hung" not in error_detail:
-                    error_code = "sandbox.no_output_json"
+                    error_code = _CODE_SANDBOX_NO_OUTPUT_JSON
                 # FAR-734: scan the retained stdout (embedded in the
                 # exception message) for terminal provider-error
                 # signatures.  When a signature matches, upgrade the
@@ -5817,8 +5933,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
     ) -> tuple[str, str | None, str | None]:
         """Post-stream tail: agent_signal firing, gated publish.
 
@@ -5844,9 +5958,9 @@ class PipelineExecutor:
                         pipeline_id=pipeline_id,
                         completed_node_outputs=completed_node_outputs,
                     )
-            # FAR-228 / FAR-1534: a gated run (``gate_suppressed``) completes
-            # without re-executing the node; its ``run_completed`` is published
-            # post-finalize like every other complete run.
+            # FAR-228 / FAR-1534: a gated run completes without re-executing
+            # the node; its ``run_completed`` is published post-finalize like
+            # every other complete run.
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -5863,8 +5977,6 @@ class PipelineExecutor:
         error_code: str | None,
         error_detail: str | None,
         completed_node_outputs: dict[str, Any],
-        broker: RunEventBroker,
-        gate_suppressed: bool,
         model_backend_hub: ModelBackendHub | None,
         connector_hub: Any | None,
     ) -> tuple[str, str | None, str | None]:
@@ -5886,8 +5998,6 @@ class PipelineExecutor:
                 error_code=error_code,
                 error_detail=error_detail,
                 completed_node_outputs=completed_node_outputs,
-                broker=broker,
-                gate_suppressed=gate_suppressed,
             )
             tail_ok = True
         finally:

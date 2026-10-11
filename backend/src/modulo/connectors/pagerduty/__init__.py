@@ -2,11 +2,13 @@
 
 import asyncio
 import contextlib
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
@@ -57,6 +59,9 @@ class PagerDutyConnector(ConnectorBase):
         self._token = token
         self._redactor = CredentialRedactor([token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.PAGERDUTY
@@ -70,8 +75,11 @@ class PagerDutyConnector(ConnectorBase):
                 "Accept": "application/vnd.pagerduty+json;version=2",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:
@@ -81,12 +89,12 @@ class PagerDutyConnector(ConnectorBase):
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid PagerDuty API token")
                 return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
                 )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

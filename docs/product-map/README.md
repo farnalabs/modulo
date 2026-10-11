@@ -658,8 +658,10 @@ Behaviour-tracker entries in this directory. Infra-only surfaces (no UI route in
 > functions directly (request ContextVars hydrated by hand, the `trigger.feature`
 > re-anchor pattern), exercising the real `_parse_hitl_action` claim-token guard
 > (`claim_token_required`), the real `_check_agent_tool_scope` role-hierarchy
-> scope gate (a `runner` is denied `hitl:review` → `insufficient_scope`), the
-> real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
+> scope gate (a `runner` is denied the decision action's registry key — e.g.
+> `hitl.approve` for `approve`; the pre-FAR-1476 `hitl:review` spelling now
+> survives only as an accepted input alias — reported as `insufficient_scope`),
+> the real `_check_human_only_gate` policy hook, the real HITLManager approve/reject
 > decision dispatch (`approved` / `rejected` + `review_id`), and the real
 > pending-gate serialisation with the shared gate description resolver –
 > network-free and DB-free with only the auth re-validation and DB/HITLManager

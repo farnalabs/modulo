@@ -24,6 +24,8 @@ from modulo.db.crud.policy_gate_decision import is_policy_gate_decision_fk_error
 from modulo.db.crud.run_retention import CHECKPOINT_RETENTION_DAYS, purge_terminal_checkpoints
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 
+_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP = "admin_housekeeping.perform_cleanup"
+
 _log = logging.getLogger(__name__)
 
 # Permission guarding every housekeeping route (same check, three routes).
@@ -180,7 +182,7 @@ async def perform_cleanup(
                                 await session.delete(obj)
                                 deleted_count += 1
                     except IntegrityError as exc:
-                        _log.exception("admin_housekeeping.perform_cleanup")
+                        _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
                         _log.warning("IntegrityError cleaning up %s %s", entity_type, eid)
                         if is_policy_gate_decision_fk_error(exc):
                             errors.append(
@@ -199,13 +201,13 @@ async def perform_cleanup(
                                 {"id": eid, "entity_type": entity_type, "error": "Foreign key constraint violation"}
                             )
     except ProgrammingError:
-        _log.exception("admin_housekeeping.perform_cleanup")
+        _log.exception(_CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_housekeeping.perform_cleanup")
+        raise_session_contract_error(exc, _CODE_ADMIN_HOUSEKEEPING_PERFORM_CLEANUP)
         _log.exception("admin_housekeeping.cleanup")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

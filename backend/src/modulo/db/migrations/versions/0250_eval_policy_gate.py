@@ -38,6 +38,10 @@ _eval_type_sql = ", ".join(f"'{v}'" for v in _VALID_EVAL_TYPES)
 # Row Level Security — org isolation policy (mirrors 0130_eval_suite_entity).
 _ORG_ISOLATION_POLICY = "organisation_id = nullif(current_setting('app.organisation_id', true), '')::uuid"
 
+# Shared DDL fragments for the three new tables (S1192).
+_UUID_SERVER_DEFAULT = "gen_random_uuid()"
+_ORGANISATIONS_FK = "organisations.id"
+
 # Ownership transfer to migration role so modulo_app (non-owner) is RLS-filtered.
 _NEW_TABLES = ("evals", "policy_gates", "policy_gate_decisions")
 
@@ -83,9 +87,9 @@ def upgrade() -> None:
     if "evals" not in existing_tables:
         op.create_table(
             "evals",
-            sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), primary_key=True),
+            sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
             sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False
+                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
             ),
             sa.Column(
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
@@ -124,9 +128,9 @@ def upgrade() -> None:
     if "policy_gates" not in existing_tables:
         op.create_table(
             "policy_gates",
-            sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), primary_key=True),
+            sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
             sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False
+                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
             ),
             sa.Column(
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False
@@ -167,9 +171,9 @@ def upgrade() -> None:
     if "policy_gate_decisions" not in existing_tables:
         op.create_table(
             "policy_gate_decisions",
-            sa.Column("id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), primary_key=True),
+            sa.Column("id", sa.Uuid(), server_default=sa.text(_UUID_SERVER_DEFAULT), primary_key=True),
             sa.Column(
-                "organisation_id", sa.Uuid(), sa.ForeignKey("organisations.id", ondelete="CASCADE"), nullable=False
+                "organisation_id", sa.Uuid(), sa.ForeignKey(_ORGANISATIONS_FK, ondelete="CASCADE"), nullable=False
             ),
             sa.Column(
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.current_timestamp(), nullable=False

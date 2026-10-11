@@ -1,11 +1,12 @@
 """DropboxPaperConnector — async Dropbox Paper API v2 connector."""
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_cursor import safe_cursor as _safe_cursor
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -40,6 +41,9 @@ class DropboxPaperConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.DROPBOX_PAPER
@@ -51,10 +55,7 @@ class DropboxPaperConnector(ConnectorBase):
 
     def _client(self) -> httpx.AsyncClient:
         return pinned_async_client_sync(
-            _DROPBOX_API,
-            base_url=_DROPBOX_API,
-            headers=self._headers(),
-            timeout=30,
+            _DROPBOX_API, base_url=_DROPBOX_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     async def health_check(self) -> HealthResult:
@@ -64,7 +65,7 @@ class DropboxPaperConnector(ConnectorBase):
                 r = await client.post("/users/get_current_account", json=None)
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             body: dict[str, Any] = r.json()
             email = body.get("email", "unknown")
@@ -72,14 +73,14 @@ class DropboxPaperConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Dropbox API HTTP {exc.response.status_code}: {exc.response.text}")[:200],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Dropbox API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Dropbox API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

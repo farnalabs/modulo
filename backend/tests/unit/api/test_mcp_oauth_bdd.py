@@ -24,7 +24,9 @@ from modulo.api.mcp_server import (
     McpAuthMiddleware,
     _ctx_auth_token,
     _ctx_auth_type,
+    _ctx_key_grants,
     _ctx_key_id,
+    _ctx_key_scope,
     _ctx_org_id,
     _ctx_role,
     _ctx_user_id,
@@ -33,6 +35,7 @@ from modulo.auth.dependencies import get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.oauth import (
     InvalidGrantError,
+    InvalidScopeError,
     OAuthAccessTokenClaims,
     UnauthorizedClientError,
     compute_pkce_challenge,
@@ -42,6 +45,7 @@ from modulo.auth.oauth import (
     validate_client_scopes,
 )
 from modulo.core.audit_coverage import audit_session
+from modulo.core.mcp.scope_validator import MCPAuthorizationError, check_tool_scope, resolve_tool_access
 from modulo.core.rate_limiter import RateLimiterRegistry
 from modulo.settings import Settings, get_settings
 from tests.unit.api.mock_session import configure_mock_session
@@ -1200,8 +1204,20 @@ class TestScopeEnforcement:
     def test_scope_outside_allowed_set_is_rejected(self) -> None:
         client = _make_mock_client(client_id="limited_client", scopes="trigger:run")
         with pytest.raises(UnauthorizedClientError) as exc:
-            validate_client_scopes(client, ["hitl:review"])
+            validate_client_scopes(client, ["pipeline.create"])
         assert "unauthorized_client" in str(exc.value).lower() or "None of the requested scopes" in str(exc.value)
+
+    def test_ceiling_caps_a_wider_request(self) -> None:
+        client = _make_mock_client(client_id="limited_client", scopes="trigger:run")
+        assert validate_client_scopes(client, ["trigger:run", "pipeline.create"]) == ["run.trigger"]
+
+    def test_excluded_scope_is_rejected_not_widened(self) -> None:
+        # FAR-1476: the registry's non-delegable exclusions (human_only HITL,
+        # credential lifecycle, system.*, org.delete, break-glass) are never
+        # grantable, even when the client's ceiling still lists one.
+        client = _make_mock_client(client_id="old_client", scopes="trigger:run api_key.create")
+        with pytest.raises(InvalidScopeError, match=r"api_key\.create"):
+            validate_client_scopes(client, ["api_key.create"])
 
 
 # ---------------------------------------------------------------------------
@@ -1393,6 +1409,138 @@ class TestOAuthMiddlewareAccountBinding:
         assert response.status_code == 503
         body = json_module.loads(response.body)
         assert body["error"] == "temporarily_unavailable"
+
+
+# ---------------------------------------------------------------------------
+# MCP leg (FAR-1476): the widened consented set IS the credential's grant-set.
+# ---------------------------------------------------------------------------
+
+
+class TestOAuthWidenedGrantEvaluation:
+    """The MCP bearer middleware evaluates an OAuth token's consented permission
+    set through the SAME grant leg as API-key grant-sets (``resolve_tool_access``
+    leg 5), so effective access = consented set INTERSECT bundle(live role).
+    Every check runs the REAL production chokepoint against the contextvars the
+    middleware just hydrated.
+    """
+
+    _CTX_VARS = (
+        _ctx_user_id,
+        _ctx_role,
+        _ctx_org_id,
+        _ctx_auth_type,
+        _ctx_auth_token,
+        _ctx_key_id,
+        _ctx_key_scope,
+        _ctx_key_grants,
+    )
+
+    def _save_ctx(self) -> list[Any]:
+        saved = []
+        for var in self._CTX_VARS:
+            if var in (_ctx_user_id, _ctx_org_id, _ctx_key_id):
+                sentinel: Any = uuid.UUID(int=0)
+            elif var is _ctx_key_grants:
+                sentinel = None
+            else:
+                sentinel = ""
+            saved.append(var.set(sentinel))
+        return saved
+
+    def _restore_ctx(self, saved: list[Any]) -> None:
+        for var, token in zip(self._CTX_VARS, saved, strict=True):
+            var.reset(token)
+
+    async def _dispatch(self, scopes: list[str], live_role: str) -> None:
+        response, _request = await TestOAuthMiddlewareAccountBinding()._dispatch(
+            scopes=scopes,
+            live_role=live_role,
+        )
+        assert response.status_code == 200
+
+    def _check(self, tool: str) -> None:
+        """Run the production tool-dispatch chokepoint with the request context."""
+        check_tool_scope(
+            _ctx_role.get(),
+            tool,
+            key_scope=_ctx_key_scope.get(None),
+            auth_type=_ctx_auth_type.get(None),
+            grants=_ctx_key_grants.get(None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_widened_token_carries_its_registry_key_grants(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["pipeline.create", "run.trigger"], "operator")
+            assert _ctx_key_grants.get(None) == frozenset({"pipeline.create", "run.trigger"})
+            # The scope-derived operator role, clamped against a live operator.
+            assert _ctx_role.get() == "operator"
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_legacy_alias_scopes_canonicalise_into_the_grant_set(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["trigger:run", "library:browse"], "admin")
+            assert _ctx_key_grants.get(None) == frozenset({"run.trigger", "resource.read_only"})
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_tool_allowed_by_the_granted_set_is_reachable(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["run.trigger", "resource.read_only"], "admin")
+            # Both a mapped tool and a read-only-pinned tool are reachable.
+            assert self._check("trigger_pipeline") is None
+            assert self._check("search_library") is None
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_tool_outside_the_granted_set_is_denied(self) -> None:
+        saved = self._save_ctx()
+        try:
+            await self._dispatch(["run.trigger"], "admin")
+            # Discriminating evidence: the role leg ALONE — the pre-FAR-1476
+            # state, grants=None — permits cancel_run at role runner. Only the
+            # grant leg can be denying it below, so the denial proves the
+            # middleware evaluated the widened set.
+            allowed_without_grants, _key = resolve_tool_access(
+                tool="cancel_run",
+                action=None,
+                role="runner",
+                key_scope="user",
+                auth_type="oauth",
+                allowed_tools=None,
+                kill_switch=True,
+                grants=None,
+            )
+            assert allowed_without_grants is True
+            with pytest.raises(MCPAuthorizationError, match=r"run\.cancel"):
+                self._check("cancel_run")
+            # The in-set tool stays reachable under the very same role.
+            assert self._check("trigger_pipeline") is None
+        finally:
+            self._restore_ctx(saved)
+
+    @pytest.mark.asyncio
+    async def test_live_role_demotion_degrades_the_widened_grant(self) -> None:
+        saved = self._save_ctx()
+        try:
+            # Operator-scoped grant, account since demoted to runner: the
+            # operator-level tool dies while the runner-level tool in the SAME
+            # grant set survives (ADR 047 live clamp, FAR-1476 grant leg).
+            await self._dispatch(["pipeline.create", "run.trigger"], "runner")
+            assert _ctx_role.get() == "runner"
+            assert _ctx_key_grants.get(None) == frozenset({"pipeline.create", "run.trigger"})
+            with pytest.raises(MCPAuthorizationError, match="Insufficient scope"):
+                self._check("create_pipeline")
+            assert self._check("trigger_pipeline") is None
+        finally:
+            self._restore_ctx(saved)
 
 
 # ---------------------------------------------------------------------------

@@ -315,12 +315,27 @@ PERMISSIONS: dict[str, str] = {
 
 NON_DELEGABLE_PERMISSIONS: frozenset[str] = frozenset(
     {
-        # human_only HITL decisions (ADR 047 / FAR-609): decided by a browser human.
-        "hitl.claim",
-        "hitl.approve",
-        "hitl.reject",
-        "hitl.deliver_manual",
-        "hitl.review",
+        # DECISION RECORD (2026-10-09, Duncan): the HITL decision keys
+        # (``hitl.claim`` / ``hitl.approve`` / ``hitl.reject`` /
+        # ``hitl.deliver_manual`` / ``hitl.review``) are deliberately NOT in
+        # this set — they are delegable to human-linked credentials (a
+        # human's OAuth connection), so a person can manage HITL gates
+        # through a harness instead of only through the browser UI.
+        #
+        # The boundary is the gate's ``human_only`` POLICY, enforced at
+        # RUNTIME — not a registry bar:
+        #   * MCP (``api/mcp_server._check_human_only_gate``) denies a
+        #     ``human_only`` gate outright regardless of credential class, so
+        #     a machine token can never answer one;
+        #   * REST (``api/routes/hitl._enforce_human_only_gate``) denies a
+        #     non-browser credential on a ``human_only`` gate.
+        # A human-linked connection may therefore answer NON-``human_only``
+        # gates (an explicit ``human_only: false`` opt-out) while ``human_only``
+        # gates stay browser-human-only. Removing the registry bar does not
+        # widen that policy — it only stops the bar from masking which layer
+        # did the denying (pinned by
+        # ``tests/unit/mcp/test_hitl_delegation_boundary.py``).
+        #
         # org destruction.
         "org.delete",
         # break-glass / authz kill-switch controls.

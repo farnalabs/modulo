@@ -20,10 +20,12 @@ Bearer API key (the connector credential ``token``).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._retry_headers import RETRYABLE_STATUSES
 from modulo.connectors.base import (
     ConnectorPayload,
@@ -72,6 +74,9 @@ class LinearConnector(TicketTrackerBase):
         self._token = token
         self._redactor = CredentialRedactor([token])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.LINEAR
@@ -89,9 +94,7 @@ class LinearConnector(TicketTrackerBase):
         # ``trust_env=False`` stops a proxy from re-resolving the destination
         # and defeating the pin.
         return pinned_async_client_sync(
-            _LINEAR_GRAPHQL_URL,
-            headers=self._headers(),
-            timeout=30,
+            _LINEAR_GRAPHQL_URL, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
         )
 
     @redacting
@@ -135,8 +138,8 @@ class LinearConnector(TicketTrackerBase):
             if exc.response.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(attempt))
                 raise _RetrySignalError(exc) from exc
-            detail = exc.response.text[:200]
-            raise ValueError(self._redactor.redact(f"Linear API HTTP {exc.response.status_code}: {detail}")) from exc
+            detail = self._redacted_detail(f"Linear API HTTP {exc.response.status_code}: {exc.response.text}")[:200]
+            raise ValueError(detail) from exc
         body: dict[str, Any] = r.json()
         return body
 
@@ -358,6 +361,8 @@ class LinearConnector(TicketTrackerBase):
             "body": comment.get("body"),
         }
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         """Verify the API key by querying the authenticated viewer."""
         try:
@@ -365,11 +370,11 @@ class LinearConnector(TicketTrackerBase):
             viewer = data.get("viewer") or {}
             return HealthResult(ok=True, detail=viewer.get("name") or "ok")
         except ValueError as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     async def get_ticket(self, ticket_id: str) -> Ticket:
         """Resolve an issue into the shared :class:`Ticket` shape (T1 surface)."""

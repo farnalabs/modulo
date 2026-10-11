@@ -54,6 +54,55 @@ def _isolated_audit_session(monkeypatch: pytest.MonkeyPatch) -> Generator[None, 
         yield
 
 
+#: Marker (applied as a Gherkin tag) opting ONE scenario out of the BDD-scope
+#: ``_verify_identity`` shim, so it runs the real function. Mirrors the root
+#: conftest's ``real_ssrf_dns`` opt-out; registration stays next to its only
+#: consumer rather than in pyproject.toml.
+_REAL_VERIFY_IDENTITY_MARKER = "real_verify_identity"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the ``real_verify_identity`` opt-out marker.
+
+    Registered here (not in ``pyproject.toml``) because this BDD conftest is
+    the marker's only consumer; ``config.addinivalue_line`` is the same shape
+    ``tests/integration/conftest.py`` uses for its ``no_docker`` marker.
+    """
+    config.addinivalue_line(
+        "markers",
+        "real_verify_identity: run the real modulo.auth.dependencies._verify_identity "
+        "instead of the BDD-scope AsyncMock shim",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _patch_verify_identity(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent ``_verify_identity`` from connecting to a real database.
+
+    ``get_current_tenant_user`` verifies the account/org against Postgres
+    before returning the principal. That check creates its own database engine
+    and bypasses every FastAPI dependency override, so a BDD scenario driving
+    the app with a mocked session would otherwise 401 whenever the local
+    Postgres is reachable but the test UUIDs do not match real rows.
+
+    This is the BDD-scope single source for that shim, mirroring
+    ``tests/unit/conftest.py::_patch_verify_identity``. Installed through
+    ``monkeypatch`` (undone at teardown), so it can never leak into a
+    subsequent scenario.
+
+    ``marcus-ciso.feature``'s ``@real_verify_identity``-tagged offboarding
+    journey drives the REAL seam on purpose: it seeds real rows and asserts a
+    removed member's JWT is rejected by the live role re-read. That ONE
+    scenario keeps the real function; every other scenario stays shimmed. The
+    explicit tag (not a filename) makes the exemption intentional and
+    greppable, exactly as the root conftest's ``_allow_test_hostnames`` keys
+    its opt-out on the ``real_ssrf_dns`` marker.
+    """
+    if request.node.get_closest_marker(_REAL_VERIFY_IDENTITY_MARKER) is not None:
+        return
+    monkeypatch.setattr("modulo.auth.dependencies._verify_identity", AsyncMock(return_value=None))
+
+
 # ---------------------------------------------------------------------------
 # Playwright fixtures (E2E with ?theme=agent)
 # ---------------------------------------------------------------------------

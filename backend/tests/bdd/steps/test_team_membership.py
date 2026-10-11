@@ -27,15 +27,6 @@ def ctx():
     }
 
 
-@pytest.fixture
-def patches():
-    collectors = []
-    yield collectors
-    for p in reversed(collectors):
-        with contextlib.suppress(RuntimeError):
-            p.stop()
-
-
 @given(parsers.parse('I am authenticated as a team operator of team "{team_name}"'))
 def auth_team_operator(team_name: str, ctx) -> None:
     ctx["auth_role"] = "team_operator"
@@ -118,7 +109,7 @@ def response_lists_teams(request) -> None:
     assert "team_memberships" in data
 
 
-@then("each membership includes team id, team name, and role")
+@then("each membership includes team id and role")
 def membership_has_fields(request) -> None:
     data = request.node._resp.json()
     for team in data.get("team_memberships", []):

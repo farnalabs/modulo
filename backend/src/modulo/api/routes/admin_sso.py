@@ -31,6 +31,12 @@ from modulo.auth.jwt import TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.feature_flags import resolve_sso_unrestricted_provisioning
 from modulo.core.runtime_config.key_bridge import get_public_url
+from modulo.core.secrets_backend import (
+    CredentialReferenceError,
+    create_secrets_backend,
+    is_secret_ref,
+    resolve_credential,
+)
 from modulo.core.sso_presets import list_presets, resolve_preset
 from modulo.core.ssrf import pinned_async_client, validate_outbound_url_async
 from modulo.db.crud.sso_provider import (
@@ -60,6 +66,8 @@ class SsoProviderCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     provider_id: str | None = None
     client_id: str | None = None
+    # A literal secret, or a ``secretref://<key>`` vault reference the SERVER
+    # resolves at write time (FAR-1640) — never stored as a reference string.
     client_secret: str | None = None
     discovery_url: str | None = None
     metadata_url: str | None = None
@@ -77,6 +85,8 @@ class SsoProviderCreate(BaseModel):
 class SsoProviderUpdate(BaseModel):
     name: str | None = None
     client_id: str | None = None
+    # A literal secret, or a ``secretref://<key>`` vault reference the SERVER
+    # resolves at write time (FAR-1640) — never stored as a reference string.
     client_secret: str | None = None
     discovery_url: str | None = None
     metadata_url: str | None = None
@@ -210,20 +220,52 @@ def _sso_provider_is_unrestricted(provider: Any) -> bool:
     return bool(getattr(provider, "auto_provision", False)) and not any(str(d).strip() for d in domains)
 
 
-async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID, session: AsyncSession) -> None:
+async def _reject_mode3_when_flag_off(provider: Any, *, org_id: uuid.UUID) -> None:
     """Fail CLOSED at save time when the dangerous mode-3 state isn't unlocked.
 
     Raises HTTP 422 inside the caller's transaction so the write rolls back.
     """
     if not _sso_provider_is_unrestricted(provider):
         return
-    flag_on = await resolve_sso_unrestricted_provisioning(session, org_id=org_id)
+    flag_on = await resolve_sso_unrestricted_provisioning(org_id=org_id)
     if not flag_on:
         _log.warning(
             "admin.sso.unrestricted_mode_rejected",
             extra={"organisation_id": str(org_id), "provider_id": getattr(provider, "provider_id", None)},
         )
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=_MSG_UNRESTRICTED_SSO_DISABLED)
+
+
+async def _resolve_sso_client_secret(
+    session: AsyncSession,
+    settings: Settings,
+    value: str | None,
+) -> str | None:
+    """Resolve a ``secretref://<key>`` SSO ``client_secret`` (FAR-1640).
+
+    Reuses the shared :func:`modulo.core.secrets_backend.resolve_credential`
+    seam (the same one model backends and connectors use) rather than adding a
+    parallel mechanism. A literal secret — and ``None`` — pass through untouched
+    (no secrets backend is constructed, so the common path is byte-identical
+    and never depends on the vault being configured). A ``secretref://<key>``
+    token is resolved server-side under the caller's ALREADY-OPEN RLS
+    transaction; a missing, foreign-org, empty, or malformed reference is a
+    typed 422 (:class:`CredentialReferenceError`) naming only the offending
+    key — the reference is never stored as a literal credential, and a
+    resolution failure is never a 500.
+    """
+    if value is None or not is_secret_ref(value):
+        return value
+    try:
+        return await resolve_credential(
+            create_secrets_backend(fernet_key=settings.fernet_key, session=session),
+            value,
+        )
+    except CredentialReferenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.validation_detail(["body", "client_secret"]),
+        ) from None
 
 
 @router.get("/providers")
@@ -312,13 +354,17 @@ async def create_provider_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            # FAR-1640: resolve a ``secretref://<key>`` client_secret under the
+            # caller's org RLS context BEFORE anything is written — a
+            # missing/foreign key is a typed 422 and writes nothing.
+            client_secret = await _resolve_sso_client_secret(session, settings, req.client_secret)
             provider = await create_provider(
                 session,
                 provider_type=req.provider_type,
                 name=req.name,
                 provider_id=req.provider_id,
                 client_id=req.client_id,
-                client_secret=req.client_secret,
+                client_secret=client_secret,
                 discovery_url=effective_discovery_url,
                 metadata_url=req.metadata_url,
                 metadata_xml=req.metadata_xml,
@@ -337,7 +383,7 @@ async def create_provider_endpoint(
             )
             # Fail CLOSED before commit when the dangerous mode-3 state is not
             # unlocked by the operator-level feature flag.
-            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
+            await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:
@@ -417,6 +463,11 @@ async def update_provider_endpoint(
     try:
         async with session.begin():
             await set_rls_org(session, current_user.organisation_id)
+            # FAR-1640: resolve a ``secretref://<key>`` client_secret under the
+            # caller's org RLS context before the credential is written — a
+            # missing/foreign key is a typed 422 and writes nothing.
+            if "client_secret" in updates:
+                updates["client_secret"] = await _resolve_sso_client_secret(session, settings, updates["client_secret"])
             provider = await update_provider(
                 session,
                 provider_id,
@@ -428,7 +479,7 @@ async def update_provider_endpoint(
             # Validate the MERGED provider state (update + existing) so an
             # auto_provision flip can't slip into dangerous mode 3.
             if provider is not None:
-                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id, session=session)
+                await _reject_mode3_when_flag_off(provider, org_id=current_user.organisation_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except IntegrityError as exc:

@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Generator
 from contextlib import ExitStack
@@ -3710,14 +3711,39 @@ class TestFireSuiteRunTriggerSpendPool:
 
 
 class _F1621Begin:
+    """``SessionTransaction`` double that records the OUTCOME (FAR-1644/M3).
+
+    SQLAlchemy's ``TransactionalContext.__exit__`` (2.1.3, the version this
+    repo pins) commits ONLY when the block exits cleanly AND the transaction
+    is still ACTIVE; an exception propagating out of the block, or an explicit
+    ``session.rollback()`` taken beforehand, makes it take the rollback/close
+    branch instead. That rule was verified against the real library (an
+    explicit ``rollback()`` inside ``session.begin()`` then exiting cleanly
+    commits nothing and raises nothing) — so ``outcome`` here is a faithful
+    unit-level observation of commit-vs-rollback for the pass. What it cannot
+    observe is the SERVER-side effect of that decision; that needs a real
+    Postgres and is integration-only (deferred to CI, noted on the ticket).
+    """
+
+    def __init__(self) -> None:
+        self.outcome = "open"  # -> "committed" | "rolled_back"
+        self._active = True
+
     async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_exc: object) -> bool:
+    async def __aexit__(self, type_: object, *_exc: object) -> bool:
         # Propagate: an exception raised inside the org transaction must roll
         # it back and reach the caller's handler, exactly like the real
         # ``AsyncSession.begin()``.
+        self.outcome = "committed" if (type_ is None and self._active) else "rolled_back"
         return False
+
+    async def rollback(self) -> None:
+        """The pass calling ``session.rollback()`` explicitly deactivates the
+        transaction, so the clean ``__aexit__`` above must not commit."""
+        self._active = False
+        self.outcome = "rolled_back"
 
 
 class _F1621Session:
@@ -3755,6 +3781,7 @@ class _F1621Session:
         self.raise_on_update = raise_on_update
         self.raise_on_read = raise_on_read
         self.info: dict[str, Any] = {}
+        self.tx = _F1621Begin()
         bind = MagicMock()
         bind.dialect.name = "postgresql"
         self._bind = bind
@@ -3769,7 +3796,12 @@ class _F1621Session:
         return False
 
     def begin(self) -> _F1621Begin:
-        return _F1621Begin()
+        return self.tx
+
+    async def rollback(self) -> None:
+        """``AsyncSession.rollback()``: the read-failed swallow calls this
+        explicitly (FAR-1644/M3) so the clean ``begin()`` exit cannot commit."""
+        await self.tx.rollback()
 
     async def flush(self) -> None:
         return None
@@ -4050,12 +4082,15 @@ class TestOrgStageHint:
 
 
 class TestReadFailureUnwind:
-    """FAR-1621 qa F3: the read phase's ``read failed`` swallow returns
-    NORMALLY from inside the org transaction. Postgres rolls that transaction
-    back, so the in-memory counts and compensating-fact ids the batch
-    terminalizers already recorded must be unwound with it — otherwise the tick
-    writes compensating facts and audits for runs that were never
-    terminalized."""
+    """FAR-1621 qa F3, amended FAR-1644/M3: the read phase's ``read failed``
+    swallow returns NORMALLY from inside the org transaction, so it must
+    decide that transaction's outcome itself. On a client-side failure over a
+    HEALTHY connection a clean exit COMMITS — so the pass now rolls the
+    transaction back EXPLICITLY and only then unwinds the in-memory counts and
+    compensating-fact ids the batch terminalizers already recorded. Without
+    both halves the tick either writes compensating facts for runs that were
+    never terminalized (rollback + no unwind) or commits terminalizations it
+    has just disowned (the pre-M3 bug: unwind + commit)."""
 
     async def test_read_failure_unwinds_the_counts_the_rolled_back_transaction_recorded(
         self, caplog: pytest.LogCaptureFixture
@@ -4065,7 +4100,7 @@ class TestReadFailureUnwind:
         async def fake_terminalizer(*_args: Any, **_kwargs: Any) -> list[uuid.UUID]:
             return list(terminalized)
 
-        async def run(*, fail_read: bool) -> tuple[dict[str, Any], list[tuple[uuid.UUID, uuid.UUID]]]:
+        async def run(*, fail_read: bool) -> tuple[dict[str, Any], list[tuple[uuid.UUID, uuid.UUID]], str]:
             stage: dict[str, str] = {}
             session = _F1621Session(
                 stage,
@@ -4078,28 +4113,63 @@ class TestReadFailureUnwind:
                 patch.object(ch, "_terminalize_claim_cap_exhausted", new=fake_terminalizer),
             ):
                 await _run_f1621_org(session, stage=stage, summary=summary, terminalized_run_ids=ids)
-            return summary, ids
+            return summary, ids, session.tx.outcome
 
-        # Control: with a clean read the terminalizer's records SURVIVE. This
-        # is what makes the unwind below an observation — without it, a broken
-        # terminalizer double would leave both runs at zero and the test would
-        # pass for the wrong reason.
-        control_summary, control_ids = await run(fail_read=False)
+        # Control: with a clean read the terminalizer's records SURVIVE and the
+        # transaction COMMITS. This is what makes the unwind below an
+        # observation — without it, a broken terminalizer double would leave
+        # both runs at zero and the test would pass for the wrong reason — and
+        # the committed control is what makes "rolled back" discriminating
+        # rather than a constant.
+        control_summary, control_ids, control_outcome = await run(fail_read=False)
         assert control_summary["claim_cap_terminalized"] == len(terminalized)
         assert len(control_ids) == len(terminalized)
+        assert control_outcome == "committed"
 
         caplog.set_level(logging.ERROR, logger="modulo.core.cron_helpers")
-        summary, ids = await run(fail_read=True)
+        summary, ids, outcome = await run(fail_read=True)
 
         # The failure was logged (never silently swallowed)...
         assert any("read failed" in message for message in caplog.messages)
-        # ...and everything the rolled-back transaction had recorded is gone:
+        # ...the transaction was rolled BACK, not committed (M3: a healthy
+        # connection would have committed the clean return this path takes)...
+        assert outcome == "rolled_back", "the read-failed pass left its transaction to COMMIT"
+        # ...and everything that rolled-back transaction had recorded is gone:
         # no terminalizer counts, no compensating-fact ids for runs that were
-        # never actually terminalized.
+        # never actually terminalized. (``terminalize_capped`` and ``scanned``
+        # are deliberately NOT asserted: the terminalizer cap needs >= max_rows
+        # terminalized and the row loop is never reached on this path, so both
+        # are 0 on the control AND the failure side — assertions that could not
+        # fail were removed as part of M5.)
         assert summary["claim_cap_terminalized"] == 0
-        assert summary["terminalize_capped"] == 0
-        assert summary["scanned"] == 0
         assert not ids
+
+
+class _FrozenTime:
+    """``time`` module proxy with a caller-advanced ``monotonic`` clock (M6/M2).
+
+    ``_dispatcher_reconcile_body`` reads ``time.monotonic`` through the
+    ``cron_helpers`` module namespace, so patching THAT name (``ch.time``)
+    freezes only the tick's own bookkeeping — remaining budget, org slice,
+    elapsed — and leaves ``asyncio``'s real loop clock alone. That lets a test
+    stage the M2 boundary (a connect-bound ``TimeoutError`` observed at t=10s
+    inside a clamped 10.5s slice) deterministically: with a real clock the
+    only way to land in the old ``[slice-0.5, slice)`` misclassification window
+    is a sleep, which is both slow and stall-flaky (the exact M6 complaint).
+    Everything except ``monotonic`` delegates to the real module.
+    """
+
+    def __init__(self, now: float = 1000.0) -> None:
+        self.now = now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
 
 
 async def _drive_f1621_body(
@@ -4108,6 +4178,7 @@ async def _drive_f1621_body(
     *,
     summary: dict[str, Any],
     terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    org_budget: int = 30,
 ) -> tuple[dict[str, Any], AsyncMock, dict[str, str], AsyncMock]:
     """Drive the REAL ``_dispatcher_reconcile_body`` over *org_ids* with a
     controlled ``_reconcile_org`` double (the FAR-1525 harness shape).
@@ -4116,10 +4187,21 @@ async def _drive_f1621_body(
     assert the tick still reached its compensating sweeps), the live ``stage``
     hint, and the ``_record_fact_for_terminalized_run`` mock (so a test can
     assert a rolled-back org contributed no compensating fact).
+
+    *org_budget* defaults to the PRODUCTION per-org budget (30s, M6): the
+    qa-F2 classification tests raise their ``TimeoutError`` immediately, so the
+    only thing the slice size buys them is stall tolerance — the in-pass
+    window is the whole slice now that no slack is subtracted, so the default
+    30s makes a >0.5s event-loop stall (the old flake) a non-event. A test that
+    needs a genuinely SHORT slice — one that waits for the real asyncio cut —
+    passes its own value. It MUST be an ``int``: the body reads the knob
+    through ``_int_setting``, which accepts only ``type(value) is int`` and
+    otherwise silently falls back to the coded default (so a float budget
+    quietly became 30s and a "1s slice" test waited thirty seconds).
     """
     settings = MagicMock(
         dispatcher_reconcile_budget_seconds=95,
-        dispatcher_reconcile_org_budget_seconds=1,
+        dispatcher_reconcile_org_budget_seconds=org_budget,
     )
     stage: dict[str, str] = {}
     record_facts = AsyncMock()
@@ -4265,7 +4347,12 @@ class TestOrgBoundedFailureCounters:
         real bound), rather than raising ``TimeoutError`` by hand: since qa F2
         the body only claims the per-org cut once the slice has actually
         elapsed, so a hand-raised timeout at t=0 would (correctly) be reported
-        as an in-pass timeout instead."""
+        as an in-pass timeout instead. It opts into a 1s slice so the test
+        waits one second, not the production 30 — the short slice costs this
+        test nothing, because a cut can only be observed at or after the
+        deadline (see M6: the short-slice harness default was the flake for
+        the OTHER tests, which never wait for it).
+        """
         hang_org = uuid.uuid4()
         summary = ch._dispatcher_summary()
         terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
@@ -4293,6 +4380,7 @@ class TestOrgBoundedFailureCounters:
             fake_reconcile_org,
             summary=summary,
             terminalized_run_ids=terminalized_run_ids,
+            org_budget=1,
         )
 
         assert summary_out["org_timeouts"] == 1
@@ -4371,6 +4459,76 @@ class TestOrgBoundedFailureCounters:
         assert "session-acquired" in message
         assert "NOT the per-org time bound" in message
         assert records[0].exc_info is not None
+
+    async def test_connect_timeout_inside_a_clamped_slice_is_still_a_connect_timeout(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """FAR-1644 (M2): a connect bound firing at ~10s inside a CLAMPED org
+        slice barely above it — the shape a nearly-exhausted tick produces
+        (``slice = min(org_budget, remaining tick budget - reserve)``), or a
+        low ``dispatcher_reconcile_org_budget_seconds`` — must still land in
+        ``org_connect_timeouts``.
+
+        The pre-FAR-1644 discriminator subtracted a 0.5s slack from the slice,
+        so the whole [slice-0.5, slice) band was claimed as the per-org cut and
+        a genuine connect timeout sitting in it was misreported. The slice
+        itself is the correct discriminator: ``asyncio.timeout`` can only fire
+        at or after its deadline and ``org_elapsed`` is measured from before
+        the timeout was armed, so every genuine cut already satisfies
+        ``elapsed >= slice`` and no slack is needed to recognise one.
+
+        Driven with the ``_FrozenTime`` clock so the geometry is exact: an
+        11s slice with the connect bound observed at 10.5s — dead centre of
+        the old [slice-0.5, slice) misclassification window. (The production
+        clamp hands out float slices; the harness knob must be an int, see
+        ``_drive_f1621_body``, and an 11s int slice reproduces the same band.
+        FAILS pre-fix: the old ``< slice - 0.5`` check sends it down the
+        per-org cut arm, leaving ``org_connect_timeouts`` at 0.)"""
+        connect_org, good_org = uuid.uuid4(), uuid.uuid4()
+        summary = ch._dispatcher_summary()
+        terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
+        clock = _FrozenTime()
+
+        async def fake_reconcile_org(
+            *,
+            org_id: uuid.UUID,
+            stage: dict[str, str] | None = None,
+            **_kwargs: Any,
+        ) -> int:
+            if org_id == connect_org:
+                if stage is not None:
+                    # The connect bound fires while acquiring the session.
+                    stage["op"] = f"reconcile_org:{org_id}/session-acquired"
+                # 10.5s of wall time pass, then asyncpg's connect bound raises
+                # — i.e. elapsed == 10.5 inside an 11s slice, which is inside
+                # the old [slice-0.5, slice) window.
+                clock.advance(10.5)
+                summary["scanned"] += 4
+                raise TimeoutError
+            summary["scanned"] += 1
+            return 0
+
+        caplog.set_level(logging.WARNING, logger="modulo.core.cron_helpers")
+        with patch.object(ch, "time", clock):
+            summary_out, sweeps, _stage, _record_facts = await _drive_f1621_body(
+                [connect_org, good_org],
+                fake_reconcile_org,
+                summary=summary,
+                terminalized_run_ids=terminalized_run_ids,
+                org_budget=11,
+            )
+
+        # NOT the per-org cut — its own counter — and the tick stays healthy.
+        assert summary_out["org_connect_timeouts"] == 1
+        assert summary_out["org_timeouts"] == 0
+        assert summary_out["status"] == "ok"
+        assert summary_out["last_error"] is None
+        assert summary_out["scanned"] == 1
+        assert sweeps.await_count == 1
+        records = [record for record in caplog.records if "org_connect_timeout" in record.getMessage()]
+        assert records, f"no org_connect_timeout WARNING emitted; log={caplog.text}"
+        assert "session-acquired" in records[0].getMessage()
+        assert "NOT the per-org time bound" in records[0].getMessage()
 
     async def test_an_early_in_pass_timeout_is_not_reported_as_the_per_org_cut(
         self, caplog: pytest.LogCaptureFixture
@@ -4527,13 +4685,23 @@ class TestSystemEnginePoolKnobs:
     async def test_starved_pool_checkout_raises_the_catchable_timeout_and_is_counted(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """qa F1 (the reachability chain, end to end): starving a REAL
-        QueuePool raises ``sqlalchemy.exc.TimeoutError`` — NOT the builtin,
-        which is exactly why the reconcile body needs a dedicated arm ahead of
-        ``except TimeoutError`` — on a bound far below the org budget, so the
-        pool arm wins the race against the asyncio cut instead of being
-        swallowed by it; and the body counts that very exception as
-        ``org_pool_timeouts``, skipping the org while the tick continues."""
+        """qa F1 — the REACHABILITY CHAIN, end to end, with an honest scope.
+
+        Part 1 (real SQLAlchemy, no doubles): starving a REAL QueuePool raises
+        ``sqlalchemy.exc.TimeoutError`` — NOT the builtin — which is exactly
+        why the reconcile body needs a dedicated arm ahead of
+        ``except TimeoutError``. Part 2: the body counts that very exception as
+        ``org_pool_timeouts``, skipping the org while the tick continues.
+
+        It is NOT the F1 REGRESSION test (M5/FAR-1644): it builds its own
+        0.05s-timeout pool and re-raises that exception from a doubled
+        ``_reconcile_org``, so it passes with or without the production fix
+        that makes the pool bound win the race. That fix —
+        ``_get_system_engine``'s explicit pool knobs with a ``pool_timeout``
+        strictly under the per-org budget — is pinned separately by
+        ``test_pool_knobs_mirror_the_shared_engine_factory`` and
+        ``test_system_pool_timeout_is_strictly_below_the_default_org_budget``.
+        """
         starvation = 0.05
         assert starvation < ch._RECONCILE_ORG_BUDGET_DEFAULT_SECONDS
         pool = QueuePool(creator=lambda: MagicMock(), pool_size=1, max_overflow=0, timeout=starvation)

@@ -1,11 +1,13 @@
 """OpsgenieConnector — async Opsgenie REST API v2 connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
 from modulo._types import _DICT_STR_ANY
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_int import safe_int as _safe_int
 from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
@@ -44,6 +46,9 @@ class OpsgenieConnector(ConnectorBase):
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._api_key,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.OPSGENIE
@@ -56,6 +61,7 @@ class OpsgenieConnector(ConnectorBase):
                 "Authorization": f"GenieKey {self._api_key}",
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
     async def health_check(self) -> HealthResult:
@@ -66,11 +72,13 @@ class OpsgenieConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Opsgenie API key validated")
                 if resp.status_code in (401, 403):
                     return HealthResult(ok=False, detail="Invalid Opsgenie API key")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

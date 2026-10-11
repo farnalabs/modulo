@@ -89,6 +89,8 @@ from modulo.version import get_version
 _CODE_WEBHOOKS_RECEIVE_WEBHOOK = "webhooks.receive_webhook"
 _CODE_WEBHOOKS_REPLAY_WEBHOOK = "webhooks.replay_webhook"
 
+_CODE_WEBHOOKS_CLEANUP_EXPIRED = "webhooks.cleanup_expired"
+
 # FAR-1034 handled-no-op ack. Deliberately a 2xx "handled" message, never a
 # "rejected" 4xx: the delivery was suppressed, not rejected, so a retry-on-4xx
 # sender must NOT loop on the very duplicates the gate exists to quiet.
@@ -935,13 +937,13 @@ async def replay_webhook(
             headers={"Retry-After": "5"},
         ) from None
     except ProgrammingError:
-        _log.exception("webhooks.replay_webhook")
+        _log.exception(_CODE_WEBHOOKS_REPLAY_WEBHOOK)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "webhooks.replay_webhook")
+        raise_session_contract_error(exc, _CODE_WEBHOOKS_REPLAY_WEBHOOK)
         log_service_unavailable(
             "db_transient",
             exc,
@@ -993,7 +995,7 @@ async def replay_webhook(
         Depends(audited("webhook_events_cleaned_up", "webhook_event", principal_dep=get_current_tenant_user))
     ],
 )
-@handle_db_errors("webhooks.cleanup_expired")
+@handle_db_errors(_CODE_WEBHOOKS_CLEANUP_EXPIRED)
 async def cleanup_expired(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission("trigger.cleanup"),
@@ -1018,17 +1020,17 @@ async def cleanup_expired(
             await set_rls_org(session, org_id)
             result["payloads_deleted"] = await _trigger_engine.cleanup_expired_payloads(session)
     except ProgrammingError:
-        _log.exception("webhooks.cleanup_expired")
+        _log.exception(_CODE_WEBHOOKS_CLEANUP_EXPIRED)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "webhooks.cleanup_expired")
+        raise_session_contract_error(exc, _CODE_WEBHOOKS_CLEANUP_EXPIRED)
         log_service_unavailable(
             "db_transient",
             exc,
-            route="webhooks.cleanup_expired",
+            route=_CODE_WEBHOOKS_CLEANUP_EXPIRED,
             detail="transient database error; dedup/payload cleanup failed closed",
         )
         raise HTTPException(

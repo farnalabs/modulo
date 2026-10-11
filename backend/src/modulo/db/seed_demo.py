@@ -103,6 +103,12 @@ _log = logging.getLogger(__name__)
 DEMO_ORG_NAME = "Demo"
 
 DEMO_PIPELINE_NAME = "Demo Governance Pipeline"
+PR_REVIEW_PIPELINE_NAME = "PR Review & Triage"
+RELEASE_NOTES_PIPELINE_NAME = "Release Notes Generator"
+DOCS_SYNC_PIPELINE_NAME = "Docs Sync"
+AI_CODE_REVIEWER_AGENT_NAME = "AI Code Reviewer"
+RELEASE_NOTES_WRITER_AGENT_NAME = "Release Notes Writer"
+DOCS_MAINTAINER_AGENT_NAME = "Docs Maintainer"
 
 # Fixed namespace for the deterministic demo ids (FAR-1248). Never change it:
 # the ids derived from it are persisted in graph_nodes_json, pipeline_edges,
@@ -260,7 +266,7 @@ _GOVERNANCE_PIPELINE = _PipelineSpec(
 _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
     _GOVERNANCE_PIPELINE,
     _PipelineSpec(
-        name="PR Review & Triage",
+        name=PR_REVIEW_PIPELINE_NAME,
         description="Reviews incoming PRs, classifies severity, and posts review comments.",
         duration_minutes=4,
         nodes=(
@@ -270,7 +276,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Classifies the PR by type (feature, bugfix, refactor, docs) and severity.",
                 x=80,
                 y=150,
-                agent="AI Code Reviewer",
+                agent=AI_CODE_REVIEWER_AGENT_NAME,
                 weight=2,
                 output_summary="Classified as bugfix, severity medium.",
             ),
@@ -280,7 +286,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Reviews the diff for correctness, security and style; posts inline comments.",
                 x=380,
                 y=150,
-                agent="AI Code Reviewer",
+                agent=AI_CODE_REVIEWER_AGENT_NAME,
                 weight=6,
                 output_summary="3 findings: 1 correctness (major), 2 style (minor). Inline comments posted.",
             ),
@@ -290,7 +296,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Posts a concise summary of the review findings as a PR comment.",
                 x=680,
                 y=150,
-                agent="AI Code Reviewer",
+                agent=AI_CODE_REVIEWER_AGENT_NAME,
                 weight=2,
                 output_summary="Posted the review summary comment on the PR.",
             ),
@@ -301,7 +307,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
         ),
     ),
     _PipelineSpec(
-        name="Release Notes Generator",
+        name=RELEASE_NOTES_PIPELINE_NAME,
         description="Collects merged PRs since the last release and generates formatted release notes.",
         duration_minutes=8,
         nodes=(
@@ -311,7 +317,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Lists every PR merged since the last release tag, grouped by type.",
                 x=80,
                 y=150,
-                agent="Release Notes Writer",
+                agent=RELEASE_NOTES_WRITER_AGENT_NAME,
                 weight=3,
                 output_summary="Collected 14 merged PRs: 6 features, 7 fixes, 1 breaking change.",
             ),
@@ -321,7 +327,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Formats the grouped PRs into markdown release notes.",
                 x=380,
                 y=150,
-                agent="Release Notes Writer",
+                agent=RELEASE_NOTES_WRITER_AGENT_NAME,
                 weight=5,
                 output_summary="Drafted release notes with Features, Fixes and Breaking Changes sections.",
             ),
@@ -329,7 +335,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
         edges=(_EdgeSpec(key="collect-format", source="collect", target="format"),),
     ),
     _PipelineSpec(
-        name="Docs Sync",
+        name=DOCS_SYNC_PIPELINE_NAME,
         description="Detects code changes and updates relevant documentation pages.",
         duration_minutes=5,
         nodes=(
@@ -339,7 +345,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Finds files with user-facing API changes since the previous release.",
                 x=80,
                 y=150,
-                agent="Docs Maintainer",
+                agent=DOCS_MAINTAINER_AGENT_NAME,
                 weight=2,
                 output_summary="Found 3 files with user-facing API changes.",
             ),
@@ -349,7 +355,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Updates the documentation page for each changed file.",
                 x=380,
                 y=150,
-                agent="Docs Maintainer",
+                agent=DOCS_MAINTAINER_AGENT_NAME,
                 weight=5,
                 output_summary="Updated 3 documentation pages.",
             ),
@@ -359,7 +365,7 @@ _DEMO_PIPELINES: tuple[_PipelineSpec, ...] = (
                 description="Verifies every internal link in the updated docs still resolves.",
                 x=680,
                 y=150,
-                agent="Docs Maintainer",
+                agent=DOCS_MAINTAINER_AGENT_NAME,
                 weight=1,
                 output_summary="All 42 internal links resolve.",
             ),
@@ -455,7 +461,7 @@ _DEMO_SCHEMA_SPECS: list[dict[str, object]] = [
 # Agent specs (FAR-977).
 _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
     {
-        "name": "AI Code Reviewer",
+        "name": AI_CODE_REVIEWER_AGENT_NAME,
         "description": (
             "Analyses code changes for correctness, security, and style, then posts a review with inline comments."
         ),
@@ -469,7 +475,7 @@ _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
         ),
     },
     {
-        "name": "Release Notes Writer",
+        "name": RELEASE_NOTES_WRITER_AGENT_NAME,
         "description": "Generates formatted, user-facing release notes from a list of merged PRs.",
         "prompt_template": (
             "You are a technical writer generating release notes.\n"
@@ -511,7 +517,7 @@ _DEMO_AGENT_SPECS: list[dict[str, str | list[str] | None]] = [
         ),
     },
     {
-        "name": "Docs Maintainer",
+        "name": DOCS_MAINTAINER_AGENT_NAME,
         "description": "Keeps user-facing documentation in sync with code changes.",
         "prompt_template": (
             "You maintain product documentation.\n"
@@ -529,35 +535,35 @@ _DEMO_RUN_SPECS: list[tuple[int, str, str, str, int, float, int, int]] = [
     # Governance runs carry video-flow costs (FAR-1248): run 1 took the auto
     # path (risk 0.18 -> Open PR, ~$0.09); run 9 hit Human review (risk 0.74
     # -> approved -> Open PR, ~$0.14). See _GOVERNANCE_RUN_PATHS.
-    (1, "complete", "webhook", "Demo Governance Pipeline", 41200, 0.0900, 0, 2),
-    (2, "failed", "webhook", "Demo Governance Pipeline", 21500, 0.0410, 0, 4),
+    (1, "complete", "webhook", DEMO_PIPELINE_NAME, 41200, 0.0900, 0, 2),
+    (2, "failed", "webhook", DEMO_PIPELINE_NAME, 21500, 0.0410, 0, 4),
     # Day 1
-    (3, "complete", "webhook", "PR Review & Triage", 3200, 0.0074, 1, 10),
-    (4, "complete", "webhook", "PR Review & Triage", 2800, 0.0065, 1, 14),
+    (3, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 3200, 0.0074, 1, 10),
+    (4, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 2800, 0.0065, 1, 14),
     # Day 2
-    (5, "complete", "cron", "Release Notes Generator", 4100, 0.0095, 2, 9),
-    (6, "awaiting_human", "manual", "PR Review & Triage", 1500, 0.0035, 2, 16),
+    (5, "complete", "cron", RELEASE_NOTES_PIPELINE_NAME, 4100, 0.0095, 2, 9),
+    (6, "awaiting_human", "manual", PR_REVIEW_PIPELINE_NAME, 1500, 0.0035, 2, 16),
     # Day 3
-    (7, "complete", "webhook", "PR Review & Triage", 2900, 0.0067, 3, 11),
-    (8, "failed", "cron", "Docs Sync", 890, 0.0021, 3, 15),
+    (7, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 2900, 0.0067, 3, 11),
+    (8, "failed", "cron", DOCS_SYNC_PIPELINE_NAME, 890, 0.0021, 3, 15),
     # Day 4
-    (9, "complete", "webhook", "Demo Governance Pipeline", 63400, 0.1400, 4, 8),
-    (10, "complete", "webhook", "PR Review & Triage", 3500, 0.0081, 4, 13),
+    (9, "complete", "webhook", DEMO_PIPELINE_NAME, 63400, 0.1400, 4, 8),
+    (10, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 3500, 0.0081, 4, 13),
     # Day 5
-    (11, "complete", "cron", "Release Notes Generator", 4300, 0.0099, 5, 9),
-    (12, "complete", "webhook", "Demo Governance Pipeline", 38900, 0.0850, 5, 17),
+    (11, "complete", "cron", RELEASE_NOTES_PIPELINE_NAME, 4300, 0.0099, 5, 9),
+    (12, "complete", "webhook", DEMO_PIPELINE_NAME, 38900, 0.0850, 5, 17),
     # Day 7
-    (13, "complete", "webhook", "PR Review & Triage", 3100, 0.0072, 7, 10),
-    (14, "failed", "manual", "Docs Sync", 650, 0.0015, 7, 14),
+    (13, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 3100, 0.0072, 7, 10),
+    (14, "failed", "manual", DOCS_SYNC_PIPELINE_NAME, 650, 0.0015, 7, 14),
     # Day 9
-    (15, "complete", "cron", "Release Notes Generator", 3800, 0.0088, 9, 9),
-    (16, "complete", "webhook", "PR Review & Triage", 2700, 0.0062, 9, 16),
+    (15, "complete", "cron", RELEASE_NOTES_PIPELINE_NAME, 3800, 0.0088, 9, 9),
+    (16, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 2700, 0.0062, 9, 16),
     # Day 11
-    (17, "complete", "webhook", "Demo Governance Pipeline", 58800, 0.1320, 11, 11),
-    (18, "complete", "cron", "Docs Sync", 1600, 0.0037, 11, 15),
+    (17, "complete", "webhook", DEMO_PIPELINE_NAME, 58800, 0.1320, 11, 11),
+    (18, "complete", "cron", DOCS_SYNC_PIPELINE_NAME, 1600, 0.0037, 11, 15),
     # Day 13
-    (19, "complete", "webhook", "PR Review & Triage", 3300, 0.0076, 13, 10),
-    (20, "failed", "manual", "PR Review & Triage", 420, 0.0010, 13, 14),
+    (19, "complete", "webhook", PR_REVIEW_PIPELINE_NAME, 3300, 0.0076, 13, 10),
+    (20, "failed", "manual", PR_REVIEW_PIPELINE_NAME, 420, 0.0010, 13, 14),
 ]
 
 _DEMO_FAILURE_DETAIL = "Demo sample failure — no real work was performed."
@@ -1333,7 +1339,7 @@ async def _seed_demo_triggers(
     converged to the current spec (config_json).
     """
     # Webhook trigger on PR Review & Triage pipeline.
-    pr_pipeline, _ = pipeline_lookup["PR Review & Triage"]
+    pr_pipeline, _ = pipeline_lookup[PR_REVIEW_PIPELINE_NAME]
     webhook_result = await session.execute(
         select(Trigger).where(
             Trigger.organisation_id == org.id,
@@ -1371,7 +1377,7 @@ async def _seed_demo_triggers(
         _log.info("demo_seed.webhook_trigger_converged", extra={"org_id": str(org.id)})
 
     # Cron trigger on Release Notes Generator pipeline.
-    rn_pipeline, _ = pipeline_lookup["Release Notes Generator"]
+    rn_pipeline, _ = pipeline_lookup[RELEASE_NOTES_PIPELINE_NAME]
     cron_result = await session.execute(
         select(Trigger).where(
             Trigger.organisation_id == org.id,
@@ -1484,7 +1490,7 @@ def _lifecycle_map_content(
     assert ``normalize_content(content) == content``.
     """
     gov_pipeline, _ = pipeline_lookup[DEMO_PIPELINE_NAME]
-    review_pipeline, _ = pipeline_lookup["PR Review & Triage"]
+    review_pipeline, _ = pipeline_lookup[PR_REVIEW_PIPELINE_NAME]
     return {
         "stages": [
             {

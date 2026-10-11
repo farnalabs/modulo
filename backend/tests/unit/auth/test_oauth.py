@@ -11,6 +11,7 @@ from jwt import InvalidTokenError as JWTError
 
 from modulo.auth.oauth import (
     MAX_REDIRECT_URI_LENGTH,
+    SCOPE_ALIASES,
     AuthlibClientWrapper,
     InvalidClientError,
     InvalidGrantError,
@@ -20,6 +21,7 @@ from modulo.auth.oauth import (
     UnauthorizedClientError,
     _hash_secret,
     blacklist_oauth_token_family,
+    canonicalise_scope,
     check_oauth_token_family_valid,
     clamp_oauth_role,
     compute_pkce_challenge,
@@ -38,7 +40,9 @@ from modulo.auth.oauth import (
     list_oauth_clients,
     normalize_redirect_uris,
     normalize_scopes,
+    oauth_grant_set,
     redirect_uri_allowed,
+    resolve_scope,
     rotate_oauth_token_family,
     scopes_required_role,
     validate_client_scopes,
@@ -47,6 +51,7 @@ from modulo.auth.oauth import (
     validate_redirect_uri,
     verify_pkce,
 )
+from modulo.auth.permissions import PERMISSIONS, grants_permit
 from tests.unit.auth.conftest import _make_session_mock
 
 _SECRET_KEY = "abcdefghijklmnopqrstuvwxyz0123456789ab"
@@ -723,13 +728,43 @@ class TestTokenFamily:
 
 
 # ---------------------------------------------------------------------------
-# Scope helpers
+# Scope helpers (FAR-1476: the PERMISSIONS registry is the one vocabulary)
 # ---------------------------------------------------------------------------
+
+
+class TestScopeCanonicalisation:
+    def test_legacy_aliases_resolve_to_the_right_registry_key(self) -> None:
+        assert canonicalise_scope("trigger:run") == "run.trigger"
+        assert canonicalise_scope("hitl:review") == "hitl.review"
+        assert canonicalise_scope("library:browse") == "resource.read_only"
+
+    def test_registry_key_passes_through_unchanged(self) -> None:
+        assert canonicalise_scope("pipeline.create") == "pipeline.create"
+        assert canonicalise_scope("run.trigger") == "run.trigger"
+
+    def test_unknown_scope_resolves_to_none(self) -> None:
+        assert canonicalise_scope("unknown:scope") is None
+
+    def test_every_alias_target_is_a_registry_key(self) -> None:
+        for alias, target in SCOPE_ALIASES.items():
+            assert target in PERMISSIONS, alias
+
+    def test_resolve_scope_requires_delegability(self) -> None:
+        assert resolve_scope("trigger:run") == "run.trigger"
+        # A still-excluded key (credential lifecycle / system administration)
+        # canonicalises but is NOT grantable.
+        assert canonicalise_scope("system.config.manage") == "system.config.manage"
+        assert resolve_scope("system.config.manage") is None
+        # HITL decisions are DELEGABLE (decision record 2026-10-09): the alias
+        # canonicalises AND resolves — the boundary for them is the gate's
+        # runtime ``human_only`` policy, not this vocabulary.
+        assert canonicalise_scope("hitl:review") == "hitl.review"
+        assert resolve_scope("hitl:review") == "hitl.review"
 
 
 class TestNormalizeScopes:
     def test_valid_scopes(self) -> None:
-        assert normalize_scopes("trigger:run hitl:review") == ["hitl:review", "trigger:run"]
+        assert normalize_scopes("trigger:run pipeline.create") == ["pipeline.create", "run.trigger"]
 
     def test_empty_string(self) -> None:
         assert not normalize_scopes("")
@@ -742,14 +777,76 @@ class TestNormalizeScopes:
             normalize_scopes("trigger:run unknown:scope")
 
     def test_single_scope(self) -> None:
-        assert normalize_scopes("library:browse") == ["library:browse"]
+        assert normalize_scopes("library:browse") == ["resource.read_only"]
+
+    def test_duplicates_collapse_to_one_canonical_key(self) -> None:
+        assert normalize_scopes("trigger:run run.trigger") == ["run.trigger"]
+
+    @pytest.mark.parametrize(
+        "scope",
+        [
+            "system.config.manage",
+            "system.org.manage",
+            "api_key.create",
+            "oauth.client.create",
+            "org.delete",
+            "org.authz_enforce.manage",
+            "org.guardrails.kill_switch.manage",
+            "errors.resolve_instance",
+        ],
+        ids=[
+            "system_config_manage",
+            "system_org_manage",
+            "api_key_create",
+            "oauth_client_create",
+            "org_delete",
+            "org_authz_enforce_manage",
+            "org_guardrails_kill_switch_manage",
+            "errors_resolve_instance",
+        ],
+    )
+    def test_excluded_permissions_are_rejected(self, scope: str) -> None:
+        with pytest.raises(InvalidScopeError, match=scope):
+            normalize_scopes(scope)
+
+    @pytest.mark.parametrize(
+        "scope",
+        ["hitl.review", "hitl.claim", "hitl.approve", "hitl.reject", "hitl.deliver_manual"],
+        ids=["hitl_review", "hitl_claim", "hitl_approve", "hitl_reject", "hitl_deliver_manual"],
+    )
+    def test_hitl_decision_scopes_are_accepted(self, scope: str) -> None:
+        """Decision record 2026-10-09: HITL decisions are delegable.
+
+        A human-linked credential (a human's OAuth connection) may be granted
+        them; the gate's runtime ``human_only`` policy is the boundary
+        (``mcp_server._check_human_only_gate`` / ``routes/hitl``), not this
+        vocabulary. Pinned so a regression back to a registry bar fails here.
+        """
+        assert normalize_scopes(scope) == [scope]
+        assert resolve_scope(scope) == scope
+
+    def test_legacy_aliases_are_accepted_input(self) -> None:
+        # All three pre-FAR-1476 spellings canonicalise to a DELEGABLE key,
+        # so none of them is rejected at the registration boundary.
+        assert normalize_scopes("hitl:review") == ["hitl.review"]
+        assert normalize_scopes("trigger:run") == ["run.trigger"]
+        assert normalize_scopes("library:browse") == ["resource.read_only"]
+
+    def test_unresolvable_scope_is_not_silently_dropped(self) -> None:
+        with pytest.raises(InvalidScopeError, match="bogus"):
+            normalize_scopes("trigger:run bogus")
 
 
 class TestValidateClientScopes:
-    def test_intersection_returns_sorted(self) -> None:
-        client = _make_oauth_client(scopes="trigger:run hitl:review library:browse")
-        result = validate_client_scopes(client, ["hitl:review", "trigger:run"])
-        assert result == ["hitl:review", "trigger:run"]
+    def test_intersection_returns_canonical_sorted(self) -> None:
+        client = _make_oauth_client(scopes="trigger:run library:browse")
+        result = validate_client_scopes(client, ["library:browse", "trigger:run"])
+        assert result == ["resource.read_only", "run.trigger"]
+
+    def test_ceiling_caps_a_wider_request(self) -> None:
+        # Request wider than the ceiling -> the ceiling wins (never widened).
+        client = _make_oauth_client(scopes="trigger:run")
+        assert validate_client_scopes(client, ["trigger:run", "pipeline.create"]) == ["run.trigger"]
 
     def test_no_overlap_raises(self) -> None:
         client = _make_oauth_client(scopes="library:browse")
@@ -758,8 +855,50 @@ class TestValidateClientScopes:
 
     def test_partial_overlap(self) -> None:
         client = _make_oauth_client(scopes="trigger:run library:browse")
-        result = validate_client_scopes(client, ["hitl:review", "trigger:run"])
-        assert result == ["trigger:run"]
+        result = validate_client_scopes(client, ["pipeline.create", "trigger:run"])
+        assert result == ["run.trigger"]
+
+    def test_excluded_scope_in_ceiling_is_still_rejected(self) -> None:
+        # A ceiling row holding an excluded key (registered before the
+        # exclusion tightened, or written directly) must never make it
+        # grantable.
+        client = _make_oauth_client(scopes="trigger:run api_key.create")
+        with pytest.raises(InvalidScopeError, match=r"api_key\.create"):
+            validate_client_scopes(client, ["api_key.create"])
+
+    def test_unresolvable_ceiling_entry_only_narrows(self) -> None:
+        client = _make_oauth_client(scopes="trigger:run nonsense:scope")
+        assert validate_client_scopes(client, ["trigger:run"]) == ["run.trigger"]
+
+    def test_unresolvable_requested_scope_is_not_dropped(self) -> None:
+        client = _make_oauth_client(scopes="trigger:run")
+        with pytest.raises(InvalidScopeError, match="bogus"):
+            validate_client_scopes(client, ["trigger:run", "bogus"])
+
+    def test_alias_ceiling_intersects_canonical_request(self) -> None:
+        # A pre-FAR-1476 row stored the alias; the canonical request must
+        # still match it (and vice versa).
+        client = _make_oauth_client(scopes="trigger:run")
+        assert validate_client_scopes(client, ["run.trigger"]) == ["run.trigger"]
+
+
+class TestOauthGrantSet:
+    def test_aliases_canonicalise_into_the_set(self) -> None:
+        assert oauth_grant_set(["trigger:run", "library:browse"]) == frozenset({"run.trigger", "resource.read_only"})
+
+    def test_canonical_keys_pass_through(self) -> None:
+        assert oauth_grant_set(["pipeline.create"]) == frozenset({"pipeline.create"})
+
+    def test_unknown_entries_are_dropped(self) -> None:
+        assert not oauth_grant_set(["unknown:scope"])
+
+    def test_excluded_key_stays_denied_at_evaluation(self) -> None:
+        # An in-flight token minted before an exclusion tightened keeps the
+        # key in the set; grants_permit's live is_delegable read denies it.
+        grants = oauth_grant_set(["trigger:run", "system.config.manage"])
+        assert grants == frozenset({"run.trigger", "system.config.manage"})
+        assert grants_permit(grants, "run.trigger") is True
+        assert grants_permit(grants, "system.config.manage") is False
 
 
 # ---------------------------------------------------------------------------
@@ -1062,10 +1201,31 @@ class TestScopeRoleHelpers:
         assert scopes_required_role(["hitl:review"]) == "operator"
         assert scopes_required_role(["trigger:run", "hitl:review"]) == "operator"
 
-    def test_other_scopes_require_runner(self) -> None:
+    def test_registry_roles_drive_the_ladder(self) -> None:
         assert scopes_required_role(["trigger:run"]) == "runner"
-        assert scopes_required_role(["library:browse"]) == "runner"
+        assert scopes_required_role(["pipeline.list"]) == "viewer"
+        assert scopes_required_role(["pipeline.create"]) == "operator"
+        assert scopes_required_role(["trigger:run", "pipeline.list"]) == "runner"
+
+    def test_library_browse_requires_viewer(self) -> None:
+        assert scopes_required_role(["library:browse"]) == "viewer"
+
+    def test_unresolvable_and_empty_fall_back_to_runner(self) -> None:
         assert scopes_required_role([]) == "runner"
+        assert scopes_required_role(["unknown:scope"]) == "runner"
+
+    def test_excluded_scope_contributes_nothing(self) -> None:
+        # An excluded key that still canonicalises (an in-flight token minted
+        # before an exclusion tightened) must NOT raise the role ladder: the
+        # grant leg (``grants_permit``) denies it at dispatch, so it must not
+        # inflate the scope-derived role here either.
+        assert canonicalise_scope("system.config.manage") == "system.config.manage"
+        assert scopes_required_role(["system.config.manage"]) == "runner"
+        assert scopes_required_role(["org.delete"]) == "runner"
+        # A valid scope alongside an excluded admin key keeps only the valid
+        # scope's floor — the excluded key is invisible.
+        assert scopes_required_role(["pipeline.create", "system.config.manage"]) == "operator"
+        assert scopes_required_role(["trigger:run", "org.delete"]) == "runner"
 
     def test_clamp_keeps_lower_role(self) -> None:
         # live operator, scope runner → runner (token never exceeds its scopes)

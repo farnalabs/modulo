@@ -191,6 +191,67 @@ _REG_PAYLOAD = {
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/mcp/oauth/scopes - the registration picker's source of truth
+# ---------------------------------------------------------------------------
+
+
+class TestListOAuthScopes:
+    ENDPOINT = "/api/v1/mcp/oauth/scopes"
+
+    def test_offers_only_delegable_registry_keys(self, admin_client: TestClient) -> None:
+        """The picker can never offer a scope the registration boundary rejects."""
+        from modulo.auth.permissions import PERMISSIONS, is_delegable
+
+        resp = admin_client.get(self.ENDPOINT)
+
+        assert resp.status_code == 200
+        items = resp.json()
+        assert items, "the delegable vocabulary must not be empty"
+        for item in items:
+            assert item["key"] in PERMISSIONS
+            assert is_delegable(item["key"]) is True
+            assert item["min_role"] == PERMISSIONS[item["key"]]
+        offered = {item["key"] for item in items}
+        # Non-delegable keys are never offered (fail-closed vocabulary).
+        assert "org.delete" not in offered
+        assert "api_key.create" not in offered
+        assert "system.config.manage" not in offered
+        assert "org.authz_enforce.manage" not in offered
+
+    def test_hitl_decision_keys_are_offered(self, admin_client: TestClient) -> None:
+        """Decision record 2026-10-09: the widened vocabulary reaches the UI."""
+        resp = admin_client.get(self.ENDPOINT)
+        assert resp.status_code == 200
+        offered = {item["key"] for item in resp.json()}
+        assert {"hitl.review", "hitl.approve", "hitl.claim", "hitl.reject", "hitl.deliver_manual"} <= offered
+        # The widened set is the whole delegable registry, not three legacy scopes.
+        assert "run.trigger" in offered
+        assert "pipeline.create" in offered
+        assert len(offered) > 100
+
+    def test_filtered_to_the_callers_role_level(self, runner_client: TestClient) -> None:
+        """A runner is never offered a scope above its own floor (no dead controls)."""
+        resp = runner_client.get(self.ENDPOINT)
+        assert resp.status_code == 200
+        items = resp.json()
+        assert items
+        levels = {"viewer": 0, "runner": 1, "operator": 2, "admin": 3}
+        assert all(levels[item["min_role"]] <= levels["runner"] for item in items)
+        assert "run.trigger" in {item["key"] for item in items}
+        assert "pipeline.create" not in {item["key"] for item in items}
+
+    def test_sorted_and_role_scoped_result_is_stable(self, admin_client: TestClient) -> None:
+        first = [item["key"] for item in admin_client.get(self.ENDPOINT).json()]
+        second = [item["key"] for item in admin_client.get(self.ENDPOINT).json()]
+        assert first == sorted(first)
+        assert first == second
+
+    def test_viewer_gets_403(self, viewer_client: TestClient) -> None:
+        resp = viewer_client.get(self.ENDPOINT)
+        assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/mcp/oauth/clients
 # ---------------------------------------------------------------------------
 

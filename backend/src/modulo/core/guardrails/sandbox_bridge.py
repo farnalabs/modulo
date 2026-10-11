@@ -216,7 +216,7 @@ def _wrap_command(argv: list[str], client: BridgeClient) -> int:
         _err("error: --wrap requires a command")
         return 2
     shell_cmd = " ".join(argv)
-    # NOSONAR: deliberate — configured agent command (pipeline config, not untrusted
+    # Suppression on the Popen call below is deliberate — configured agent command (pipeline config, not untrusted
     # input) needs shell features; already suppressed for bandit (B603) and ruff (S603).
     try:
         proc = subprocess.Popen(  # noqa: S603  # nosec B603 — execs the configured agent command (fixed argv list, shell=False, no user input)  # NOSONAR

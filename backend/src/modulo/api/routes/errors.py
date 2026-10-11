@@ -7,6 +7,7 @@ import logging
 import time as _time
 import uuid
 from datetime import UTC, datetime, timedelta
+from itertools import islice
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -58,6 +59,11 @@ _CODE_ERRORS_RESOLVE_INSTANCE = "errors.resolve_instance"
 _CODE_ERRORS_INGEST_ERRORS = "errors.ingest_errors"
 _CODE_ERRORS_INGEST_ERRORS_PUBLIC = "errors.ingest_errors_public"
 
+_CODE_ERRORS_LIST_ERROR_GROUPS = "errors.list_error_groups"
+_CODE_ERRORS_GET_ERROR_GROUP_DETAIL = "errors.get_error_group_detail"
+_CODE_ERRORS_PATCH_ERROR_GROUP = "errors.patch_error_group"
+_CODE_ERRORS_LIST_ERROR_EVENTS = "errors.list_error_events"
+
 # Scheduler-starvation surfacing (FAR-604). Pending runs blocked on a capacity
 # cap carry a RAW marker in ``runs.error_code`` (``error_codes.LEGACY_ALIASES``
 # maps them to the dotted capacity.org / capacity.pipeline presentation codes).
@@ -76,6 +82,8 @@ _key_store: SessionKeyStore | None = None
 
 # Public ingest rate limiter and daily cap (in-memory, no Redis)
 #
+# Both maps are IP-keyed and live on the same UNAUTHENTICATED route, so both must
+# be hard-bounded or a flood of one-off client IPs grows them forever.
 # ``_public_rate_limit`` is a plain dict (not a defaultdict): every read is an
 # explicit ``.get()`` and every write an explicit assignment, so a stray read
 # can never silently grow the map past its bound.
@@ -93,6 +101,32 @@ _public_daily_event_count: dict[str, dict[str, int]] = {}  # IP -> {YYYY-MM-DD: 
 # new for this limiter.
 _PUBLIC_RATE_LIMIT_WINDOW_SECONDS = 60.0
 _MAX_TRACKED_PUBLIC_CLIENTS = 10_000
+
+# The stale-key sweep runs on the per-request admission path, so one sweep
+# inspects at most this many keys rather than the whole map. The front of the
+# map holds the least-recently-touched keys, which under normal traffic are the
+# idle (stale) ones, so the oldest batch is the highest-yield region to scan.
+# It is a BEST-EFFORT reclaim, not an exact one: ``_touch_*`` is also called on
+# the rejection path (to spare an actively-limited client from LRU eviction), so
+# a key's touch time can be more recent than its newest stored timestamp and a
+# stale key that was rate-limited shortly before going quiet can sit behind a
+# still-in-window key. The hard bound does NOT depend on the sweep — the
+# ``_evict_least_recently_used_*`` backstop guarantees it; the sweep only reduces
+# how often that backstop has to drop an in-window client.
+_PUBLIC_SWEEP_BATCH = 256
+# At-capacity is an expected steady state under a unique-IP flood, so log the
+# warning at most once per interval rather than on every request (log-flood
+# guard); the ``_warn_*_at_capacity`` helpers compare against these timestamps.
+_PUBLIC_CAPACITY_WARNING_INTERVAL_SECONDS = 300.0
+_public_rate_limit_capacity_warning_at: float = 0.0
+_public_daily_capacity_warning_at: float = 0.0
+
+# Daily-cap retention window (48 h) and a hard bound on the number of tracked
+# client IPs for ``_public_daily_event_count`` — bound by the same bounded-sweep
+# + LRU pattern as the rate limiter, because the pre-fix code pruned only on the
+# SUCCESS path and left an entry behind for every one-off IP that failed later.
+_PUBLIC_DAILY_CAP_RETENTION_HOURS = 48
+_MAX_TRACKED_PUBLIC_DAILY_CLIENTS = 10_000
 
 # System / no-tenant sentinel org (SYSTEM_ORG_ID) is imported from
 # modulo.db.models.organisation at module top — the single canonical
@@ -120,15 +154,25 @@ def _prepare_event_data(event: ErrorEventInput) -> dict[str, Any]:
     return data
 
 
-def _sweep_stale_public_rate_limit_clients(window_start: float) -> None:
-    """Evict IPs with no rate-limit timestamp inside the active window.
+def _sweep_stale_public_rate_limit_clients(window_start: float) -> int:
+    """Best-effort eviction of stale client IPs from the front of the LRU order.
 
     A client with no in-window request can never have tripped the limiter, so
-    its key carries no rate-limiting information and is safe to drop.
+    its key carries no rate-limiting information and is safe to drop. Only the
+    first :data:`_PUBLIC_SWEEP_BATCH` keys are materialised (``islice``), so the
+    per-request cost is O(batch) rather than O(tracked clients). This is a
+    best-effort reclaim — see the ``_PUBLIC_SWEEP_BATCH`` note for why a stale
+    key can sit behind an in-window one; the hard bound is the LRU backstop's
+    job, not the sweep's. Returns the number of keys evicted.
     """
-    stale = [ip for ip, stamps in _public_rate_limit.items() if not any(t > window_start for t in stamps)]
+    stale = [
+        ip
+        for ip in islice(_public_rate_limit, _PUBLIC_SWEEP_BATCH)
+        if not any(t > window_start for t in _public_rate_limit[ip])
+    ]
     for ip in stale:
         del _public_rate_limit[ip]
+    return len(stale)
 
 
 def _touch_public_rate_limit_client(client_ip: str, timestamps: list[float]) -> None:
@@ -156,6 +200,23 @@ def _evict_least_recently_used_public_clients(limit: int) -> None:
         del _public_rate_limit[next(iter(_public_rate_limit))]
 
 
+def _rate_limit_exceeded_detail() -> str:
+    """Client-facing 429 message, derived from the window so it cannot drift."""
+    return f"Rate limit exceeded. Max 1 request per {_PUBLIC_RATE_LIMIT_WINDOW_SECONDS:g} seconds."
+
+
+def _warn_public_rate_limit_at_capacity(now: float) -> None:
+    """Warn that the rate limiter is evicting at capacity, at most once per interval."""
+    global _public_rate_limit_capacity_warning_at
+    if now - _public_rate_limit_capacity_warning_at < _PUBLIC_CAPACITY_WARNING_INTERVAL_SECONDS:
+        return
+    _public_rate_limit_capacity_warning_at = now
+    _log.warning(
+        "public_error_ingest: rate-limiter at capacity (%d tracked clients); evicting least-recently-used",
+        _MAX_TRACKED_PUBLIC_CLIENTS,
+    )
+
+
 def _check_public_rate_limit(client_ip: str, now: float) -> None:
     """Record a public-ingest attempt, raising 429 if the client is over the limit.
 
@@ -170,41 +231,95 @@ def _check_public_rate_limit(client_ip: str, now: float) -> None:
         _touch_public_rate_limit_client(client_ip, timestamps)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Max 1 request per 60 seconds.",
+            detail=_rate_limit_exceeded_detail(),
         )
     # Keep the tracked-IP map hard-bounded before admitting a new key: sweep
-    # idle IPs first (cheap), then evict the least-recently-used keys if the
+    # idle IPs first (bounded), then evict the least-recently-used keys if the
     # sweep could not bring the map under the cap (all tracked clients are still
     # in-window). Evict down to one below the cap so the incoming key fits.
     if client_ip not in _public_rate_limit and len(_public_rate_limit) >= _MAX_TRACKED_PUBLIC_CLIENTS:
         _sweep_stale_public_rate_limit_clients(window_start)
         if len(_public_rate_limit) >= _MAX_TRACKED_PUBLIC_CLIENTS:
-            _log.warning(
-                "public_error_ingest: rate-limiter at capacity (%d tracked clients); evicting least-recently-used",
-                _MAX_TRACKED_PUBLIC_CLIENTS,
-            )
+            _warn_public_rate_limit_at_capacity(now)
             _evict_least_recently_used_public_clients(_MAX_TRACKED_PUBLIC_CLIENTS - 1)
     timestamps.append(now)
     _touch_public_rate_limit_client(client_ip, timestamps)
 
 
-def _prune_stale_ip_counters() -> None:
-    """Remove IP entries with no activity in the last 48 hours.
+def _public_daily_window_start(now: datetime | None = None) -> str:
+    """Oldest date string still inside the daily-cap retention window."""
+    return ((now or datetime.now(UTC)) - timedelta(hours=_PUBLIC_DAILY_CAP_RETENTION_HOURS)).strftime("%Y-%m-%d")
 
-    Bounds ``_public_daily_event_count`` (a different structure from
-    ``_public_rate_limit``, which has its own LRU bound in
-    :func:`_check_public_rate_limit`).
+
+def _sweep_stale_public_daily_clients(threshold: str) -> int:
+    """Best-effort eviction of stale daily-cap clients from the front of the LRU order.
+
+    Mirrors :func:`_sweep_stale_public_rate_limit_clients`: materialise only the
+    first :data:`_PUBLIC_SWEEP_BATCH` keys, drop clients with no counter dated
+    at/after ``threshold``, and prune stale dated entries from the clients
+    retained. Best-effort for the same reason as its rate-limit sibling; the
+    LRU backstop, not this sweep, is the hard bound. Returns the count evicted.
     """
-    threshold = (datetime.now(UTC) - timedelta(hours=48)).strftime("%Y-%m-%d")
-    stale_ips = []
-    for ip, days in _public_daily_event_count.items():
-        for date_str in list(days.keys()):
-            if date_str < threshold:
-                del days[date_str]
+    to_evict = []
+    for ip in islice(_public_daily_event_count, _PUBLIC_SWEEP_BATCH):
+        days = _public_daily_event_count[ip]
+        for date_str in [key for key in days if key < threshold]:
+            del days[date_str]
         if not days:
-            stale_ips.append(ip)
-    for ip in stale_ips:
+            to_evict.append(ip)
+    for ip in to_evict:
         del _public_daily_event_count[ip]
+    return len(to_evict)
+
+
+def _touch_public_daily_client(client_ip: str, days: dict[str, int]) -> None:
+    """Store ``days`` for ``client_ip``, marking it most-recently-used."""
+    _public_daily_event_count.pop(client_ip, None)
+    _public_daily_event_count[client_ip] = days
+
+
+def _evict_least_recently_used_public_daily_clients(limit: int) -> None:
+    """Evict least-recently-used client IPs until at most ``limit`` remain."""
+    while len(_public_daily_event_count) > limit:
+        del _public_daily_event_count[next(iter(_public_daily_event_count))]
+
+
+def _warn_public_daily_cap_at_capacity(now: float) -> None:
+    """Warn that the daily-cap map is evicting at capacity, at most once per interval."""
+    global _public_daily_capacity_warning_at
+    if now - _public_daily_capacity_warning_at < _PUBLIC_CAPACITY_WARNING_INTERVAL_SECONDS:
+        return
+    _public_daily_capacity_warning_at = now
+    _log.warning(
+        "public_error_ingest: daily-cap at capacity (%d tracked clients); evicting least-recently-used",
+        _MAX_TRACKED_PUBLIC_DAILY_CLIENTS,
+    )
+
+
+def _admit_public_daily_client(client_ip: str, now: float) -> dict[str, int]:
+    """Return ``client_ip``'s daily-cap counters, keeping the map hard-bounded.
+
+    Same pattern as :func:`_check_public_rate_limit`: a NEW key is admitted only
+    after idle clients are swept (bounded) and, if the sweep could not bring the
+    map under the cap, least-recently-used keys are evicted. Re-touching on every
+    admitted request keeps an actively-seen client most-recently-used
+    (best-effort LRU), and stale dated counters are dropped so a long-lived
+    client's entry stays inside the retention window.
+    """
+    days = _public_daily_event_count.get(client_ip)
+    if days is None:
+        if len(_public_daily_event_count) >= _MAX_TRACKED_PUBLIC_DAILY_CLIENTS:
+            _sweep_stale_public_daily_clients(_public_daily_window_start())
+            if len(_public_daily_event_count) >= _MAX_TRACKED_PUBLIC_DAILY_CLIENTS:
+                _warn_public_daily_cap_at_capacity(now)
+                _evict_least_recently_used_public_daily_clients(_MAX_TRACKED_PUBLIC_DAILY_CLIENTS - 1)
+        days = {}
+    else:
+        threshold = _public_daily_window_start()
+        for date_str in [key for key in days if key < threshold]:
+            del days[date_str]
+    _touch_public_daily_client(client_ip, days)
+    return days
 
 
 def _get_key_store(settings: Settings | None = None) -> SessionKeyStore:
@@ -425,7 +540,7 @@ async def ingest_errors_public(
 
     # Daily cap: 100 events per IP
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    ip_counts = _public_daily_event_count.setdefault(client_ip, {})
+    ip_counts = _admit_public_daily_client(client_ip, now)
     today_count = ip_counts.get(today, 0)
     if today_count + len(valid_events) > 100:
         raise HTTPException(
@@ -485,7 +600,6 @@ async def ingest_errors_public(
 
     # Update daily cap count after successful ingest
     ip_counts[today] = today_count + len(valid_events)
-    _prune_stale_ip_counters()
 
     _log.info("public_error_ingest ip=%s count=%d", client_ip, len(valid_events))
 
@@ -655,7 +769,7 @@ async def _error_group_events_body(
 
 
 @router.get("", response_model=ErrorListResponse, dependencies=[require_feature("error_tracking")])
-@handle_db_errors("errors.list_error_groups")
+@handle_db_errors(_CODE_ERRORS_LIST_ERROR_GROUPS)
 async def list_error_groups(
     status_filter: str | None = Query(None, alias="status"),
     level: str | None = Query(None),
@@ -684,14 +798,14 @@ async def list_error_groups(
             offset=offset,
         )
     except ProgrammingError as exc:
-        _log.exception("errors.list_error_groups")
+        _log.exception(_CODE_ERRORS_LIST_ERROR_GROUPS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.list_error_groups")
-        _log.exception("errors.list_error_groups")
+        raise_session_contract_error(exc, _CODE_ERRORS_LIST_ERROR_GROUPS)
+        _log.exception(_CODE_ERRORS_LIST_ERROR_GROUPS)
         _log.warning("error_tracking.list_groups_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -858,7 +972,7 @@ async def list_instance_error_events(
 
 
 @router.get("/{error_id}", response_model=ErrorGroupDetail, dependencies=[require_feature("error_tracking")])
-@handle_db_errors("errors.get_error_group_detail")
+@handle_db_errors(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
 async def get_error_group_detail(
     error_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -873,14 +987,14 @@ async def get_error_group_detail(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.get_error_group_detail")
+        _log.exception(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.get_error_group_detail")
-        _log.exception("errors.get_error_group_detail")
+        raise_session_contract_error(exc, _CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
+        _log.exception(_CODE_ERRORS_GET_ERROR_GROUP_DETAIL)
         _log.warning("error_tracking.get_group_detail_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -902,7 +1016,7 @@ async def get_error_group_detail(
         require_feature("error_tracking"),
     ],
 )
-@handle_db_errors("errors.patch_error_group")
+@handle_db_errors(_CODE_ERRORS_PATCH_ERROR_GROUP)
 async def patch_error_group(
     error_id: uuid.UUID,
     req: ErrorGroupUpdate,
@@ -931,14 +1045,14 @@ async def patch_error_group(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.patch_error_group")
+        _log.exception(_CODE_ERRORS_PATCH_ERROR_GROUP)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.patch_error_group")
-        _log.exception("errors.patch_error_group")
+        raise_session_contract_error(exc, _CODE_ERRORS_PATCH_ERROR_GROUP)
+        _log.exception(_CODE_ERRORS_PATCH_ERROR_GROUP)
         _log.warning("error_tracking.patch_group_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -969,7 +1083,7 @@ async def patch_error_group(
     response_model=ErrorEventListResponse,
     dependencies=[require_feature("error_tracking")],
 )
-@handle_db_errors("errors.list_error_events")
+@handle_db_errors(_CODE_ERRORS_LIST_ERROR_EVENTS)
 async def list_error_events(
     error_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=100),
@@ -986,14 +1100,14 @@ async def list_error_events(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("errors.list_error_events")
+        _log.exception(_CODE_ERRORS_LIST_ERROR_EVENTS)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "errors.list_error_events")
-        _log.exception("errors.list_error_events")
+        raise_session_contract_error(exc, _CODE_ERRORS_LIST_ERROR_EVENTS)
+        _log.exception(_CODE_ERRORS_LIST_ERROR_EVENTS)
         _log.warning("error_tracking.list_events_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

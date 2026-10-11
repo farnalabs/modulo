@@ -110,14 +110,19 @@ class _SecondBeginRaisesSession:
 
 
 class _RaisingSession:
-    """Session whose first DB touch raises ``InvalidRequestError``.
+    """Session whose first DB touch raises a configurable exception.
+
+    Defaults to ``InvalidRequestError`` (the FAR-1464 session-contract case).
+    Pass ``ProgrammingError`` / a plain ``SQLAlchemyError`` to drive the arm's
+    ``except ProgrammingError`` / non-contract ``except SQLAlchemyError`` body
+    instead (see ``test_route_db_error_arm_coverage``).
 
     ``begin()`` / ``begin_nested()`` return *self* so ``async with session.begin()``
     raises at ``__aenter__``; every async DB operation raises directly.
     """
 
-    def __init__(self) -> None:
-        self._exc = _session_error()
+    def __init__(self, exc: Exception | None = None) -> None:
+        self._exc = exc if exc is not None else _session_error()
 
     def begin(self) -> _RaisingSession:
         return self

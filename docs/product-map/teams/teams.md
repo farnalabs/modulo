@@ -7,16 +7,20 @@ code:
   - backend/src/modulo/auth/team_rbac.py
   - backend/src/modulo/core/team_visibility.py
   - backend/src/modulo/core/capability_scope.py
-  - backend/src/modulo/api/routes/me.py
+  - backend/src/modulo/api/routes/viewmodel.py
+  - backend/src/modulo/db/crud/team_scope.py
   - backend/src/modulo/db/models/team.py
   - backend/src/modulo/db/migrations/versions/0287_team_rls_lifecycle_evals.py
 unit-tests:
   - backend/tests/unit/api/test_teams.py
+  - backend/tests/unit/api/test_teams_routes_coverage.py
   - backend/tests/unit/auth/test_team_rbac.py
   - backend/tests/unit/auth/test_team_scope_dependencies.py
   - backend/tests/unit/core/test_team_visibility.py
   - backend/tests/unit/db/crud/test_team.py
   - backend/tests/unit/db/crud/test_team_membership.py
+  - backend/tests/unit/db/crud/test_team_scope.py
+  - backend/tests/unit/mcp/test_team_scope_enforcement.py
   - backend/tests/integration/test_rls_isolation.py
   - backend/tests/unit/db/test_migration_team_visibility_rls.py
   - backend/tests/architecture/test_team_scope_wiring.py
@@ -31,6 +35,7 @@ bdd:
   - backend/tests/bdd/features/teams/team_pipeline_visibility.feature
   - backend/tests/bdd/features/teams/view_as_team.feature
   - backend/tests/bdd/features/users/roles.feature
+  - backend/tests/bdd/steps/test_team_create.py
   - backend/tests/bdd/steps/test_team_crud.py
   - backend/tests/bdd/steps/test_team_membership.py
   - backend/tests/bdd/steps/test_team_deletion.py
@@ -39,7 +44,7 @@ bdd:
   - backend/tests/bdd/steps/test_cross_team_isolation.py
   - backend/tests/bdd/steps/test_team_pipeline_visibility.py
   - backend/tests/bdd/steps/test_view_as_team.py
-  - backend/tests/bdd/steps/test_auth_rbac.py
+  - backend/tests/bdd/steps/test_alpha_users.py
 depends-on:
   - feat-auth
   - feat-teams-org-entity
@@ -58,15 +63,18 @@ org profile, and is the product-map home for user roles.
 
 - [x] Team CRUD: create with name/description (201), duplicate name 409, empty name 422,
       non-admin create 403, paginated list, get by id (404 when missing), rename (409 on
-      duplicate), delete 204 for a non-admin-owned team (`team_crud.feature`)
+      duplicate), delete 204 for a team with no owned resources (`team_crud.feature`)
 - [x] Membership: an admin or the team operator adds/removes members with a role, a user
       cannot be granted a team role above their org role (422 "exceeds"), duplicate
-      membership is 409, adding to a missing team is 404, and profile lists memberships
-      with team id/name/role (`team_membership.feature`)
-- [x] Deletion safety: deleting a team with active runs is blocked with 409 and the
-      active-run count in the error; memberships cascade-clean on deletion; non-admin
-      delete is 403 and a missing team is 404 (`team_deletion.feature`,
-      `team_deletion_blocked.feature`)
+      membership is 409, adding to a missing team is 404, and the profile lists memberships
+      with team id and role (`team_membership.feature`)
+- [x] Deletion safety: deleting a team that still owns resources (pipelines, connectors,
+      model backends, library primitives) is blocked with 409 (`team_has_resources`) and
+      the per-resource counts in the error
+      (`tests/unit/api/test_teams_routes_coverage.py`, driving the real route); deletion is
+      a soft delete (`deleted_at`), so memberships are not cascade-deleted; delete with no
+      owned resources is 204, non-admin delete is 403 and a missing team is 404
+      (`team_crud.feature`, `team_deletion.feature`, `team_deletion_blocked.feature`)
 - [x] Cross-team isolation: a team cannot see or enumerate another team's team-scoped
       pipelines (404 / omitted from list counts), cross-team connector binding is refused
       as `connector_team_mismatch`, org-wide resources stay shared, and there is no
@@ -76,10 +84,12 @@ org profile, and is the product-map home for user roles.
       ANY pipeline, including one owned by a team (an org-wide connector, model backend
       or environment profile never produces a mismatch). `visibility: team` means
       owner-team-only — it binds only to a pipeline owned by the same team, and a
-      different team's pipeline (or an org pipeline) is refused as
-      `connector_team_mismatch` at every write path that can create the binding.
-      Both directions are the same rule for connectors, model backends and environment
-      profiles (`core/team_visibility.py`)
+      different team's pipeline (or an org pipeline) is refused at every write path
+      that can create the binding. Both directions are the same rule for connectors,
+      model backends and environment profiles, but each resource type reports its own
+      machine-readable code: `connector_team_mismatch`, `model_backend_team_mismatch`,
+      `environment_profile_team_mismatch` / `environment_profile_binding_team_mismatch`
+      (`core/team_visibility.py`)
 - [x] Team-scoped pipeline visibility and the view-as-team admin flows are enforced
       (`team_pipeline_visibility.feature`, `view_as_team.feature`)
 - [x] RBAC roles (`admin | operator | runner | viewer`) gate team surfaces
@@ -96,7 +106,10 @@ org profile, and is the product-map home for user roles.
       so the execution-context escape hatch only widens the team clause WITHIN
       the org. Background machinery (executor, cron, SAQ suite-run dispatch,
       housekeeping, seed) sets `app.execution_context` and keeps reading
-      team-private rows; user-facing sessions never set it, so isolation holds.
+      team-private rows; the FAR-1515 team-scope seams (`team_blind_org_scope`,
+      `pipeline_team_scope_team_blind`) widen on the request path for the duration of
+      a scoped gate check then restore the caller's context, so user-facing list/read
+      paths stay team-filtered.
       The four core-table resolvers (connectors / model_backends /
       environment_profiles / library_primitives) stay INTENTIONALLY unwired from
       route dependencies — their DB RLS alone 404s a non-member before handler
@@ -114,6 +127,15 @@ org profile, and is the product-map home for user roles.
 - **`stale_jwt_revocation.feature` and `admin_override.feature`** exercise JWT/override
   surfaces under the teams BDD directory that are not cited by this entry's behaviours
   (they belong to the auth/JWT feature edges).
+- **`team_deletion.feature` and `team_deletion_blocked.feature` scenarios are mocked** —
+  both patch `delete_team` with client-constructed 409s, so neither exercises the shipped
+  resource guard (the real 409 is raised by the route's owned-resource count loop); the
+  active-run-blocking scenarios in `team_deletion.feature` describe a guard that does not
+  ship (the route blocks on owned resources — see the Deletion safety behaviour above).
+  The shipped block is covered by the unit test
+  `test_delete_team_with_owned_resources_returns_409`
+  (`tests/unit/api/test_teams_routes_coverage.py`), which drives the real route to a 409
+  `team_has_resources` carrying the per-resource count.
 
 ## QA History
 - 2026-10-08: **Improve Architecture product-map walk** – closed the untracked

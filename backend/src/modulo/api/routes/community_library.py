@@ -35,6 +35,8 @@ from modulo.core.runtime_config import FLAG_COMMUNITY_OBJECTS_ENABLED, read_org_
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.settings import get_settings
 
+_MSG_COMMUNITY_LIBRARY_DISABLED = "Community library is disabled by the organisation administrator."
+
 router = APIRouter(prefix="/api/v1/libraries/community", tags=["community-library"])
 
 _log = logging.getLogger(__name__)
@@ -76,7 +78,7 @@ async def list_community(
     if not await _community_objects_enabled(session, principal.organisation_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Community library is disabled by the organisation administrator.",
+            detail=_MSG_COMMUNITY_LIBRARY_DISABLED,
         )
     items: list[dict[str, Any]] = []
     synced_at: str | None = None
@@ -131,7 +133,7 @@ async def get_entry(
     if not await _community_objects_enabled(session, _principal.organisation_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Community library is disabled by the organisation administrator.",
+            detail=_MSG_COMMUNITY_LIBRARY_DISABLED,
         )
     try:
         entry = await get_community_entry(session, entry_id)
@@ -169,7 +171,7 @@ async def install(
     if not await _community_objects_enabled(session, principal.organisation_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Community library is disabled by the organisation administrator.",
+            detail=_MSG_COMMUNITY_LIBRARY_DISABLED,
         )
     try:
         async with session.begin():

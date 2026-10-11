@@ -13,7 +13,10 @@ pin that every field is sourced from the state a feature actually writes:
   metrics dump writes (``DUMP_WATERMARK_KEY`` /
   ``DUMP_COUNT_KEY``).
 * ``consent_level`` is the caller's organisation real consent level
-  (``org.settings_json["product_analytics"]["level"]``), defaulting to ``off``.
+  (``org.settings_json["product_analytics"]["level"]``) — the PREFERRED source.
+  When the caller org cannot be resolved the endpoint reports an INSTANCE-level
+  posture (``all`` if any active org has opted in, else ``off``) instead of a
+  hardcoded ``off`` (FAR-1635).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from modulo.api.routes import product_analytics_transparency as pat_module
 from modulo.api.routes.product_analytics_transparency import (
     TransparencyResponse,
     _coerce_last_dump,
-    _resolve_org_settings,
+    _resolve_org,
 )
 from modulo.api.routes.product_analytics_transparency import router as transparency_router
 from modulo.auth.dependencies import get_current_user
@@ -90,18 +93,8 @@ def _config(value: object) -> MagicMock:
     return config
 
 
-def _make_session(org_settings: object = _UNSET) -> AsyncMock:
-    """Build a session mock whose single SELECT resolves to an org row.
-
-    ``org_settings`` is the returned org's ``settings_json``; ``_UNSET`` means
-    no org row is found (``scalar_one_or_none()`` -> ``None``).
-    """
-    session = AsyncMock()
-    begin_cm = AsyncMock()
-    begin_cm.__aenter__ = AsyncMock(return_value=None)
-    begin_cm.__aexit__ = AsyncMock(return_value=False)
-    session.begin = MagicMock(return_value=begin_cm)
-
+def _org_result(org_settings: object) -> MagicMock:
+    """A SELECT result carrying the caller-org lookup (``scalar_one_or_none``)."""
     result = MagicMock()
     if org_settings is _UNSET:
         result.scalar_one_or_none = MagicMock(return_value=None)
@@ -109,7 +102,55 @@ def _make_session(org_settings: object = _UNSET) -> AsyncMock:
         org = MagicMock()
         org.settings_json = org_settings
         result.scalar_one_or_none = MagicMock(return_value=org)
-    session.execute = AsyncMock(return_value=result)
+    return result
+
+
+def _instances_result(entries: list[object]) -> MagicMock:
+    """A SELECT result carrying active orgs (``scalars()``) for the fallback.
+
+    A plain-string entry is a consent level and is wrapped as the org's
+    ``settings_json`` (``{"product_analytics": {"level": ...}}``); ``None`` and
+    any non-string entry (a dict/list) are used verbatim, so a malformed
+    ``settings_json`` shape can be modelled too.
+    """
+    orgs = []
+    for entry in entries:
+        org = MagicMock()
+        org.settings_json = {"product_analytics": {"level": entry}} if isinstance(entry, str) else entry
+        orgs.append(org)
+    result = MagicMock()
+    result.scalars = MagicMock(return_value=iter(orgs))
+    return result
+
+
+def _make_session(
+    org_settings: object = _UNSET,
+    instance_levels: list[object] | None = None,
+    *,
+    skip_org_lookup: bool = False,
+) -> AsyncMock:
+    """Build a session mock resolving the caller org, then the instance aggregate.
+
+    ``org_settings`` is the returned caller-org's ``settings_json``; ``_UNSET``
+    means no org row is found (``scalar_one_or_none()`` -> ``None``). The second
+    result models the instance-aggregate read (``_instance_consent_level``),
+    built from ``instance_levels`` (one entry per active org). The endpoint only
+    issues the second SELECT when the caller org is unresolved.
+
+    ``skip_org_lookup`` drops the org-lookup result: a principal with no
+    ``organisation_id`` short-circuits ``_resolve_org`` without a query, so the
+    instance aggregate becomes the FIRST execute.
+    """
+    session = AsyncMock()
+    begin_cm = AsyncMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    results: list[MagicMock] = []
+    if not skip_org_lookup:
+        results.append(_org_result(org_settings))
+    results.append(_instances_result(list(instance_levels or [])))
+    session.execute = AsyncMock(side_effect=results)
     return session
 
 
@@ -288,7 +329,7 @@ class TestRealInstanceSwitch:
 
 
 # ---------------------------------------------------------------------------
-# Real org consent level
+# Per-org consent level (the PREFERRED source)
 # ---------------------------------------------------------------------------
 
 
@@ -304,20 +345,27 @@ class TestRealConsentLevel:
         _restore_overrides()
 
     def test_org_level_off_is_reflected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _client(session=_make_session(_ORG_OFF))
+        session = _make_session(_ORG_OFF)
+        client = _client(session=session)
         sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
         with sources[0], sources[1]:
             body = _request(client)
         assert body["consent_level"] == LEVEL_OFF
         assert body["egress_allowed"] is False
+        # A resolved caller org is the sole source — no instance aggregate read.
+        assert session.execute.await_count == 1
         _restore_overrides()
 
-    def test_missing_org_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _client(session=_make_session())  # no org row
+    def test_per_org_off_wins_over_instance_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Per-org is primary: the caller's own ``off`` must not be overridden."""
+        session = _make_session(_ORG_OFF, instance_levels=[LEVEL_ALL])
+        client = _client(session=session)
         sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
         with sources[0], sources[1]:
             body = _request(client)
         assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        assert session.execute.await_count == 1
         _restore_overrides()
 
     def test_org_without_block_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -328,8 +376,98 @@ class TestRealConsentLevel:
         assert body["consent_level"] == LEVEL_OFF
         _restore_overrides()
 
-    def test_org_less_principal_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        client = _client(principal=_NO_ORG_ADMIN, session=_make_session(_ORG_ALL))
+    def test_org_with_malformed_settings_defaults_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-dict ``settings_json`` must not crash the per-org read (fail-closed)."""
+        session = _make_session(["not", "a", "dict"])
+        client = _client(session=session)
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        assert session.execute.await_count == 1
+        _restore_overrides()
+
+    def test_resolved_org_without_settings_ignores_instance_aggregate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A resolved org with null settings is per-org ``off``, NOT the instance posture."""
+        session = _make_session(None, instance_levels=[LEVEL_ALL])
+        client = _client(session=session)
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert session.execute.await_count == 1
+        _restore_overrides()
+
+
+# ---------------------------------------------------------------------------
+# Instance fallback when the caller org cannot be resolved (FAR-1635)
+# ---------------------------------------------------------------------------
+
+
+class TestInstanceConsentFallback:
+    def test_missing_org_falls_back_to_instance_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(instance_levels=[LEVEL_OFF, LEVEL_ALL]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_ALL
+        # Instance switch on + instance aggregate all -> egress allowed.
+        assert body["egress_allowed"] is True
+        _restore_overrides()
+
+    def test_missing_org_falls_back_to_instance_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session(instance_levels=[LEVEL_OFF]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        _restore_overrides()
+
+    def test_no_active_org_falls_back_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(session=_make_session())  # no org row, no active consenting org
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        _restore_overrides()
+
+    def test_malformed_instance_settings_fall_back_to_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-dict ``settings_json`` row must not 500 the aggregate (fail-closed)."""
+        client = _client(session=_make_session(instance_levels=[["not", "a", "dict"], LEVEL_OFF]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_OFF
+        assert body["egress_allowed"] is False
+        _restore_overrides()
+
+    def test_malformed_row_does_not_mask_a_consenting_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A malformed row must be skipped, not abort the scan before a consenting org."""
+        client = _client(session=_make_session(instance_levels=[["not", "a", "dict"], LEVEL_ALL]))
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_ALL
+        _restore_overrides()
+
+    def test_org_less_principal_falls_back_to_instance_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(
+            principal=_NO_ORG_ADMIN,
+            session=_make_session(instance_levels=[LEVEL_ALL], skip_org_lookup=True),
+        )
+        sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
+        with sources[0], sources[1]:
+            body = _request(client)
+        assert body["consent_level"] == LEVEL_ALL
+        _restore_overrides()
+
+    def test_org_less_principal_falls_back_to_instance_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _client(
+            principal=_NO_ORG_ADMIN,
+            session=_make_session(instance_levels=[LEVEL_OFF], skip_org_lookup=True),
+        )
         sources = _patch_sources(consent_values={INSTANCE_SWITCH_KEY: True}, monkeypatch=monkeypatch)
         with sources[0], sources[1]:
             body = _request(client)
@@ -502,24 +640,33 @@ class TestStaleWarning:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_org_settings (the org DB seam)
+# _resolve_org (the org DB seam)
 # ---------------------------------------------------------------------------
 
 
-class TestResolveOrgSettings:
+class TestResolveOrg:
     @pytest.mark.asyncio
-    async def test_returns_settings_for_existing_org(self) -> None:
+    async def test_returns_org_for_existing_id(self) -> None:
         session = _make_session(_ORG_ALL)
-        settings = await _resolve_org_settings(session, _ORG_ID)
-        assert settings == _ORG_ALL
+        org = await _resolve_org(session, _ORG_ID)
+        assert org is not None
+        assert org.settings_json == _ORG_ALL
+
+    @pytest.mark.asyncio
+    async def test_returns_org_with_null_settings(self) -> None:
+        """A resolved org with no settings_json is still a resolved org."""
+        session = _make_session(None)
+        org = await _resolve_org(session, _ORG_ID)
+        assert org is not None
+        assert org.settings_json is None
 
     @pytest.mark.asyncio
     async def test_returns_none_when_org_missing(self) -> None:
         session = _make_session()
-        assert await _resolve_org_settings(session, _ORG_ID) is None
+        assert await _resolve_org(session, _ORG_ID) is None
 
     @pytest.mark.asyncio
     async def test_none_org_id_skips_the_query(self) -> None:
         session = _make_session(_ORG_ALL)
-        assert await _resolve_org_settings(session, None) is None
+        assert await _resolve_org(session, None) is None
         session.execute.assert_not_awaited()

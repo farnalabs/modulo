@@ -73,6 +73,8 @@ from modulo.db.models.team import Team
 from modulo.db.models.team_membership import TeamMembership
 from modulo.db.models.trigger import Trigger
 
+_MSG_NOT_TEAM_MEMBER = "Not a member of the team that owns this resource"
+
 
 @dataclass(frozen=True)
 class TeamScopedResource:
@@ -164,7 +166,7 @@ async def evaluate_team_gate(
         return TeamGateDenial(
             kind="membership",
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a member of the team that owns this resource",
+            detail=_MSG_NOT_TEAM_MEMBER,
             owner_team_id=owner_team_id,
         )
     is_member = await team_membership_exists(session, account_id=account_id, team_id=owner_team_id)
@@ -172,7 +174,7 @@ async def evaluate_team_gate(
         return TeamGateDenial(
             kind="membership",
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a member of the team that owns this resource",
+            detail=_MSG_NOT_TEAM_MEMBER,
             owner_team_id=owner_team_id,
         )
     return None
@@ -442,7 +444,7 @@ async def validate_team_transition_for_update(
         if not is_member:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not a member of the team that owns this resource",
+                detail=_MSG_NOT_TEAM_MEMBER,
             )
 
     if new_owner_team_id is not None and new_owner_team_id != current_owner_team_id:

@@ -22,33 +22,6 @@ def connector():
 
 
 @respx.mock
-async def test_health_check_ok(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
-    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get(_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
-    result = await connector.health_check()
-    assert result.ok is True
-    assert result.detail == "myuser"
-
-
-@respx.mock
-async def test_health_check_missing_scopes(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
-    respx.get(f"{_API}/projects").mock(return_value=httpx.Response(403, text="forbidden"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Missing scopes" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail(connector):
-    respx.get(f"{_API}/user").mock(return_value=httpx.Response(401, text="Unauthorized"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "401" in result.detail
-
-
-@respx.mock
 async def test_query_projects(connector):
     projects = [{"id": 1, "name": "proj-a"}, {"id": 2, "name": "proj-b"}]
     respx.get(f"{_API}/projects").mock(return_value=httpx.Response(200, json=projects))
@@ -319,14 +292,6 @@ async def test_unsupported_write_resource(connector):
     payload = ConnectorPayload(resource="branch", data={})
     with pytest.raises(ValueError, match="Unsupported GitLab write resource"):
         await connector.write(payload)
-
-
-@respx.mock
-async def test_health_check_network_error(connector):
-    respx.get(f"{_API}/user").mock(side_effect=httpx.ConnectError("Connection refused"))
-    result = await connector.health_check()
-    assert result.ok is False
-    assert "Connection refused" in result.detail
 
 
 @respx.mock

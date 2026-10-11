@@ -1,10 +1,11 @@
 """BitbucketConnector — async Bitbucket Cloud API connector."""
 
-import base64
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_paging_total as _safe_paging_total
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
@@ -16,6 +17,7 @@ from modulo.connectors.base import (
     HealthResult,
     health_check_failure,
 )
+from modulo.connectors.security import basic_auth_wire_secrets
 from modulo.core.ssrf import pinned_async_client_sync
 
 _BITBUCKET_API = "https://api.bitbucket.org/2.0"
@@ -53,11 +55,24 @@ class BitbucketConnector(ConnectorBase):
     ) -> None:
         if token:
             self._auth_header = {"Authorization": f"Bearer {token}"}
+            # Captured for credential redaction of echoed upstream detail
+            # (``ConnectorBase._credential_values``); empty for the Bearer mode.
+            self._credential: str = token
+            self._basic_secrets: tuple[str, ...] = ()
         elif username and app_password:
-            encoded = base64.b64encode(f"{username}:{app_password}".encode()).decode()
-            self._auth_header = {"Authorization": f"Basic {encoded}"}
+            # FAR-1651Fix1: the reflected ``Authorization: Basic <b64>`` header
+            # (and its decoded ``user:password`` form) do NOT contain the raw
+            # app password, so both wire forms must be redactable too. Mirrors
+            # the rest-connector precedent (``RestConnector._collect_basic_secrets``).
+            raw, encoded, header = basic_auth_wire_secrets(username, app_password)
+            self._auth_header = {"Authorization": header}
+            self._credential = app_password
+            self._basic_secrets = (raw, encoded, header)
         else:
             raise ValueError("Provide either token (OAuth 2.0) or username+app_password")
+
+    def _credential_values(self) -> Sequence[str]:
+        return (self._credential, *self._basic_secrets)
 
     @property
     def connector_type(self) -> ConnectorType:
@@ -70,7 +85,13 @@ class BitbucketConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(_BITBUCKET_API, base_url=_BITBUCKET_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _BITBUCKET_API,
+            base_url=_BITBUCKET_API,
+            headers=self._headers(),
+            timeout=30,
+            verify=egress_ssl_context(self),
+        )
 
     async def health_check(self) -> HealthResult:
         """Verify API access by fetching the authenticated user."""
@@ -79,7 +100,7 @@ class BitbucketConnector(ConnectorBase):
                 r = await client.get("/user")
 
             if r.status_code != 200:
-                return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
 
             user_info = r.json()
             if not isinstance(user_info, dict):
@@ -89,14 +110,16 @@ class BitbucketConnector(ConnectorBase):
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Bitbucket API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Bitbucket API timeout")
         except httpx.ConnectError:
             return HealthResult(ok=False, detail="Bitbucket API connection error")
         except ValueError as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as client:

@@ -25,7 +25,7 @@ from modulo.core.cost_controller.system_config import (
     read_system_config,
     write_system_config,
 )
-from modulo.core.product_analytics.consent import is_instance_analytics_enabled
+from modulo.core.product_analytics.consent import is_instance_analytics_enabled, is_org_consenting
 from modulo.core.product_analytics.constants import (
     DUMP_COUNT_KEY,
     DUMP_WATERMARK_KEY,
@@ -301,13 +301,16 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
     )
     orgs: list[dict[str, Any]] = []
     for row in result:
-        settings = row.settings_json or {}
-        pa = settings.get("product_analytics", {})
-        if pa.get("level") == "all":
-            level_changed_at = pa.get("level_changed_at")
-            if isinstance(level_changed_at, str):
-                level_changed_at = _parse_iso_date(level_changed_at)
-            orgs.append({"id": row.id, "level_changed_at": level_changed_at})
+        # Read the level through the shared canonical predicate so the dump's
+        # consent set and the transparency endpoint's reported posture cannot
+        # drift (both call ``consent.is_org_consenting``).
+        if not is_org_consenting(row.settings_json):
+            continue
+        pa = (row.settings_json or {}).get("product_analytics", {})
+        level_changed_at = pa.get("level_changed_at")
+        if isinstance(level_changed_at, str):
+            level_changed_at = _parse_iso_date(level_changed_at)
+        orgs.append({"id": row.id, "level_changed_at": level_changed_at})
     return orgs
 
 

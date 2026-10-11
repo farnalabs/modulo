@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError, SQLAlchemyError
 
 from modulo.api.dependencies import _get_engine, _get_session_factory, get_db_session, get_plan_context
 from modulo.api.main import app
@@ -42,6 +42,16 @@ _PROG = ProgrammingError("s", {}, Exception())
 _SQL = SQLAlchemyError("boom")
 _RUNTIME = RuntimeError("kaboom")
 _INTEGRITY = IntegrityError("s", {}, Exception())
+
+
+class _LockNotAvailableError(Exception):
+    """A DBAPI driver error carrying the bounded lock_timeout SQLSTATE."""
+
+    sqlstate = "55P03"
+
+
+# The bounded finalisation row-lock wait expired on the cancel path (55P03).
+_LOCK_TIMEOUT = OperationalError("SELECT ... FOR UPDATE", {}, _LockNotAvailableError())
 
 
 def _make_settings() -> Settings:
@@ -682,6 +692,21 @@ def test_cancel_run_error_mapping(exc: Exception, expected: int) -> None:
         resp = http.post(f"/api/v1/runs/{_RUN_ID}/cancel")
 
     assert resp.status_code == expected, resp.text
+
+
+def test_cancel_run_lock_timeout_maps_to_409_not_503() -> None:
+    """FAR-1642 item 2: the bounded finalisation row-lock wait (SQLSTATE 55P03)
+    fires on the cancel path and must answer the SAME non-generic 409 the shared
+    ``handle_db_errors`` classifier gives every other bounded lock timeout — not
+    the retry-inviting generic 503 the bare ``except SQLAlchemyError`` arm would
+    otherwise fall through to."""
+    with (
+        _fresh_client() as http,
+        patch("modulo.api.routes.runs._cancel_run", new_callable=AsyncMock, side_effect=_LOCK_TIMEOUT),
+    ):
+        resp = http.post(f"/api/v1/runs/{_RUN_ID}/cancel")
+
+    assert resp.status_code == 409, resp.text
 
 
 # ---------------------------------------------------------------------------

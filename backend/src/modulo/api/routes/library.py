@@ -120,6 +120,10 @@ from modulo.db.models.team import Team
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.util import sanitise_log_value as _sanitise_log_value
 
+_CODE_LIBRARY_SEARCH = "library.search"
+_VISIBILITY_PATTERN = "^(org|team)$"
+_CODE_LIBRARY_WRITE = "library.write"
+
 _MSG_LIBRARY_FEATURE_TEMPORARILY_UNAVAILABLE = (
     "The library feature is temporarily unavailable due to a database issue. Please retry."
 )
@@ -336,7 +340,7 @@ class LibraryPrimitiveCreate(TeamVisibilityMixin):
     tags: list[str] = Field(default_factory=list)
     content_json: dict[str, Any]
     owner_team_id: uuid.UUID | None = None
-    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
     tier: Literal["native", "preview", "in_dev"] = Field(default="native")
 
     @model_validator(mode="after")
@@ -352,7 +356,7 @@ class LibraryPrimitiveUpdate(TeamVisibilityMixin):
     tags: list[str] | None = None
     content_json: dict[str, Any] | None = None
     owner_team_id: uuid.UUID | None = None
-    visibility: str | None = Field(default=None, pattern=r"^(org|team)$")
+    visibility: str | None = Field(default=None, pattern=_VISIBILITY_PATTERN)
     auto_update: bool | None = None
     tier: Literal["native", "preview", "in_dev"] | None = None
 
@@ -485,7 +489,7 @@ class CollectionCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     manifest_pins: list[CollectionPin] = Field(default_factory=list)
     owner_team_id: uuid.UUID | None = None
-    visibility: str = Field(default="org", pattern=r"^(org|team)$")
+    visibility: str = Field(default="org", pattern=_VISIBILITY_PATTERN)
 
 
 class CollectionUpdateRequest(BaseModel):
@@ -643,7 +647,7 @@ async def list_library_primitives_endpoint(
     source: str | None = None,
     include_in_dev: bool = Query(default=False, description="Include in_dev tier items (default excludes them)"),
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.search"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
 ) -> LibraryPrimitiveListResponse:
     if include_in_dev:
         require_in_dev_operator(principal, "library.search.in_dev")
@@ -756,7 +760,7 @@ async def ping() -> dict[str, bool]:
 async def get_library_primitive_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.search"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
 ) -> LibraryPrimitiveResponse:
     try:
         async with session.begin():
@@ -2183,7 +2187,7 @@ async def admin_publish_contribution_endpoint(
 async def create_collection_endpoint(
     req: CollectionCreateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.write"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
 ) -> CollectionResponse:
     """Create a new library collection (status=draft)."""
     org_id = _require_organisation_id(principal)
@@ -2252,7 +2256,7 @@ async def update_collection_endpoint(
     primitive_id: uuid.UUID,
     req: CollectionUpdateRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.write"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
 ) -> CollectionResponse:
     """Update a draft collection's manifest pins."""
     org_id = _require_organisation_id(principal)
@@ -2286,7 +2290,7 @@ async def update_collection_endpoint(
 async def publish_collection_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.write"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
 ) -> CollectionResponse:
     """Publish a draft collection — validates pins and sets status=published."""
     org_id = _require_organisation_id(principal)
@@ -2470,7 +2474,7 @@ async def uninstall_collection_endpoint(
     primitive_id: uuid.UUID,
     req: CollectionUninstallRequest,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> CollectionUninstallResponse:
     """Uninstall a collection, removing or detaching entities as appropriate.
 
@@ -2523,7 +2527,7 @@ async def uninstall_collection_endpoint(
 async def list_collection_installs_endpoint(
     primitive_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.search"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
 ) -> CollectionInstallListResponse:
     """List install records for a collection."""
     org_id = _require_organisation_id(principal)
@@ -2588,7 +2592,7 @@ async def grant_collection_agents_endpoint(
     primitive_id: uuid.UUID,
     install_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.manage"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
 ) -> CollectionInstallResponse:
     """Grant tool/connector access for community-sourced collection agents.
 
@@ -2661,7 +2665,7 @@ async def get_collection_install_endpoint(
     primitive_id: uuid.UUID,
     install_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
-    principal: TenantPrincipal = require_permission("library.search"),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
 ) -> CollectionInstallResponse:
     """Get a single install record for a collection."""
     org_id = _require_organisation_id(principal)

@@ -36,6 +36,10 @@ from modulo.db.rls import set_rls_org
 
 _CODE_ERROR_NOTIFICATION_MANAGE = "error_notification.manage"
 
+_CODE_ERROR_NOTIFICATION_RULES_LIST_NOTIFICATION_RULES = "error_notification_rules.list_notification_rules"
+_CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE = "error_notification_rules.create_notification_rule"
+_CODE_ERROR_NOTIFICATION_RULES_DELETE_NOTIFICATION_RULE = "error_notification_rules.delete_notification_rule"
+
 
 _log = logging.getLogger(__name__)
 
@@ -62,7 +66,7 @@ def _serialize_rule(rule: ErrorNotificationRule) -> dict[str, Any]:
 
 
 @router.get("", response_model=ErrorNotificationRuleListResponse)
-@handle_db_errors("error_notification_rules.list_notification_rules")
+@handle_db_errors(_CODE_ERROR_NOTIFICATION_RULES_LIST_NOTIFICATION_RULES)
 async def list_notification_rules(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -93,14 +97,14 @@ async def list_notification_rules(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("error_notification_rules.list_notification_rules")
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_LIST_NOTIFICATION_RULES)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_notification_rules.list_notification_rules")
-        _log.exception("error_notification_rules.list_notification_rules")
+        raise_session_contract_error(exc, _CODE_ERROR_NOTIFICATION_RULES_LIST_NOTIFICATION_RULES)
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_LIST_NOTIFICATION_RULES)
         _log.warning("error_tracking.list_rules_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -131,7 +135,7 @@ async def list_notification_rules(
         )
     ],
 )
-@handle_db_errors("error_notification_rules.create_notification_rule")
+@handle_db_errors(_CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE)
 async def create_notification_rule(
     req: ErrorNotificationRuleCreate,
     session: AsyncSession = Depends(get_db_session),
@@ -196,14 +200,14 @@ async def create_notification_rule(
             detail=f"Maximum {max_rules} notification rules per organisation reached",
         ) from exc
     except ProgrammingError as exc:
-        _log.exception("error_notification_rules.create_notification_rule")
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_notification_rules.create_notification_rule")
-        _log.exception("error_notification_rules.create_notification_rule")
+        raise_session_contract_error(exc, _CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE)
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_CREATE_NOTIFICATION_RULE)
         _log.warning("error_tracking.create_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -347,7 +351,7 @@ async def update_notification_rule(
         )
     ],
 )
-@handle_db_errors("error_notification_rules.delete_notification_rule")
+@handle_db_errors(_CODE_ERROR_NOTIFICATION_RULES_DELETE_NOTIFICATION_RULE)
 async def delete_notification_rule(
     rule_id: uuid.UUID,
     session: AsyncSession = Depends(get_db_session),
@@ -376,14 +380,14 @@ async def delete_notification_rule(
     except HTTPException:
         raise
     except ProgrammingError as exc:
-        _log.exception("error_notification_rules.delete_notification_rule")
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_DELETE_NOTIFICATION_RULE)
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_ERROR_TRACKING_NOT_AVAILABLE,
         ) from exc
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "error_notification_rules.delete_notification_rule")
-        _log.exception("error_notification_rules.delete_notification_rule")
+        raise_session_contract_error(exc, _CODE_ERROR_NOTIFICATION_RULES_DELETE_NOTIFICATION_RULE)
+        _log.exception(_CODE_ERROR_NOTIFICATION_RULES_DELETE_NOTIFICATION_RULE)
         _log.warning("error_tracking.delete_rule_db_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

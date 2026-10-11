@@ -39,34 +39,6 @@ def test_connector_type(ap_runner):
 
 
 @respx.mock
-async def test_health_check_ok(ap_runner):
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(200, json={"value": [{"id": "proj-1"}], "count": 1})
-    )
-    result = await ap_runner.health_check()
-    assert result.ok is True
-
-
-@respx.mock
-async def test_health_check_fail_401(ap_runner):
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
-    result = await ap_runner.health_check()
-    assert result.ok is False
-    assert "Authentication failed" in result.detail
-
-
-@respx.mock
-async def test_health_check_fail_500(ap_runner):
-    respx.get(f"{_AZURE_DEVOPS_API}/myorg/_apis/projects", params={"api-version": "7.0"}).mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
-    result = await ap_runner.health_check()
-    assert result.ok is False
-    assert "500" in result.detail
-
-
 # ---------------------------------------------------------------------------
 # trigger_run
 # ---------------------------------------------------------------------------
@@ -616,11 +588,6 @@ async def test_double_list_runs(ap_double):
     runs = await ap_double.list_runs(pipeline_id="1")
     assert len(runs) == 1
     assert runs[0].status == CIRunStatus.SUCCESS
-
-
-async def test_double_health_check(ap_double):
-    result = await ap_double.health_check()
-    assert result.ok is True
 
 
 async def test_double_query(ap_double):

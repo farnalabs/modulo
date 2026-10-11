@@ -20,6 +20,9 @@ from modulo.db.models.base import OrgScoped
 # Repeated column type (S1192): JSON with PostgreSQL JSONB variant.
 _JSONB_COL = JSON().with_variant(JSONB(), "postgresql")
 
+# Repeated FK ondelete behaviour (S1192).
+_ONDELETE_SET_NULL = "SET NULL"
+
 # FAR-900: valid schema_profile values — MUST match get_args(SchemaProfile) from
 # modulo.core.schema_registry.rendering.  Kept static here because the DB layer
 # must not import core (import-linter contract).  A test asserts consistency.
@@ -61,7 +64,7 @@ class Agent(OrgScoped):
     is_executable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     prompt_always_visible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     template_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("composite_templates.id", ondelete="SET NULL"), nullable=True, default=None
+        Uuid(), ForeignKey("composite_templates.id", ondelete=_ONDELETE_SET_NULL), nullable=True, default=None
     )
     agent_commands: Mapped[list[str] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"), nullable=True, default=None
@@ -84,13 +87,13 @@ class Agent(OrgScoped):
     max_input_length: Mapped[int | None] = mapped_column(Integer)
     token_budget: Mapped[int | None] = mapped_column(Integer)
     library_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("library_primitives.id", ondelete="SET NULL"), index=True
+        Uuid(), ForeignKey("library_primitives.id", ondelete=_ONDELETE_SET_NULL), index=True
     )
     parameter_schema_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("parameter_schemas.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     collection_install_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("collection_install.install_id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(), ForeignKey("collection_install.install_id", ondelete=_ONDELETE_SET_NULL), nullable=True, index=True
     )
     account_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True

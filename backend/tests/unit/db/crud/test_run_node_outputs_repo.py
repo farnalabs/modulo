@@ -37,6 +37,7 @@ from modulo.db.crud.run_node_outputs import (
     OutputsSentinelViolation,
     RunBlobs,
     _jsonb_canonical_key,
+    _sanitise_jsonb,
     dialect_insert,
     parse_marker_node_id,
     read_node_output_blob_bytes,
@@ -701,6 +702,62 @@ class TestInheritedSentinelFiltering:
         await _write_markers(session, run, {"weird-legacy-key": {"raw": "keep"}})
         blobs = await _read_blobs(session, run, raw=True)
         assert blobs.markers == {"weird-legacy-key": {"raw": "keep"}}
+
+
+class TestJsonbSanitisation:
+    """FAR-1602: a node output carrying U+0000 (or a lone UTF-16 surrogate)
+    would abort the Postgres jsonb INSERT (SQLSTATE 22P05) and lose the node's
+    output. The primary-write choke point (:func:`replace_run_node_outputs`)
+    replaces every illegal code point — in nested string values AND keys —
+    with the visible U+FFFD marker so the run completes."""
+
+    def test_nul_in_nested_strings_is_replaced(self) -> None:
+        sanitised = _sanitise_jsonb({"out": {"text": "a\x00b", "more": ["x\x00", "y"]}})[0]
+        assert "\x00" not in json.dumps(sanitised)
+        assert sanitised["out"]["text"] == "a\ufffdb"
+        assert sanitised["out"]["more"] == ["x\ufffd", "y"]
+
+    def test_nul_in_keys_is_replaced(self) -> None:
+        sanitised = _sanitise_jsonb({"k\x00ey": {"inner\x00": 1}})[0]
+        assert set(sanitised) == {"k\ufffdey"}
+        assert set(sanitised["k\ufffdey"]) == {"inner\ufffd"}
+
+    def test_lone_surrogate_is_replaced(self) -> None:
+        assert _sanitise_jsonb("pre\ud800post")[0] == "pre\ufffdpost"
+
+    def test_clean_value_is_reported_unchanged(self) -> None:
+        value = {"a": [1, 2.5, True, None], "b": {"c": "ok"}}
+        sanitised, changed = _sanitise_jsonb(value)
+        assert sanitised == value
+        assert changed is False
+
+    def test_non_string_scalars_are_preserved(self) -> None:
+        assert _sanitise_jsonb(7)[0] == 7
+        assert _sanitise_jsonb(None)[0] is None
+        assert _sanitise_jsonb(True)[0] is True
+
+    async def test_replace_sanitises_nul_nested_and_in_keys(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        outputs = {"n\x001": {"answer": "a\x00b", "deep": {"list": ["x\x00y"]}}}
+        await _replace(session, run, outputs=outputs, telemetry=None)
+
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.outputs is not None
+        assert set(blobs.outputs) == {"n\ufffd1"}
+        node = blobs.outputs["n\ufffd1"]
+        assert node["answer"] == "a\ufffdb"
+        assert node["deep"]["list"] == ["x\ufffdy"]
+
+    async def test_replace_after_sanitisation_keeps_key_consistency(self, session: AsyncSession) -> None:
+        """The blanking key set and the upsert node_ids are both derived from
+        the sanitised map, so a REPLACE re-writing the same (NUL-keyed) node
+        updates the row instead of blanking it as a phantom absent key."""
+        run = await _seed_run(session)
+        await _replace(session, run, outputs={"n\x001": {"v": 1}}, telemetry=None)
+        await _replace(session, run, outputs={"n\x001": {"v": 2}}, telemetry=None)
+
+        blobs = await _read_blobs(session, run, raw=True)
+        assert blobs.outputs == {"n\ufffd1": {"v": 2}}
 
 
 class TestBytesAccounting:

@@ -742,7 +742,7 @@ def get_registry() -> FeatureFlagRegistry:
 SSO_UNRESTRICTED_PROVISIONING_FLAG = "sso_unrestricted_provisioning"
 
 
-async def resolve_sso_unrestricted_provisioning(session: Any, *, org_id: uuid.UUID | None) -> bool:
+async def resolve_sso_unrestricted_provisioning(*, org_id: uuid.UUID | None) -> bool:
     """FAR-855: resolve the operator-level SSO unrestricted-provisioning flag.
 
     This flag is NOT a plan-tier feature: it is default-OFF on every tier

@@ -13,6 +13,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import Insert as PGInsert
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_plan_context
+from modulo.api.routes import metrics_ingest
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.settings import Settings, get_settings
@@ -179,6 +180,32 @@ class TestConsentGate:
         mock_get_org.return_value = None
         resp = _post_events(client, [_valid_event()])
         assert resp.status_code == 204
+
+
+class TestConsentActiveDelegation:
+    """``_consent_active`` must be a thin delegate to the shared predicate.
+
+    FAR-1635: the route's consent gate previously carried its own structurally
+    divergent reader. These tests pin the delegation so a second reader cannot
+    silently reappear: the return value must come FROM the shared predicate
+    (patching it changes the result) and the shared predicate must be called
+    with the caller's settings.
+    """
+
+    def test_delegates_to_shared_predicate(self) -> None:
+        settings = {"product_analytics": {"level": "all"}}
+        with patch.object(metrics_ingest, "is_org_consenting", return_value=True) as mock_shared:
+            result = metrics_ingest._consent_active(settings)
+        assert result is True
+        mock_shared.assert_called_once_with(settings)
+
+    def test_return_value_follows_shared_predicate(self) -> None:
+        # With the old local reader this would return True for level="all"
+        # despite the shared predicate being patched to deny consent.
+        settings = {"product_analytics": {"level": "all"}}
+        with patch.object(metrics_ingest, "is_org_consenting", return_value=False):
+            result = metrics_ingest._consent_active(settings)
+        assert result is False
 
 
 class TestBatchSizeLimit:

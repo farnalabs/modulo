@@ -60,6 +60,23 @@ async function mockSettingsMcpApi(page: Page) {
       body: JSON.stringify([]),
     })
   })
+
+  // The registration picker's scope vocabulary comes from the backend
+  // (GET /api/v1/mcp/oauth/scopes) - intercept it like the rest of the
+  // surface, otherwise the request falls through to the local mock-API
+  // catch-all and the picker renders its load-error state.
+  await page.route('**/api/v1/mcp/oauth/scopes', async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { key: 'run.trigger', min_role: 'runner' },
+        { key: 'hitl.review', min_role: 'operator' },
+        { key: 'hitl.approve', min_role: 'operator' },
+        { key: 'resource.read_only', min_role: 'viewer' },
+      ]),
+    })
+  })
 }
 
 /** The OAuth client list, with stateful POST / DELETE handling. */
@@ -135,7 +152,7 @@ test.describe('Settings MCP OAuth clients', { tag: '@regression' }, () => {
 
     await page.getByTestId('settings-mcp-oauth-name').fill('E2E OAuth Client')
     await page.getByTestId('settings-mcp-oauth-redirect-uris').fill('https://example.com/callback')
-    await page.getByTestId('settings-mcp-oauth-scope-trigger-run').check()
+    await page.getByTestId('settings-mcp-oauth-scope-run-trigger').check()
 
     const registerDialog = page
       .locator('[role="dialog"]')

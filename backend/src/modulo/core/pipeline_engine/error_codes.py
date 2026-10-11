@@ -67,6 +67,9 @@ _CODE_SANDBOX_QUEUE_TIMEOUT = "sandbox.queue_timeout"
 # FAR-510: the finalize-time downgrade code for a sandbox_agent node whose
 # synthetic failure envelope was masked as a completed output.
 _CODE_SANDBOX_AGENT_FAILED = "sandbox.agent_failed"
+# Retryable code for a sandbox session that died leaving no output JSON
+# (session-lost / no-output stall family).
+_CODE_SANDBOX_NO_OUTPUT_JSON = "sandbox.no_output_json"
 # FAR-592 (D6): provision-time per-agent runner-binding resolution failure —
 # retryable config error; the D6 rollback trigger reads this code's rate.
 _CODE_SANDBOX_BINDING_RESOLUTION = "sandbox.binding_resolution"
@@ -359,7 +362,7 @@ ERROR_CODE_REGISTRY: dict[str, ErrorCodeSpec] = {
         ),
     ),
     # --- sandbox codes ---------------------------------------------------
-    "sandbox.no_output_json": ErrorCodeSpec(
+    _CODE_SANDBOX_NO_OUTPUT_JSON: ErrorCodeSpec(
         error_class="sandbox",
         retryable=True,
         alert_severity="warning",
@@ -805,7 +808,7 @@ LEGACY_ALIASES: dict[str, str] = {
     "OperationalError": "harness.db.connection_lost",
     "TypeError": "harness.state_serialization",
     "NodeCancelledError": "harness.sdk_task_cancelled",
-    "SandboxNodeFailedError": "sandbox.no_output_json",
+    "SandboxNodeFailedError": _CODE_SANDBOX_NO_OUTPUT_JSON,
     # FAR-296 Phase 4a: E2B concurrent-sandbox rate limits (429 / resource
     # exhausted) are transient. The executor's generic catch publishes the raw
     # exception class name (``SandboxRateLimitedError`` — our retryable wrapper,

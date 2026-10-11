@@ -1,10 +1,12 @@
 """DatadogConnector — async Datadog REST API connector (v1 + v2)."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any, cast
 
 import httpx
 
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import (
     ConnectorBase,
@@ -37,6 +39,9 @@ class DatadogConnector(ConnectorBase):
         self._base = base
         self._redactor = CredentialRedactor([api_key, app_key])
 
+    def _credential_values(self) -> Sequence[str]:
+        return self._redactor.secrets
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.DATADOG
@@ -51,8 +56,11 @@ class DatadogConnector(ConnectorBase):
                 "DD-APPLICATION-KEY": self._app_key,
             },
             timeout=30,
+            verify=egress_ssl_context(self),
         )
 
+    @redacting
+    # Defence-in-depth: health_check catches internally today; guards against a future escape.
     async def health_check(self) -> HealthResult:
         try:
             async with self._client() as c:
@@ -62,18 +70,18 @@ class DatadogConnector(ConnectorBase):
                 if resp.status_code == 403:
                     return HealthResult(ok=False, detail="Invalid Datadog API key")
                 return HealthResult(
-                    ok=False, detail=self._redactor.redact(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
                 )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
                 return HealthResult(ok=False, detail="Invalid Datadog API key")
             return HealthResult(
-                ok=False, detail=self._redactor.redact(f"HTTP {exc.response.status_code}: {exc.response.text[:200]}")
+                ok=False, detail=self._redacted_detail(f"HTTP {exc.response.status_code}: {exc.response.text}")[:200]
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(self._redactor.redact_exc(exc))
+            return health_check_failure(self._redactor.redact_exc(exc), self._redacted_detail)
 
     @redacting
     async def query(self, q: ConnectorQuery) -> ConnectorResult:

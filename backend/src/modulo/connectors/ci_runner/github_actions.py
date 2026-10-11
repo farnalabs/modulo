@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors._safe_page import safe_records as _safe_records
 from modulo.connectors.base import CIRun, CIRunLog, CIRunStatus, HealthResult
 from modulo.connectors.ci_runner.base import CIRunnerBase
@@ -17,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 _API_VERSION = "2022-11-28"
+
+#: Validation error raised when a run-dispatch call omits the pipeline id.
+_PIPELINE_ID_REQUIRED = "pipeline_id is required"
 
 #: Attempts to resolve a freshly-dispatched run through the latest-runs
 #: lookup. GitHub's runs listing is eventually consistent right after a
@@ -62,6 +67,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._token}",
@@ -74,7 +82,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
         # transport so the hardcoded api.github.com address is pinned onto the
         # connection (never re-resolved at connect time — closes DNS rebinding).
         # The token is in the Authorization header, so no creds reach the URL.
-        return pinned_async_client_sync(_GITHUB_API, base_url=_GITHUB_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _GITHUB_API, base_url=_GITHUB_API, headers=self._headers(), timeout=30, verify=egress_ssl_context(self)
+        )
 
     @staticmethod
     def _parse_duration_seconds(raw: dict[str, Any]) -> int | None:
@@ -136,10 +146,10 @@ class GitHubActionsCIRunner(CIRunnerBase):
             async with self._client() as client:
                 r = await client.get("/user")
                 if r.status_code != 200:
-                    return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+                    return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
                 return HealthResult(ok=True)
         except httpx.HTTPError as exc:
-            return HealthResult(ok=False, detail=f"HTTP error: {exc}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP error: {exc}")[:200])
 
     @staticmethod
     def _split_pipeline_id(pipeline_id: str) -> tuple[str, str]:
@@ -226,7 +236,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         variables: dict[str, str] | None = None,
     ) -> CIRun:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         owner_repo, workflow_filename = self._split_pipeline_id(pipeline_id)
 
         # Captured BEFORE the dispatch: the lower bound that keeps the
@@ -264,7 +274,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     f"check https://github.com/{owner_repo}/actions",
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -281,7 +293,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 r.raise_for_status()
                 return self._parse_run(r.json(), owner_repo=owner_repo)
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -307,7 +321,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     # different host; follow it through a fresh pinned client so
                     # the redirect target is validated+pinned too (never a bare
                     # unpinned egress), matching the primary client's SSRF gate.
-                    async with pinned_async_client_sync(location, timeout=30) as follow_client:
+                    async with pinned_async_client_sync(
+                        location, timeout=30, verify=egress_ssl_context(self)
+                    ) as follow_client:
                         r = await follow_client.get(location)
                     redirects += 1
                 if r.status_code == 202:
@@ -322,7 +338,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                     next_cursor=str(start_line + len(lines)) if cursor is not None else None,
                 )
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -333,7 +351,7 @@ class GitHubActionsCIRunner(CIRunnerBase):
         limit: int = 20,
     ) -> list[CIRun]:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         params: dict[str, Any] = {"per_page": limit}
         owner_repo = pipeline_id
         if pipeline_id.count("/") >= 2:
@@ -366,7 +384,9 @@ class GitHubActionsCIRunner(CIRunnerBase):
                 raw_runs = _safe_records(r.json(), "workflow_runs")
                 return [self._parse_run(run, owner_repo=owner_repo) for run in raw_runs]
         except httpx.HTTPStatusError as exc:
-            raise ValueError(f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}") from exc
+            raise ValueError(
+                self._redacted_detail(f"GitHub API error ({exc.response.status_code}): {exc.response.text}")[:200]
+            ) from exc
         except httpx.HTTPError as exc:
             raise ValueError(f"GitHub API connection error: {exc}") from exc
 
@@ -402,7 +422,7 @@ class _GitHubActionsTestDouble(CITestDoubleMixin, GitHubActionsCIRunner):
 
     def _double_trigger_id(self, pipeline_id: str) -> str:
         if not pipeline_id:
-            raise ValueError("pipeline_id is required")
+            raise ValueError(_PIPELINE_ID_REQUIRED)
         return f"{self._split_pipeline_id(pipeline_id)[0]}/{self._uuid.uuid4()}"
 
     def _double_listed_id(self, resolved: str) -> str:

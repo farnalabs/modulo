@@ -22,6 +22,8 @@ _MSG_DATABASE_NOT_AVAILABLE_RUN = "Database not available. Run migrations."
 _CODE_ROUTES_ADMIN_SYSTEM_CONFIG = "routes.admin_system_config"
 _MSG_DATABASE_ERROR_OCCURRED_PLEASE = "A database error occurred. Please try again later."
 
+_CODE_ADMIN_SYSTEM_CONFIG_ADMIN_SET_CONFIG = "admin_system_config.admin_set_config"
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +116,16 @@ async def admin_set_config(
     except asyncio.CancelledError:
         raise
     except IntegrityError:
-        logger.exception("admin_system_config.admin_set_config")
+        logger.exception(_CODE_ADMIN_SYSTEM_CONFIG_ADMIN_SET_CONFIG)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Resource already exists or constraint violation.",
         ) from None
     except ProgrammingError:
-        logger.exception("admin_system_config.admin_set_config")
+        logger.exception(_CODE_ADMIN_SYSTEM_CONFIG_ADMIN_SET_CONFIG)
         raise HTTPException(status_code=501, detail=_MSG_DATABASE_NOT_AVAILABLE_RUN) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "admin_system_config.admin_set_config")
+        raise_session_contract_error(exc, _CODE_ADMIN_SYSTEM_CONFIG_ADMIN_SET_CONFIG)
         logger.exception(_CODE_ROUTES_ADMIN_SYSTEM_CONFIG)
 
         raise HTTPException(

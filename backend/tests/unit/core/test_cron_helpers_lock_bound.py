@@ -127,6 +127,7 @@ class _OrgSession:
         self.rows_marker = rows_marker
         self.raise_on_update = raise_on_update
         self.info: dict[str, Any] = {}
+        self.rolled_back = False
         bind = MagicMock()
         bind.dialect.name = "postgresql"
         self._bind = bind
@@ -142,6 +143,15 @@ class _OrgSession:
 
     def begin(self) -> _Begin:
         return _Begin()
+
+    async def rollback(self) -> None:
+        """``AsyncSession.rollback()``.
+
+        The read-failed swallow calls this EXPLICITLY (FAR-1644/M3) before it
+        unwinds, so a clean ``begin()`` exit cannot commit a healthy
+        transaction while the counters are already disowned.
+        """
+        self.rolled_back = True
 
     async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
         sql = str(stmt)
@@ -314,6 +324,10 @@ class TestLockTimeoutContract:
         assert got == 0
         assert any("read failed" in message for message in caplog.messages)
         assert not any("org_lock_timeout" in message for message in caplog.messages)
+        # FAR-1644/M3: that path also decides the transaction outcome — it
+        # rolls back explicitly, because a clean ``begin()`` exit would COMMIT
+        # a healthy connection while the counts are unwound.
+        assert session.rolled_back
 
     async def test_cancelled_error_is_never_treated_as_a_lock_timeout(self) -> None:
         """``CancelledError`` is re-raised FIRST — never swallowed as a lock

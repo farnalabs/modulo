@@ -55,4 +55,4 @@ Feature: Team Membership Management
     And I am a member of team "design"
     When I request my profile
     Then the response lists my team memberships
-    And each membership includes team id, team name, and role
+    And each membership includes team id and role

@@ -1,5 +1,6 @@
 """Buildkite CI/CD connector — triggers and observes pipeline runs via the Buildkite REST API v2."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 
@@ -7,6 +8,7 @@ import httpx
 
 from modulo._types import _LIST_DICT_STR_ANY
 from modulo.connectors._ci_test_double import CITestDoubleMixin
+from modulo.connectors._egress import egress_ssl_context
 from modulo.connectors.base import (
     CIRun,
     CIRunLog,
@@ -61,6 +63,9 @@ class BuildkiteConnector(ConnectorBase):
     def __init__(self, token: str) -> None:
         self._token = token
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.BUILDKITE
@@ -72,7 +77,13 @@ class BuildkiteConnector(ConnectorBase):
         }
 
     def _client(self) -> httpx.AsyncClient:
-        return pinned_async_client_sync(_BUILDKITE_API, base_url=_BUILDKITE_API, headers=self._headers(), timeout=30)
+        return pinned_async_client_sync(
+            _BUILDKITE_API,
+            base_url=_BUILDKITE_API,
+            headers=self._headers(),
+            timeout=30,
+            verify=egress_ssl_context(self),
+        )
 
     def _parse_run(self, raw: dict[str, Any], org: str = "", pipeline_slug: str = "") -> CIRun:
         """Parse a build payload into a :class:`CIRun`.
@@ -118,11 +129,13 @@ class BuildkiteConnector(ConnectorBase):
                 return HealthResult(ok=True)
             if r.status_code in (401, 403):
                 return HealthResult(ok=False, detail="Authentication failed: invalid or expired token")
-            return HealthResult(ok=False, detail=f"HTTP {r.status_code}: {r.text[:200]}")
+            return HealthResult(ok=False, detail=self._redacted_detail(f"HTTP {r.status_code}: {r.text}")[:200])
         except httpx.HTTPStatusError as exc:
             return HealthResult(
                 ok=False,
-                detail=f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+                detail=self._redacted_detail(f"Buildkite API HTTP {exc.response.status_code}: {exc.response.text}")[
+                    :200
+                ],
             )
         except httpx.TimeoutException:
             return HealthResult(ok=False, detail="Buildkite API timeout")

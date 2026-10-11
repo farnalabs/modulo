@@ -9,7 +9,10 @@ below — previously two forked copies existed (``crud.run._sqlstate_of`` and
 (``55P03``) is here for the same reason: ``core.dispatch`` and
 ``core.run_admission`` both gate the hot ``runs`` row's lock bound on it, and
 two byte-identical private copies is exactly the drift this module prevents.
-Deliberately leaf (imports
+:func:`is_statement_timeout` (``57014``) is here for the same reason
+(FAR-1644): ``core.cron_helpers`` sets a ``statement_timeout`` bound and
+classified its own cancel with a private copy of both the SQLSTATE and the
+predicate. Deliberately leaf (imports
 nothing from modulo) so both consumers import it without a cycle; the model
 module (:mod:`modulo.db.models.run_node_outputs`) hosts other shared
 constants, but this is DB-layer, not schema — a sibling leaf keeps the
@@ -37,8 +40,10 @@ __all__ = [
     "LOCK_NOT_AVAILABLE_SQLSTATE",
     "MARKER_TXN_ABORTING_SQLSTATES",
     "SAVEPOINT_ROLLBACK_FAILURE_SQLSTATES",
+    "STATEMENT_TIMEOUT_SQLSTATE",
     "is_lock_abort",
     "is_row_lock_timeout",
+    "is_statement_timeout",
     "sqlstate_of",
 ]
 
@@ -57,6 +62,14 @@ DEADLOCK_DETECTED_SQLSTATE = "40P01"
 # retry/abort vocabularies above are shared.
 LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
+# SQLSTATE ``query_canceled``: what Postgres raises when a ``statement_timeout``
+# bound expires. Lives here for the same single-spelling reason as
+# ``LOCK_NOT_AVAILABLE_SQLSTATE`` above — the periodic-sweep reconcile path
+# (``core.cron_helpers``, FAR-1621) and the dual-write retry vocabulary below
+# both name it, and a private copy in each consumer is how a re-mapping would
+# silently diverge.
+STATEMENT_TIMEOUT_SQLSTATE = "57014"
+
 # The ONE bounded in-session retry of the new-table leg: ONLY the statement
 # timeout (57014) is genuinely savepoint-recoverable — the transaction-aborting
 # states (40001 serialization failure, 40P01 deadlock, 53300 connection
@@ -65,7 +78,7 @@ LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 # they go STRAIGHT to DualWriteError. Hard errors (42501 RLS, 23503 FK, 23505
 # unique) also fail immediately. Authoritative copy (the dual-write
 # orchestration deliberately does not mirror it).
-DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({"57014"})
+DUAL_WRITE_RETRYABLE_SQLSTATES = frozenset({STATEMENT_TIMEOUT_SQLSTATE})
 
 # SQLSTATEs whose failure aborts the WHOLE Postgres transaction (deadlock
 # 40P01, admin shutdown 57P01, crash shutdown 57P02, connection-loss 08xxx
@@ -208,3 +221,22 @@ def is_row_lock_timeout(exc: BaseException) -> bool:
     keep propagating.
     """
     return sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE
+
+
+def is_statement_timeout(exc: BaseException) -> bool:
+    """True when *exc* is a ``statement_timeout`` expiry (SQLSTATE 57014).
+
+    The single definition shared by every path that bounds statement
+    execution with a ``statement_timeout`` and then has to classify the
+    cancel: the periodic-sweep reconcile path (``core.cron_helpers``
+    ``_set_org_statement_timeout``, FAR-1621) and any future bound of the same
+    shape. Same split as :func:`is_row_lock_timeout` — one shared spelling of
+    the SQLSTATE plus one shared predicate, so a re-mapping cannot diverge
+    between the setter and the classifier.
+
+    :func:`sqlstate_of` walks the whole exception chain (``.orig``/
+    ``__cause__``/``__context__``, incl. savepoint-rollback wrappers), so both
+    a raw asyncpg ``QueryCanceledError`` and a SQLAlchemy ``OperationalError``
+    wrapping it are recognised — dialect-tolerant, no exception-class import.
+    """
+    return sqlstate_of(exc) == STATEMENT_TIMEOUT_SQLSTATE

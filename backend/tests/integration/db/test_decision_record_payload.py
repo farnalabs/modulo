@@ -2,8 +2,10 @@
 
 Runs against a real Postgres (testcontainers) via the integration session
 fixtures.  Verifies the six payload columns (C8), the CHECK constraint on
-``resolved_action`` (C9), the temporary unique index
-``ix_tmp_policy_gate_decisions_run_gate_result`` (C10), and real-asyncpg
+``resolved_action`` (C9), the permanent event-identity partial unique index
+``uq_policy_gate_decisions_eval_result_id`` (C10, FAR-1108 chunk 8b — it
+replaced chunk 4's temporary ``ix_tmp_policy_gate_decisions_run_gate_result``),
+and real-asyncpg
 IntegrityError constraint metadata for ``is_policy_gate_decision_fk_error``
 (C16).
 
@@ -253,21 +255,30 @@ class TestC9ResolvedActionCheck:
 
 
 # ---------------------------------------------------------------------------
-# C10: temporary uniqueness index behaviour
+# C10: permanent event-identity uniqueness index behaviour
 # ---------------------------------------------------------------------------
 
 
-class TestC10TemporaryUniquenessIndex:
+class TestC10EventIdentityUniquenessIndex:
     @pytest.mark.asyncio
-    async def test_index_present_and_unique(self, db_engine: AsyncEngine) -> None:
+    async def test_permanent_index_present_and_unique(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as connection:
             indexes = await connection.run_sync(
                 lambda conn: {ix["name"]: ix for ix in inspect(conn).get_indexes("policy_gate_decisions")}
             )
-        assert "ix_tmp_policy_gate_decisions_run_gate_result" in indexes
-        assert indexes["ix_tmp_policy_gate_decisions_run_gate_result"]["unique"] is True
-        cols = indexes["ix_tmp_policy_gate_decisions_run_gate_result"]["column_names"]
-        assert cols == ["run_id", "policy_gate_id", "eval_result_id"]
+        assert "uq_policy_gate_decisions_eval_result_id" in indexes
+        assert indexes["uq_policy_gate_decisions_eval_result_id"]["unique"] is True
+        cols = indexes["uq_policy_gate_decisions_eval_result_id"]["column_names"]
+        assert cols == ["eval_result_id"]
+
+    @pytest.mark.asyncio
+    async def test_temporary_bridge_index_is_gone(self, db_engine: AsyncEngine) -> None:
+        """FAR-1108 chunk 8b replaced chunk 4's temporary bridge index."""
+        async with db_engine.connect() as connection:
+            indexes = await connection.run_sync(
+                lambda conn: {ix["name"] for ix in inspect(conn).get_indexes("policy_gate_decisions")}
+            )
+        assert "ix_tmp_policy_gate_decisions_run_gate_result" not in indexes
 
     @pytest.mark.asyncio
     async def test_identical_run_gate_result_rejected(self, db_engine: AsyncEngine) -> None:
