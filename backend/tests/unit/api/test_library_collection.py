@@ -355,6 +355,25 @@ class TestPublishCollectionEndpoint:
         data = resp.json()
         assert data["status"] == "published"
 
+    def test_publish_back_propagates_update_notification(self, client: TestClient) -> None:
+        """FAR-759: publishing fires the existing update-notification machinery."""
+        mock_prim = _make_collection_primitive(manifest_pins=[{"slug": "my-schema", "version": "1.0"}])
+        pinned = _make_collection_pin_primitive("my-schema", "1.0", primitive_type="schema")
+        with (
+            patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim),
+            patch("modulo.api.routes.library._lookup_pin_primitive", new_callable=AsyncMock, return_value=pinned),
+            patch(
+                "modulo.api.routes.library.notify_importers_of_update",
+                new_callable=AsyncMock,
+            ) as notify,
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{mock_prim.id}/publish",
+            )
+        assert resp.status_code == 200
+        notify.assert_awaited_once()
+        assert notify.await_args.args[2] == mock_prim.id
+
     def test_publish_empty_manifest_rejected(self, client: TestClient) -> None:
         mock_prim = _make_collection_primitive(manifest_pins=[])
         with patch("modulo.api.routes.library.get_primitive", new_callable=AsyncMock, return_value=mock_prim):
@@ -728,6 +747,16 @@ def _make_install_record(
     return rec
 
 
+def _patch_no_newer_version():
+    """FAR-759: install responses surface update-available via
+    ``find_newer_version`` — stub "no update" for route-shape tests."""
+    return patch(
+        "modulo.api.routes.library.find_newer_version",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+
+
 class TestInstallCollectionEndpoint:
     def test_install_success(self, client: TestClient) -> None:
         mock_install = _make_install_record()
@@ -742,6 +771,7 @@ class TestInstallCollectionEndpoint:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            _patch_no_newer_version(),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
@@ -787,6 +817,7 @@ class TestInstallCollectionEndpoint:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            _patch_no_newer_version(),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
@@ -1030,10 +1061,13 @@ class TestListCollectionInstallsEndpoint:
 class TestGetCollectionInstallEndpoint:
     def test_get_install_success(self, client: TestClient) -> None:
         mock_install = _make_install_record()
-        with patch(
-            "modulo.api.routes.library.compute_runnable",
-            new_callable=AsyncMock,
-            return_value=True,
+        with (
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            _patch_no_newer_version(),
         ):
             client.mock_session.get = AsyncMock(return_value=mock_install)
             resp = client.get(
@@ -1043,6 +1077,7 @@ class TestGetCollectionInstallEndpoint:
         data = resp.json()
         assert data["install_id"] == str(mock_install.install_id)
         assert data["runnable"] is True
+        assert data["update_available"] is False
 
     def test_get_install_not_found(self, client: TestClient) -> None:
         client.mock_session.get = AsyncMock(return_value=None)
@@ -1212,6 +1247,8 @@ class TestInstallCollectionService:
 
             pin = MagicMock()
             pin.primitive_type = "schema"
+            pin.slug = "my-schema"
+            pin.version = "1.0"
             pin.content_json = {}
 
             no_existing = MagicMock()
@@ -1255,6 +1292,10 @@ class TestInstallCollectionService:
             "agents": {},
             "pipeline_id": None,
             "warnings": [],
+            # FAR-759: install-time upgrade snapshot.
+            "pins": [{"slug": "my-schema", "version": "1.0", "primitive_type": "schema"}],
+            "pin_entity_ids": {},
+            "entity_fingerprints": {},
         }
         assert not install.connector_checklist
         assert not install.installed_entities
@@ -1442,6 +1483,7 @@ class TestGrantCollectionAgentsEndpoint:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            _patch_no_newer_version(),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_install.collection_id}/installs/{mock_install.install_id}/grant",
@@ -1520,6 +1562,7 @@ class TestGrantCollectionAgentsEndpoint:
                 new_callable=AsyncMock,
                 return_value=True,
             ),
+            _patch_no_newer_version(),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{mock_install.collection_id}/install",
@@ -1530,6 +1573,298 @@ class TestGrantCollectionAgentsEndpoint:
         assert "agents_granted" in data
         assert data["community_sourced"] is True
         assert data["agents_granted"] is True
+
+
+# ---------------------------------------------------------------------------
+# Route: POST /collections/{id}/versions + update/upgrade flow (FAR-759)
+# ---------------------------------------------------------------------------
+
+
+def _make_published_collection(
+    *,
+    prim_id: uuid.UUID | None = None,
+    version: str = "1.0",
+    status: str = "published",
+    org_id: uuid.UUID | None = None,
+    version_group_id: uuid.UUID | None = None,
+) -> MagicMock:
+    prim = MagicMock()
+    prim.id = prim_id or uuid.uuid4()
+    prim.organisation_id = org_id or _ORG_ID
+    prim.primitive_type = "library_collection"
+    prim.status = status
+    prim.version = version
+    prim.version_group_id = version_group_id
+    prim.slug = "my-collection"
+    prim.name = "My Collection"
+    prim.description = "desc"
+    prim.author = "test"
+    prim.tags = []
+    prim.content_json = {"pins": []}
+    prim.manifest_pins = [{"slug": "my-schema", "version": "1.0"}]
+    prim.owner_team_id = None
+    prim.visibility = "org"
+    prim.account_id = _USER_ID
+    prim.auto_update = True
+    prim.tier = "native"
+    prim.created_at = _NOW
+    prim.updated_at = _NOW
+    prim.trust_header = None
+    return prim
+
+
+def _no_rows_execute_result() -> MagicMock:
+    res = MagicMock()
+    scalars = MagicMock()
+    scalars.first = MagicMock(return_value=None)
+    res.scalars = MagicMock(return_value=scalars)
+    return res
+
+
+class TestCreateCollectionVersionEndpoint:
+    def test_version_bump_creates_draft_linked_by_group(self, client: TestClient) -> None:
+        coll = _make_published_collection(version_group_id=None)
+        mock_session = client.mock_session
+        mock_session.execute = AsyncMock(return_value=_no_rows_execute_result())
+
+        def _stamp_added_row(*_args: object, **_kwargs: object) -> None:
+            # Real flush would let the DB server-defaults fill id/timestamps;
+            # the mock has no DB, so stamp them the way a flush would.
+            row = mock_session.add.call_args.args[0]
+            row.id = uuid.uuid4()
+            row.created_at = _NOW
+            row.updated_at = _NOW
+
+        mock_session.flush = AsyncMock(side_effect=_stamp_added_row)
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=coll,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{coll.id}/versions")
+        assert resp.status_code == 201, resp.text
+        data = resp.json()
+        assert data["version"] == "1.1"
+        assert data["status"] == "draft"
+        assert data["slug"] == "my-collection"
+        # The version group is seeded onto the existing row and copied onto
+        # the new draft so detection can find the pair.
+        assert coll.version_group_id == coll.id
+        mock_session.add.assert_called_once()
+        added = mock_session.add.call_args.args[0]
+        assert added.version == "1.1"
+        assert added.status == "draft"
+        assert added.version_group_id == coll.id
+
+    def test_version_not_found(self, client: TestClient) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/versions")
+        assert resp.status_code == 404
+
+    def test_version_rejects_non_collection(self, client: TestClient) -> None:
+        prim = _make_published_collection()
+        prim.primitive_type = "schema"
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{prim.id}/versions")
+        assert resp.status_code == 400
+
+    def test_version_rejects_cross_org_row(self, client: TestClient) -> None:
+        prim = _make_published_collection(org_id=uuid.uuid4())
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{prim.id}/versions")
+        assert resp.status_code == 400
+
+    def test_version_rejects_draft_collection(self, client: TestClient) -> None:
+        prim = _make_published_collection(status="draft")
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=prim,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{prim.id}/versions")
+        assert resp.status_code == 400
+
+    def test_version_rejects_existing_draft_sibling(self, client: TestClient) -> None:
+        coll = _make_published_collection()
+        draft_sibling = MagicMock()
+        res = MagicMock()
+        scalars = MagicMock()
+        scalars.first = MagicMock(return_value=draft_sibling)
+        res.scalars = MagicMock(return_value=scalars)
+        client.mock_session.execute = AsyncMock(return_value=res)
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=coll,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{coll.id}/versions")
+        assert resp.status_code == 409
+
+    def test_version_runner_denied(self, runner_client: TestClient) -> None:
+        resp = runner_client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/versions")
+        assert resp.status_code == 403
+
+
+class TestGetCollectionUpdateEndpoint:
+    def test_update_available_with_delta(self, client: TestClient) -> None:
+        install_id = uuid.uuid4()
+        coll_id = uuid.uuid4()
+        report = {
+            "update_available": True,
+            "current_version": "1.0",
+            "available_version": "1.1",
+            "available_version_id": uuid.uuid4(),
+            "delta": {
+                "schemas": [
+                    {
+                        "entity_type": "schema",
+                        "slug": "s1",
+                        "from_version": "1.0",
+                        "to_version": "1.1",
+                        "change": "changed",
+                        "action": "upgrade",
+                        "entities": [{"entity_type": "schema", "entity_id": uuid.uuid4(), "modified": False}],
+                    }
+                ],
+                "agents": [],
+                "pipelines": [],
+            },
+            "warnings": [],
+        }
+        with patch(
+            "modulo.api.routes.library.detect_collection_update",
+            new_callable=AsyncMock,
+            return_value=report,
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{coll_id}/installs/{install_id}/update",
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["update_available"] is True
+        assert data["current_version"] == "1.0"
+        assert data["available_version"] == "1.1"
+        assert data["delta"]["schemas"][0]["change"] == "changed"
+        assert data["delta"]["schemas"][0]["action"] == "upgrade"
+
+    def test_no_update(self, client: TestClient) -> None:
+        report = {
+            "update_available": False,
+            "current_version": "1.0",
+            "available_version": None,
+            "available_version_id": None,
+            "delta": None,
+            "warnings": [],
+        }
+        with patch(
+            "modulo.api.routes.library.detect_collection_update",
+            new_callable=AsyncMock,
+            return_value=report,
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/update",
+            )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["update_available"] is False
+        assert data["delta"] is None
+
+    def test_update_unknown_install_404(self, client: TestClient) -> None:
+        from modulo.core.library_service.upgrade import UpgradeInstallNotFoundError
+
+        with patch(
+            "modulo.api.routes.library.detect_collection_update",
+            new_callable=AsyncMock,
+            side_effect=UpgradeInstallNotFoundError("nope"),
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/update",
+            )
+        assert resp.status_code == 404
+
+
+class TestUpgradeCollectionEndpoint:
+    def test_upgrade_success(self, client: TestClient) -> None:
+        report = {
+            "install_id": str(uuid.uuid4()),
+            "from_version": "1.0",
+            "to_version": "1.1",
+            "reconciled": [{"slug": "s1", "entity_type": "schema", "entity_id": str(uuid.uuid4())}],
+            "preserved": [{"slug": "s2", "entity_type": "schema", "entity_id": str(uuid.uuid4())}],
+            "reported": [],
+            "warnings": [],
+        }
+        with patch(
+            "modulo.api.routes.library.upgrade_collection",
+            new_callable=AsyncMock,
+            return_value=report,
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["from_version"] == "1.0"
+        assert data["to_version"] == "1.1"
+        assert len(data["reconciled"]) == 1
+        assert data["preserved"][0]["slug"] == "s2"
+
+    def test_upgrade_no_update_409(self, client: TestClient) -> None:
+        from modulo.core.library_service.upgrade import NoUpdateAvailableError
+
+        with patch(
+            "modulo.api.routes.library.upgrade_collection",
+            new_callable=AsyncMock,
+            side_effect=NoUpdateAvailableError("already current"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+            )
+        assert resp.status_code == 409
+
+    def test_upgrade_unknown_install_404(self, client: TestClient) -> None:
+        from modulo.core.library_service.upgrade import UpgradeInstallNotFoundError
+
+        with patch(
+            "modulo.api.routes.library.upgrade_collection",
+            new_callable=AsyncMock,
+            side_effect=UpgradeInstallNotFoundError("nope"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+            )
+        assert resp.status_code == 404
+
+    def test_upgrade_generic_error_400(self, client: TestClient) -> None:
+        from modulo.core.library_service.upgrade import CollectionUpgradeError
+
+        with patch(
+            "modulo.api.routes.library.upgrade_collection",
+            new_callable=AsyncMock,
+            side_effect=CollectionUpgradeError("bad"),
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+            )
+        assert resp.status_code == 400
+
+    def test_upgrade_runner_denied(self, runner_client: TestClient) -> None:
+        resp = runner_client.post(
+            f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+        )
+        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
