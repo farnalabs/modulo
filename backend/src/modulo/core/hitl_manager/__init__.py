@@ -43,6 +43,7 @@ from modulo.auth.jwt import create_claim_token as _create_claim_jwt
 from modulo.auth.jwt import decode_claim_token as _decode_claim_jwt
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.hitl_manager.sweep_alarm import maybe_alarm_approve_sweep
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import unpark_parked_run
 from modulo.db.models.hitl_claim import HitlClaim
 from modulo.db.models.run import HITL_ACTIONABLE_RUN_STATUSES, HITL_CLAIMABLE_RUN_STATUSES, Run
@@ -336,6 +337,17 @@ class HITLManager:
         """
         if expiry_minutes <= 0:
             raise HITLError(f"expiry_minutes must be positive, got {expiry_minutes}")
+
+        # FAR-1610 lock bound: a claim is a REQUEST path, and this method's
+        # first lock is either the team-scope ``FOR UPDATE`` below or the claim
+        # UPDATE. Issue the transaction-scoped bound BEFORE either, in the
+        # caller's transaction — it also covers the caller's subsequent
+        # ``transition_run`` (runs row) write in the SAME transaction
+        # (``api.routes.hitl.claim_review``), whose caller-side bound lives here
+        # because the shared ``transition_run`` stays unbounded (FAR-1601). A
+        # contended row surfaces as a bounded 55P03 the route maps to a visible
+        # error, never an unbounded wait.
+        await set_mutation_row_lock_timeout(session)
 
         now = datetime.now(UTC)
 
@@ -1013,6 +1025,15 @@ class HITLManager:
         Raises on missing token, expired token, decided gate, or a
         malformed/foreign-stamped payload.
         """
+        # FAR-1610 lock bound: the decide path is a REQUEST path. Issue the
+        # transaction-scoped bound at the TOP, before this method's first lock
+        # (the HitlClaim decision UPDATE below), in the caller's transaction —
+        # it therefore also bounds the subsequent ``unpark_parked_run`` write on
+        # the hot ``runs`` row (``db.crud.run`` stays unbounded — FAR-1601). A
+        # contended row surfaces as a bounded 55P03 the caller maps to a
+        # visible error; the whole decision transaction rolls back together, so
+        # the decision and the un-park are never half-applied.
+        await set_mutation_row_lock_timeout(session)
         now = datetime.now(UTC)
 
         # FAR-541 (iteration 3): stamp authority. A payload without a stamp is

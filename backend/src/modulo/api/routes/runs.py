@@ -88,6 +88,7 @@ from modulo.db.crud.node_observation import observe_node
 from modulo.db.crud.observability import get_otel_config
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
+from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
     WorkItemRefsRequiredError,
     count_active_runs_for_org,
@@ -1698,7 +1699,18 @@ async def _cancel_run(session: AsyncSession, principal: TenantPrincipal, run_id:
     running run cancelled cross-process is routed through finalize_cost,
     re-reading the STORED cumulative sets; a NEVER-PAUSED in-flight run has none
     and forfeits its accrued cost (cost_components_partial_spend_lost log).
+
+    FAR-1610 lock bound: this is a REQUEST path on the hot ``runs`` row, and the
+    FIRST lock in the caller's transaction is ``request_cancellation``'s
+    ``SELECT ... FOR UPDATE`` below (``get_run`` is a plain read). The bound is
+    issued HERE — the caller of the shared ``request_cancellation`` — before
+    that lock, so a contended row surfaces as a bounded 55P03 the route maps to
+    a visible 409 rather than an unbounded wait. It is transaction-scoped, so
+    it also bounds the ``finalize_cancelled_run`` write that follows. (Bounding
+    inside the shared CRUD function instead would let a broad ``except
+    Exception`` caller swallow the 55P03 into a silent lost write — FAR-1601.)
     """
+    await set_mutation_row_lock_timeout(session)
     run = await get_run(session, run_id, organisation_id=principal.organisation_id)
 
     if run is None:
@@ -1763,15 +1775,14 @@ async def cancel_run(
     except SQLAlchemyError as exc:
         raise_session_contract_error(exc, _CODE_RUNS_CANCEL_RUN)
         if sqlstate_of(exc) == LOCK_NOT_AVAILABLE_SQLSTATE:
-            # FAR-1642: ``_cancel_run`` finalises cost, which takes the bounded
-            # finalisation row locks (``set_mutation_row_lock_timeout`` +
-            # ``FOR UPDATE``). When that bound fires the DB is healthy — the
-            # cancel simply could not take the lock. Map it to the SAME 409 the
-            # shared ``handle_db_errors`` classifier gives every other bounded
-            # lock timeout (and the route-local precedent in
-            # ``product_analytics_identity``), never the retry-inviting generic
-            # 503 below. The comment stays here rather than on the except arm so
-            # the WHY is next to the mapping.
+            # FAR-1610: the transaction-scoped bound
+            # (``mutation_row_lock_timeout_ms``) on the hot ``runs`` row — taken
+            # first by ``request_cancellation``'s ``SELECT ... FOR UPDATE`` and
+            # also bounding ``finalize_cancelled_run``'s write (FAR-1642) —
+            # expired (55P03). The DB is healthy and another change holds the
+            # row, so answer 409, never the retry-inviting 503 the rest of this
+            # arm returns (mirrors api.db_error_handling /
+            # product_analytics_identity).
             _log.warning("runs.cancel_run.lock_timeout")
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
