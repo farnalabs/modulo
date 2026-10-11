@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,20 @@ def _render_policy_gate_change(entry: dict[str, Any], *, scope: str | None) -> s
     return f"gate {verb} pipeline {scope!r} node {entry.get('node')} ({detail})"
 
 
+def _render_policy_gate_changes(entries: Iterable[dict[str, Any]], *, scope: str | None = None) -> list[str]:
+    """Render every node-attached policy-gate change for one report section.
+
+    ``scope`` pins the pipeline label for all entries (drift-detail mode, where
+    the section key is the pipeline); when omitted each entry carries its own
+    ``pipeline`` (apply-report mode). Keeps ``render_table`` under the
+    SonarCloud cognitive-complexity threshold by owning the per-entry loop.
+    """
+    return [
+        _render_policy_gate_change(entry, scope=scope if scope is not None else entry.get("pipeline"))
+        for entry in entries
+    ]
+
+
 def render_table(report: dict[str, Any]) -> str:
     """Human-friendly plan/apply/drift report rendering.
 
@@ -128,11 +143,9 @@ def render_table(report: dict[str, Any]) -> str:
         # FAR-1109: gate changes render as their own drift-detail line (the
         # node-level aggregate above cannot tell a gate change from any other
         # node modification).
-        lines.extend(_render_policy_gate_change(entry, scope=key) for entry in breakdown.get("policy_gates") or ())
+        lines.extend(_render_policy_gate_changes(breakdown.get("policy_gates") or (), scope=key))
     # FAR-1109: an APPLY report lists gate changes as a distinct change class.
-    lines.extend(
-        _render_policy_gate_change(entry, scope=entry.get("pipeline")) for entry in report.get("gate_changes") or ()
-    )
+    lines.extend(_render_policy_gate_changes(report.get("gate_changes") or ()))
     counts = {s: len(report.get(s, [])) for s in ("created", "updated", "unchanged", "blocked", "failed")}
     label = "drift summary" if drift_mode else "summary"
     lines.append(
