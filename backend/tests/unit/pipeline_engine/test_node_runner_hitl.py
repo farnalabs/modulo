@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from typing import Any, Self
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -19,6 +19,7 @@ from modulo.core.pipeline_engine.node_runner import (
     make_hitl_review_fn,
     make_manual_node_fn,
 )
+from modulo.core.run_context.autonomy import PIPELINE_EARNED_AT_START_KEY
 
 
 @pytest.fixture(autouse=True)
@@ -1748,6 +1749,224 @@ async def test_hitl_review_autonomy_telemetry_forwards_pipeline_id_on_fired_path
     kwargs = telemetry_mock.await_args.kwargs
     assert kwargs["gate_outcome"] == "fired"
     assert kwargs["pipeline_id"] == "pipe-1"
+
+
+# ---------------------------------------------------------------------------
+# FAR-1175 S1 — gate-time earned-autonomy live read
+#
+# The autonomy resolution above is unit-tested in isolation; this section
+# exercises the SEAM: make_hitl_review_fn reading the pipeline's live earned
+# level + the org's autonomy_gating flag at gate time, passing them into
+# resolution. The existing gate tests all construct make_hitl_review_fn with
+# session_factory=None, so the live read was never driven.
+# ---------------------------------------------------------------------------
+
+
+class _EarnedReadSession:
+    """Session double supporting ``async with factory() as s, s.begin():``."""
+
+    class _Begin:
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+    def begin(self) -> "_EarnedReadSession._Begin":
+        return _EarnedReadSession._Begin()
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+@asynccontextmanager
+async def _earned_session_factory() -> Any:
+    """A real (if in-memory) session factory — NOT None — so the gate's
+    ``read_live_earned_autonomy`` call executes its real body."""
+    yield _EarnedReadSession()
+
+
+class _StaticFlagRegistry:
+    """Feature-flag registry double returning a fixed value."""
+
+    def __init__(self, value: bool) -> None:
+        self.value = value
+
+    async def resolve_flag(self, _flag_name: str, org_id: Any = None, **_kwargs: Any) -> bool:
+        return self.value
+
+
+def _earned_pipeline(level: str | None) -> MagicMock:
+    pipeline = MagicMock()
+    pipeline.earned_autonomy_level = level
+    return pipeline
+
+
+def _wire_gate_live_read(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    live_level: str | None,
+    gating: bool,
+) -> AsyncMock:
+    """Patch the gate-time read seams; return the ``get_pipeline`` spy."""
+    get_pipeline = AsyncMock(return_value=_earned_pipeline(live_level))
+    monkeypatch.setattr("modulo.db.crud.pipeline.get_pipeline", get_pipeline)
+    monkeypatch.setattr("modulo.db.rls.set_rls_org", AsyncMock())
+    monkeypatch.setattr("modulo.db.rls.set_rls_execution_context", AsyncMock())
+    monkeypatch.setattr(
+        "modulo.core.feature_flags.get_registry",
+        lambda: _StaticFlagRegistry(gating),
+    )
+    # Keep the test hermetic — telemetry and the audit write are irrelevant here.
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "modulo.core.pipeline_engine.node_runner.emit_autonomy_clamp_telemetry",
+        AsyncMock(),
+    )
+    return get_pipeline
+
+
+class TestGateTimeEarnedAutonomyRead:
+    """FAR-1175 S1: the gate resolves against the LIVE earned level."""
+
+    async def test_live_demotion_bites_an_in_flight_run_at_the_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pipeline demoted to manual_approval while a fully_autonomous run
+        is mid-flight must make the run's NEXT gate fire — the live level
+        (lower) wins over the pinned-at-start level."""
+        get_pipeline = _wire_gate_live_read(monkeypatch, live_level="manual_approval", gating=True)
+        node_fn = make_hitl_review_fn(
+            {"review_id": "earned-demote", "human_only": False},
+            session_factory=_earned_session_factory,
+            org_id=uuid4(),
+        )
+
+        with pytest.raises(GraphInterrupt) as exc_info:
+            await node_fn(
+                {
+                    "artifacts": [],
+                    "_hitl_reviews": [],
+                    "_pipeline_id": uuid4(),
+                    "run_context": {
+                        "_pipeline_default_autonomy": "fully_autonomous",
+                        PIPELINE_EARNED_AT_START_KEY: "fully_autonomous",
+                    },
+                }
+            )
+
+        payload = exc_info.value.args[0][0].value
+        assert payload["autonomy_level"] == "manual_approval"
+        # The live read genuinely executed against the session factory.
+        get_pipeline.assert_awaited_once()
+
+    async def test_live_promotion_does_not_loosen_an_in_flight_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A promotion that lands mid-run must NOT apply to the in-flight run:
+        the run's pinned-at-start level still caps resolution, so the gate
+        fires. Without the pin the live fully_autonomous level would skip it."""
+        _wire_gate_live_read(monkeypatch, live_level="fully_autonomous", gating=True)
+        node_fn = make_hitl_review_fn(
+            {"review_id": "earned-promote", "human_only": False},
+            session_factory=_earned_session_factory,
+            org_id=uuid4(),
+        )
+
+        with pytest.raises(GraphInterrupt) as exc_info:
+            await node_fn(
+                {
+                    "artifacts": [],
+                    "_hitl_reviews": [],
+                    "_pipeline_id": uuid4(),
+                    "run_context": {
+                        "_pipeline_default_autonomy": "fully_autonomous",
+                        PIPELINE_EARNED_AT_START_KEY: "manual_approval",
+                    },
+                }
+            )
+
+        assert exc_info.value.args[0][0].value["autonomy_level"] == "manual_approval"
+
+    async def test_flag_off_short_circuits_the_live_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With autonomy_gating OFF (the default), the gate path must cost NO
+        extra per-gate SELECT: the flag is resolved first and the live read is
+        skipped entirely, leaving S0 behaviour byte-identical."""
+        read_mock = AsyncMock(return_value="manual_approval")
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.read_live_earned_autonomy",
+            read_mock,
+        )
+        flag_mock = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
+            flag_mock,
+        )
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+            AsyncMock(),
+        )
+        node_fn = make_hitl_review_fn(
+            {"review_id": "flag-off", "human_only": False},
+            session_factory=_earned_session_factory,
+            org_id=uuid4(),
+        )
+
+        result = await node_fn(
+            {
+                "artifacts": [],
+                "_pipeline_id": uuid4(),
+                "run_context": {
+                    "_pipeline_default_autonomy": "fully_autonomous",
+                    PIPELINE_EARNED_AT_START_KEY: "manual_approval",
+                },
+            }
+        )
+
+        # Flag OFF → the earned pin/live are ignored; the default skips the gate.
+        assert result["artifacts"][0]["status"] == "skipped"
+        flag_mock.assert_awaited_once()
+        read_mock.assert_not_awaited()
+
+    async def test_flag_on_drives_the_live_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Counterpart to the short-circuit: with the flag ON the live read is
+        awaited exactly once and its level feeds resolution."""
+        read_mock = AsyncMock(return_value="manual_approval")
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.read_live_earned_autonomy",
+            read_mock,
+        )
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.is_autonomy_gating_enabled",
+            AsyncMock(return_value=True),
+        )
+        monkeypatch.setattr(
+            "modulo.core.pipeline_engine.node_runner.emit_autonomy_telemetry",
+            AsyncMock(),
+        )
+        node_fn = make_hitl_review_fn(
+            {"review_id": "flag-on", "human_only": False},
+            session_factory=_earned_session_factory,
+            org_id=uuid4(),
+        )
+
+        with pytest.raises(GraphInterrupt) as exc_info:
+            await node_fn(
+                {
+                    "artifacts": [],
+                    "_hitl_reviews": [],
+                    "_pipeline_id": uuid4(),
+                    "run_context": {
+                        "_pipeline_default_autonomy": "fully_autonomous",
+                        PIPELINE_EARNED_AT_START_KEY: "fully_autonomous",
+                    },
+                }
+            )
+
+        read_mock.assert_awaited_once()
+        assert exc_info.value.args[0][0].value["autonomy_level"] == "manual_approval"
 
 
 class TestResolveSubjectParentAndKey:

@@ -40,6 +40,8 @@ Decision table (spec, keyed on status — never prose):
 | rejected        | ``excluded`` (FAR-1487 — a HITL reject ended the run; reason ``hitl_rejected``, or |
 |                 | ``hitl_superseded`` for a coalesced supersede — never a human "no") |
 | failed / eval_failed / stalled | ``no_delivery`` (COUNTABLE — infra/sandbox crash elevated to failed counts, PO) |
+|                 | UNLESS a per-pipeline benign signature matches (error_code, error_detail) → ``benign`` |
+|                 | (FAR-707 — business-expected, excluded from failure rates)                           |
 | complete        | ``delivered`` iff >= 1 valid ``pr_url`` OR any marker carries ``delivery_done`` (FAR-228 |
 |                 | email sentinel); else COUNTABLE ``no_delivery`` (empty-backlog, PO) |
 | (other terminal)| ``excluded`` FAIL-SAFE — a NEW terminal status added to ``TERMINAL_STATUSES``
@@ -141,6 +143,15 @@ REASON_HITL_SUPERSEDED = "hitl_superseded"
 REASON_DELIVERED = "pr_delivered"
 REASON_DELIVERED_EMAIL = "email_delivered"
 REASON_UNCLASSIFIED = "classifier_error"
+# FAR-707: a BUSINESS-EXPECTED terminal outcome. An explicit per-pipeline
+# benign signature (``pipelines.benign_signatures``) matched the run's
+# (error_code, error_detail) — e.g. the Merge Queue's "Rebase conflict" — so
+# the run is a correct, expected outcome rather than a failure. It keeps its
+# terminal ``status`` (nothing about the run row changes); only the
+# CLASSIFICATION record marks it, and every failure-rate reader keys off that
+# record. Opt-in per pipeline: a pipeline with no signatures classifies
+# byte-identically to the pre-FAR-707 behaviour.
+REASON_BENIGN = "benign_outcome"
 
 # --- delivery-signal provenance vocabulary (FAR-1336) -----------------------
 #
@@ -246,6 +257,122 @@ _COUNTABLE_NO_DELIVERY_STATUSES: frozenset[str] = frozenset({"failed", "eval_fai
 #: ``raw-status-complete`` semgrep rule's intent.
 _DELIVERABLE_STATUSES: frozenset[str] = frozenset({"complete"})
 
+# --- per-pipeline benign signatures (FAR-707) ------------------------------
+#
+# EXPLICIT configuration, never inference: an operator declares which terminal
+# failure shapes their pipeline is expected to produce, and the classifier
+# recognises exactly those. The config lives on the pipeline row
+# (``pipelines.benign_signatures``, migration 0296) and is read once per
+# terminalization.
+#
+# Shape (a JSON list; NULL / [] = no signatures = pre-FAR-707 behaviour):
+#
+#   [{"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+#    {"error_code": "agent.no_op"}]
+#
+# * ``error_code`` (str, REQUIRED) — exact match against ``runs.error_code``.
+#   Required so a signature can never be "match every failure".
+# * ``error_detail_contains`` (str, optional) — case-insensitive SUBSTRING
+#   match against ``runs.error_detail``. Absent/empty = any detail for that
+#   error code.
+#
+# Substring (not regex): signatures are operator-authored config, and a regex
+# here would be a ReDoS surface on the terminalization hot path for no gain —
+# the failure details being matched are short, stable, agent-reported strings.
+#
+# FAIL-OPEN TO THE OLD BEHAVIOUR: a malformed config (non-list, a non-dict
+# entry, a missing/non-string ``error_code``, or ANY key outside the accepted
+# pair — a typo'd ``detail_contains`` must never widen to "any detail")
+# contributes NO signature and the whole read is logged — a broken config must
+# never silently classify a real failure as benign.
+
+#: Accepted keys on one ``pipelines.benign_signatures`` entry.
+BENIGN_SIGNATURE_ERROR_CODE_KEY = "error_code"
+BENIGN_SIGNATURE_ERROR_DETAIL_KEY = "error_detail_contains"
+
+#: The COMPLETE accepted key set for one ``pipelines.benign_signatures``
+#: entry. An entry carrying ANY key outside this set is malformed — never
+#: normalised-and-kept. The hazard it prevents: an operator typo such as
+#: ``{"error_code": "agent.failed", "detail_contains": "rebase conflict"}``
+#: would otherwise silently lose its detail constraint (``error_detail_contains``
+#: absent = "any detail") and classify EVERY ``agent.failed`` failure on the
+#: pipeline as benign — a signature far broader than the one the operator
+#: believes they configured.
+BENIGN_SIGNATURE_KEYS = frozenset({BENIGN_SIGNATURE_ERROR_CODE_KEY, BENIGN_SIGNATURE_ERROR_DETAIL_KEY})
+
+#: A normalised signature — ``error_detail_contains`` is ALWAYS present
+#: (empty string = "any detail") so the matcher has one shape to walk.
+BenignSignature = dict[str, str]
+
+
+def normalize_benign_signatures(raw: Any) -> list[BenignSignature]:
+    """Validate a stored ``pipelines.benign_signatures`` value for matching.
+
+    Returns only the WELL-FORMED entries (an unusable entry is skipped, never
+    raised): classification runs inside a terminalization transaction, so a
+    config defect must degrade to "no benign outcomes" — the historical
+    counting — instead of breaking the terminal write. Callers that need the
+    defect surfaced should log the raw value; this function stays pure.
+
+    An entry carrying ANY key outside ``BENIGN_SIGNATURE_KEYS`` is malformed
+    (FAR-707 QA): a typo'd key is DROPPED, never silently widened to "match
+    any detail" — the broadening hazard the module comment documents.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[BenignSignature] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        if not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
+            # Unknown/typo'd key (e.g. "detail_contains"): the operator's
+            # intent is unknowable, so the entry is unusable — drop it.
+            continue
+        code = entry.get(BENIGN_SIGNATURE_ERROR_CODE_KEY)
+        if not isinstance(code, str) or not code.strip():
+            continue
+        detail = entry.get(BENIGN_SIGNATURE_ERROR_DETAIL_KEY)
+        if detail is None:
+            detail = ""
+        if not isinstance(detail, str):
+            continue
+        out.append(
+            {
+                BENIGN_SIGNATURE_ERROR_CODE_KEY: code.strip(),
+                BENIGN_SIGNATURE_ERROR_DETAIL_KEY: detail.strip(),
+            }
+        )
+    return out
+
+
+def matches_benign_signature(
+    signatures: Iterable[BenignSignature] | None,
+    *,
+    error_code: str | None,
+    error_detail: str | None,
+) -> bool:
+    """True when the run's (error_code, error_detail) matches a configured signature.
+
+    Exact code match + case-insensitive substring detail match; an empty
+    ``error_detail_contains`` matches any detail. An empty/absent error code
+    never matches (there is nothing to key on), and no signatures = no match.
+    """
+    if not signatures:
+        return False
+    code = (error_code or "").strip()
+    if not code:
+        return False
+    detail = error_detail or ""
+    detail_folded = detail.casefold()
+    for sig in signatures:
+        if sig.get(BENIGN_SIGNATURE_ERROR_CODE_KEY) != code:
+            continue
+        needle = sig.get(BENIGN_SIGNATURE_ERROR_DETAIL_KEY) or ""
+        if not needle or needle.casefold() in detail_folded:
+            return True
+    return False
+
+
 #: Hard statement timeout for the classification persist + sweep re-reads
 #: (FAR-188 precedent): a hung DB must never block terminalization indefinitely.
 #:
@@ -268,6 +395,14 @@ class RunClassificationValue(StrEnum):
     delivered = "delivered"
     no_delivery = "no_delivery"
     excluded = "excluded"
+    #: FAR-707 — a BUSINESS-EXPECTED terminal failure: an explicit per-pipeline
+    #: benign signature matched, so the run is a correct outcome, not a
+    #: failure. Distinct from ``excluded`` (an operator/HITL/budget stop that
+    #: never counted) and from ``no_delivery`` (a genuine failure that does
+    #: count): the run DID fail with a status of ``failed``-family, it just
+    #: was expected. Readers that compute failure rates must drop it from the
+    #: rate's denominator as well as its numerator.
+    benign = "benign"
     unclassified = "unclassified"
 
 
@@ -647,6 +782,8 @@ def classify_run(
     raw_output_markers: Any = None,
     work_intact: bool | None = None,
     cancel_reason: str | None = None,
+    error_detail: str | None = None,
+    benign_signatures: Iterable[BenignSignature] | None = None,
 ) -> ClassificationResult:
     """The decision table (FAR-189 spec §6) — pure and unit-testable.
 
@@ -664,6 +801,14 @@ def classify_run(
     ``cancel_reason`` (FAR-1257) refines ONLY the ``cancelled`` reason: a run
     the review-window terminalizer collected gets ``hitl_timeout`` instead of
     ``operator_or_hitl_cancelled``. The verdict stays ``excluded`` either way.
+
+    FAR-707 ``benign_signatures``: when supplied, a COUNTABLE-failure run whose
+    ``(error_code, error_detail)`` matches a signature classifies ``benign``
+    INSTEAD OF ``no_delivery`` — the deliberate, explicitly-configured escape
+    from the countable bucket. It is checked ONLY there: an ``excluded`` status
+    is already never counted, a ``delivered``/``complete`` run is never a
+    failure, and a non-terminal/guard status is not a business outcome at all,
+    so none of those branches may be re-routed by a signature.
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
@@ -702,6 +847,23 @@ def classify_run(
     # genuine delivery failure (the watched node AND its compensation path both
     # failed) — explicit reason, counted as no_delivery (never fail-safe).
     if status in _COUNTABLE_NO_DELIVERY_STATUSES:
+        # FAR-707 FIRST: an explicitly configured business-expected outcome
+        # (rebase conflict, superseded-by-design, empty-workload no-op, ...)
+        # classifies benign instead of counting as a failure. Checked before
+        # reason derivation because it REPLACES the countable verdict, not
+        # merely its reason label.
+        if matches_benign_signature(
+            benign_signatures,
+            error_code=error_code,
+            error_detail=error_detail,
+        ):
+            return ClassificationResult(
+                RunClassificationValue.benign,
+                REASON_BENIGN,
+                computed_at=computed_at,
+                work_intact=work_intact,
+                declared_success_nodes=declared_success_nodes,
+            )
         reason = (
             REASON_COMPENSATION_FAILED
             if status == "compensation_failed"
@@ -945,6 +1107,73 @@ async def persist_classification(
     return ok
 
 
+async def _load_benign_signatures(session: Any, run: Any) -> list[BenignSignature]:
+    """Read + validate this run's pipeline's benign signatures (FAR-707).
+
+    Read inside the caller's transaction (RLS org context is already set by
+    every classification call site), so a cross-org row simply does not resolve
+    and the run classifies as before.
+
+    Gated before the query: only a COUNTABLE-failure run carrying an error code
+    can possibly match a signature, so every ``complete`` / ``cancelled`` /
+    ``awaiting_human`` terminalization — the overwhelming majority — pays no
+    extra statement.
+
+    Best-effort and NEVER raises (cancellation excepted): a signature read
+    failure degrades to "no signatures" (the historical counting) with a log —
+    a config read must never be able to block or corrupt terminalization.
+    """
+    if getattr(run, "status", None) not in _COUNTABLE_NO_DELIVERY_STATUSES:
+        return []
+    if not (getattr(run, "error_code", None) or "").strip():
+        return []
+    pipeline_id = getattr(run, "pipeline_id", None)
+    org_id = getattr(run, "organisation_id", None)
+    if pipeline_id is None or org_id is None:
+        return []
+    try:
+        from sqlalchemy import select
+
+        from modulo.db.models.pipeline import Pipeline
+
+        raw = (
+            await session.execute(
+                select(Pipeline.benign_signatures).where(
+                    Pipeline.id == pipeline_id,
+                    Pipeline.organisation_id == org_id,
+                )
+            )
+        ).scalar_one_or_none()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.warning(
+            "classification.benign_signatures_read_failed run=%s pipeline=%s",
+            getattr(run, "id", None),
+            pipeline_id,
+            exc_info=True,
+        )
+        return []
+    signatures = normalize_benign_signatures(raw)
+    # Loud whenever the stored config is unusable in ANY way: a wholly
+    # malformed value, AND a partially malformed one (entries dropped by
+    # normalize — e.g. a typo'd ``detail_contains`` key). The old "only when
+    # nothing survived" condition hid a single typo'd entry sitting next to a
+    # valid one, which is exactly the defect most likely to reach production.
+    dropped = isinstance(raw, list) and len(signatures) != len(raw)
+    unusable = raw is not None and raw != [] and (not isinstance(raw, list) or dropped)
+    if unusable:
+        # An unusable stored config is an operator defect: loud in the log,
+        # but still fail-open (no benign outcomes from the bad entries).
+        _log.warning(
+            "classification.benign_signatures_malformed run=%s pipeline=%s raw=%r",
+            getattr(run, "id", None),
+            pipeline_id,
+            raw,
+        )
+    return signatures
+
+
 async def classify_and_persist_run(
     session: Any,
     run: Any,
@@ -978,6 +1207,10 @@ async def classify_and_persist_run(
         from modulo.db.crud.run_node_outputs import read_run_blobs
 
         blobs = await read_run_blobs(session, run_id=run.id, organisation_id=run.organisation_id)
+        # FAR-707: explicit per-pipeline business-expected outcomes. Read
+        # OUTSIDE ``asyncio.to_thread`` (it awaits) and passed in as data so
+        # the pure classifier stays DB-free.
+        benign_signatures = await _load_benign_signatures(session, run)
         result = await asyncio.to_thread(
             classify_run,
             run.status,
@@ -991,6 +1224,10 @@ async def classify_and_persist_run(
             # this resilient to stand-in run rows (tests, partial mocks) built
             # before the column existed.
             cancel_reason=getattr(run, "cancel_reason", None),
+            # FAR-707: the detail half of the (error_code, error_detail)
+            # signature match — also ``getattr``-defensive for stand-in rows.
+            error_detail=getattr(run, "error_detail", None),
+            benign_signatures=benign_signatures,
         )
     except asyncio.CancelledError:
         raise
@@ -1024,10 +1261,12 @@ async def _reconcile_classify_run(
 
     Runs in a fresh transaction under the org's RLS context; locks the row
     (``with_for_update``) so a concurrent re-terminalization serializes behind
-    the persist instead of racing it. Returns one of ``"classified"`` /
-    ``"unclassified"`` / ``"errors"`` (or ``"skipped"`` when the row is gone or
-    already classified) — matching ``reconcile_missing_classifications``'s
-    summary keys.
+    the persist instead of racing it. A ``benign`` verdict also re-records the
+    run's analytics fact in the same transaction (FAR-707 — the raw-SQL
+    terminalizers wrote that fact with ``benign=NULL`` BEFORE this sweep ran).
+    Returns one of ``"classified"`` / ``"unclassified"`` / ``"errors"`` (or
+    ``"skipped"`` when the row is gone or already classified) — matching
+    ``reconcile_missing_classifications``'s summary keys.
     """
     from sqlalchemy import select
 
@@ -1060,7 +1299,22 @@ async def _reconcile_classify_run(
                 value = str(fresh.run_classification.get("value") or RunClassificationValue.unclassified.value)
                 if value == RunClassificationValue.unclassified.value:
                     return "unclassified"
-                # delivered / no_delivery / excluded — any real record.
+                if value == RunClassificationValue.benign.value:
+                    # FAR-707: a raw-SQL terminalizer (cron_helpers /
+                    # saq_hooks / run_terminal_advance / pipeline_execution)
+                    # writes its ``run_daily_facts`` row BEFORE this sweep
+                    # classifies the run, so that fact carries ``benign=NULL``
+                    # — and NULL reads as "not benign", permanently inflating
+                    # the analytics failure rate. Re-record the fact in THIS
+                    # transaction now the verdict exists: the upsert stamps
+                    # ``benign=True`` via ``_fact_is_benign``. Fail-open
+                    # (``record_run_facts`` never raises): a facts failure
+                    # here leaves the NULL marker (historical counting) and
+                    # can never roll back the classification.
+                    from modulo.core.analytics import record_run_facts
+
+                    await record_run_facts(session, fresh)
+                # delivered / no_delivery / benign / excluded — any real record.
                 return "classified"
             return "errors"
     except asyncio.CancelledError:
@@ -1083,7 +1337,11 @@ async def reconcile_missing_classifications(
     directly (cron_helpers dispatcher_reconcile / stale-run sweeps, the SAQ
     task_failure writer, pipeline_execution) and for the crash-after-commit
     window. WIRED into ``cron_helpers.dispatcher_reconcile`` (every 60s) — this
-    is the periodic production path that closes the gap within a minute.
+    is the periodic production path that closes the gap within a minute. A
+    ``benign`` verdict additionally re-records the run's daily analytics fact
+    in the same per-run transaction (FAR-707) — those terminalizers wrote the
+    fact BEFORE the classification existed, so without the restamp the fact
+    would sit at ``benign=NULL`` forever and keep counting in the failure rate.
 
     TOCTOU-safe: the per-run re-read locks the row (``with_for_update``) and
     the persist is status-guarded (``expected_status``), so a stale verdict can

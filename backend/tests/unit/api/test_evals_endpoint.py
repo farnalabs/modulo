@@ -103,6 +103,30 @@ def admin_client() -> Generator[TestClient, None, None]:
 
 
 @pytest.fixture
+def operator_client() -> Generator[TestClient, None, None]:
+    """FAR-735: operators may create/update eval definitions."""
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="operator",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="operator",
+    )
+    mock_session = _make_mock_session()
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield mock_session
+
+    app.dependency_overrides[get_db_session] = override_session
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def runner_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
@@ -243,7 +267,40 @@ class TestCreateEvalDefinition:
         assert data["pass_threshold"] is None
         assert data["suite_id"] is None
 
-    def test_create_admin_required(self, runner_client: TestClient) -> None:
+    def test_create_operator_succeeds(self, operator_client: TestClient) -> None:
+        """FAR-735: operators may create eval definitions (admin no longer required)."""
+        mock_pipeline = MagicMock()
+        mock_pipeline.id = _PIPELINE_ID
+        mock_session = _make_mock_session()
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=mock_pipeline),  # pipeline ownership check
+        ]
+        mock_session.add = MagicMock()
+        mock_session.flush = AsyncMock()
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = operator_client.post(
+            self.URL,
+            json={
+                "pipeline_id": str(_PIPELINE_ID),
+                "name": "Op Eval",
+                "eval_type": "regex",
+                "config_json": {"pattern": r"\d+"},
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "Op Eval"
+        assert data["eval_type"] == "regex"
+
+    def test_create_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.post(
             self.URL,
             json={
@@ -642,7 +699,35 @@ class TestUpdateEvalDefinition:
         assert resp.status_code == 400
         assert "PolicyGate binding violation" in resp.json()["detail"]
 
-    def test_update_admin_required(self, runner_client: TestClient) -> None:
+    def test_update_operator_succeeds(self, operator_client: TestClient) -> None:
+        """FAR-735: operators may update eval definitions."""
+        mock_session = _make_mock_session()
+        eval_def = _make_eval_def(name="Original", pass_threshold=None, suite_id=None)
+        mock_session.execute.side_effect = [
+            _make_result(),  # require_permission authz_enforce (kill-switch) read
+            _make_result(scalar_value=None),  # set_rls_org
+            _make_result(scalar_value=None),  # set_rls_user_context (user_id)
+            _make_result(scalar_value=None),  # set_rls_user_context (org_role)
+            _make_result(scalar_one_value=eval_def),  # Eval lookup (chunk 3b: reads from evals)
+            _make_result(scalar_one_value=None),  # PolicyGate lookup for current failure_behaviour
+            _make_result(scalar_one_value=eval_def),  # create_or_update_eval: existing Eval lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: PolicyGate lookup
+            _make_result(scalar_one_value=None),  # create_or_update_eval: flush
+            _make_result(scalar_one_value=None),  # PolicyGate reload for response mapping
+        ]
+
+        async def override_session() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_session
+
+        app.dependency_overrides[get_db_session] = override_session
+        resp = operator_client.put(
+            f"{self.URL}/{_EVAL_DEF_ID}",
+            json={"name": "Op Update"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Op Update"
+
+    def test_update_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.put(f"{self.URL}/{_EVAL_DEF_ID}", json={"name": "Should Fail"})
         assert resp.status_code == 403
 
@@ -692,7 +777,12 @@ class TestDeleteEvalDefinition:
         resp = admin_client.delete(f"{self.URL}/{uuid.uuid4()}")
         assert resp.status_code == 404
 
-    def test_delete_admin_required(self, runner_client: TestClient) -> None:
+    def test_delete_operator_denied(self, operator_client: TestClient) -> None:
+        """FAR-735: DELETE is stricter than its registry floor — admins only."""
+        resp = operator_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
+        assert resp.status_code == 403
+
+    def test_delete_runner_denied(self, runner_client: TestClient) -> None:
         resp = runner_client.delete(f"{self.URL}/{_EVAL_DEF_ID}")
         assert resp.status_code == 403
 

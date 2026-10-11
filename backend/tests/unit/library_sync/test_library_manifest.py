@@ -4,6 +4,7 @@ serialisation, and parsing (FAR-363)."""
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 from tests.unit.library_sync.conftest import signed_manifest as _signed_manifest
@@ -60,6 +61,28 @@ class TestVerifyManifest:
     def test_fail_closed_without_root_key(self) -> None:
         manifest = {"schema_version": "1"}
         assert verify_manifest(manifest, "") is False
+
+    @pytest.mark.parametrize("kind", ["type-error", "value-error"], ids=["unserialisable-value", "circular-reference"])
+    def test_returns_false_when_canonicalisation_fails(self, keys: tuple[str, str], kind: str) -> None:
+        """A payload json.dumps cannot canonically serialise must fail closed.
+
+        The guard sits around ``canonical_manifest_bytes``: without it the
+        ``TypeError`` (an unserialisable value) or ``ValueError`` (a circular
+        reference) escapes ``verify_manifest``'s never-raises contract.
+        """
+        _, public_key = keys
+        manifest: dict[str, Any] = {
+            "schema_version": "1",
+            "entries": [],
+            "revoked": [],
+            "signature": {"algorithm": "ed25519", "value": "AA=="},
+        }
+        if kind == "type-error":
+            manifest["entries"] = [object()]  # not JSON-serialisable
+        else:
+            manifest["self"] = manifest  # circular reference
+
+        assert verify_manifest(manifest, public_key) is False
 
 
 class TestCanonicalManifestBytes:

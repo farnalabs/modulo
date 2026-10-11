@@ -20,6 +20,7 @@ from modulo.api.routes.pipelines import (
     HITL_DESCRIPTION_MIN_LENGTH,
     HitlReviewConfig,
     PipelineGraphNode,
+    PipelineUpdate,
     _resolve_graph_references,
 )
 from modulo.auth.dependencies import get_current_user
@@ -3035,3 +3036,78 @@ class TestCompositeValidation:
             },
         )
         assert any(i["code"] == "COMPOSITE_VALIDATION_REGEX_INVALID" for i in issues)
+
+
+class TestBenignSignaturesSurface:
+    """FAR-707 — the per-pipeline benign-signature config's wire surface.
+
+    Strict on the WRITE side (a typo cannot silently disable a signature the
+    operator believes is active) and normalising (the same strip the storage
+    reader applies) so what is stored is what the classifier matches.
+    """
+
+    def test_valid_signatures_round_trip(self) -> None:
+        req = PipelineUpdate.model_validate(
+            {
+                "benign_signatures": [
+                    {"error_code": "agent.failed", "error_detail_contains": "  rebase conflict "},
+                    {"error_code": "agent.no_op"},
+                ]
+            }
+        )
+        assert req.benign_signatures == [
+            {"error_code": "agent.failed", "error_detail_contains": "rebase conflict"},
+            {"error_code": "agent.no_op", "error_detail_contains": ""},
+        ]
+
+    def test_null_clears_the_signatures(self) -> None:
+        assert PipelineUpdate.model_validate({"benign_signatures": None}).benign_signatures is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not-a-list",
+            {"error_code": "agent.failed"},
+            [{"no_error_code": True}],
+            [{"error_code": ""}],
+            [{"error_code": "agent.failed", "error_detail_contains": 5}],
+            [{"error_code": None}],
+            ["not-a-dict"],
+            # FAR-707 QA: a typo'd detail key (or any unknown key) must 422 —
+            # accepting it would store the entry with its detail constraint
+            # silently lost, matching EVERY failure with that error_code.
+            [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}],
+            [{"error_code": "agent.failed", "match_type": "exact"}],
+            # ...even when it sits next to a fully valid entry.
+            [
+                {"error_code": "agent.no_op"},
+                {"error_code": "agent.failed", "detail_contains": "rebase conflict"},
+            ],
+        ],
+        ids=[
+            "not-a-list",
+            "dict-not-list",
+            "missing-error-code",
+            "empty-error-code",
+            "non-string-detail",
+            "null-error-code",
+            "not-a-dict-entry",
+            "typo'd-detail-key",
+            "unknown-extra-key",
+            "typo-next-to-valid-entry",
+        ],
+    )
+    def test_malformed_signatures_are_rejected_on_the_wire(self, payload: Any) -> None:
+        """422, never a silent drop: an entry the operator believes is active
+        must not vanish from the stored config."""
+        with pytest.raises(ValidationError):
+            PipelineUpdate.model_validate({"benign_signatures": payload})
+
+    def test_an_unknown_key_rejection_names_the_widening_hazard(self) -> None:
+        """The 422 for an unknown key is EXPLICIT (not the generic shape
+        message), so the operator learns why the key is rejected — an absent
+        ``error_detail_contains`` would match any detail for that code."""
+        with pytest.raises(ValidationError, match="accept ONLY the keys"):
+            PipelineUpdate.model_validate(
+                {"benign_signatures": [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}]}
+            )

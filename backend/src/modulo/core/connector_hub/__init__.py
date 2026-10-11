@@ -71,6 +71,7 @@ from modulo.connectors.opsgenie import OpsgenieConnector
 from modulo.connectors.pagerduty import PagerDutyConnector
 from modulo.connectors.pypi import PyPIConnector
 from modulo.connectors.rest import RestConnector, SecurityGuard
+from modulo.connectors.security import CredentialRedactor
 from modulo.connectors.sentry import SentryConnector
 from modulo.connectors.sharepoint import SharePointConnector
 from modulo.connectors.shell import ShellConnector
@@ -252,6 +253,13 @@ class ConnectorHub:
         # CancelledError), which abort the run instead. Callers persist a
         # degraded marker from this so operators can see broken connectors.
         self.skipped: dict[uuid.UUID, str] = {}
+        # Per-instance credential redactors built from the DECRYPTED creds dict
+        # (FAR-1651Fix3), kept for the lifetime of the last initialise() pass so
+        # health-sweep / skip-summary error text can be credential-scrubbed even
+        # when the exception carries reflected auth headers (basic-auth wire
+        # forms) that a bare ``str(exc)`` would leak. Cleared by close() and by
+        # each initialise() pass reset alongside skipped/healthy.
+        self._redactors: dict[uuid.UUID, CredentialRedactor] = {}
         # Instances successfully initialised during the last initialise() call
         # (FAR-495). The executor clears stale degraded markers for these so a
         # connector fixed via a config/plugin change stops being flagged
@@ -373,18 +381,46 @@ class ConnectorHub:
         self._connectors.clear()
         self._acls.clear()
         self.skipped.clear()
+        self._redactors.clear()
         self.healthy.clear()
         self._initialised = False
+
+    def credential_redactor_for(self, connector_id: uuid.UUID) -> CredentialRedactor | None:
+        """The redactor bound to a connector's decrypted creds for this initialise pass.
+
+        Returns ``None`` when no redactor exists (not initialised, out of
+        fetch scope, or the failure crossed the fail-closed propagations).
+        Callers of detail-building paths (`_record_skip`, the health sweep)
+        MUST redact any error text they persist through it — with a fallback
+        to a non-content-bearing placeholder when absent, since an unbound
+        summary is exactly the leak FAR-1651 closes.
+        """
+        return self._redactors.get(connector_id)
 
     def _record_skip(self, instance: ConnectorInstance, exc: Exception) -> None:
         """Record an instance that failed to initialise (FAR-495) so callers can persist a degraded marker.
 
-        The summary is NUL-stripped and truncated to 2000 chars: Postgres
-        rejects NUL bytes in SQL text (a NUL in any summary would fail the
+        The summary is credential-redacted through the connector's own
+        redactor when one was bound (FAR-1651Fix3): skip summaries are
+        persisted into ``connector_instances.last_health_check_error`` /
+        degraded markers, and initialisation failures can echo reflected auth
+        headers or config the raw creds derive.
+
+        Exceptions raised BEFORE the creds dict is parsed
+        (ConnectorDecryptError, secrets-backend timeouts, JSON decode errors)
+        are structurally credential-free — the redactor cannot be bound
+        because no plaintext existed — so a missing entry here is not a fail-open:
+        those exception types carry only the instance id.
+        The summary is then NUL-stripped and truncated to 2000 chars:
+        Postgres rejects NUL bytes in SQL text (a NUL in any summary would fail the
         whole batch UPDATE so NO instance gets marked), and 2000 matches the
         sibling ``last_health_check_error`` String(2000) column.
         """
-        summary = f"{type(exc).__name__}: {exc}"
+        redactor = self._redactors.get(instance.id)
+        if redactor is not None:
+            summary = f"{type(exc).__name__}: {redactor.redact(str(exc))}"
+        else:
+            summary = f"{type(exc).__name__}: {exc}"
         self.skipped[instance.id] = summary.replace("\x00", "")[:_SKIP_SUMMARY_LIMIT]
 
     async def initialise(
@@ -424,6 +460,7 @@ class ConnectorHub:
             # reference a caller captured.
             self.skipped.clear()
             self.healthy.clear()
+            self._redactors.clear()
             fetch_scope: set[str] | None = set(allowed_connectors) if allowed_connectors is not None else None
             for ci in instances:
                 if fetch_scope is not None and not _in_fetch_scope(ci, fetch_scope):
@@ -483,6 +520,15 @@ class ConnectorHub:
                     if not isinstance(parsed, dict):
                         raise ConnectorDecryptError(ci.id) from TypeError(f"Expected dict, got {type(parsed).__name__}")
                     creds: dict[str, Any] = parsed
+                    # FAR-1651Fix3: bind a redactor to the decrypted creds
+                    # BEFORE attempting the build. Exceptions raised below (in
+                    # _build_connector, e.g. a stem check that echoes
+                    # ``auth_target``) and any later health-sweep error on this
+                    # instance redact through the connector's own redactor —
+                    # the reflected-auth-header wire forms (_.basic b64) are
+                    # NOT covered by raw credential values, which is precisely
+                    # what _record_skip / the health sweep must scrub.
+                    self._redactors[ci.id] = CredentialRedactor.from_creds(creds)
                     connector = _build_connector(
                         ci.connector_type_id,
                         ci.config_json,

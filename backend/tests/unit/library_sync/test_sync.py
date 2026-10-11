@@ -8,8 +8,9 @@ SyncResult without raising, leaving the last-good cached manifest intact.
 
 from __future__ import annotations
 
+import logging
 import types
-from typing import Self
+from typing import Any, Self
 
 import pytest
 from sqlalchemy.exc import InvalidRequestError
@@ -89,9 +90,12 @@ class _FakeSession:
 
 
 class _FakeClient:
-    def __init__(self, manifest: dict | None, error: Exception | None = None) -> None:
+    def __init__(
+        self, manifest: dict | None, error: Exception | None = None, close_error: Exception | None = None
+    ) -> None:
         self.manifest = manifest
         self.error = error
+        self.close_error = close_error
         self.closed = False
 
     async def fetch_manifest(self) -> dict | None:
@@ -101,6 +105,27 @@ class _FakeClient:
 
     async def close(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _AwaitableInTransactionSession(_FakeSession):
+    """Session whose ``in_transaction()`` returns an AWAITABLE (sync.py:55).
+
+    Some session/driver combinations return a coroutine here. Every coroutine
+    is truthy, so the value must be AWAITED — a truthiness check alone would
+    always take the "txn active" branch and call ``execute()`` outside one.
+    """
+
+    def __init__(self, existing: LibrarySyncState | None = None, *, active_tx: bool = False) -> None:
+        super().__init__(existing=existing)
+        self._active_tx = active_tx
+
+    async def _resolve(self) -> bool:
+        return self._active_tx
+
+    def in_transaction(self) -> Any:
+        return self._resolve()
 
 
 class TestSyncLibrary:
@@ -214,6 +239,41 @@ class TestSyncLibrary:
         assert session.state is not None
         assert session.state.last_error == "unexpected sync failure"
 
+    async def test_raising_close_never_propagates(
+        self, keys: tuple[str, str], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``close()`` that raises is logged and swallowed on every path.
+
+        The teardown sits in ``finally`` OUTSIDE the ``except Exception``
+        block, so without its own guard a raising ``close()`` would replace the
+        body's exception (or discard its ``return``) and escape — breaking the
+        documented never-raises contract. Proves both the success and the
+        failure path return a ``SyncResult`` and that the failure is logged.
+        """
+        private_key, public_key = keys
+        good_manifest = _signed_manifest(private_key, entries=[{"id": "agent-1"}])
+        good_client = _FakeClient(manifest=good_manifest, close_error=RuntimeError("teardown failed"))
+        _install_client(monkeypatch, good_client, root_key=public_key)
+
+        with caplog.at_level(logging.ERROR, logger=sync_module._log.name):
+            ok = await sync_library(_FakeSession())
+
+        assert isinstance(ok, sync_module.SyncResult)
+        assert ok.success is True
+        assert ok.entries_count == 1
+        assert good_client.closed is True
+        assert "library_sync.client_close_failed" in caplog.messages
+
+        # Failure path: the body failed AND teardown failed — still no escape.
+        failing_client = _FakeClient(manifest=None, close_error=RuntimeError("teardown failed"))
+        _install_client(monkeypatch, failing_client)
+
+        failed = await sync_library(_FakeSession())
+
+        assert isinstance(failed, sync_module.SyncResult)
+        assert failed.success is False
+        assert failing_client.closed is True
+
 
 class TestCachedManifest:
     async def test_returns_none_when_no_state_stored(self) -> None:
@@ -235,6 +295,27 @@ class TestCachedManifest:
         assert await get_cached_manifest(session) == manifest
         # Still the same caller-owned transaction (no re-begin, no close).
         assert session._active_tx is True
+
+    async def test_in_transaction_result_may_be_awaitable(self) -> None:
+        """sync.py:55 — a coroutine from ``in_transaction()`` is awaited.
+
+        Every coroutine is truthy, so without the ``await`` the truthiness
+        check would always take the "txn active" branch: with no transaction
+        really open, ``_load_state``'s ``execute()`` then raises
+        ``InvalidRequestError`` (sessions are ``autobegin=False``) and the
+        manifest degrades to ``None`` instead of being returned.
+        """
+        manifest = {"schema_version": "1", "entries": [{"id": "agent-1"}]}
+        state = LibrarySyncState(id=SINGLETON_ID, manifest_json=manifest, catalog_json=[])
+
+        # Awaitable resolves False: no transaction open — must begin() its own.
+        outside = _AwaitableInTransactionSession(existing=state)
+        assert await get_cached_manifest(outside) == manifest
+
+        # Awaitable resolves True: reuse the caller's open transaction as-is.
+        inside = _AwaitableInTransactionSession(existing=state, active_tx=True)
+        assert await get_cached_manifest(inside) == manifest
+        assert inside._active_tx is True
 
     async def test_fail_open_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _explode(_session: object) -> LibrarySyncState:

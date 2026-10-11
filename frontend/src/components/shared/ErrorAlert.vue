@@ -7,9 +7,10 @@
     <button type="button"
       v-if="onRetry && retryable !== false"
       class="ml-2 underline"
+      data-testid="error-alert-retry"
       @click="onRetry"
     >
-      Retry
+      {{ $t('components.ErrorAlert.retry') }}
     </button>
     <button
       v-if="onDismiss && dismissLabel"

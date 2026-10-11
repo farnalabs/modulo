@@ -383,6 +383,72 @@ async def test_finalize_persistent_failure_flushes_no_metric(
     limit_refused.assert_not_called()
 
 
+async def test_finalize_retry_flushes_buffered_finalize_deferred_exactly_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write-failure ``finalize_deferred`` buffered on the lock-aborted
+    attempt's sink must be discarded; only the committing attempt's is flushed —
+    so one re-run emits ONE ``record_finalize_deferred`` sample, not one per
+    attempt.
+
+    Without the sink routing (the pre-change inline emission) the counter would
+    fire once per attempt, and this assert would see 2 calls.
+    """
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+
+    sinks: list[object] = []
+
+    async def _finalize(session: object, **kwargs: object) -> None:
+        sink = kwargs["metric_sink"]
+        sinks.append(sink)
+        assert sink is not None
+        sink.finalize_deferred("write_failure", "team-a")  # type: ignore[attr-defined]
+        if len(sinks) == 1:
+            raise _SqlstateError("40P01")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+    ):
+        await _run_finalize(fake_self)
+
+    assert len(sinks) == 2, "the deadlock must re-run the whole transaction exactly once"
+    assert sinks[0] is not sinks[1], "each attempt must get a FRESH sink"
+    deferred.assert_called_once_with(reason="write_failure", team="team-a")
+
+
+async def test_finalize_persistent_failure_flushes_no_finalize_deferred(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When every attempt aborts, nothing committed — so a buffered
+    ``finalize_deferred`` may not be flushed (a metric must never count a
+    finalisation that rolled back)."""
+    session = _make_session(None)
+    fake_self = _finalize_self(session)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._FINALIZE_LOCK_RETRY_DELAY_SECONDS", 0.0)
+
+    async def _finalize(session: object, **kwargs: object) -> None:
+        sink = kwargs["metric_sink"]
+        assert sink is not None
+        sink.finalize_deferred("write_failure", "team-a")  # type: ignore[attr-defined]
+        raise _SqlstateError("40P01")
+
+    with (
+        patch("modulo.core.pipeline_engine.executor.set_rls_org"),
+        patch("modulo.core.pipeline_engine.executor.set_rls_execution_context"),
+        patch("modulo.core.pipeline_engine.executor.finalize_cost", new=_finalize),
+        patch("modulo.core.cost_controller.finalize.record_finalize_deferred") as deferred,
+        pytest.raises(_SqlstateError),
+    ):
+        await _run_finalize(fake_self)
+
+    deferred.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # work_intact write failures inside the owned finalisation transaction
 # ---------------------------------------------------------------------------

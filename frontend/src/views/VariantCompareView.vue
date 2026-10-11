@@ -1,7 +1,7 @@
 <template>
   <div class="page-wide">
     <LoadingSpinner v-if="loading" />
-    <ErrorAlert v-else-if="error" :message="error" />
+    <ErrorAlert v-else-if="error" :message="error" :on-retry="loadGroups" />
     <template v-else>
       <PageHeader :title="$t('views.variantCompare.title')" :subtitle="$t('views.variantCompare.subtitle')" />
 
@@ -307,7 +307,7 @@ interface RunEntry {
   evalResults: RunEvalItem[]
 }
 
-const { loading, error, data: groupsResp } = useDataFetch(
+const { loading, error, data: groupsResp, load: loadGroups } = useDataFetch(
   () => api.GET('/api/v1/variant-groups'),
   { initialValue: [] as VariantGroup[] },
 )

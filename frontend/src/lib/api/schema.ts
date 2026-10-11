@@ -2001,6 +2001,10 @@ export interface paths {
         /**
          * Dashboard Summary
          * @description Org-level dashboard summary with counts, team breakdown, eval pass rate, and 7-day trend.
+         *
+         *     Optional ``days`` (1..90) adds a period-scoped ``{current, previous, delta_pct}``
+         *     block per metric (FAR-92); ignored — the legacy all-time shape is preserved —
+         *     when the ``analytics_page`` feature flag is off.
          */
         get: operations["dashboard_summary_api_v1_dashboard_summary_get"];
         put?: never;
@@ -2505,6 +2509,56 @@ export interface paths {
         head?: never;
         /** Replace Pipeline Graph Endpoint */
         patch: operations["replace_pipeline_graph_endpoint_api_v1_pipelines__pipeline_id__graph_patch"];
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/autonomy/demote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Demote Pipeline Autonomy
+         * @description Manually lower a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         *
+         *     Demotion adds human review, so it is always safe: an admin or the pipeline's
+         *     owner may lower the earned level at any time. Takes effect at the run's next
+         *     HITL gate (in-flight runs included) when ``autonomy_gating`` is on. Records
+         *     a ``pipeline.autonomy_demoted`` audit event.
+         */
+        post: operations["demote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_demote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pipelines/{pipeline_id}/autonomy/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote Pipeline Autonomy
+         * @description Manually raise a pipeline's earned autonomy level (FAR-1175, ADR 043 §1).
+         *
+         *     Promotion is never automatic: an admin or the pipeline's owner approves it,
+         *     capped at the pipeline's ``max_autonomy_level`` ceiling. It applies only to
+         *     runs created after the approval — in-flight runs keep the lower level (ADR
+         *     043 §3). Records a ``pipeline.autonomy_promotion_decided`` audit event.
+         */
+        post: operations["promote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/pipelines/{pipeline_id}/restore": {
@@ -7140,7 +7194,8 @@ export interface paths {
          * Create Eval Definition
          * @description Create a new eval definition.
          *
-         *     Admin only. The eval definition is scoped to the caller's organisation.
+         *     Operator or admin only (FAR-735). The eval definition is scoped to the
+         *     caller's organisation.
          */
         post: operations["create_eval_definition_api_v1_evals_post"];
         delete?: never;
@@ -7377,7 +7432,7 @@ export interface paths {
         get: operations["get_eval_definition_api_v1_evals__eval_id__get"];
         /**
          * Update Eval Definition
-         * @description Update an eval definition. Admin only.
+         * @description Update an eval definition. Operator or admin only (FAR-735).
          *
          *     Reads from the ``evals`` table (chunk 3b cutover).  The update is
          *     persisted via ``create_or_update_eval`` which handles version stamping
@@ -7464,7 +7519,7 @@ export interface paths {
         put?: never;
         /**
          * Create Eval From Run
-         * @description Create an eval definition pre-populated from run output.
+         * @description Create an eval definition pre-populated from run output. Operator or admin (FAR-735).
          */
         post: operations["create_eval_from_run_api_v1_evals_from_run_post"];
         delete?: never;
@@ -10575,6 +10630,10 @@ export interface components {
             node_deadline_watchdog_fired_count?: number | null;
             /** Execution Origin */
             execution_origin?: string | null;
+            /** Autonomy Level */
+            autonomy_level?: string | null;
+            /** Benign */
+            benign?: boolean | null;
             /** Created At */
             created_at: string;
         };
@@ -10875,6 +10934,43 @@ export interface components {
             suggestion: string;
             /** Connector Type */
             connector_type?: string | null;
+        };
+        /**
+         * AutonomyChangeRequest
+         * @description Body for a manual autonomy demote/promote.
+         */
+        AutonomyChangeRequest: {
+            /**
+             * Level
+             * @description Target autonomy level (canonical value).
+             */
+            level: string;
+            /**
+             * Reason
+             * @description Why the level is being changed — recorded on the audit event.
+             */
+            reason?: string | null;
+        };
+        /**
+         * AutonomyChangeResponse
+         * @description Result of a manual autonomy demote/promote.
+         */
+        AutonomyChangeResponse: {
+            /**
+             * Pipeline Id
+             * Format: uuid
+             */
+            pipeline_id: string;
+            /** Previous Level */
+            previous_level: string;
+            /** Earned Autonomy Level */
+            earned_autonomy_level: string;
+            /** Max Autonomy Level */
+            max_autonomy_level?: string | null;
+            /** Event Type */
+            event_type: string;
+            /** Updated At */
+            updated_at?: string | null;
         };
         /** AvailableProviderInfo */
         AvailableProviderInfo: {
@@ -16245,6 +16341,10 @@ export interface components {
             default_autonomy_level?: string | null;
             /** Max Autonomy Level */
             max_autonomy_level?: string | null;
+            /** Earned Autonomy Level */
+            earned_autonomy_level?: string | null;
+            /** Earned Autonomy Updated At */
+            earned_autonomy_updated_at?: string | null;
             /** Max Duration Seconds */
             max_duration_seconds?: number | null;
             /**
@@ -16267,6 +16367,10 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /** Benign Signatures */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included).
@@ -16407,6 +16511,13 @@ export interface components {
             stdout_retention_config?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Benign Signatures
+             * @description Explicit BUSINESS-EXPECTED run-outcome signatures (FAR-707). Shape: [{"error_code": "<exact runs.error_code>", "error_detail_contains": "<case-insensitive substring, optional>"}]. A terminal failure whose (error_code, error_detail) matches one is classified `benign` — a distinct class excluded from analytics failure rates and error-code clusters — instead of counting as a failure. Null clears (no signatures = historical behaviour).
+             */
+            benign_signatures?: {
+                [key: string]: unknown;
+            }[] | null;
             /**
              * Circuit Breaker Threshold
              * @description Monthly spend circuit breaker (USD). When the pipeline's calendar-month spend plus a run's cost would exceed this value, the breaker trips: the run is rejected, every trigger of the pipeline is paused, and admins are notified. An org admin resets it via POST /api/v1/admin/costs/circuit-breaker/{pipeline_id}/reset. null = disabled; must be > 0 when set. Available on every plan (Community included). Send null to disable; omit to leave unchanged.
@@ -25853,6 +25964,94 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PipelineGraphResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    demote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_demote_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutonomyChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyChangeResponse"];
+                };
+            };
+            /** @description Not an admin or the pipeline owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_pipeline_autonomy_api_v1_pipelines__pipeline_id__autonomy_promote_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                pipeline_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutonomyChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutonomyChangeResponse"];
+                };
+            };
+            /** @description Not an admin or the pipeline owner */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

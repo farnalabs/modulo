@@ -474,4 +474,39 @@ describe('VariantCompareView', () => {
     await nextTick()
     expect(wrapper.find('[data-testid="variant-group-builder"]').exists()).toBe(true)
   })
+
+  it('offers Retry on a failed variant-groups load and re-fetches on click (FAR-1655)', async () => {
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.reject(new Error('groups backend down'))
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+
+    const wrapper = mount(VariantCompareView, {
+      global: {
+        stubs: { FeatureGate: { template: '<div><slot /></div>' } },
+        mocks: { $t: (key: string) => key },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('groups backend down')
+    })
+
+    const retry = wrapper.find('[data-testid="error-alert-retry"]')
+    expect(retry.exists()).toBe(true)
+
+    vi.mocked(api.GET as unknown as (url: string) => Promise<unknown>).mockImplementation((url: string) => {
+      if (url === '/api/v1/variant-groups') {
+        return Promise.resolve({ data: [groupWithVariants], error: undefined })
+      }
+      return Promise.resolve({ data: null, error: undefined })
+    })
+    await retry.trigger('click')
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
+    })
+    expect(wrapper.find('[data-testid="variant-compare-group-select"]').exists()).toBe(true)
+  })
 })

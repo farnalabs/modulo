@@ -12,6 +12,7 @@ Uses an in-memory SQLite engine with only the ``run_node_outputs`` table
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -577,3 +578,136 @@ class TestAuditAttemptKeyContract:
             )
         ).scalar_one_or_none()
         assert row_bad is None
+
+
+# ---------------------------------------------------------------------------
+# FAR-1654 — write-site JSONB sanitisation on both direct-upsert writers
+# ---------------------------------------------------------------------------
+
+
+class _PayloadRecord:
+    """Stand-in audit record whose ``to_audit_dict`` returns a caller-shaped
+    payload.
+
+    ``record_resolved_inputs`` only calls ``to_audit_dict()`` on each record, so
+    this injects Postgres/JSONB-illegal code points at the exact
+    operator/config-sourced strings the write path receives — including a NUL in
+    a dict KEY, which the real record's fixed field names cannot carry. The
+    write-site sanitiser must neutralise BOTH the nested values and the key.
+    """
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def to_audit_dict(self) -> dict[str, Any]:
+        return self._payload
+
+
+def _nul_payload_entry() -> dict[str, Any]:
+    """One audit entry carrying a NUL in nested VALUES and in a nested KEY."""
+    return {
+        "input_name": "repo\x00name",
+        "connector_instance_id": None,
+        "host": "github.com",
+        "url_redacted": "https://github.com/acme/repo\x00name.git",
+        "requested_ref_kind": "branch",
+        "requested_ref_value": "feature/\x00branch",
+        "resolved_sha": "a" * 40,
+        "final_sha": None,
+        "drift_detected": False,
+        "dest": "/home/user/repo",
+        "status": "resolved",
+        "nested\x00key": {"deep": ["x\x00y"]},
+    }
+
+
+class TestRecordResolvedInputsSanitisation:
+    """FAR-1654: ``record_resolved_inputs`` bypasses the shared ``upsert_rows``
+    sanitiser, so its own write must neutralise JSONB-illegal code points before
+    the bind. Without the write-site sanitiser the stored payload retains the
+    NUL and these assertions fail."""
+
+    @pytest.mark.anyio
+    async def test_nul_in_nested_values_and_keys_is_sanitised(
+        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        record = _PayloadRecord(_nul_payload_entry())
+        with caplog.at_level("WARNING"):
+            await record_resolved_inputs(
+                session,
+                run_id=_RUN_ID,
+                organisation_id=_ORG,
+                node_id="sandbox-1",
+                attempt_key="attempt-0",
+                records=[record],
+                status="resolved",
+            )
+        await session.flush()
+
+        # Column-only select reads the STORED value (not an identity-mapped
+        # ORM instance), so it reflects exactly what the write bound.
+        payload = await read_audit_row_outputs_json(
+            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0"
+        )
+        assert payload is not None
+        assert "\x00" not in json.dumps(payload)
+        entry = payload["workspace_inputs"][0]
+        assert entry["input_name"] == "repo\ufffdname"
+        assert entry["url_redacted"] == "https://github.com/acme/repo\ufffdname.git"
+        assert entry["requested_ref_value"] == "feature/\ufffdbranch"
+        assert entry["nested\ufffdkey"] == {"deep": ["x\ufffdy"]}
+        assert "workspace input audit" in caplog.text
+
+
+class TestRecordDriftSanitisation:
+    """FAR-1654: ``record_drift`` re-writes a payload read back from the table
+    and likewise bypasses ``upsert_rows``. A row that already carries a NUL
+    (written before the fix, or by another path) must not be re-persisted with
+    it when drift is recorded."""
+
+    @pytest.mark.anyio
+    async def test_nul_in_stored_row_is_sanitised_on_drift_rewrite(
+        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from sqlalchemy import insert
+
+        seed = {
+            "workspace_inputs": [_nul_payload_entry()],
+            "status": "resolved",
+            "resolved_for_node_id": "sandbox-1",
+        }
+        # Core insert (not ORM add): no identity-mapped instance shadows the
+        # stored value when the drift read/write happens below.
+        await session.execute(
+            insert(RunNodeOutput).values(
+                run_id=_RUN_ID,
+                organisation_id=_ORG,
+                node_id=AUDIT_NODE_ID,
+                attempt_key="attempt-0",
+                outputs_json=seed,
+            )
+        )
+        await session.flush()
+
+        with caplog.at_level("WARNING"):
+            await record_drift(
+                session,
+                run_id=_RUN_ID,
+                organisation_id=_ORG,
+                node_id="sandbox-1",
+                attempt_key="attempt-0",
+                final_shas={"repo\x00name": "b" * 40},
+            )
+        await session.flush()
+
+        payload = await read_audit_row_outputs_json(
+            session, run_id=_RUN_ID, node_id=AUDIT_NODE_ID, attempt_key="attempt-0"
+        )
+        assert payload is not None
+        assert "\x00" not in json.dumps(payload)
+        entry = payload["workspace_inputs"][0]
+        assert entry["input_name"] == "repo\ufffdname"
+        assert entry["nested\ufffdkey"] == {"deep": ["x\ufffdy"]}
+        assert entry["final_sha"] == "b" * 40
+        assert entry["drift_detected"] is True
+        assert "workspace input audit" in caplog.text

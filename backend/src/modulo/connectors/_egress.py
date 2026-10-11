@@ -30,28 +30,12 @@ class.
 
 from __future__ import annotations
 
-import os
 import ssl
 
 import httpx
 
 from modulo.connectors.base import ConnectorBase
-
-_TRUST_PROXY_ENV = "SSRF_TRUST_PROXY"
-_TRUST_PROXY_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
-
-
-def _egress_trust_env() -> bool:
-    """Resolve the CA-bundle ``trust_env`` flag for connector egress.
-
-    Mirrors ``modulo.core.ssrf._default_trust_env`` — connectors may not import
-    ``modulo.core`` outside the allowlisted ``core.ssrf`` egress edge
-    (import-linter's ``connectors-do-not-import-core`` contract), so the
-    one-line ``SSRF_TRUST_PROXY`` read is duplicated here rather than imported.
-    ``tests/unit/connectors/test_connector_ssl_context_reuse.py`` pins the two
-    implementations together so they cannot drift.
-    """
-    return os.environ.get(_TRUST_PROXY_ENV, "").strip().lower() in _TRUST_PROXY_TRUE_VALUES
+from modulo.core.ssrf import default_trust_env as _egress_trust_env
 
 
 def egress_ssl_context(connector: ConnectorBase) -> ssl.SSLContext:
@@ -59,7 +43,9 @@ def egress_ssl_context(connector: ConnectorBase) -> ssl.SSLContext:
 
     The context is built exactly as httpx would build it for ``verify=True``
     with the transport's resolved ``trust_env`` (see
-    :func:`_egress_trust_env`), so swapping a per-call build for this cached
+    ``default_trust_env`` in ``modulo.core.ssrf`` — the shared ``SSRF_TRUST_PROXY``
+    resolver this module imports, so the CA-bundle selection cannot drift from
+    the pinned transport's), so swapping a per-call build for this cached
     one changes only the construction count. Callers pass the result as
     ``verify=`` to ``pinned_async_client_sync`` / ``pinned_async_transport_sync``.
     """

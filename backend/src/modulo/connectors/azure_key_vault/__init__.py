@@ -1,6 +1,7 @@
 """AzureKeyVaultConnector — async Azure Key Vault REST API connector."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -30,6 +31,9 @@ class AzureKeyVaultConnector(ConnectorBase):
         self._token = token
         self._base = vault_url.rstrip("/")
 
+    def _credential_values(self) -> Sequence[str]:
+        return (self._token,)
+
     @property
     def connector_type(self) -> ConnectorType:
         return ConnectorType.AZURE_KEY_VAULT
@@ -58,11 +62,13 @@ class AzureKeyVaultConnector(ConnectorBase):
                     return HealthResult(ok=True, detail="Azure Key Vault token validated")
                 if resp.status_code == 401:
                     return HealthResult(ok=False, detail="Invalid Azure Key Vault access token")
-                return HealthResult(ok=False, detail=f"HTTP {resp.status_code}: {resp.text[:200]}")
+                return HealthResult(
+                    ok=False, detail=self._redacted_detail(f"HTTP {resp.status_code}: {resp.text}")[:200]
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return health_check_failure(exc)
+            return health_check_failure(exc, self._redacted_detail)
 
     async def query(self, q: ConnectorQuery) -> ConnectorResult:
         async with self._client() as c:

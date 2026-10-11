@@ -18,7 +18,7 @@ from decimal import Decimal
 from operator import attrgetter
 from typing import Any, TypeGuard
 
-from sqlalchemy import Date, bindparam, case, cast, delete, func, or_, select, text, update
+from sqlalchemy import Date, and_, bindparam, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
@@ -258,6 +258,51 @@ def _is_failure_bucket_status(status: str) -> bool:
 def _is_failure_reason_status(status: str) -> bool:
     """Whether ``status`` can carry a failure reason in run stats."""
     return status in _FAILURE_REASON_STATUSES
+
+
+#: FAR-707 — the ``benign`` run-classification value (a BUSINESS-EXPECTED
+#: terminal outcome: an explicit per-pipeline benign signature matched the
+#: run's error_code/error_detail). Held as a LITERAL rather than an import of
+#: ``core.pipeline_engine.classify.RunClassificationValue`` because this module
+#: is the db layer and the classifier import must stay off the CRUD hot path —
+#: the same lockstep convention ``_write_unclassified_classification`` uses for
+#: the ``unclassified`` marker. The anti-drift test in test_run_classification.py
+#: pins the two spellings together.
+_RUN_CLASSIFICATION_BENIGN = "benign"
+
+
+def _is_benign_run(run: Run) -> bool:
+    """FAR-707 — whether the run's terminal classification marks it business-expected.
+
+    Benign runs are NOT failures: they are dropped from the stats failure
+    buckets, the failure-reason cluster breakdown, and the success-rate
+    denominator. Defensive on the JSON column (a legacy/partial row may hold
+    anything): a non-dict record or a missing ``value`` is NOT benign, so the
+    historical counting keeps applying until a real record exists.
+    """
+    record = getattr(run, "run_classification", None)
+    if not isinstance(record, dict):
+        return False
+    return record.get("value") == _RUN_CLASSIFICATION_BENIGN
+
+
+def _benign_case_sum() -> Any:
+    """SQL ``SUM(...)`` of the per-day benign count for the Postgres stats path.
+
+    ``run_classification`` is JSON/JSONB on the supported backends, so the
+    ``["value"].as_string()`` accessor renders the dialect-correct extraction
+    (``->>`` on Postgres) — the same ORM form ``core.rollback_thresholds``
+    already uses against this column.
+    """
+    return func.sum(case((Run.run_classification["value"].as_string() == _RUN_CLASSIFICATION_BENIGN, 1), else_=0))
+
+
+#: SQL predicate excluding benign rows from a failure aggregate (Postgres stats
+#: path). ``IS DISTINCT FROM`` (not ``!=``) so a NULL classification — a
+#: terminal run whose record has not landed yet — is treated as NOT benign and
+#: keeps counting, matching the ORM-side ``_is_benign_run`` default. A bare
+#: ``!=`` would evaluate NULL and silently DROP those rows from the aggregate.
+_NOT_BENIGN_PREDICATE = Run.run_classification["value"].as_string().is_distinct_from(_RUN_CLASSIFICATION_BENIGN)
 
 
 def _is_valid_int_limit_value(value: Any) -> TypeGuard[int]:
@@ -4282,7 +4327,8 @@ def _runs_by_day(runs: list[Run]) -> dict[str, dict[str, int]]:
         by_day[day]["count"] += 1
         if r.status == "complete":
             by_day[day]["success"] += 1
-        elif _is_failure_bucket_status(r.status):
+        # FAR-707: a business-expected outcome is never a failure bucket entry.
+        elif _is_failure_bucket_status(r.status) and not _is_benign_run(r):
             by_day[day]["failed"] += 1
     return by_day
 
@@ -4300,10 +4346,15 @@ def _duration_by_day(completed_runs: list[Run]) -> dict[str, list[int]]:
 
 
 def _failure_reason_counts(runs: list[Run]) -> dict[str, int]:
-    """Counts of failure-reason statuses by their ``error_code``."""
+    """Counts of failure-reason statuses by their ``error_code``.
+
+    FAR-707: benign (business-expected) runs are dropped — an expected
+    ``agent.failed`` rebase conflict must not inflate its own error-code
+    cluster, which is exactly the pollution the benign class exists to stop.
+    """
     failure_reasons: dict[str, int] = defaultdict(int)
     for r in runs:
-        if _is_failure_reason_status(r.status) and r.error_code:
+        if _is_failure_reason_status(r.status) and r.error_code and not _is_benign_run(r):
             failure_reasons[r.error_code] += 1
     return failure_reasons
 
@@ -4332,7 +4383,13 @@ async def _get_run_stats_python(
     durations_ms = _completed_durations_ms(completed_runs)
 
     success_count = sum(1 for r in runs if r.status == "complete")
-    success_rate = round(success_count / total, 4)
+    # FAR-707: business-expected outcomes leave the failure rate entirely —
+    # they leave the DENOMINATOR too, so an expected rebase conflict can never
+    # dilute the rate. ``total_runs`` stays the raw volume (it is a count of
+    # runs, not a rate); only the rate is recomputed over the non-benign set.
+    benign_count = sum(1 for r in runs if _is_benign_run(r))
+    rate_denominator = total - benign_count
+    success_rate = round(success_count / rate_denominator, 4) if rate_denominator > 0 else 0.0
     avg_duration = int(sum(durations_ms) / len(durations_ms)) if durations_ms else 0
 
     by_day = _runs_by_day(runs)
@@ -4376,6 +4433,9 @@ async def _get_run_stats_postgres(
     # Per-day count/success/failed buckets plus per-day average duration. A day
     # with runs but no completed durations has a NULL avg and is omitted, which
     # matches the generic path (days only appear once they have a duration).
+    # FAR-707: ``benign_count`` is the per-day business-expected total (so the
+    # rate's denominator can be recomputed) and the ``failed`` bucket skips
+    # those rows.
     day_rows = list(
         (
             await session.execute(
@@ -4383,7 +4443,10 @@ async def _get_run_stats_postgres(
                     day,
                     func.count().label("run_count"),
                     func.sum(case((Run.status == "complete", 1), else_=0)).label("success"),
-                    func.sum(case((Run.status.in_(_FAILURE_BUCKET_STATUSES), 1), else_=0)).label("failed"),
+                    func.sum(
+                        case((and_(Run.status.in_(_FAILURE_BUCKET_STATUSES), _NOT_BENIGN_PREDICATE), 1), else_=0)
+                    ).label("failed"),
+                    _benign_case_sum().label("benign_count"),
                     func.avg(duration_ms).label("avg_duration"),
                 )
                 .select_from(Run)
@@ -4423,7 +4486,9 @@ async def _get_run_stats_postgres(
     p99 = overall.p99
     avg_duration = overall.avg_duration
 
-    # Failure reason breakdown for failed / eval_failed runs carrying an error code.
+    # Failure reason breakdown for failed / eval_failed runs carrying an error
+    # code. FAR-707: benign (business-expected) rows are excluded so an
+    # expected failure never inflates its own error-code cluster.
     failure_rows = list(
         (
             await session.execute(
@@ -4435,6 +4500,7 @@ async def _get_run_stats_postgres(
                     Run.status.in_(_FAILURE_REASON_STATUSES),
                     Run.error_code.is_not(None),
                     Run.error_code != "",
+                    _NOT_BENIGN_PREDICATE,
                 )
                 .group_by(Run.error_code)
             )
@@ -4442,7 +4508,11 @@ async def _get_run_stats_postgres(
     )
 
     success_count = sum(int(row.success) for row in day_rows)
-    success_rate = round(success_count / total, 4)
+    benign_total = sum(int(row.benign_count or 0) for row in day_rows)
+    # FAR-707: the rate's denominator drops business-expected outcomes (see the
+    # generic path's comment); ``total_runs`` stays the raw volume.
+    rate_denominator = total - benign_total
+    success_rate = round(success_count / rate_denominator, 4) if rate_denominator > 0 else 0.0
 
     return {
         "total_runs": total,

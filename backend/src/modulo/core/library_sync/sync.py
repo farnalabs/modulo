@@ -137,7 +137,13 @@ async def sync_library(session: AsyncSession) -> SyncResult:
         await _record_failure(session, "unexpected sync failure")
         return SyncResult(success=False, error="unexpected sync failure")
     finally:
-        await client.close()
+        # Teardown must never surface: a raising close() would replace the
+        # body's exception (or discard its return value) and break the
+        # documented "never raises" contract above — log and swallow.
+        try:
+            await client.close()
+        except Exception:
+            _log.exception("library_sync.client_close_failed")
 
 
 def _apply_revocations(catalog_entries: list[dict[str, Any]], revoked_ids: set[str]) -> list[dict[str, Any]]:

@@ -402,7 +402,7 @@ def _get_dns_timeout() -> float:
     return value if value > 0 else _DNS_TIMEOUT_DEFAULT
 
 
-def _default_trust_env() -> bool:
+def default_trust_env() -> bool:
     """Resolve the process-wide default for the pinned transport's ``trust_env``.
 
     ``trust_env`` is exposed as ``bool | None`` so each caller can opt in or out
@@ -410,8 +410,17 @@ def _default_trust_env() -> bool:
     ``SSRF_TRUST_PROXY`` (``true``/``1``/``yes``/``on`` honours a corporate proxy
     for every connector; unset/other keeps the safe-by-default ``False`` so a
     proxy env var does not silently defeat pinning).
+
+    Public so the shared egress pool factory (``modulo.connectors._egress``)
+    builds the cached TLS context with the SAME ``trust_env`` the pinned
+    transport resolves — a single implementation that cannot drift (FAR-1650).
     """
     return os.environ.get(_TRUST_PROXY_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Internal callers (pinned_async_transport / _sync / pinned_async_client(_sync))
+# keep the original private spelling; it is the same function, not a re-read.
+_default_trust_env = default_trust_env
 
 
 def _get_resolve_ttl() -> float:

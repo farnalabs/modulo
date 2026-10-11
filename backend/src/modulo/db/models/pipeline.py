@@ -66,6 +66,15 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
             "WHEN 'fully_autonomous' THEN 2 END)",
             name="ck_pipelines_max_autonomy_ge_default",
         ),
+        # FAR-1175 (ADR 043 S1): the earned autonomy level — runtime state that
+        # the gating engine (demotion) and approved promotions write, read LIVE
+        # at every HITL gate. NULL = never earned (resolution falls back to
+        # default_autonomy_level). Migration 0295.
+        CheckConstraint(
+            "earned_autonomy_level IS NULL OR "
+            "earned_autonomy_level IN ('manual_approval', 'notify_on_complete', 'fully_autonomous')",
+            name="ck_pipelines_earned_autonomy_level",
+        ),
         # FAR-1530: per-pipeline Paused execution state. A disabled row must
         # carry BOTH its cause and when it was set (mirrors
         # ck_organisations_triggers_paused_at); the reason vocabulary is the
@@ -160,6 +169,15 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # 0256; CHECKs ck_pipelines_max_autonomy_level (vocabulary) and
     # ck_pipelines_max_autonomy_ge_default (>= default, migration 0264) above.
     max_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # FAR-1175 (ADR 043 S1): the EARNED autonomy level — runtime state that
+    # lives OUTSIDE the snapshot (like circuit-breaker state) because it must
+    # change between runs without a pipeline edit. NULL until set. Read LIVE at
+    # every HITL gate when the ``autonomy_gating`` flag is on; in-flight runs
+    # apply min(pinned-at-run-start, live) so a demotion bites mid-run but a
+    # promotion never loosens an in-flight run (ADR 043 §3). CHECK
+    # ck_pipelines_earned_autonomy_level (migration 0297).
+    earned_autonomy_level: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    earned_autonomy_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     graph_nodes_json: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON,
         nullable=False,
@@ -172,6 +190,18 @@ class Pipeline(SoftDeleteMixin, OrgScoped):
     # Shape: {"mode": "tail"|"full", "max_bytes": <positive int>} or None
     # (no pipeline override — inherit from org ceiling only).
     stdout_retention_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # FAR-707: explicit per-pipeline BENIGN run-outcome signatures. A terminal
+    # run whose (error_code, error_detail) matches one is classified ``benign``
+    # — a distinct terminal class excluded from analytics failure rates and
+    # failure-reason clusters — instead of countable ``no_delivery``.
+    # Shape (JSON list; NULL = no signatures = historical behaviour):
+    #   [{"error_code": "<exact runs.error_code>",            # REQUIRED
+    #     "error_detail_contains": "<case-insensitive substring>"}]  # optional
+    # Validated/matched by ``core.pipeline_engine.classify.normalize_benign_signatures``
+    # / ``matches_benign_signature``; malformed entries are IGNORED at read
+    # time (fail-open to the old counting — a broken config never marks a real
+    # failure benign). Migration 0296.
+    benign_signatures: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     retry_policy: Mapped[dict[str, Any]] = mapped_column(
         JSON,
         nullable=False,

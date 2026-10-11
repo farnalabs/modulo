@@ -32,7 +32,9 @@ mcp_server.py:revoke_api_key
 mcp_server.py:set_org_triggers_paused
 observability.py:test_otel_connection
 parameter_schemas.py:validate_parameter_values_endpoint
+pipelines.py:demote_pipeline_autonomy
 pipelines.py:diff_snapshot_endpoint
+pipelines.py:promote_pipeline_autonomy
 runs.py:diff_node_output
 runs.py:reveal_node_prompt
 schemas.py:generate_schema_endpoint

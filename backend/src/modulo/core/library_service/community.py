@@ -127,7 +127,13 @@ async def _fetch_blob(sha256: str) -> dict[str, Any] | None:
         logger.warning("community.install.blob_not_json")
         return None
     finally:
-        await client.close()
+        # Teardown must never surface: a raising close() would replace the
+        # body's exception (or discard its return value) and escape the
+        # documented "return None on failure" contract above — log and swallow.
+        try:
+            await client.close()
+        except Exception:
+            logger.exception("community.install.client_close_failed")
     if not isinstance(content, dict):
         logger.warning("community.install.blob_not_object")
         return None

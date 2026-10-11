@@ -12,6 +12,14 @@ accounts for (``crud.run_retention._NODE_OUTPUT_BYTES``).
 Both functions are **best-effort**: a failure is logged and swallowed so
 that a successful provision is never converted into a run failure.
 
+FAR-1654: both functions write ``outputs_json`` through a direct
+``dialect_insert`` (they do NOT go through ``crud.run_node_outputs.upsert_rows``),
+so each payload is sanitised through that module's shared
+``_sanitise_jsonb_for_store`` before the bind — an operator/config-sourced NUL
+or lone UTF-16 surrogate (``input_name``, ``url_redacted``,
+``requested_ref_value``, ...) is replaced with the visible U+FFFD marker rather
+than aborting the Postgres jsonb INSERT (SQLSTATE 22P05).
+
 The module is intentionally dependency-light (no LangGraph, no settings)
 so it can be imported by the provisioning layer and unit-tested without
 dragging the full runtime into them.
@@ -34,7 +42,11 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.db.crud.run_node_outputs import dialect_insert, resolve_dialect
+from modulo.db.crud.run_node_outputs import (
+    _sanitise_jsonb_for_store,
+    dialect_insert,
+    resolve_dialect,
+)
 from modulo.db.models.run import Run
 from modulo.db.models.run_node_outputs import RunNodeOutput
 
@@ -178,7 +190,12 @@ async def record_resolved_inputs(
             "organisation_id": organisation_id,
             "node_id": AUDIT_NODE_ID,
             "attempt_key": attempt_key,
-            "outputs_json": payload,
+            # FAR-1654: this writer bypasses ``upsert_rows``' shared sanitiser,
+            # so the payload is sanitised HERE before the bind — a NUL / lone
+            # surrogate in an operator/config-sourced value (``input_name``,
+            # ``url_redacted``, ``requested_ref_value``) must never abort the
+            # Postgres jsonb INSERT (SQLSTATE 22P05).
+            "outputs_json": _sanitise_jsonb_for_store(payload, run_id=run_id, label="workspace input audit"),
         }
         stmt = insert_factory(RunNodeOutput).values(**values)
         set_: dict[str, Any] = {
@@ -272,7 +289,12 @@ async def record_drift(
             "organisation_id": organisation_id,
             "node_id": AUDIT_NODE_ID,
             "attempt_key": attempt_key,
-            "outputs_json": existing_payload,
+            # FAR-1654: this writer bypasses ``upsert_rows``' shared sanitiser,
+            # so the payload is sanitised HERE before the bind. A NUL / lone
+            # surrogate inherited from the stored row (or introduced by a
+            # final-sha value) must never abort the Postgres jsonb INSERT
+            # (SQLSTATE 22P05).
+            "outputs_json": _sanitise_jsonb_for_store(existing_payload, run_id=run_id, label="workspace input audit"),
         }
         stmt = insert_factory(RunNodeOutput).values(**values)
         set_: dict[str, Any] = {

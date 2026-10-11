@@ -1,11 +1,12 @@
 """Eval management endpoints.
 
 URLs:
-    POST   /api/v1/evals              — create an eval definition (admin only)
+    POST   /api/v1/evals              — create an eval definition (operator or admin)
     GET    /api/v1/runs/{run_id}/evals — list eval results for a run
     POST   /api/v1/evals/compare      — side-by-side comparison of two runs
     GET    /api/v1/evals/coverage     — eval coverage map for a pipeline
-    POST   /api/v1/evals/from-run     — create eval definition from run data
+    POST   /api/v1/evals/from-run     — create eval definition from run data (operator or admin)
+    PUT    /api/v1/evals/{eval_id}    — update an eval definition (operator or admin)
     PUT    /api/v1/evals/suites/{suite_id}/alerting — configure regression alerting (admin only)
     POST   /api/v1/eval-datasets      — create an eval dataset (admin only)
     GET    /api/v1/eval-datasets      — list eval datasets
@@ -56,6 +57,7 @@ from modulo.api.team_scope import (
 )
 from modulo.auth.dependencies import get_current_tenant_user
 from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.team_rbac import org_role_level
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.eval_engine.author_warnings import check_author_warnings
@@ -197,6 +199,24 @@ def _eval_def_to_dict(
         "version": getattr(eval_row, "version", 1),
         "pre_version_raw": getattr(eval_row, "pre_version_raw", None),
     }
+
+
+def _assert_eval_definition_write_role(principal: TenantPrincipal, action: str) -> None:
+    """Operator-or-admin may create/update eval definitions (FAR-735).
+
+    The ``require_permission`` dependency already enforces the ADR 047 registry
+    floor (``eval.definition.create`` / ``eval.definition.update`` resolve to
+    ``operator``), so callers reaching this guard with a JWT org role below
+    ``operator`` are exactly the viewer/runner cases the registry could not
+    stop at the dependency layer (e.g. a runner with a broader legacy bundle).
+    Fail-closed on an unknown/missing role: below-floor callers receive 403.
+    Delete is NOT covered here — it stays admin-only, mirroring the MCP tool.
+    """
+    if principal.org_role is None or org_role_level(principal.org_role) < org_role_level("operator"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Only operators or admins can {action} eval definitions",
+        )
 
 
 def _validate_guardrail_request(
@@ -1214,13 +1234,10 @@ async def create_eval_definition(
 ) -> dict[str, Any]:
     """Create a new eval definition.
 
-    Admin only. The eval definition is scoped to the caller's organisation.
+    Operator or admin only (FAR-735). The eval definition is scoped to the
+    caller's organisation.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create eval definitions",
-        )
+    _assert_eval_definition_write_role(principal, "create")
 
     _validate_guardrail_request(
         eval_type=req.eval_type,
@@ -2553,14 +2570,13 @@ async def update_eval_definition(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_UPDATE),
 ) -> dict[str, Any]:
-    """Update an eval definition. Admin only.
+    """Update an eval definition. Operator or admin only (FAR-735).
 
     Reads from the ``evals`` table (chunk 3b cutover).  The update is
     persisted via ``create_or_update_eval`` which handles version stamping
     and PolicyGate management internally.
     """
-    if principal.org_role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can update eval definitions")
+    _assert_eval_definition_write_role(principal, "update")
 
     try:
         async with session.begin():
@@ -3369,12 +3385,8 @@ async def create_eval_from_run(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_EVAL_DEFINITION_CREATE),
 ) -> dict[str, Any]:
-    """Create an eval definition pre-populated from run output."""
-    if principal.org_role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can create eval definitions",
-        )
+    """Create an eval definition pre-populated from run output. Operator or admin (FAR-735)."""
+    _assert_eval_definition_write_role(principal, "create")
     run, sample_output = await _eval_from_run_source(session, principal, req)
     config_json = _build_eval_config_json(req.eval_type, sample_output)
     eval_dict = await _insert_eval_definition(session, principal, req, run, config_json)

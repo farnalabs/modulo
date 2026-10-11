@@ -20,8 +20,8 @@ import modulo.api.mcp_server as ms
 from modulo.api.mcp_server import (
     _analytics_deep_link,
     _apply_node_connector_binding,
-    _assert_admin_scope,
     _assert_create_eval_definition_params,
+    _assert_eval_definition_write_scope,
     _assert_eval_type,
     _assert_pass_threshold,
     _assert_update_eval_definition_params,
@@ -734,20 +734,37 @@ class TestAssertPassThreshold:
         assert err is not None
 
 
-class TestAssertAdminScope(_Ctx):
-    def test_admin_passes(self) -> None:
-        ms._ctx_role.set("admin")
-        _assert_admin_scope("create")  # should not raise
+class TestAssertEvalDefinitionWriteScope(_Ctx):
+    """FAR-735: create/update are operator-floor; delete stays admin-only."""
 
-    def test_operator_denied(self) -> None:
+    def test_operator_create_allowed(self) -> None:
+        ms._ctx_role.set("operator")
+        _assert_eval_definition_write_scope("create", "operator")  # should not raise
+
+    def test_operator_update_allowed(self) -> None:
+        ms._ctx_role.set("operator")
+        _assert_eval_definition_write_scope("update", "operator")  # should not raise
+
+    def test_operator_delete_denied(self) -> None:
         ms._ctx_role.set("operator")
         with pytest.raises(MCPAuthorizationError):
-            _assert_admin_scope("create")
+            _assert_eval_definition_write_scope("delete", "admin")
 
-    def test_runner_denied(self) -> None:
+    def test_runner_create_denied(self) -> None:
         ms._ctx_role.set("runner")
         with pytest.raises(MCPAuthorizationError):
-            _assert_admin_scope("delete")
+            _assert_eval_definition_write_scope("create", "operator")
+
+    def test_viewer_update_denied(self) -> None:
+        ms._ctx_role.set("viewer")
+        with pytest.raises(MCPAuthorizationError):
+            _assert_eval_definition_write_scope("update", "operator")
+
+    def test_admin_all_allowed(self) -> None:
+        ms._ctx_role.set("admin")
+        _assert_eval_definition_write_scope("create", "operator")  # should not raise
+        _assert_eval_definition_write_scope("update", "operator")  # should not raise
+        _assert_eval_definition_write_scope("delete", "admin")  # should not raise
 
 
 # ─── Check agent tool scope ────────────────────────────────────────

@@ -237,6 +237,42 @@ async def _fact_workspace_inputs_count(session: AsyncSession, run: Run) -> int |
         return None
 
 
+async def _fact_autonomy_level(session: AsyncSession, run: Run) -> str | None:
+    """The autonomy level the run's HITL gates resolved under (FAR-1175).
+
+    Sourced from the run's most recent ``run.autonomy_level_applied`` audit
+    event (autonomy-study.md §3.3) so the analytics surface can bucket by
+    autonomy without re-joining the audit chain. Best-effort: any read failure
+    (or no event) degrades to ``None`` — never raises.
+    """
+    from modulo.db.models.audit_event import AuditEvent
+
+    try:
+        payload = (
+            await session.execute(
+                select(AuditEvent.payload_json)
+                .where(
+                    AuditEvent.resource_type == "run",
+                    AuditEvent.resource_id == run.id,
+                    AuditEvent.event_type == "run.autonomy_level_applied",
+                )
+                .order_by(AuditEvent.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if not isinstance(payload, dict):
+            return None
+        level = payload.get("autonomy_level")
+        return level if isinstance(level, str) and level else None
+    except Exception:
+        _log.warning(
+            "analytics.autonomy_level_read_failed",
+            extra={"run_id": str(run.id)},
+            exc_info=True,
+        )
+        return None
+
+
 async def _fact_enforcement_aggregates(
     session: AsyncSession,
     run: Run,
@@ -355,6 +391,32 @@ async def _snapshot_graph_dimensions(
     return _derive_graph_dimensions(graph_json)
 
 
+def _fact_is_benign(run: Run) -> bool | None:
+    """The fact's ``benign`` marker from the run's terminal classification (FAR-707).
+
+    ``True`` when ``runs.run_classification`` carries value ``benign`` (a
+    business-expected outcome — an explicit per-pipeline benign signature
+    matched at terminalization), ``False`` when the run IS classified but is
+    not benign, and ``None`` when the run has no usable classification record
+    yet — a raw-SQL terminalizer writes its fact BEFORE the reconcile sweep
+    backfills the classification, and a partial/malformed record must not be
+    read as a confident verdict. Every analytics reader treats NULL as "not
+    benign" (the historical counting), so this degrades fail-open.
+
+    The enum is imported lazily: this module is on the finalize hot path and
+    the classifier pulls in the pipeline-engine package.
+    """
+    record = getattr(run, "run_classification", None)
+    if not isinstance(record, dict):
+        return None
+    value = record.get("value")
+    if not isinstance(value, str):
+        return None
+    from modulo.core.pipeline_engine.classify import RunClassificationValue
+
+    return value == RunClassificationValue.benign.value
+
+
 async def record_run_facts(session: AsyncSession, run: Run) -> None:
     """Upsert the daily fact for a terminal run — NEVER raises (fail-open).
 
@@ -387,6 +449,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
         blobs = await _fact_run_blobs(session, run)
         workspace_inputs_count = await _fact_workspace_inputs_count(session, run)
         enforcement, enforcement_records = await _fact_enforcement_aggregates(session, run)
+        autonomy_level = await _fact_autonomy_level(session, run)
 
         # FAR-902: derive mode and outcome from the raw enforcement records
         # and write them onto the Run row so the API route can read them
@@ -423,6 +486,10 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "total_tokens": run.total_tokens,
             "duration_ms": _fact_duration_ms(run),
             "error_code": getattr(run, "error_code", None),
+            # FAR-707: business-expected-outcome marker copied from the run's
+            # terminal classification so the analytics read path can drop it
+            # from failure rates without joining ``runs`` (ADR 020).
+            "benign": _fact_is_benign(run),
             "claim_count": getattr(run, "claim_count", None),
             "queue_wait_ms": _fact_queue_wait_ms(run),
             "final_idle_ms": _fact_final_idle_ms(run),
@@ -465,6 +532,9 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
             "enforcement_verbatim_count": enforcement.verbatim_count if enforcement else None,
             "enforcement_repair_count": enforcement.repair_count if enforcement else None,
             "enforcement_wasted_count": enforcement.wasted_count if enforcement else None,
+            # FAR-1175: the effective autonomy the run resolved under (from the
+            # run.autonomy_level_applied audit event; NULL when none).
+            "autonomy_level": autonomy_level,
         }
         async with session.begin_nested():
             stmt = pg_insert(RunDailyFact).values(**values)
@@ -483,6 +553,7 @@ async def record_run_facts(session: AsyncSession, run: Run) -> None:
                 "created_at": stmt.excluded.created_at,
                 "duration_ms": stmt.excluded.duration_ms,
                 "error_code": stmt.excluded.error_code,
+                "benign": stmt.excluded.benign,
                 "claim_count": stmt.excluded.claim_count,
                 "queue_wait_ms": stmt.excluded.queue_wait_ms,
                 "final_idle_ms": stmt.excluded.final_idle_ms,

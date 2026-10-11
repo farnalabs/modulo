@@ -779,18 +779,25 @@ class RestConnector(ConnectorBase):
 
         Issues a ``GET`` against ``base_url`` + the configured ``path`` after
         validating the target through the SSRF/allowlist guard, sending the
-        credentials (``apply_auth`` headers + query params). ``_send`` raises a
-        status error for any response at or above 300, so a returned response is
-        always a sub-400 success. Every non-2xx outcome (invalid request-spec,
-        REST status/send errors, ``httpx`` errors) is degraded into a not-ok
-        ``HealthResult`` and credential-redacted, like the other connectors.
-        ``asyncio.CancelledError`` is re-raised, not swallowed.
+        credentials (``apply_auth`` headers + query params). Redirects are not
+        followed, and ``_send`` raises ``RESTStatusError`` (a ``ValueError``) for
+        any response status >= 300, so the observable OK band is exactly 2xx: a
+        returned response is always a 2xx success. Every non-2xx outcome (a 3xx/4xx/
+        5xx status error, an invalid request-spec, an ``httpx`` transport error) is
+        degraded into a not-ok, credential-redacted ``HealthResult``; the method
+        never raises except ``asyncio.CancelledError``, which is re-raised.
         """
         try:
             request = await self._build_health_request()
             client = self._client()
             resp, _body_text = await self._send(client, request)
-            return HealthResult(ok=True, detail=f"HTTP {resp.status_code}: {self._redact(str(request.url))}")
+            # FAR-1651Fix5: the URL is echoed into the detail, and credentials
+            # may be carried as query params (apply_auth) — redact the URL and
+            # status-prefixed detail through the credential redactor before it
+            # leaves the connector.
+            return HealthResult(
+                ok=resp.status_code < 400, detail=self._redact(f"HTTP {resp.status_code}: {request.url}")
+            )
         except asyncio.CancelledError:
             raise
         except (ValueError, httpx.HTTPError) as exc:
@@ -1343,6 +1350,10 @@ class RestConnector(ConnectorBase):
         else:
             secrets.append(f"{auth.get('query_param_name', '')}={api_key}")
 
+    def _credential_values(self) -> Sequence[str]:
+        """Expose the same credential set :meth:`_redact` strips (FAR-1651)."""
+        return tuple(self._secret_values())
+
     def _redact(self, text: str) -> str:
         """Strip credential values from *text* so error detail never echoes secrets.
 
@@ -1880,8 +1891,13 @@ class RestConnector(ConnectorBase):
     def _status_detail(self, resp: httpx.Response, request: RestRequest, body_text: str) -> str:
         location = resp.headers.get("location", "")
         location_part = f" (location: {location})" if location else ""
-        body = self._redact(body_text[:200])
-        return f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body}"
+        # Redact the FULL detail string (URL, location header and body — any of
+        # which can carry the credential) BEFORE truncating (FAR-1651):
+        # truncating first can split a credential in half, leaving a fragment
+        # the redactor cannot match.
+        return self._redact(
+            f"REST HTTP {resp.status_code} for {request.method} {request.url}{location_part}: {body_text}"
+        )[:200]
 
     @staticmethod
     def _parse_json_body(body_text: str, content_type: str) -> Any:
