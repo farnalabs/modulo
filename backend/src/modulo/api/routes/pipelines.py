@@ -877,13 +877,29 @@ class PipelineUpdate(TeamVisibilityMixin):
         (``classify.normalize_benign_signatures``) stays lenient so a value
         written before this validator (or by a direct DB edit) can never break
         terminalization.
+
+        A key outside the accepted pair (FAR-707 QA) is rejected EXPLICITLY,
+        not only via the length check: ``{"error_code": "agent.failed",
+        "detail_contains": "rebase conflict"}`` would otherwise be stored with
+        its detail constraint silently lost and classify EVERY ``agent.failed``
+        failure as benign.
         """
-        from modulo.core.pipeline_engine.classify import normalize_benign_signatures
+        from modulo.core.pipeline_engine.classify import (
+            BENIGN_SIGNATURE_KEYS,
+            normalize_benign_signatures,
+        )
 
         if v is None:
             return None
         if not isinstance(v, list):
             raise ValueError("benign_signatures must be a list")
+        for entry in v:
+            if isinstance(entry, dict) and not BENIGN_SIGNATURE_KEYS.issuperset(entry.keys()):
+                raise ValueError(
+                    "benign_signatures entries accept ONLY the keys 'error_code' and "
+                    "'error_detail_contains' — an unknown key would silently widen the "
+                    "signature (an absent 'error_detail_contains' matches any detail)"
+                )
         normalised = normalize_benign_signatures(v)
         if len(normalised) != len(v):
             raise ValueError(

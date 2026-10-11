@@ -1703,6 +1703,197 @@ class TestSweep:
             await eng.dispose()
 
 
+class TestSweepBenignFactRestamp:
+    """FAR-707 QA: a raw-SQL-terminalized run that reconciles ``benign`` must
+    leave the ANALYTICS failure rate, not only the run-stats one.
+
+    The raw terminalizers (``saq_hooks._mark_run_failed`` and friends) write
+    their ``run_daily_facts`` row BEFORE the 60s reconcile sweep classifies
+    the run, so that fact carries ``benign=NULL`` — and every analytics reader
+    treats NULL as "not benign". Without a restamp the sweep's ``benign``
+    classification would sit next to a fact that keeps inflating the failure
+    rate forever. The sweep must re-record the fact in the SAME transaction
+    as the classification.
+    """
+
+    async def test_reconciled_benign_run_is_restamped_and_leaves_the_failure_rate(self) -> None:
+        from datetime import datetime
+
+        from sqlalchemy import event
+
+        from modulo.core import cron_helpers
+        from modulo.core.analytics.builder import AnalyticsGroupBy, AnalyticsQuery, bucket_rows, build_facts_query
+        from modulo.core.error_tracking import saq_hooks
+        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+        from modulo.db.models.run_daily_facts import RunDailyFact
+
+        eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
+
+        @event.listens_for(eng.sync_engine, "connect")
+        def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
+            # ``_mark_run_failed`` stamps ``completed_at=now()``. The UDF must
+            # return a type sqlite3 accepts (a datetime object raises) in the
+            # shape SQLAlchemy's SQLite DATETIME result processor parses back —
+            # "YYYY-MM-DD HH:MM:SS.ffffff", no offset (an ISO string with an
+            # offset does not parse and leaves a raw string in the column).
+            dbapi_connection.create_function("now", 0, lambda: datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f"))
+
+        tables = [
+            Run.__table__,
+            RunNodeOutput.__table__,
+            Pipeline.__table__,
+            RunDailyFact.__table__,
+            # ``record_run_facts`` reads the snapshot graph for node stats.
+            PipelineSnapshot.__table__,
+        ]
+        async with eng.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        try:
+            run_id = uuid.uuid4()
+            maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                s.add(
+                    Pipeline(
+                        id=_PIPELINE,
+                        organisation_id=_ORG,
+                        name="Merge Queue",
+                        account_id=uuid.uuid4(),
+                        # The pipeline EXPECTS this task_failure shape — the
+                        # run must reconcile benign once the sweep sees it.
+                        benign_signatures=[{"error_code": "task_failure"}],
+                    )
+                )
+                await s.flush()
+                await _seed_run(s, run_id)  # status="running", claim_token="tok-a"
+
+            with patch.object(saq_hooks, "_open_factory", return_value=maker):
+                # 1. The raw-SQL terminalizer writes status='failed' + error
+                #    WITHOUT the inline classification hook.
+                rowcount = await saq_hooks._mark_run_failed(
+                    run_id.hex,
+                    _ORG.hex,
+                    claim_token="tok-a",
+                    error_detail="task failure",
+                )
+                assert rowcount == 1
+                # 2. Its compensating analytics fact is written IMMEDIATELY —
+                #    BEFORE any classification exists (the production order).
+                await saq_hooks._record_task_failure_facts(str(run_id), str(_ORG))
+
+            assert await _read_classification(eng, run_id) is None
+            async with maker() as s, s.begin():
+                fact = (await s.execute(select(RunDailyFact).where(RunDailyFact.run_id == run_id))).scalar_one()
+            # The fact was written with benign=NULL — the exact state that
+            # keeps counting in the failure rate if the sweep never restamps.
+            assert fact.benign is None
+
+            # 3. The periodic sweep classifies the run benign...
+            with patch.object(cron_helpers, "_open_system_factory", return_value=maker):
+                summary = await cron_helpers.run_classification_reconcile()
+            assert summary["classified"] == 1
+
+            async with maker() as s, s.begin():
+                record = (await s.execute(select(Run).where(Run.id == run_id))).scalar_one().run_classification
+                fact = (await s.execute(select(RunDailyFact).where(RunDailyFact.run_id == run_id))).scalar_one()
+            assert record is not None
+            assert record["value"] == "benign"
+            # ...AND restamps the pre-existing fact in the same transaction.
+            assert fact.benign is True
+
+            # 4. The analytics failure-rate read now drops the run from the
+            #    failure numerator AND the denominator.
+            today = datetime.now(UTC).date()
+            stmt, bind = build_facts_query(AnalyticsQuery(org_id=_ORG, date_from=today, date_to=today))
+            async with maker() as s, s.begin():
+                rows = list((await s.execute(stmt, bind)).all())
+            buckets = bucket_rows(
+                rows,
+                group_by=AnalyticsGroupBy.DAY,
+                dimension=None,
+                date_from=today,
+                date_to=today,
+            )
+            assert len(buckets) == 1
+            bucket = buckets[0]
+            assert bucket["count"] == 1  # volume still includes it
+            assert bucket["failure_count"] == 0  # it is NO LONGER a failure
+            # The rate's denominator is (count - benign) = 0: the run left the
+            # rate ENTIRELY. Without the restamp (benign=NULL) the same bucket
+            # would read failure_count=1 and success_rate=0.0.
+            assert bucket["success_rate"] is None
+        finally:
+            await eng.dispose()
+
+    async def test_reconciled_non_benign_run_leaves_the_fact_untouched(self) -> None:
+        """The restamp is benign-only: a raw-SQL failure that reconciles
+        ``no_delivery`` keeps its fact as written (benign stays NULL, which
+        every reader already treats as "not benign" — the historical counting)."""
+        from datetime import datetime
+
+        from sqlalchemy import event
+
+        from modulo.core import cron_helpers
+        from modulo.core.error_tracking import saq_hooks
+        from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+        from modulo.db.models.run_daily_facts import RunDailyFact
+
+        eng = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, echo=False)
+
+        @event.listens_for(eng.sync_engine, "connect")
+        def _sqlite_now(dbapi_connection: Any, connection_record: Any) -> None:
+            dbapi_connection.create_function("now", 0, lambda: datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f"))
+
+        tables = [
+            Run.__table__,
+            RunNodeOutput.__table__,
+            Pipeline.__table__,
+            RunDailyFact.__table__,
+            PipelineSnapshot.__table__,
+        ]
+        async with eng.begin() as conn:
+            await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tables))
+        try:
+            run_id = uuid.uuid4()
+            maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)
+            async with maker() as s, s.begin():
+                # No benign signatures on this pipeline.
+                s.add(
+                    Pipeline(
+                        id=_PIPELINE,
+                        organisation_id=_ORG,
+                        name="Unconfigured",
+                        account_id=uuid.uuid4(),
+                    )
+                )
+                await s.flush()
+                await _seed_run(s, run_id)
+
+            with patch.object(saq_hooks, "_open_factory", return_value=maker):
+                rowcount = await saq_hooks._mark_run_failed(
+                    run_id.hex,
+                    _ORG.hex,
+                    claim_token="tok-a",
+                    error_detail="task failure",
+                )
+                assert rowcount == 1
+                await saq_hooks._record_task_failure_facts(str(run_id), str(_ORG))
+
+            with patch.object(cron_helpers, "_open_system_factory", return_value=maker):
+                summary = await cron_helpers.run_classification_reconcile()
+            assert summary["classified"] == 1
+
+            async with maker() as s, s.begin():
+                record = (await s.execute(select(Run).where(Run.id == run_id))).scalar_one().run_classification
+                fact = (await s.execute(select(RunDailyFact).where(RunDailyFact.run_id == run_id))).scalar_one()
+            assert record is not None
+            assert record["value"] == "no_delivery"
+            # A non-benign verdict must NOT stamp the marker: NULL is the
+            # reader's "not benign" state and the run keeps counting.
+            assert fact.benign is None
+        finally:
+            await eng.dispose()
+
+
 class _MockBegin:
     async def __aenter__(self) -> Self:
         return self
@@ -1941,6 +2132,8 @@ class TestBenignSignatures:
             {"error_detail_contains": "no code"},  # missing code -> dropped
             {"error_code": 123},  # non-string code -> dropped
             {"error_code": "agent.failed", "error_detail_contains": 5},  # non-string detail -> dropped
+            {"error_code": "agent.failed", "detail_contains": "rebase conflict"},  # typo'd key -> dropped
+            {"error_code": "agent.failed", "error_detail_contains": "x", "match_type": "exact"},  # extra -> dropped
             "not-a-dict",
             None,
         ]
@@ -1950,9 +2143,43 @@ class TestBenignSignatures:
             {"error_code": "agent.stall", "error_detail_contains": "quiet"},
         ]
 
+    def test_a_typo_detail_key_is_dropped_never_widened(self) -> None:
+        """FAR-707 QA: ``detail_contains`` (a typo for ``error_detail_contains``)
+        must NOT normalise to ``error_detail_contains: ""`` — that would match
+        EVERY ``agent.failed`` failure on the pipeline instead of only rebase
+        conflicts, the exact "signature broader than believed" hazard."""
+        typo = [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}]
+        # The typo'd entry is unusable — dropped, not silently widened.
+        assert not normalize_benign_signatures(typo)
+        # Consequently it can never match anything — including a failure whose
+        # detail WOULD have matched had the key been spelled correctly.
+        assert not matches_benign_signature(
+            normalize_benign_signatures(typo),
+            error_code="agent.failed",
+            error_detail="Rebase conflict",
+        )
+        # And the well-formed equivalent still matches, proving the drop is
+        # about the KEY, not about the code/detail pair.
+        assert matches_benign_signature(
+            normalize_benign_signatures([{"error_code": "agent.failed", "error_detail_contains": "rebase conflict"}]),
+            error_code="agent.failed",
+            error_detail="Rebase conflict",
+        )
+
     @pytest.mark.parametrize(
         "raw",
-        [None, {}, "nope", 3, [], [{"nope": 1}], [{"error_code": None}], [{"error_code": "  "}], [None, 7]],
+        [
+            None,
+            {},
+            "nope",
+            3,
+            [],
+            [{"nope": 1}],
+            [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}],
+            [{"error_code": None}],
+            [{"error_code": "  "}],
+            [None, 7],
+        ],
         ids=[
             "none",
             "empty-dict",
@@ -1960,6 +2187,7 @@ class TestBenignSignatures:
             "int",
             "empty-list",
             "unknown-keys",
+            "typo'd-detail-key",
             "null-code",
             "blank-code",
             "non-dict-entries",
@@ -2159,6 +2387,38 @@ class TestBenignConfigWiring:
             assert await classify_and_persist_run(session, run) is True
         record = await _read_classification(engine, run_id)
         assert record is not None
+        assert record["value"] == "no_delivery"
+
+    async def test_a_partially_malformed_stored_config_is_logged_and_never_widens(
+        self,
+        engine: AsyncEngine,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """FAR-707 QA: one typo'd entry next to a valid one must (a) log the
+        malformed config (the old "only when NOTHING survived" condition hid
+        it) and (b) never widen the typo'd entry to "match any detail" — the
+        run below would have classified ``benign`` off the typo'd entry's
+        lost detail constraint under the old normaliser."""
+        run_id = uuid.uuid4()
+        async with session.begin():
+            await self._seed_pipeline(
+                session,
+                signatures=[
+                    {"error_code": "agent.failed", "detail_contains": "rebase conflict"},  # typo'd key
+                    {"error_code": "agent.no_op"},
+                ],
+            )
+            run = await _seed_run(session, run_id, status="failed", error_code="agent.failed")
+            run.error_detail = "Sandbox died"  # would match a WIDENED typo'd entry
+            await session.flush()
+            with caplog.at_level("WARNING", logger="modulo.core.pipeline_engine.classify"):
+                assert await classify_and_persist_run(session, run) is True
+        assert any("classification.benign_signatures_malformed" in m for m in caplog.messages)
+        record = await _read_classification(engine, run_id)
+        assert record is not None
+        # The typo'd entry was DROPPED (not widened), so this genuine failure
+        # still counts — historical behaviour.
         assert record["value"] == "no_delivery"
 
     async def test_non_terminal_runs_never_touch_the_signature_query(

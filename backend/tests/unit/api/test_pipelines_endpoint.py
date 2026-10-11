@@ -3073,6 +3073,28 @@ class TestBenignSignaturesSurface:
             [{"error_code": "agent.failed", "error_detail_contains": 5}],
             [{"error_code": None}],
             ["not-a-dict"],
+            # FAR-707 QA: a typo'd detail key (or any unknown key) must 422 —
+            # accepting it would store the entry with its detail constraint
+            # silently lost, matching EVERY failure with that error_code.
+            [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}],
+            [{"error_code": "agent.failed", "match_type": "exact"}],
+            # ...even when it sits next to a fully valid entry.
+            [
+                {"error_code": "agent.no_op"},
+                {"error_code": "agent.failed", "detail_contains": "rebase conflict"},
+            ],
+        ],
+        ids=[
+            "not-a-list",
+            "dict-not-list",
+            "missing-error-code",
+            "empty-error-code",
+            "non-string-detail",
+            "null-error-code",
+            "not-a-dict-entry",
+            "typo'd-detail-key",
+            "unknown-extra-key",
+            "typo-next-to-valid-entry",
         ],
     )
     def test_malformed_signatures_are_rejected_on_the_wire(self, payload: Any) -> None:
@@ -3080,3 +3102,12 @@ class TestBenignSignaturesSurface:
         must not vanish from the stored config."""
         with pytest.raises(ValidationError):
             PipelineUpdate.model_validate({"benign_signatures": payload})
+
+    def test_an_unknown_key_rejection_names_the_widening_hazard(self) -> None:
+        """The 422 for an unknown key is EXPLICIT (not the generic shape
+        message), so the operator learns why the key is rejected — an absent
+        ``error_detail_contains`` would match any detail for that code."""
+        with pytest.raises(ValidationError, match="accept ONLY the keys"):
+            PipelineUpdate.model_validate(
+                {"benign_signatures": [{"error_code": "agent.failed", "detail_contains": "rebase conflict"}]}
+            )
