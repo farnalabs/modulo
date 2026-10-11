@@ -45,6 +45,25 @@ describe('ErrorAlert', () => {
     expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
   })
 
+  // -- ProblemDetail message (RFC 9457 problem object) ---------------------
+
+  it('renders a ProblemDetail message as "title: detail"', async () => {
+    // When `message` is a problem object rather than a string, the component
+    // shows the RFC 9457 `title` and `detail` instead of the raw message.
+    const wrapper = mount(ErrorAlert, {
+      props: {
+        message: {
+          type: 'urn:problem:modulo:not_found',
+          title: 'Not Found',
+          status: 404,
+          detail: 'Pipeline not found',
+        },
+      },
+    })
+    await nextTick()
+    expect(wrapper.text()).toContain('Not Found: Pipeline not found')
+  })
+
   // -- compact density variant (FAR-1669 sweep follow-up) ------------------
 
   it('applies the compact density classes when compact is true', async () => {
