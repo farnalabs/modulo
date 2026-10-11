@@ -27,7 +27,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from modulo.core import cron_helpers as ch
-from modulo.core.pipeline_execution import PHASE_FIRST_NODE_DISPATCHED
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 
 _PHASE_ELAPSED_RE = re.compile(r"dispatch_phase_elapsed=([0-9]+\.[0-9])s")
 
@@ -205,27 +205,65 @@ class TestNodeStartedIsNotNodelessZombie:
 
     def test_zero_progress_sql_shape_carries_the_phase_leg(self) -> None:
         """The shared zero-progress shape (router selection + age-gate
-        NOT-arm) must exclude node-started rows, and the inlined SQL literal
-        must stay pinned to the canonical phase constant (single source)."""
+        NOT-arm) must exclude node-started rows, and the phase value is a BIND
+        (``:first_node_phase``) sourced from the shared constant — the
+        raw-SQL and ORM spellings cannot desynchronise because both bind the
+        ONE definition (FAR-1649 qa finding 7)."""
         assert "dispatch_phase" in ch._ZERO_PROGRESS_SHAPE_SQL
-        assert PHASE_FIRST_NODE_DISPATCHED in ch._ZERO_PROGRESS_SHAPE_SQL
-        assert f"dispatch_phase <> '{PHASE_FIRST_NODE_DISPATCHED}'" in ch._ZERO_PROGRESS_SHAPE_SQL
+        assert ":first_node_phase" in ch._ZERO_PROGRESS_SHAPE_SQL
+        assert "first_node_dispatched" not in ch._ZERO_PROGRESS_SHAPE_SQL
 
     def test_mid_graph_wedge_not_arm_now_covers_node_started_rows(self) -> None:
         """Routing consequence: because the age gate excludes exactly the
         zero-progress shape, closing the shape's node-started hole makes
         node-started rows collectable there with the truthful
         ``run.no_progress`` code instead of the nodeless "dispatched no
-        node" label."""
+        node" label. The assembled statement carries the phase BIND, and the
+        detail concat appends the row's own phase (qa finding 6) so the
+        class is visible on the failed run."""
         assembled = ch._MID_GRAPH_WEDGE_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
         assert "AND NOT (" in assembled
-        assert PHASE_FIRST_NODE_DISPATCHED in assembled
+        assert ":first_node_phase" in assembled
+        assert "dispatch_phase=" in assembled
 
     def test_nodeless_router_sql_excludes_node_started_rows(self) -> None:
         """The aged nodeless router composes the SAME shape — node-started
         rows are never routed to the ``agent.stall`` chokepoint."""
         assembled = ch._NODELESS_ROUTER_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
-        assert f"dispatch_phase <> '{PHASE_FIRST_NODE_DISPATCHED}'" in assembled
+        assert ":first_node_phase" in assembled
+
+    async def test_both_sql_sites_bind_the_shared_phase_constant(self) -> None:
+        """Both raw-SQL execute sites pass ``first_node_phase`` bound to the
+        SHARED constant — one definition, two statements, no drift."""
+        from unittest.mock import MagicMock
+
+        class _CaptureSession:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict[str, Any]]] = []
+
+            async def execute(self, stmt: Any, params: dict[str, Any] | None = None) -> MagicMock:
+                self.calls.append((str(stmt), dict(params or {})))
+                result = MagicMock()
+                result.all.return_value = []
+                return result
+
+            async def flush(self) -> None:
+                return
+
+        router_session = _CaptureSession()
+        await ch._terminalize_aged_nodeless_zombies(
+            router_session, uuid.uuid4(), max_age_minutes=135, summary=ch._dispatcher_summary(), max_rows=None
+        )
+        assert router_session.calls
+        assert router_session.calls[0][1]["first_node_phase"] == PHASE_FIRST_NODE_DISPATCHED
+
+        age_gate_session = _CaptureSession()
+        routed = await ch._terminalize_mid_graph_wedges(
+            age_gate_session, uuid.uuid4(), max_age_minutes=135, max_rows=None
+        )
+        assert routed == []
+        assert age_gate_session.calls
+        assert age_gate_session.calls[0][1]["first_node_phase"] == PHASE_FIRST_NODE_DISPATCHED
 
     def test_orm_predicate_compiles_the_phase_leg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The reconciler's ORM nodeless predicate (also the FAR-873
@@ -250,18 +288,25 @@ class TestNodeStartedIsNotNodelessZombie:
         chokepoint (phase transitioned between SELECT and re-read), the
         terminal detail must never claim "dispatched no node" — that
         self-contradicting label is what produced the FAR-1649
-        misdiagnosis."""
+        misdiagnosis. FAR-1649 qa finding 4: the COUNTER is truthful too —
+        the row inflates ``node_started_terminalized``, never the zero-node
+        ``claimed_but_never_dispatched`` class."""
         entered_at = datetime.now(UTC) - timedelta(seconds=180)
         run = _make_run(
             dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
             dispatch_phase_entered_at=entered_at,
         )
-        summary, _ingest = await _terminal_fail(run)
+        summary, ingest = await _terminal_fail(run)
 
         detail = run.error_detail
         assert isinstance(detail, str)
         assert "first node STARTED" in detail
         assert "dispatched no node" not in detail
         assert f"dispatch_phase={PHASE_FIRST_NODE_DISPATCHED}" in detail
-        assert summary["claimed_but_never_dispatched"] == 1
+        assert summary["node_started_terminalized"] == 1
+        assert summary["claimed_but_never_dispatched"] == 0
+        # The ingested error event groups under ITS OWN stable message.
+        event_message = ingest.await_args.kwargs["message"]
+        assert "node-started" in event_message
+        assert "no node was ever dispatched" not in event_message
         assert run.status == "failed"

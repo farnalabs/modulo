@@ -1374,6 +1374,57 @@ async def test_node_started_aged_run_routes_to_age_gate_not_nodeless(
     assert code == "no_progress"
 
 
+async def test_slot_sweep_never_resets_node_started_stale_run(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """FAR-1649 qa iteration 1 (finding 1, path B): the heartbeat-stale slot
+    sweep must NEVER reset a durably node-STARTED run to ``pending``.
+
+    The reset clears ``dispatched_at``, which admits the row to the reconcile
+    ``capacity_deferred`` leg and re-dispatches it — RE-EXECUTING the started
+    node. The sweep's UPDATE therefore excludes ``first_node_dispatched``
+    rows; the NULL-phase control with the identical shape is still reset
+    (retry) as before — the exclusion discriminates on the phase alone."""
+    from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
+    from modulo.core.run_admission import reconcile_pipeline_slots
+
+    org_id, user_id = await _seed_org_account(db_engine, "SweepNodePhaseOrg", cap=None)
+    pipe = await _seed_pipeline(db_engine, org_id, "PipeSweepPhase", user_id)
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _SANDBOX_GRAPH)
+    stale = datetime.now(UTC) - timedelta(minutes=45)
+    node_started = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=0,
+        heartbeat_at=stale,
+        started_at=datetime.now(UTC) - timedelta(hours=2),
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    control = await _seed_saq_running_run(
+        db_engine,
+        org_id,
+        pipe,
+        snap,
+        claim_count=0,
+        heartbeat_at=stale,
+        started_at=datetime.now(UTC) - timedelta(hours=2),
+        dispatch_phase=None,
+    )
+
+    await reconcile_pipeline_slots(db_engine)
+
+    # Node-started: untouched — still running, for the watchdogs / age gate.
+    status, _code = await _run_state(db_engine, org_id, node_started)
+    assert status == "running"
+    # Control (NULL phase, claim_count within the retry budget): reset to
+    # pending for re-dispatch, exactly as before the exclusion.
+    status, _code = await _run_state(db_engine, org_id, control)
+    assert status == "pending"
+
+
 async def test_mid_graph_wedge_spares_recently_started_run(
     app_engine: AsyncEngine,
     db_engine: AsyncEngine,

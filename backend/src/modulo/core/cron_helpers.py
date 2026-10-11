@@ -49,6 +49,15 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from modulo.connectors._rate_bucket import SharedBudgetUnavailableError
 from modulo.connectors.base import ConnectorPermissionError
 from modulo.core.dispatch import SAQ_RUN_TIMEOUT
+
+# FAR-1649: the durable "first node STARTED" phase label. It lives in the
+# dependency-free leaf ``modulo.core.dispatch_phases`` (a module import with NO
+# imports of its own) so this API-facing seam can branch on it without
+# importing ``pipeline_execution`` — which reaches langgraph at module level
+# and would otherwise need an import-linter whitelist edge here (the lazy shim
+# it replaced did exactly that, coupling the runner-capacity safety sweep to
+# langgraph).
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.exceptions import PIPELINE_NOT_RUNNABLE_SKIP_REASON, PipelineNotRunnableError, TriggersPausedError
 from modulo.core.logging_config import org_id_var
 from modulo.core.pipeline_engine.error_codes import sanitize_error_text
@@ -310,23 +319,10 @@ _MID_GRAPH_WEDGE_MAX_AGE_MINUTES = max(SAQ_RUN_TIMEOUT // 60, 120) + 15
 # Raw spelling written into ``runs.error_code``; registered (and aliased) in
 # ``pipeline_engine.error_codes`` as ``run.no_progress`` in the same change.
 _NO_PROGRESS_ERROR_CODE = "no_progress"
-# Constant prefix; the per-row ``node_attempts=`` / ``claims=`` counts are
-# concatenated onto it by the UPDATE itself (one bind param, N row shapes).
+# Constant prefix; the per-row ``node_attempts=`` / ``claims=`` /
+# ``dispatch_phase=`` values are concatenated onto it by the UPDATE itself
+# (one bind param for the prefix, N row shapes).
 _NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT = "No node progress within the {age}m age bound (dispatcher_reconcile age gate; "
-
-
-def _phase_first_node_dispatched() -> str:
-    """FAR-1649: the durable "first node STARTED" phase label (FAR-1422).
-
-    Lazy import by house discipline: ``pipeline_execution`` reaches
-    ``langgraph`` at module level, and ``cron_helpers`` is an API-facing seam
-    (import-linter forbids the API layer transitively importing langgraph) —
-    same reason the shared ``pipeline_engine.executor`` matcher import is
-    in-function (FAR-733).
-    """
-    from modulo.core.pipeline_execution import PHASE_FIRST_NODE_DISPATCHED
-
-    return PHASE_FIRST_NODE_DISPATCHED
 
 
 # The ZERO-progress row shape: no node ever STARTED, no node ever attempted,
@@ -357,17 +353,19 @@ def _phase_first_node_dispatched() -> str:
 # terminal-failed them with the FALSE "dispatched no node" label. They now
 # fall to the mid-graph age gate's NOT-arm (truthful ``run.no_progress`` at
 # the age bound) and are left for the in-process attempt's own watchdogs
-# (provisioning / node-deadline) in the meantime. The phase literal below is
-# the SQL spelling of ``PHASE_FIRST_NODE_DISPATCHED`` (inlined rather than
-# interpolated because ruff S608 / the static-template convention forbid
-# f-string SQL here); a unit test pins the two spellings together.
+# (provisioning / node-deadline) in the meantime. The phase value is BOUND
+# (``:first_node_phase``) from the shared ``PHASE_FIRST_NODE_DISPATCHED``
+# constant at both execute sites — never inlined — so the raw-SQL spelling and
+# the ORM predicate's parameterised leg cannot desynchronise (FAR-1649 qa
+# finding 7): there is one constant and one bind, not two spellings to pin
+# together.
 _ZERO_PROGRESS_SHAPE_SQL = (
     "COALESCE(node_attempt_count,0) = 0 AND node_token_usage IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM run_node_outputs rno "
     "WHERE rno.run_id = runs.id AND rno.attempt_key = :final_key) "
     "AND NOT EXISTS (SELECT 1 FROM checkpoints cp "
     "WHERE cp.organisation_id = runs.organisation_id AND cp.thread_id = runs.langgraph_thread_id) "
-    "AND (dispatch_phase IS NULL OR dispatch_phase <> 'first_node_dispatched')"
+    "AND (dispatch_phase IS NULL OR dispatch_phase <> :first_node_phase)"
 )
 _ZERO_PROGRESS_SHAPE_TOKEN = "__ZERO_PROGRESS_SHAPE__"
 
@@ -386,7 +384,14 @@ _NODELESS_ROUTER_SQL = (
 _MID_GRAPH_WEDGE_SQL = (
     "UPDATE runs SET status='failed', error_code=:code, "
     "error_detail=:detail || 'node_attempts=' || COALESCE(node_attempt_count,0)::text "
-    "|| ', claims=' || COALESCE(claim_count,0)::text || ')', "
+    "|| ', claims=' || COALESCE(claim_count,0)::text "
+    # FAR-1649 qa finding 6: the age gate is where a started-but-dying row
+    # lands, so its detail MUST carry the row's own dispatch phase — otherwise
+    # the first-node-started class is invisible (no nodeless label, no phase in
+    # the detail) and an operator cannot tell "no node ever started" from
+    # "first node started, then died". Per-row COALESCE: a legacy NULL phase
+    # renders as ``unknown``, never omitted.
+    "|| ', dispatch_phase=' || COALESCE(dispatch_phase, 'unknown') || ')', "
     "completed_at=now() "
     "WHERE ctid IN ("
     "  SELECT ctid FROM runs "
@@ -447,6 +452,10 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     "deduped": 0,
     "nodeless_redispatched": 0,
     "nodeless_capped": 0,
+    # FAR-1649: node-started rows held back from re-dispatch this tick (the
+    # row-level guard in _reconcile_one_row). Read through .get() like every
+    # other additive counter here.
+    "node_started_deferred": 0,
     # The terminalizer counters below (and their healthz aliases) are seeded
     # from the registry (FAR-720) just after the registry is defined — see
     # ``_dispatcher_reconcile_stats.update(_terminalizer_stats_defaults())``.
@@ -510,6 +519,8 @@ def set_dispatcher_reconcile_stats(stats: dict[str, Any]) -> None:
     _dispatcher_reconcile_stats["nodeless_redispatched"] = stats.get("nodeless_redispatched", 0)
     _dispatcher_reconcile_stats["nodeless_capped"] = stats.get("nodeless_capped", 0)
     _dispatcher_reconcile_stats["capacity_deferred"] = stats.get("capacity_deferred", 0)
+    # FAR-1649: held-back node-started rows (additive .get() contract).
+    _dispatcher_reconcile_stats["node_started_deferred"] = stats.get("node_started_deferred", 0)
     # Terminalizer counters (and their healthz aliases) derive from the
     # registry (FAR-720): a new terminalizer registers once below and is
     # carried through here, the module dict, the summary and the telemetry
@@ -4641,7 +4652,7 @@ def _nodeless_zombie_predicate(age_minutes: int) -> Any:
         Run.node_token_usage.is_(None),
         # FAR-1649: a durably-recorded first-node start is not zero-node —
         # never re-dispatch or mislabel it through this branch.
-        or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != _phase_first_node_dispatched()),
+        or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
         # The AGE gate stays run-level (started_at): it protects a legitimate
         # long first node from the window, and a re-dispatched run's total age
         # only grows. Only the SHIELD below is per-attempt.
@@ -4718,7 +4729,7 @@ def _is_nodeless_zombie_row(row: Any, age_minutes: int) -> bool:
     if row.started_at is None:
         return False
     # FAR-1649: a durably-recorded first-node start is not zero-node.
-    if getattr(row, "dispatch_phase", None) == _phase_first_node_dispatched():
+    if getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
         return False
     now = datetime.now(UTC)
     age_seconds = (now - row.started_at).total_seconds()
@@ -4973,6 +4984,14 @@ async def _fail_nodeless_run(
     grepping run error_details after the fact. Best-effort: the alert must
     never break the repair.
 
+    FAR-1649 qa finding 4: when the re-read phase proves a node STARTED
+    (``first_node_dispatched``), all three legs switch to the node-started
+    class — the ``node_started_terminalized`` counter, a distinct log event /
+    tail and a distinct stable error message — because "no node was ever
+    dispatched" is false for that row and would poison the alert signal and
+    the error group. Such a row should not reach here at all (the selection
+    legs exclude the class); this is the defense-in-depth label.
+
     FAR-1088: the error_detail now includes ``pipeline_id``, ``trigger_id``,
     ``claim_count``, and the run's last recorded ``dispatch_phase`` (+ the
     seconds spent in it) so the terminal-failed run is diagnosable from the
@@ -5032,7 +5051,8 @@ async def _fail_nodeless_run(
     # transitioned between the SELECT and this chokepoint re-read must never
     # produce the self-contradicting label that caused the FAR-1649
     # misdiagnosis; say what the row actually proves.
-    if dispatch_phase == _phase_first_node_dispatched():
+    node_started = dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
+    if node_started:
         detail_lead = (
             "Claimed by SAQ; first node STARTED but no super-step completed within the "
             "nodeless window (dispatcher_reconcile zombie repair; FAR-1649 row should have "
@@ -5050,18 +5070,35 @@ async def _fail_nodeless_run(
         phase=phase_text,
     )
     run.completed_at = completed_at
-    summary["claimed_but_never_dispatched"] += 1
+    # FAR-1649 qa finding 4: all THREE observability legs (counter, alert-grade
+    # log, ingested stable error message) must describe the row that actually
+    # arrived. A node-started row is NOT "claimed but never dispatched" — a
+    # node DID start — so it gets its own counter, log event and error group
+    # instead of inflating/labeling the zero-node class.
+    if node_started:
+        summary["node_started_terminalized"] += 1
+    else:
+        summary["claimed_but_never_dispatched"] += 1
     # Alert-grade: these runs burned their full retry budget without ever
     # executing a node — the environment (worker or sandbox) that claimed them
     # is degraded. ERROR level + the wasted age makes the burst visible.
     age_text = f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown"
     queue_wait_text = f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown"
+    if node_started:
+        log_event = "dispatcher_reconcile.node_started_terminalized"
+        log_tail = (
+            "terminal-failed; first node STARTED but no super-step completed within the "
+            "nodeless window (node-started row — NOT a zero-node zombie)"
+        )
+    else:
+        log_event = "dispatcher_reconcile.claimed_but_never_dispatched"
+        log_tail = "terminal-failed; SAQ claimed this run but no node was ever dispatched"
     _log.error(
-        "dispatcher_reconcile.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
+        "%s run=%s org=%s claim_count=%s "
         "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
         "zombie_age_minutes=%s saq_queue_wait_seconds=%s "
-        "dispatched_at=%s started_at=%s — "
-        "terminal-failed; SAQ claimed this run but no node was ever dispatched",
+        "dispatched_at=%s started_at=%s — %s",
+        log_event,
         run_id,
         org_id,
         claim_count,
@@ -5073,17 +5110,25 @@ async def _fail_nodeless_run(
         queue_wait_text,
         dispatched_at.isoformat() if dispatched_at is not None else "None",
         started_at.isoformat() if started_at is not None else "None",
+        log_tail,
     )
+    if node_started:
+        stable_message = (
+            "dispatcher_reconcile: node-started zombie terminal-failed "
+            "(first node STARTED but no super-step completed within the nodeless window)"
+        )
+    else:
+        stable_message = (
+            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
+            "(SAQ claimed the run but no node was ever dispatched)"
+        )
     await _ingest_saq_error(
         session,
         org_id,
         function="dispatcher_reconcile",
         # STABLE message (no run id): one error group whose occurrence count IS
         # the alert signal for the class; the run id rides in context_json.
-        message=(
-            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
-            "(SAQ claimed the run but no node was ever dispatched)"
-        ),
+        message=stable_message,
         context={
             "run_id": str(run_id),
             "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
@@ -5190,6 +5235,23 @@ def _build_re_dispatch_predicate(
             Run.status == "running",
             Run.dispatcher == "saq",
             Run.heartbeat_at < func_now_minus(stale_window),
+            # FAR-1649 qa finding 1: the generic stale-heartbeat leg must NOT
+            # select a durably node-STARTED run (``first_node_dispatched``) —
+            # re-dispatching it re-executes the started node (the zero-node
+            # "nothing can double-execute" premise is false for it). Such rows
+            # are left for the in-process attempt's own watchdogs and, once
+            # dead, for the age gate's truthful ``run.no_progress`` (whose
+            # detail now carries the phase). A NULL phase = no durable
+            # node-start evidence (legacy rows) and stays recoverable.
+            #
+            # Finding 2 (fleet cap): with this exclusion the node-started class
+            # is out of EVERY re-dispatch leg — it enqueues ZERO rows per tick
+            # (the mass-wedge flood the old nodeless-cap of 50/tick used to
+            # bound), so no per-tick cap is needed for it; its terminalisation
+            # drains through the age gate's own per-tick ``max_rows`` cap. The
+            # D8 marker sweep composes this SAME predicate (parity by
+            # construction), so its recoverability verdict moves in lockstep.
+            or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
         # dispatcher='saq' + stale heartbeat. The no-job gate is applied
@@ -5560,7 +5622,10 @@ def _saq_run_claim_cap() -> int:
     ``pipeline_execution.SAQ_RUN_CLAIM_CAP`` module constant was removed; claim
     caps now resolve from settings everywhere. cron_helpers never imports
     pipeline_execution (import-linter: api must not reach langgraph transitively
-    through pipeline_execution -> executor).
+    through pipeline_execution -> executor): the one label it needed from there
+    — ``PHASE_FIRST_NODE_DISPATCHED`` — now lives in the dependency-free leaf
+    ``modulo.core.dispatch_phases`` (FAR-1649), so no lazy shim and no
+    whitelist edge are required.
     """
     return int(get_settings().saq_run_claim_cap)
 
@@ -5695,6 +5760,9 @@ async def _terminalize_aged_nodeless_zombies(
         {
             "oid": str(org_id),
             "final_key": FINAL_ATTEMPT_KEY,
+            # FAR-1649: the zero-progress shape's phase leg binds the SHARED
+            # constant — raw SQL and the ORM predicate read one definition.
+            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -5764,6 +5832,9 @@ async def _terminalize_mid_graph_wedges(
             "code": _NO_PROGRESS_ERROR_CODE,
             "detail": detail_prefix,
             "final_key": FINAL_ATTEMPT_KEY,
+            # FAR-1649: shared-constant bind for the shape's phase leg (see
+            # the router's params above — one definition, both statements).
+            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
             "max_age_minutes": max_age_minutes,
             "max_rows": _terminalize_max_rows(max_rows),
         },
@@ -6096,7 +6167,13 @@ _TERMINALIZERS: tuple[ReconcileTerminalizer, ...] = (
     ReconcileTerminalizer(
         key="nodeless",
         stats_key="nodeless_failed",
-        blob_keys=("nodeless_failed", "claimed_but_never_dispatched"),
+        # FAR-1649 qa finding 4: ``node_started_terminalized`` is the THIRD
+        # blob key of this chokepoint — a node-STARTED row that reached the
+        # terminaliser (a phase-transition race; the selection legs exclude
+        # the class) is NOT "claimed-but-never-dispatched" and must never
+        # inflate that counter. Registered here so the summary, the healthz
+        # blob and the setter all carry it without parallel hand-edits.
+        blob_keys=("nodeless_failed", "claimed_but_never_dispatched", "node_started_terminalized"),
         stall_reason="executor_stalled",
         # FAR-1329: the age-bound ZERO-progress rows route through this same
         # chokepoint (``_fail_nodeless_run``), so the router is a batch
@@ -6324,7 +6401,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         older than ``ENQUEUE_FAILED_TTL_BACKSTOP_MINUTES`` (60m) is
         terminal-failed ``dispatch_failed`` — ONLY when Redis is verifiably
         reachable (lightweight ping); Redis down -> keep pending.
-      * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT.
+      * running: ``dispatcher='saq'``, heartbeat stale by 2*SAQ_JOB_HEARTBEAT
+        — EXCLUDING a durably node-STARTED run (``dispatch_phase=
+        'first_node_dispatched'``, FAR-1649): re-dispatch would re-execute the
+        started node, so such rows are left for the in-process watchdogs and
+        the age gate's truthful ``run.no_progress`` (the row-level guard in
+        ``_reconcile_one_row`` carries the same exclusion).
       * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
         progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
         puts_json both NULL + no LangGraph checkpoint for the thread):
@@ -7037,6 +7119,18 @@ async def _dispatcher_reconcile_body(
             summary["claimed_but_never_dispatched"],
             tuning.nodeless_window,
         )
+    # FAR-1649 qa finding 4: the node-STARTED twin of the alert above. These
+    # rows are excluded from the zero-node selection legs, so ANY count here is
+    # a selection-leg race that reached the chokepoint — alert on its own
+    # terms instead of folding it into the zero-node class.
+    if summary["node_started_terminalized"]:
+        _log.error(
+            "dispatcher_reconcile.node_started_terminalized_summary: %d run(s) whose first node STARTED "
+            "were terminal-failed by the zombie chokepoint this tick (nodeless_window=%dm) — a node-started "
+            "row reached the zero-node chokepoint; investigate the selection legs / phase writes",
+            summary["node_started_terminalized"],
+            tuning.nodeless_window,
+        )
     if stage is not None:
         stage["op"] = "compensating_sweeps"
     await _run_reconcile_sweeps(redis_client, summary)
@@ -7070,6 +7164,11 @@ def _dispatcher_summary() -> dict[str, Any]:
         "enqueue_failed_redispatched": 0,
         "enqueue_failed_capped": 0,
         "capacity_deferred": 0,
+        # FAR-1649: running rows whose durable phase proves a node STARTED that
+        # this tick deliberately did NOT re-dispatch (re-execution unsafe) —
+        # held back for the watchdogs / age gate. Additive .get() contract like
+        # every other counter here.
+        "node_started_deferred": 0,
         "streak_scanned": 0,
         "streak_deactivated": 0,
         "streak_capped": 0,
@@ -8293,6 +8392,28 @@ async def _reconcile_one_row(
         return enqueue_failed_redispatched
     if job is not None:
         summary["skipped"] += 1
+        return enqueue_failed_redispatched
+
+    # FAR-1649 qa finding 1 — row-level belt for the SQL exclusion (the scan's
+    # predicate can only reach this row via another branch, or via a phase that
+    # transitioned between SELECT and now). A durably node-STARTED running row
+    # is never re-dispatched here: ``execute_run`` would re-execute the started
+    # node. It stays ``running`` so the age gate collects it truthfully
+    # (``run.no_progress`` + the phase in its detail). Counted separately
+    # (``node_started_deferred``) so the held-back class is visible per tick —
+    # see the predicate comment on the per-tick bound: this class enqueues
+    # zero rows per tick, so the mass-wedge flood bound holds.
+    if row.status == "running" and getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+        summary["node_started_deferred"] += 1
+        _log.warning(
+            "dispatcher_reconcile.node_started_not_redispatched run=%s org=%s "
+            "dispatch_phase=%s claim_count=%s — node-started row held back from "
+            "re-dispatch (re-execution unsafe); left for the watchdogs / age gate",
+            row.id,
+            org_id,
+            PHASE_FIRST_NODE_DISPATCHED,
+            getattr(row, "claim_count", None),
+        )
         return enqueue_failed_redispatched
 
     # Discriminator (F6a): awaiting_human/claimed/hitl_parked -> resume_run;

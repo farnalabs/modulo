@@ -38,6 +38,28 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, async_sessionmaker
 
+# FAR-1649: the ``PHASE_*`` label values themselves live in the
+# dependency-free leaf ``modulo.core.dispatch_phases``. They moved there so
+# ``cron_helpers`` / ``run_admission`` can branch on them without importing
+# THIS module, which reaches langgraph at module level. This import IS the
+# re-export: every ``pipeline_execution.PHASE_*`` name keeps resolving here
+# for every existing importer (saq_worker, executor, tests) while the values
+# have ONE definition. The ``noqa: F401`` lines are names this module itself
+# never references but other modules historically import from HERE.
+from modulo.core.dispatch_phases import (
+    PHASE_CAPACITY_CHECK,  # noqa: F401  (re-export)
+    PHASE_CLAIMED,
+    PHASE_EXECUTOR_RUNNING,  # noqa: F401  (re-export)
+    PHASE_FIRST_NODE_DISPATCHED,
+    PHASE_GRAPH_COMPILE,  # noqa: F401  (re-export)
+    PHASE_INIT_ENV,  # noqa: F401  (re-export)
+    PHASE_LOADING_CONTEXT,  # noqa: F401  (re-export)
+    PHASE_LOADING_SETUP,
+    PHASE_NOT_STARTED,
+    PHASE_SETUP_COMPLETE,
+    PHASE_SPEND_CHECK,  # noqa: F401  (re-export)
+    PHASE_STREAMING,
+)
 from modulo.db.crud.run import get_run
 from modulo.db.models.run import ACTIVE_RUN_STATUSES
 from modulo.db.sqlstates import LOCK_NOT_AVAILABLE_SQLSTATE, sqlstate_of
@@ -54,18 +76,10 @@ _log = logging.getLogger(__name__)
 # (the claim+setup side) and the executor (the dispatch side).  When the
 # zombie watchdog fires, it reads the tracker to report WHERE the executor is
 # stuck — not just THAT it is stuck.
-PHASE_NOT_STARTED = "not_started"
-PHASE_CLAIMED = "claimed"
-PHASE_LOADING_SETUP = "loading_setup"
-PHASE_SETUP_COMPLETE = "setup_complete"
-PHASE_EXECUTOR_RUNNING = "executor_running"
-PHASE_LOADING_CONTEXT = "loading_context"
-PHASE_CAPACITY_CHECK = "capacity_check"
-PHASE_SPEND_CHECK = "spend_check"
-PHASE_INIT_ENV = "init_env"
-PHASE_GRAPH_COMPILE = "graph_compile"
-PHASE_STREAMING = "streaming"
-PHASE_FIRST_NODE_DISPATCHED = "first_node_dispatched"
+#
+# FAR-1649: the ``PHASE_*`` label values themselves live in the
+# dependency-free leaf ``modulo.core.dispatch_phases`` and are re-exported
+# from the import block above — see the note there.
 
 # Attribute name used to attach the DispatchPhaseTracker to the executor instance.
 DISPATCH_TRACKER_ATTR = "_dispatch_phase_tracker"
