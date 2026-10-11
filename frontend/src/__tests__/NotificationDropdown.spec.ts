@@ -84,6 +84,18 @@ describe('NotificationDropdown (FAR-249)', () => {
     expect(wrapper.find('[data-testid="notification-dropdown-empty"]').exists()).toBe(true)
   })
 
+  it('falls back to an empty list when the payload omits notifications', async () => {
+    // `notifications` is optional on the dashboard payload; a missing field
+    // must resolve to the empty list (nullish fallback) rather than leaving
+    // stale entries, so the dropdown shows the empty state.
+    h.mockFetchDashboard.mockResolvedValue({ total_unread: 0 })
+    const store = useNotificationsStore()
+
+    await store.fetchRecent()
+
+    expect(store.recentNotifications).toEqual([])
+  })
+
   it('renders an error state, NOT the empty state, when the recent fetch fails', async () => {
     h.mockFetchDashboard.mockRejectedValue(new Error('boom'))
 

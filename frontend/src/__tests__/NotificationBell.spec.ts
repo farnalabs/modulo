@@ -313,6 +313,25 @@ describe('NotificationBell (FAR-250)', () => {
     expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
   })
 
+  it('ignores an outside-click whose target is inside the bell root', async () => {
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = await mountBell()
+    await wrapper.find('[data-testid="notification-bell-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+
+    const clickCall = addSpy.mock.calls.find(([type]) => type === 'click')
+    expect(clickCall).toBeDefined()
+    const handler = clickCall![1] as unknown as (e: MouseEvent) => void
+
+    // A click whose target the root contains is NOT an outside click; the
+    // handler must leave the dropdown open.
+    handler({ target: wrapper.element } as unknown as MouseEvent)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="notification-dropdown"]').exists()).toBe(true)
+    addSpy.mockRestore()
+  })
+
   it('removes the document click listener when unmounted', async () => {
     const removeSpy = vi.spyOn(document, 'removeEventListener')
     const wrapper = await mountBell()
