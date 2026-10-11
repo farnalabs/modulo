@@ -12,6 +12,7 @@ are captured into ``report["failed"]`` instead of aborting the run.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, cast
@@ -42,6 +43,24 @@ _CONFLICT_HINT = "name already exists; rerun to apply as update"
 _PATH_MODEL_BACKENDS = "/model-backends"
 _PATH_SCHEMAS = "/schemas"
 
+# The MCP StreamableHTTP endpoint (stateless JSON-RPC) — the org-vault key
+# listing surface (FAR-1216). The server exposes no REST route that reads the
+# vault; ``list_secrets`` is the shipped read-only key-listing tool, so
+# plan-time credential_ref validation uses it rather than inventing a parallel
+# surface.
+_MCP_TOOLS_CALL_PATH = "/mcp/"
+_MCP_LIST_SECRETS_LIMIT = 1000
+_MCP_ACCEPT = "application/json, text/event-stream"
+
+
+class VaultListingError(RuntimeError):
+    """The org vault key listing could not be fetched.
+
+    Raised (never swallowed) so a caller validating a ``credential_ref`` fails
+    CLOSED with a clear reason rather than silently passing a key it could not
+    confirm.
+    """
+
 
 def _entity_reports(config: ApplyConfig) -> dict[str, list[tuple[str, Any]]]:
     """kind -> [(name, entity-object)] preserving declaration order.
@@ -65,21 +84,29 @@ def resolve_secret_refs(
     Returns (api_key_by_backend_name, blocked) where blocked entries are
     (kind, name, reason) for backends whose env var is missing/empty.
 
-    A ``secretref://<key>`` api_key is forwarded to the server UNCHANGED (the
-    same ``secretref://...`` string is sent as the request's ``api_key``): the
-    SERVER resolves it against the org vault at write time under the caller's
-    org context (FAR-1640) and fails the entity with a typed, key-naming error
-    if it is missing/foreign. The value never crosses the client boundary, so
-    the CLI cannot and does not resolve it locally.
+    A ``secretref://<key>`` api_key — or a ``credential_ref: <key>``, which is
+    normalised to the same token (FAR-1216) — is forwarded to the server
+    UNCHANGED (the ``secretref://...`` string is sent as the request's
+    ``api_key``): the SERVER resolves it against the org vault at write time
+    under the caller's org context (FAR-1640) and fails the entity with a
+    typed, key-naming error if it is missing/foreign. The value never crosses
+    the client boundary, so the CLI cannot and does not resolve it locally.
     """
     env: dict[str, str] = dict(environ if environ is not None else os.environ)
     resolved: dict[str, str] = {}
     blocked: list[tuple[str, str, str]] = []
     for entity in config.entities.model_backends:
+        credential_reference = entity.credential_reference()
+        if credential_reference is not None:
+            # ``credential_ref: <key>`` — forward the normalised token; the
+            # server resolves the vault reference (FAR-1640).
+            resolved[entity.name] = credential_reference
+            continue
         var = entity.env_ref_var()
         if var is None:
             # Literal or ``secretref://<key>`` — pass through; the server
             # resolves the vault reference (FAR-1640).
+            assert entity.api_key is not None  # enforced by the model validator
             resolved[entity.name] = entity.api_key
             continue
         value = env.get(var)
@@ -92,6 +119,43 @@ def resolve_secret_refs(
         else:
             resolved[entity.name] = value
     return resolved, blocked
+
+
+def _parse_vault_key_listing(envelope: dict[str, Any]) -> set[str]:
+    """Extract the org vault keys from a ``list_secrets`` MCP JSON-RPC response.
+
+    Raises :class:`VaultListingError` for any error/partial response so a
+    caller never mistakes "could not list" for "key absent" (which would block
+    a valid config) or "key present" (a silent pass).
+    """
+    error = envelope.get("error")
+    if error is not None:
+        detail = error.get("message") if isinstance(error, dict) else error
+        raise VaultListingError(f"list_secrets returned an error: {detail!r}")
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        raise VaultListingError("list_secrets response carried no result")
+    if result.get("isError"):
+        raise VaultListingError("list_secrets reported a tool error")
+    content = result.get("content")
+    if not isinstance(content, list) or not content or not isinstance(content[0], dict):
+        raise VaultListingError("list_secrets response carried no content")
+    text = content[0].get("text")
+    if not isinstance(text, str):
+        raise VaultListingError("list_secrets content was not text")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise VaultListingError("list_secrets content was not JSON") from None
+    if not isinstance(data, dict) or not isinstance(data.get("secrets"), list):
+        raise VaultListingError("list_secrets payload carried no secrets list")
+    keys = {item["key"] for item in data["secrets"] if isinstance(item, dict) and isinstance(item.get("key"), str)}
+    total = data.get("total")
+    if isinstance(total, int) and total > len(data["secrets"]):
+        # The page limit truncated the listing: a missing key cannot be
+        # distinguished from a key beyond the page, so refuse to validate.
+        raise VaultListingError(f"vault holds {total} keys but only {len(data['secrets'])} were listed")
+    return keys
 
 
 class ApplyExecutor:
@@ -127,6 +191,67 @@ class ApplyExecutor:
     def close(self) -> None:
         if self._owns_client:
             self._client.close()
+
+    # ------------------------------------------------------------------
+    # Org-vault key listing (FAR-1216 plan-time credential_ref validation)
+    # ------------------------------------------------------------------
+
+    def list_vault_keys(self) -> set[str]:
+        """Return the org vault secret keys via the MCP ``list_secrets`` tool.
+
+        The server ships no REST route that reads the vault; ``list_secrets``
+        (keys only, never values) is the read-only surface. Raises
+        :class:`VaultListingError` on any failure so validation fails CLOSED.
+        """
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "list_secrets",
+                "arguments": {"limit": _MCP_LIST_SECRETS_LIMIT},
+            },
+        }
+        try:
+            response = self._client.post(
+                f"{self._base_url}{_MCP_TOOLS_CALL_PATH}",
+                json=request,
+                headers={**self._auth_headers, "Accept": _MCP_ACCEPT},
+            )
+        except httpx.HTTPError as exc:
+            raise VaultListingError(f"vault listing request failed ({type(exc).__name__})") from None
+        if not 200 <= response.status_code < 300:
+            raise VaultListingError(f"vault listing returned status {response.status_code}")
+        try:
+            envelope = response.json()
+        except ValueError:
+            raise VaultListingError("vault listing returned invalid JSON") from None
+        if not isinstance(envelope, dict):
+            raise VaultListingError("vault listing returned a non-object response")
+        return _parse_vault_key_listing(envelope)
+
+    def _block_missing_credential_refs(self, config: ApplyConfig) -> list[tuple[str, str, str]]:
+        """Block model backends whose ``credential_ref`` is absent from the vault.
+
+        Runs at PLAN time (before any write). Only entered when the config
+        actually declares a ``credential_ref`` — configs using a literal /
+        ``${env:}`` / ``secretref://`` api_key never incur the listing call.
+        A key that cannot be verified (listing unavailable) blocks too: a plan
+        that cannot confirm the key must not silently pass it.
+        """
+        declared = [(e.name, e.credential_ref) for e in config.entities.model_backends if e.credential_ref is not None]
+        if not declared:
+            return []
+        try:
+            vault_keys = self.list_vault_keys()
+        except VaultListingError as exc:
+            _log.warning("apply.vault_listing_unavailable: %s", exc)
+            return [(KIND_BACKEND, name, f"cannot verify credential_ref {ref!r}: {exc}") for name, ref in declared]
+        return [
+            (KIND_BACKEND, name, f"credential_ref {ref!r} not found in the org vault")
+            for name, ref in declared
+            if ref not in vault_keys
+        ]
 
     # ------------------------------------------------------------------
     # HTTP helpers
@@ -611,6 +736,11 @@ class ApplyExecutor:
         from modulo.cli.apply import pipeline_apply, trigger_apply
 
         resolved_api_keys, blocked = resolve_secret_refs(config)
+        # FAR-1216: plan-time validation of ``credential_ref`` keys against the
+        # org vault — a missing (or unverifiable) key blocks the entity before
+        # any write, mirroring the env-ref block. Only declared refs trigger
+        # the vault listing call.
+        blocked = [*blocked, *self._block_missing_credential_refs(config)]
         entities = _entity_reports(config)
         current_entities: dict[str, Any] = self.fetch_current(config) if any(entities.values()) else _empty_current()
         resolved_trigger_configs, trigger_blocked = trigger_apply.resolve_trigger_config_refs(entities)
@@ -732,6 +862,26 @@ def _failure_message(exc: Exception) -> str:
     return message
 
 
+def _format_validation_detail(item: Any) -> str:
+    """Render one FastAPI validation-detail entry, preserving its typed code.
+
+    A credential-reference 422 carries ``{"type": "credential_reference_error",
+    "loc": [...], "msg": "vault key 'x': ..."}`` (FAR-1640). Flattening it to a
+    raw ``repr`` would bury the stable machine-readable ``type`` and the named
+    key; this keeps both so apply surfaces the server's typed error verbatim.
+    """
+    if not isinstance(item, dict):
+        return str(item)
+    code = item.get("type")
+    msg = item.get("msg")
+    loc = item.get("loc")
+    head_parts = [str(part) for part in (code, msg) if part is not None]
+    head = ": ".join(head_parts) if head_parts else str(item)
+    if isinstance(loc, list) and loc:
+        return f"{head} (loc={'.'.join(str(part) for part in loc)})"
+    return head
+
+
 def _extract_detail(response: httpx.Response) -> str:
     try:
         body = response.json()
@@ -743,6 +893,8 @@ def _extract_detail(response: httpx.Response) -> str:
         if "detail" in body:
             detail = body["detail"]
             if detail is not None:
+                if isinstance(detail, list):
+                    return "; ".join(_format_validation_detail(item) for item in detail)
                 return str(detail)
         return f"status {response.status_code}: {body}"
     return f"status {response.status_code}: {body}"
@@ -763,6 +915,7 @@ __all__ = [
     "AUTH_HEADER",
     "ApplyExecutor",
     "ApplyHttpError",
+    "VaultListingError",
     "has_blockers",
     "resolve_secret_refs",
 ]
