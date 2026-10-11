@@ -2149,14 +2149,12 @@ def _load_python_coverage(report: str) -> CoverageNumbers | None:
     return CoverageNumbers(language="Python", line_pct=line_pct, branch_pct=branch_pct)
 
 
-def _load_js_coverage(report: str, src_root: str) -> CoverageNumbers | None:
+def _load_js_coverage(report: str) -> CoverageNumbers | None:
     """Load project-wide line and branch coverage from an LCOV report.
 
     Returns ``None`` when the report cannot be read, so the caller skips the
-    JavaScript floor.  ``src_root`` is accepted for symmetry with the
-    JavaScript changed-lines leg (whose LCOV ``SF:`` paths resolve against it);
-    the project-wide metric itself reads the whole report and is independent
-    of any source root.
+    JavaScript floor.  The project-wide metric reads the whole report and is
+    independent of any source root.
     """
     metrics = _compute_project_wide_metrics_lcov(Path(report))
     if metrics is None:
@@ -2165,13 +2163,12 @@ def _load_js_coverage(report: str, src_root: str) -> CoverageNumbers | None:
     return CoverageNumbers(language="JavaScript", line_pct=line_pct, branch_pct=branch_pct)
 
 
-def _enforce(got: CoverageNumbers, args: Args) -> int:
+def _enforce(got: CoverageNumbers) -> int:
     """Evaluate one language's project-wide coverage against the floors.
 
     Prints the language's metric line and any BREACH lines; returns 1 when a
     floor is breached or branch data is absent, else 0.  The floors are
-    module-level ratchet constants (not CLI values), so ``args`` carries no
-    floor-relevant input — it is retained for the specified interface.
+    module-level ratchet constants, not CLI values.
     """
     branch_display = f"{got.branch_pct:.1f}%" if got.branch_pct is not None else "n/a (no branch data)"
     print(f"  {got.language} project-wide: line {got.line_pct:.1f}%, branch {branch_display}")
@@ -2255,7 +2252,7 @@ def _print_changed_lines_summary(results: list[GateResult]) -> None:
     print()
 
 
-def _check_project_floors(args: Args, python_report: Path | None, js_report: Path | None) -> bool:
+def _check_project_floors(python_report: Path | None, js_report: Path | None) -> bool:
     """Evaluate the project-wide coverage floors (the ratchet).
 
     Loads each language's project-wide numbers, prints the floor section (via
@@ -2272,7 +2269,7 @@ def _check_project_floors(args: Args, python_report: Path | None, js_report: Pat
         python_numbers = _load_python_coverage(str(python_report))
     js_numbers: CoverageNumbers | None = None
     if js_report is not None and js_report.exists():
-        js_numbers = _load_js_coverage(str(js_report), args.js_src_root)
+        js_numbers = _load_js_coverage(str(js_report))
 
     present = [numbers for numbers in (python_numbers, js_numbers) if numbers is not None]
     if not present:
@@ -2281,7 +2278,7 @@ def _check_project_floors(args: Args, python_report: Path | None, js_report: Pat
     print("=== Project-wide Coverage Floor (ratchet) ===")
     failure = False
     for numbers in present:
-        failure |= _enforce(numbers, args) == 1
+        failure |= _enforce(numbers) == 1
     print(
         f"  Floors: MIN_PROJECT_LINE_COVERAGE={MIN_PROJECT_LINE_COVERAGE}%, "
         f"MIN_PROJECT_BRANCH_COVERAGE={MIN_PROJECT_BRANCH_COVERAGE}%"
@@ -2327,7 +2324,7 @@ def main(argv: list[str] | None = None) -> int:
     results = _evaluate_changed_lines(args, python_report, js_report)
 
     _print_changed_lines_summary(results)
-    project_floor_failed = _check_project_floors(args, python_report, js_report)
+    project_floor_failed = _check_project_floors(python_report, js_report)
 
     return _exit_code(results, project_floor_failed)
 
