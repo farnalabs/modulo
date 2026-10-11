@@ -8,6 +8,7 @@ blob fetch, and use a fake session for the DB queries.
 from __future__ import annotations
 
 import hashlib
+import logging
 import types
 import uuid
 from typing import Any
@@ -169,8 +170,9 @@ def fake_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 class _FakeLibraryClient:
     """Stand-in for ``LibraryClient`` exercising the real ``_fetch_blob`` body."""
 
-    def __init__(self, blob: bytes | None) -> None:
+    def __init__(self, blob: bytes | None, close_error: Exception | None = None) -> None:
         self._blob = blob
+        self.close_error = close_error
         self.closed = False
 
     async def fetch_blob(self, _sha256: str) -> bytes | None:
@@ -178,6 +180,8 @@ class _FakeLibraryClient:
 
     async def close(self) -> None:
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class TestInstalledRegistryKeys:
@@ -454,8 +458,10 @@ class TestInstallCommunityEntry:
 class TestFetchBlob:
     """Exercises the real ``_fetch_blob`` body (elsewhere monkeypatched away)."""
 
-    def _install_client(self, monkeypatch: pytest.MonkeyPatch, blob: bytes | None) -> _FakeLibraryClient:
-        client = _FakeLibraryClient(blob)
+    def _install_client(
+        self, monkeypatch: pytest.MonkeyPatch, blob: bytes | None, close_error: Exception | None = None
+    ) -> _FakeLibraryClient:
+        client = _FakeLibraryClient(blob, close_error)
         monkeypatch.setattr(community_module, "LibraryClient", lambda **_: client)
         monkeypatch.setattr(
             community_module,
@@ -499,3 +505,29 @@ class TestFetchBlob:
         result = await community_module._fetch_blob(hashlib.sha256(payload).hexdigest())
         assert result == {"name": "code-reviewer"}
         assert client.closed is True
+
+    async def test_raising_close_never_propagates(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A ``close()`` that raises is logged and swallowed on every path.
+
+        The teardown sits in ``finally`` OUTSIDE the ``except ValueError``
+        block, so without its own guard a raising ``close()`` would replace the
+        body's exception (or discard its ``return``) and escape — breaking the
+        documented "return None on failure" contract.
+        """
+        payload = b'{"name": "code-reviewer"}'
+        ok_client = self._install_client(monkeypatch, payload, close_error=RuntimeError("teardown failed"))
+
+        with caplog.at_level(logging.ERROR, logger=community_module.logger.name):
+            assert await community_module._fetch_blob(hashlib.sha256(payload).hexdigest()) == {"name": "code-reviewer"}
+
+        assert ok_client.closed is True
+        assert "community.install.client_close_failed" in caplog.messages
+
+        # Failure path: the body's ValueError handling returns None AND teardown
+        # fails — still no escape.
+        bad_payload = b"not json"
+        bad_client = self._install_client(monkeypatch, bad_payload, close_error=RuntimeError("teardown failed"))
+        assert await community_module._fetch_blob(hashlib.sha256(bad_payload).hexdigest()) is None
+        assert bad_client.closed is True
