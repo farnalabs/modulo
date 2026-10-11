@@ -1803,31 +1803,82 @@ const retryPolicySaveBlocked = computed(
   () => retryPolicyMode.value === 'specific' && retryPolicyEvents.value.length === 0,
 )
 
+// FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
+// missing or null) renders as All-errors — the runtime resolves it to all
+// retryable events. An explicit `on` list renders as granular (a stored
+// empty list is retry-effectively-off, surfaced by the zero-selected
+// warning). A malformed non-list `on` fail-closes at runtime (no retry),
+// so it renders as granular with nothing selected to surface the warning.
+function _coverageFromStored(rp: RetryPolicy): { mode: 'all' | 'specific'; events: string[] } {
+  const stored = rp as Record<string, unknown>
+  if (stored.on === undefined || stored.on === null) {
+    return { mode: 'all', events: [] }
+  }
+  if (Array.isArray(stored.on)) {
+    return {
+      mode: 'specific',
+      events: (stored.on as unknown[]).filter((e): e is string =>
+        retryPolicyEventValues.has(e as string),
+      ),
+    }
+  }
+  return { mode: 'specific', events: [] }
+}
+
+function _maxRetriesFromStored(rp: RetryPolicy): number {
+  const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
+  return Math.min(5, Math.max(0, max))
+}
+
+// FAR-525: the run-level backoff schedule. Out-of-range stored values are
+// clamped here for editing ONLY — the runtime resolver fails open to the
+// default 45s x 2.0 schedule, which the caller surfaces via `clamped`.
+function _scheduleFromStored(rp: RetryPolicy): {
+  delay: number
+  multiplier: number
+  clamped: boolean
+} {
+  const stored = rp as Record<string, unknown>
+  const schedule = stored.backoff_schedule
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) {
+    return { delay: 45, multiplier: 2, clamped: false }
+  }
+  const s = schedule as Record<string, unknown>
+  let clamped = false
+
+  const rawDelay = Number(s.delay_seconds)
+  let delay: number
+  if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
+    delay = Math.round(rawDelay)
+  } else {
+    delay = Number.isFinite(rawDelay) ? Math.min(300, Math.max(1, Math.round(rawDelay))) : 45
+    clamped = true
+  }
+
+  let multiplier: number
+  if (s.multiplier === undefined) {
+    multiplier = 2
+  } else {
+    const rawMult = Number(s.multiplier)
+    if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
+      multiplier = rawMult
+    } else {
+      multiplier = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
+      clamped = true
+    }
+  }
+
+  return { delay, multiplier, clamped }
+}
+
 function syncRetryPolicyFromPipeline() {
   const rp = (pipeline.value as PipelineRetryPolicySource | null)?.retry_policy
   retryPolicyScheduleWarning.value = null
   if (rp && typeof rp === 'object' && !Array.isArray(rp)) {
-    // FAR-649: coverage mode from the stored shape. An ABSENT `on` (key
-    // missing or null) renders as All-errors — the runtime resolves it to all
-    // retryable events. An explicit `on` list renders as granular (a stored
-    // empty list is retry-effectively-off, surfaced by the zero-selected
-    // warning). A malformed non-list `on` fail-closes at runtime (no retry),
-    // so it renders as granular with nothing selected to surface the warning.
-    const stored = rp as Record<string, unknown>
-    if (stored.on === undefined || stored.on === null) {
-      retryPolicyMode.value = 'all'
-      retryPolicyEvents.value = []
-    } else if (Array.isArray(stored.on)) {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = (stored.on as unknown[]).filter((e): e is string =>
-        retryPolicyEventValues.has(e as string),
-      )
-    } else {
-      retryPolicyMode.value = 'specific'
-      retryPolicyEvents.value = []
-    }
-    const max = typeof rp.max_retries === 'number' ? Math.round(rp.max_retries) : 0
-    retryPolicyMaxRetries.value = Math.min(5, Math.max(0, max))
+    const coverage = _coverageFromStored(rp)
+    retryPolicyMode.value = coverage.mode
+    retryPolicyEvents.value = coverage.events
+    retryPolicyMaxRetries.value = _maxRetriesFromStored(rp)
 
     // FAR-525: keep the legacy node-level inherited `backoff` so a save can
     // re-send it losslessly (the editor rebuilds the policy from a whitelist).
@@ -1835,38 +1886,10 @@ function syncRetryPolicyFromPipeline() {
     retryPolicyLegacyBackoff.value =
       typeof legacyBackoff === 'number' && Number.isFinite(legacyBackoff) ? legacyBackoff : undefined
 
-    // FAR-525: load the run-level backoff schedule into the panel. Out-of-range
-    // stored values are clamped here for editing ONLY — the runtime resolver
-    // fails open to the default 45s x 2.0 schedule, which the warning surfaces.
-    let scheduleClamped = false
-    const schedule = (rp as Record<string, unknown>).backoff_schedule
-    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
-      const s = schedule as Record<string, unknown>
-      const rawDelay = Number(s.delay_seconds)
-      if (Number.isFinite(rawDelay) && rawDelay >= 1 && rawDelay <= 300) {
-        retryPolicyDelaySeconds.value = Math.round(rawDelay)
-      } else {
-        retryPolicyDelaySeconds.value = Number.isFinite(rawDelay)
-          ? Math.min(300, Math.max(1, Math.round(rawDelay)))
-          : 45
-        scheduleClamped = true
-      }
-      if (s.multiplier === undefined) {
-        retryPolicyMultiplier.value = 2
-      } else {
-        const rawMult = Number(s.multiplier)
-        if (Number.isFinite(rawMult) && rawMult >= 1 && rawMult <= 10) {
-          retryPolicyMultiplier.value = rawMult
-        } else {
-          retryPolicyMultiplier.value = Number.isFinite(rawMult) ? Math.min(10, Math.max(1, rawMult)) : 2
-          scheduleClamped = true
-        }
-      }
-    } else {
-      retryPolicyDelaySeconds.value = 45
-      retryPolicyMultiplier.value = 2
-    }
-    if (scheduleClamped) {
+    const schedule = _scheduleFromStored(rp)
+    retryPolicyDelaySeconds.value = schedule.delay
+    retryPolicyMultiplier.value = schedule.multiplier
+    if (schedule.clamped) {
       retryPolicyScheduleWarning.value = t('views.PipelineEditorView.retry_policy_schedule_clamped_warning')
     }
   } else {
