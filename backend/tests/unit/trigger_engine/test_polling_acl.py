@@ -223,6 +223,42 @@ def test_polling_read_proceeds_for_unrestricted_and_read_granted(allowed_operati
 
 
 # ---------------------------------------------------------------------------
+# Type-qualified legacy allowlist entries (FAR-1616 / FAR-1628)
+# ---------------------------------------------------------------------------
+
+
+def _typed_instance(connector_type_id: str, allowed_operations: Any) -> SimpleNamespace:
+    instance = _instance(allowed_operations)
+    instance.connector_type_id = connector_type_id
+    return instance
+
+
+def test_same_type_legacy_qualified_entry_grants_polling_read() -> None:
+    """A ``["github.read"]`` entry on a GITHUB-typed instance is a valid read grant.
+
+    ``ConnectorACL`` only certifies a type-qualified legacy entry when its own
+    ``connector_type_id`` argument matches the entry's qualifier (FAR-1616).
+    The hub passes the instance's type at its construction site; before
+    FAR-1628 this polling gate did NOT, so a same-type grant that every other
+    gate honours was rejected here and the poll raised
+    ``ConnectorPermissionError``. The gate must build the ACL with EXACTLY the
+    hub's arguments.
+    """
+    assert enforce_polling_read_acl(_typed_instance("github", ["github.read"])) is None
+
+
+def test_mis_typed_legacy_qualified_entry_still_denies_polling_read() -> None:
+    """A ``["github.read"]`` entry on a NON-github instance still fails closed.
+
+    Threading the surface type through must not widen the gate: a qualifier
+    naming a different type certifies nothing (FAR-1616), so the read is
+    refused exactly as an untyped construction refused it.
+    """
+    with pytest.raises(ConnectorPermissionError, match="not in allowed_operations"):
+        enforce_polling_read_acl(_typed_instance("rest", ["github.read"]))
+
+
+# ---------------------------------------------------------------------------
 # Team scope (FAR-1595) — the fire job reads the connector row team-blind
 # ---------------------------------------------------------------------------
 
