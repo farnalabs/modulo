@@ -109,6 +109,15 @@ describe('PublishCompositeFlow', () => {
     await next!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('name already taken')
+    // FAR-1669: the error renders via the shared ErrorAlert carrying the
+    // message — a bespoke destructive <div> (pre-conversion markup) would
+    // fail findComponent, so this proves the conversion.
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('name already taken')
+    // Retry = click Next again; no separate loader, so no in-place retry.
+    expect(alert.props('retryable')).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Name & Description')
   })
 
@@ -157,6 +166,15 @@ describe('PublishCompositeFlow', () => {
     await publish!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('version conflict')
+    // FAR-1669: the error && !success box is the shared ErrorAlert carrying the
+    // message — a bespoke destructive <div> (pre-conversion markup) would fail
+    // findComponent, so this proves the conversion.
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('version conflict')
+    // Retry = click Publish again; no separate loader, so no in-place retry.
+    expect(alert.props('retryable')).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Published!')
     expect(wrapper.emitted('published')).toBeUndefined()
   })

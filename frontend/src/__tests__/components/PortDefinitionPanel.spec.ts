@@ -91,6 +91,15 @@ describe('PortDefinitionPanel', () => {
     const saveBtn = wrapper.findAll('button').find(b => b.text() === 'Add')
     await saveBtn!.trigger('click')
     expect(wrapper.text()).toContain('Name and label are required')
+    // FAR-1669: formError renders via the shared ErrorAlert carrying the
+    // message — a bespoke destructive <div> (pre-conversion markup) would
+    // fail findComponent, so this proves the conversion.
+    const alert = wrapper.findComponent({ name: 'ErrorAlert' })
+    expect(alert.exists()).toBe(true)
+    expect(String(alert.props('message'))).toContain('Name and label are required')
+    // Validation errors are corrected in the form — no in-place retry.
+    expect(alert.props('retryable')).toBe(false)
+    expect(wrapper.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(wrapper.emitted('update:ports')).toBeUndefined()
   })
 
