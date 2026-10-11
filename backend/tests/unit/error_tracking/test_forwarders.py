@@ -114,7 +114,17 @@ class TestSentryErrorForwarder:
         # awaited (the result alone could come from the SDK path).
         mock_client.return_value.__aenter__.return_value.post.assert_awaited_once()
 
-    async def test_api_fallback_omits_authorization_header_without_userinfo(self) -> None:
+    @pytest.mark.parametrize(
+        ("dsn", "expected_authorization"),
+        [
+            ("https://sentry.io/123", None),
+            ("https://key@sentry.io/123", "Bearer key"),
+        ],
+        ids=["without-userinfo", "with-userinfo"],
+    )
+    async def test_api_fallback_authorization_header_follows_dsn_userinfo(
+        self, dsn: str, expected_authorization: str | None
+    ) -> None:
         fwd = SentryErrorForwarder()
 
         with _patch_pinned("sentry") as mock_client:
@@ -129,14 +139,17 @@ class TestSentryErrorForwarder:
                 _ORG_ID,
                 _make_error_group(),
                 _make_error_event(),
-                {"dsn": "https://sentry.io/123", "org_slug": "o", "project_slug": "p"},
+                {"dsn": dsn, "org_slug": "o", "project_slug": "p"},
             )
 
         assert result is True
-        # A DSN with no userinfo yields no auth token, so no Authorization header
-        # (pins ``_parse_dsn_token`` returning None).
+        # Pins ``_parse_dsn_token``: a DSN with userinfo sends the key as a
+        # Bearer token; one without userinfo sends no Authorization header.
         headers = mock_client.return_value.__aenter__.return_value.post.call_args.kwargs["headers"]
-        assert "Authorization" not in headers
+        if expected_authorization is None:
+            assert "Authorization" not in headers
+        else:
+            assert headers["Authorization"] == expected_authorization
 
     async def test_sdk_capture_failure_returns_false(self) -> None:
         fwd = SentryErrorForwarder()
@@ -737,6 +750,10 @@ class TestForwarderNonSuccessResponse:
                 config,
             )
         assert result is False
+        # The request must actually have fired, reaching the named
+        # ``is_success is False`` branch, not the outer exception handler
+        # (which also yields False).
+        instance.post.assert_awaited_once()
 
 
 # =========================================================================
@@ -761,25 +778,36 @@ class TestForwarderDispatchConfig:
         configs = await _load_per_org_configs(session, _ORG_ID)
 
         assert configs == {"datadog": {"api_key": "x"}}
-        # The query must be org-scoped and enabled-filtered.
+        # The query must be org-scoped and enabled-filtered. A bare "enabled"
+        # is satisfied by any column reference (including the SELECT list);
+        # the "IS true" clause is what actually filters, so pin the polarity.
         stmt_str = str(session.execute.call_args[0][0])
         assert "error_forwarder_configs" in stmt_str
         assert "organisation_id" in stmt_str
-        assert "enabled" in stmt_str
+        assert "enabled is true" in stmt_str.lower()
 
     async def test_dispatch_forwarders_prefers_org_config_over_default(self) -> None:
+        # The default must be non-empty AND different from the org config,
+        # otherwise an inverted-precedence bug
+        # (``_DEFAULT_FORWARDER_CONFIGS or per_org_configs``) yields the same
+        # result and the test passes under the very bug it claims to catch.
         with (
             patch(
+                "modulo.core.error_tracking._DEFAULT_FORWARDER_CONFIGS",
+                {"sentry": {"dsn": "default-dsn"}},
+            ),
+            patch(
                 "modulo.core.error_tracking._load_per_org_configs",
-                new=AsyncMock(return_value={"datadog": {"api_key": "org"}}),
+                new=AsyncMock(return_value={"datadog": {"api_key": "org-key"}}),
             ),
             patch("modulo.core.error_tracking._dispatch_one_forwarder", new=AsyncMock()) as dispatch,
         ):
             await _dispatch_forwarders(_ORG_ID, _make_error_group(), _make_error_event(), {}, session=object())
 
         dispatch.assert_awaited_once()
+        # The ORG config won: the default sentinel was NOT dispatched.
         assert dispatch.call_args.args[3] == "datadog"
-        assert dispatch.call_args.args[4] == {"api_key": "org"}
+        assert dispatch.call_args.args[4] == {"api_key": "org-key"}
 
     async def test_dispatch_forwarders_falls_back_to_default_without_session(self) -> None:
         default_config = {"loki": {"push_url": "https://loki.example.com/push"}}
