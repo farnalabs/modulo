@@ -135,12 +135,13 @@ Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 # SSRF guard: blocks outbound requests to private/reserved/link-local/cloud-
 # metadata ranges. The literals below are DESTINATION filters that must be
 # blocked — never connection endpoints — so hardcoding them is required and
-# safe (S1313 specifically exempts such documented network blocks). NOSONAR
-# marks each ``ip_network`` literal which is not a client-configurable
+# safe (S1313 specifically exempts such documented network blocks). The
+# suppression comments on each literal below mark an ip_network
+# destination filter which is not a client-configurable
 # connection address.
 _EXCLUDED_NETWORKS = [
     # 169.254.0.0/16 is the IPv4 link-local block (AWS EC2 IMDS, GCP, Azure
-    # instance metadata) — the classic SSRF pivot target. NOSONAR.
+    # instance metadata) — the classic SSRF pivot target.
     ipaddress.ip_network("169.254.0.0/16"),  # NOSONAR - AWS/GCP/Azure link-local metadata
     # 100.64.0.0/10 is the CGNAT shared-address space (RFC 6598) — reachable
     # only within a private network but never a safe public egress target.
@@ -881,7 +882,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         ip: str,
         port: int,
         *,
-        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
+        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(); not asyncio.wait_for()
         local_address: str | None = None,
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
@@ -913,7 +914,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         ips: tuple[str, ...],
         port: int,
         *,
-        timeout: float | None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
+        timeout: float | None,  # noqa: ASYNC109 — httpcore connect_tcp(); not asyncio.wait_for()
         local_address: str | None,
         socket_options: Iterable[SOCKET_OPTION] | None,
     ) -> httpcore.AsyncNetworkStream:
@@ -950,7 +951,7 @@ class _PinnedAsyncNetworkBackend(httpcore.AnyIOBackend):
         self,
         host: str,
         port: int,
-        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(), not asyncio.wait_for()
+        timeout: float | None = None,  # noqa: ASYNC109 — httpcore connect_tcp(); not asyncio.wait_for()
         local_address: str | None = None,
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:

@@ -37,6 +37,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = REPO_ROOT / "frontend"
 PACKAGE_JSON = FRONTEND_DIR / "package.json"
 
+#: Windows command interpreter required to launch .cmd/.bat shims (CreateProcess
+#: cannot execute them directly — WinError 193).
+_CMD_EXE = "cmd.exe"
+
 _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_./-]*$")
 
 # Allow-list for filenames that flow into the eslint subprocess command line.
@@ -146,11 +150,11 @@ def main() -> int:
             # npx shim is a .cmd that CreateProcess cannot launch directly, so
             # it must run through the command interpreter too.
             if sys.platform == "win32":
-                eslint_cmd = ["cmd.exe", "/c", "npx", "eslint"]
+                eslint_cmd = [_CMD_EXE, "/c", "npx", "eslint"]
             else:
                 eslint_cmd = ["npx", "eslint"]
         elif sys.platform == "win32":
-            eslint_cmd = ["cmd.exe", "/c", str(eslint_bin)]
+            eslint_cmd = [_CMD_EXE, "/c", str(eslint_bin)]
         else:
             eslint_cmd = [str(eslint_bin)]
         cmd = [*eslint_cmd, "--cache", "--cache-location", ".cache/eslint", *staged]
@@ -160,7 +164,7 @@ def main() -> int:
     if sys.platform == "win32":
         # CreateProcess cannot execute .cmd/.bat shims directly (WinError 193);
         # they must be launched through the Windows command interpreter.
-        cmd = ["cmd.exe", "/c", pm, "run", script]
+        cmd = [_CMD_EXE, "/c", pm, "run", script]
     else:
         cmd = [pm, "run", script]
     result = subprocess.run(cmd, cwd=FRONTEND_DIR, check=False)

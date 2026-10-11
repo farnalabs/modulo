@@ -382,7 +382,7 @@ def _rehearsal_print(message: str) -> None:
     not depend on alembic.ini's logging configuration. Logging alone is
     filtered/reformatted and can be lost entirely.
     """
-    print(message, flush=True)  # noqa: T201 - diagnostic report, must reach stdout
+    print(message, flush=True)  # noqa: T201 - diagnostic report; must reach stdout
 
 
 def _rehearsal_escape_hatch_message(culprit: str) -> str:
