@@ -8,8 +8,8 @@ Migration 0156 creates partial unique indexes ``(organisation_id, name)
 WHERE deleted_at IS NULL`` on six SoftDeleteMixin tables. On databases where
 no prior constraint ever enforced that key among live rows, real deployments
 can already contain duplicates, so 0156's ``CREATE UNIQUE INDEX`` fails and
-the whole (single-transaction) upgrade is blocked. First seen on the
-farnalabs production deployment on 2026-09-03: three live pipelines named
+the whole (single-transaction) upgrade is blocked. First seen on a
+production deployment on 2026-09-03: three live pipelines named
 'Agent Echo' in one organisation, created within 21 minutes on 2026-07-15.
 
 Because this product is self-hosted, the cleanup must run BEFORE 0156 for

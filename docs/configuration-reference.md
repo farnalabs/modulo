@@ -62,6 +62,13 @@ Controls a 98% hard-stop that refuses new runs when database capacity is nearly 
 
 See [`docs/deployment-security.md`](./deployment-security.md) for key rotation procedures and [`docs/security/secret-management.md`](./security/secret-management.md) for backend-specific configuration.
 
+Declarative `modulo apply` configs reference these vault entries by key rather
+than embedding a value: `credential_ref: <key>` (or `api_key: secretref://<key>`)
+is resolved through the `MODULO_SECRETS_BACKEND` above, under the calling
+organisation's context. A `credential_ref` that names no vault entry fails the
+plan; a `secretref://` that cannot be resolved fails the apply (typed 422).
+See [`docs/product-map/configure/apply.md`](./product-map/configure/apply.md).
+
 ---
 
 ## License Key

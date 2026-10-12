@@ -2,13 +2,16 @@
   <div class="page-wide py-8">
     <PageHeader :title="$t('views.LibraryView.collection_create_title')" />
     <div class="max-w-2xl mx-auto mt-6 space-y-4">
-      <div
+      <!--
+        Create-form failure: the user edits the form and submits again; an
+        automatic Retry could double-create the collection, so none is offered.
+      -->
+      <ErrorAlert
         v-if="error"
-        class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive"
+        :message="error"
+        :retryable="false"
         role="alert"
-      >
-        {{ error }}
-      </div>
+      />
       <form class="space-y-4" @submit.prevent="submit">
         <div>
           <label for="collection-name" class="block text-sm font-medium mb-1">
@@ -120,6 +123,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import PageHeader from '../components/shared/PageHeader.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 

@@ -455,6 +455,82 @@ def _assert_read_org(
         )
 
 
+# The four JSONB blob columns in side-signature tuple order
+# (has_outputs, has_telemetry, has_markers, has_artifacts) — maps a row
+# group's signature onto the uniform column set executemany requires.
+_SIDE_COLUMNS: tuple[str, str, str, str] = (
+    "outputs_json",
+    "node_telemetry_json",
+    "raw_output_markers",
+    "artifacts_json",
+)
+
+
+def _group_by_payload_signature(
+    rows: Sequence[NodeOutputWrite],
+) -> dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]]:
+    """Group rows by which sides they write — the side-signature 4-tuple.
+
+    executemany requires homogeneous params, so every statement carries a
+    single uniform column set: one group per distinct signature.
+    """
+    groups: dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]] = {}
+    for row in rows:
+        signature = (
+            row.outputs is not _SIDE_ABSENT,
+            row.telemetry is not _SIDE_ABSENT,
+            row.markers is not _SIDE_ABSENT,
+            row.artifacts is not _SIDE_ABSENT,
+        )
+        groups.setdefault(signature, []).append(row)
+    return groups
+
+
+def _row_update_payload(row: NodeOutputWrite, *, run_id: uuid.UUID) -> dict[str, Any]:
+    """The executemany param dict for one row: identity keys plus every
+    present side, each sanitised through the shared JSONB store sanitiser
+    (FAR-1654)."""
+    item: dict[str, Any] = {"node_id": row.node_id, "attempt_key": row.attempt_key}
+    if row.outputs is not _SIDE_ABSENT:
+        item["outputs_json"] = _sanitise_jsonb_for_store(row.outputs, run_id=run_id, label="outputs")
+    if row.telemetry is not _SIDE_ABSENT:
+        item["node_telemetry_json"] = _sanitise_jsonb_for_store(row.telemetry, run_id=run_id, label="telemetry")
+    if row.markers is not _SIDE_ABSENT:
+        item["raw_output_markers"] = _sanitise_jsonb_for_store(row.markers, run_id=run_id, label="markers")
+    if row.artifacts is not _SIDE_ABSENT:
+        item["artifacts_json"] = _sanitise_jsonb_for_store(row.artifacts, run_id=run_id, label="artifacts")
+    return item
+
+
+def _upsert_group_stmt(
+    insert_factory: Any,
+    *,
+    signature: tuple[bool, bool, bool, bool],
+    run_id: uuid.UUID,
+    organisation_id: uuid.UUID,
+    ignore_conflicts: bool,
+) -> Any:
+    """The dialect-guarded ON CONFLICT statement for one side-signature group.
+
+    Present sides are named in the INSERT column list (executemany binds
+    them per row) and — unless *ignore_conflicts* — overwritten from
+    ``excluded`` on conflict with ``updated_at`` stamped explicitly
+    (TimestampMixin.onupdate never fires for Core upserts).
+    """
+    values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
+    for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
+        if present:
+            values[column] = None
+    stmt = insert_factory(RunNodeOutput).values(**values)
+    if ignore_conflicts:
+        return stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
+    set_: dict[str, Any] = {"updated_at": func.current_timestamp()}
+    for present, column in zip(signature, _SIDE_COLUMNS, strict=True):
+        if present:
+            set_[column] = getattr(stmt.excluded, column)
+    return stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
+
+
 async def upsert_rows(
     session: AsyncSession,
     *,
@@ -485,52 +561,15 @@ async def upsert_rows(
     if not rows:
         return
     insert_factory = dialect_insert(resolve_dialect(session))
-    groups: dict[tuple[bool, bool, bool, bool], list[NodeOutputWrite]] = {}
-    for row in rows:
-        flags = (
-            row.outputs is not _SIDE_ABSENT,
-            row.telemetry is not _SIDE_ABSENT,
-            row.markers is not _SIDE_ABSENT,
-            row.artifacts is not _SIDE_ABSENT,
+    for signature, group in _group_by_payload_signature(rows).items():
+        stmt = _upsert_group_stmt(
+            insert_factory,
+            signature=signature,
+            run_id=run_id,
+            organisation_id=organisation_id,
+            ignore_conflicts=ignore_conflicts,
         )
-        groups.setdefault(flags, []).append(row)
-
-    for (has_out, has_tel, has_markers, has_artifacts), group in groups.items():
-        values: dict[str, Any] = {"run_id": run_id, "organisation_id": organisation_id}
-        if has_out:
-            values["outputs_json"] = None
-        if has_tel:
-            values["node_telemetry_json"] = None
-        if has_markers:
-            values["raw_output_markers"] = None
-        if has_artifacts:
-            values["artifacts_json"] = None
-        stmt = insert_factory(RunNodeOutput).values(**values)
-        params: list[dict[str, Any]] = []
-        for row in group:
-            item: dict[str, Any] = {"node_id": row.node_id, "attempt_key": row.attempt_key}
-            if has_out:
-                item["outputs_json"] = _sanitise_jsonb_for_store(row.outputs, run_id=run_id, label="outputs")
-            if has_tel:
-                item["node_telemetry_json"] = _sanitise_jsonb_for_store(row.telemetry, run_id=run_id, label="telemetry")
-            if has_markers:
-                item["raw_output_markers"] = _sanitise_jsonb_for_store(row.markers, run_id=run_id, label="markers")
-            if has_artifacts:
-                item["artifacts_json"] = _sanitise_jsonb_for_store(row.artifacts, run_id=run_id, label="artifacts")
-            params.append(item)
-        if ignore_conflicts:
-            stmt = stmt.on_conflict_do_nothing(index_elements=["run_id", "node_id", "attempt_key"])
-        else:
-            set_: dict[str, Any] = {"updated_at": func.current_timestamp()}
-            if has_out:
-                set_["outputs_json"] = stmt.excluded.outputs_json
-            if has_tel:
-                set_["node_telemetry_json"] = stmt.excluded.node_telemetry_json
-            if has_markers:
-                set_["raw_output_markers"] = stmt.excluded.raw_output_markers
-            if has_artifacts:
-                set_["artifacts_json"] = stmt.excluded.artifacts_json
-            stmt = stmt.on_conflict_do_update(index_elements=["run_id", "node_id", "attempt_key"], set_=set_)
+        params = [_row_update_payload(row, run_id=run_id) for row in group]
         await session.execute(stmt, params)
 
 

@@ -166,9 +166,10 @@ from typing import Any, Literal
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from modulo.auth.jwt import TenantPrincipal
+from modulo.auth.jwt import CLIENT_KIND_BROWSER, TenantPrincipal
 from modulo.core.audit_logger import append_audit_event, append_audit_event_isolated
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from modulo.core.principals import KIND_HUMAN, KIND_SERVICE
 from modulo.db.rls import set_rls_org, set_rls_user_context
 
 _log = logging.getLogger(__name__)
@@ -180,6 +181,7 @@ __all__ = [
     "audited_system",
     "bind_audit_actor_source",
     "bind_audit_org",
+    "bind_principal_kind",
 ]
 
 #: How the request finished, as recorded in the coarse default payload:
@@ -301,19 +303,75 @@ async def _emit(
         )
 
 
-def _coarse_payload(request: Request, outcome: AuditOutcome) -> dict[str, Any]:
+def bind_principal_kind(request: Request, kind: str) -> None:
+    """Publish the acting principal's ``kind`` for the audit stamp (FAR-1385).
+
+    The audit stamp records ``principal.kind`` (ADR 058) so the audit viewer can
+    distinguish a human actor from a service principal. A resolver that has read
+    the account row (and so knows its ``kind``) can publish the authoritative
+    value here; :func:`_resolve_principal_kind` prefers it over the value derived
+    from the credential. Only the two known kinds are accepted so a typo cannot
+    poison the trail.
+    """
+    if kind not in (KIND_HUMAN, KIND_SERVICE):
+        _log.warning("audit_coverage.invalid_principal_kind", extra={"kind": kind})
+        return
+    request.state.principal_kind = kind
+
+
+def _derive_principal_kind(principal: TenantPrincipal) -> str | None:
+    """The honest principal kind for a RESOLVED principal, or ``None`` (FAR-1385).
+
+    ``human`` is stamped only for an account-backed browser-JWT credential —
+    the one credential class that authenticates a human account in this slice.
+    A programmatic credential resolves to ``None``, leaving the stamp ABSENT
+    rather than attributing a machine credential to a human: that is the exact
+    fiction ADR 056 forbids. ``via_api_key`` marks an org ``mk_`` API key; a
+    non-browser ``client_kind`` marks any other automation-minted token. Both
+    are machine credentials, so neither may carry ``principal_kind="human"``
+    (mirrors ``_system_payload``'s honest no-account behaviour).
+    """
+    if principal.via_api_key:
+        return None
+    if principal.client_kind != CLIENT_KIND_BROWSER:
+        return None
+    return KIND_HUMAN
+
+
+def _resolve_principal_kind(request: Request, principal: TenantPrincipal) -> str | None:
+    """The acting principal's kind for the audit stamp, or ``None`` to omit it.
+
+    An explicitly-bound kind wins (a resolver that has read the account row and
+    knows its ``kind``). Otherwise the kind is derived from the credential the
+    resolved principal actually used (:func:`_derive_principal_kind`) — never a
+    blanket default, which would stamp a machine credential as human.
+    """
+    raw = getattr(request.state, "principal_kind", None)
+    if isinstance(raw, str) and raw in (KIND_HUMAN, KIND_SERVICE):
+        return raw
+    return _derive_principal_kind(principal)
+
+
+def _coarse_payload(request: Request, outcome: AuditOutcome, principal: TenantPrincipal) -> dict[str, Any]:
     """Default payload: enough to tell what was called and how it finished.
 
     Deliberately coarse and identical for every annotated route: the resource
     id and the changed fields are not derivable from the request here. A route
     that needs that detail still calls ``append_audit_event_isolated`` itself
-    for its own, richer event.
+    for its own, richer event. ``principal_kind`` (ADR 058) is included only
+    when it is an honest statement about the resolved credential: ``human`` for
+    a browser-JWT principal, ABSENT for a programmatic one (see
+    :func:`_derive_principal_kind`), mirroring ``_system_payload``.
     """
-    return {
+    payload: dict[str, Any] = {
         "http_method": request.method,
         "path": request.url.path,
         "outcome": outcome,
     }
+    kind = _resolve_principal_kind(request, principal)
+    if kind is not None:
+        payload["principal_kind"] = kind
+    return payload
 
 
 def audited(
@@ -373,7 +431,7 @@ def audited(
                 principal=principal,
                 event_type=event_type,
                 resource_type=resource_type,
-                payload=_coarse_payload(request, "error"),
+                payload=_coarse_payload(request, "error", principal),
                 fail_closed=False,
             )
             raise
@@ -383,7 +441,7 @@ def audited(
                 principal=principal,
                 event_type=event_type,
                 resource_type=resource_type,
-                payload=_coarse_payload(request, "success"),
+                payload=_coarse_payload(request, "success", principal),
                 fail_closed=fail_closed,
             )
 
@@ -460,8 +518,17 @@ def _resolve_actor_source(request: Request, default: str) -> str:
 
 
 def _system_payload(request: Request, outcome: AuditOutcome, actor_source: str) -> dict[str, Any]:
-    """Coarse payload plus the honest provenance markers for a system event."""
-    payload = _coarse_payload(request, outcome)
+    """Coarse payload plus the honest provenance markers for a system event.
+
+    Deliberately does NOT carry ``principal_kind``: there is no principal on an
+    actor-less event, and inventing one would be dishonest provenance (FAR-1385
+    stamps the kind only where a real principal acted).
+    """
+    payload: dict[str, Any] = {
+        "http_method": request.method,
+        "path": request.url.path,
+        "outcome": outcome,
+    }
     payload["actor"] = SYSTEM_ACTOR
     payload["actor_source"] = actor_source
     return payload

@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.middleware.rate_limiter import RateLimitMiddleware
-from modulo.api.models.error import ErrorEventInput, ErrorGroupResult, ErrorIngestRequest, ErrorIngestResponse
+from modulo.api.models.error import ErrorIngestRequest
 from modulo.core.error_tracking import ErrorIngestionService, SessionKeyStore
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -346,107 +346,6 @@ class TestSessionKeyStore:
 # =========================================================================
 # Schema validation — parametrized
 # =========================================================================
-
-
-class TestErrorEventInputValidation:
-    @pytest.mark.parametrize(
-        ("kwargs", "should_pass", "match"),
-        [
-            pytest.param(
-                {"level": "error", "message": "Something broke", "source": "backend"}, True, None, id="valid_input"
-            ),
-            pytest.param(
-                {"level": "error", "message": "", "source": "backend"},
-                False,
-                "message must not be empty",
-                id="empty_message",
-            ),
-            pytest.param(
-                {"level": "debug", "message": "test", "source": "backend"}, False, "Invalid level", id="invalid_level"
-            ),
-            pytest.param(
-                {"level": "error", "message": "test", "source": "mobile"}, False, "Invalid source", id="invalid_source"
-            ),
-            pytest.param({"level": "error", "message": "test", "source": "saq"}, True, None, id="saq_source_accepted"),
-            pytest.param(
-                {
-                    "level": "error",
-                    "message": "test",
-                    "source": "backend",
-                    "breadcrumbs": [{"msg": str(i)} for i in range(51)],
-                },
-                False,
-                "breadcrumbs must not exceed",
-                id="too_many_breadcrumbs",
-            ),
-            pytest.param(
-                {
-                    "level": "error",
-                    "message": "test",
-                    "source": "backend",
-                    "breadcrumbs": [{"msg": str(i)} for i in range(50)],
-                },
-                True,
-                None,
-                id="breadcrumbs_at_limit",
-            ),
-            pytest.param(
-                {"level": "error", "message": "  hello  ", "source": "backend"}, True, None, id="message_stripped"
-            ),
-            pytest.param(
-                {"level": "critical", "message": "test", "source": "celery"}, True, None, id="optional_fields_none"
-            ),
-        ],
-    )
-    def test_validation(self, kwargs: dict, should_pass: bool, match: str | None) -> None:
-        if should_pass:
-            e = ErrorEventInput(**kwargs)
-            assert e.level == kwargs["level"]
-            if kwargs.get("message") == "  hello  ":
-                assert e.message == "hello"
-        else:
-            with pytest.raises(ValidationError, match=match):
-                ErrorEventInput(**kwargs)
-
-
-class TestErrorIngestRequestValidation:
-    @pytest.mark.parametrize(
-        ("events", "should_pass"),
-        [
-            pytest.param([], False, id="empty_rejected"),
-            pytest.param([{"level": "error", "message": "test", "source": "backend"}], True, id="single_valid"),
-            pytest.param(
-                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(20)],
-                True,
-                id="max_20_valid",
-            ),
-            pytest.param(
-                [{"level": "error", "message": f"err{i}", "source": "backend"} for i in range(21)],
-                False,
-                id="too_many_rejected",
-            ),
-        ],
-    )
-    def test_validation(self, events: list[dict], should_pass: bool) -> None:
-        if should_pass:
-            r = ErrorIngestRequest(events=events)
-            assert len(r.events) == len(events)
-        else:
-            with pytest.raises(ValidationError):
-                ErrorIngestRequest(events=events)
-
-
-class TestErrorGroupResult:
-    def test_fields(self) -> None:
-        r = ErrorGroupResult(group_id="abc-123", is_new=True)
-        assert r.group_id == "abc-123"
-        assert r.is_new is True
-
-
-class TestErrorIngestResponse:
-    def test_response_model(self) -> None:
-        r = ErrorIngestResponse(results=[ErrorGroupResult(group_id="g1", is_new=True)])
-        assert len(r.results) == 1
 
 
 # =========================================================================

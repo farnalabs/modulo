@@ -1880,4 +1880,4 @@ async def _load_claimant_name_map(session: AsyncSession, gates: list[HitlClaim])
             select(Account.id, Account.display_name, Account.email).where(Account.id.in_(account_ids))
         )
     ).all()
-    return {row[0]: row[1] or row[2] for row in rows}
+    return {row[0]: row[1] or row[2] or "" for row in rows}

@@ -527,3 +527,80 @@ def test_viewmodel_current_non_admin_view_as_team_returns_403(client: TestClient
         account_id=_USER_ID,
         org_role="admin",
     )
+
+
+def test_viewmodel_current_system_admin_without_org_returns_200(client: TestClient) -> None:
+    """A system admin with no organisation resolves ``org=None`` and skips the
+    org-scoped dashboard slice (the ``else`` arm of ``_fetch_viewmodel``)."""
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="sysadmin",
+        organisation_id=None,
+        account_id=_USER_ID,
+        org_role="admin",
+        is_system_admin=True,
+    )
+    user = _make_user()
+    plan_ctx = _make_mock_plan_context()
+
+    with (
+        patch("modulo.api.routes.viewmodel.set_rls_org"),
+        patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+        patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=user),
+        patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+        patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+    ):
+        resp = client.get("/api/v1/viewmodel/current")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["org"]["org_name"] == "System Admin"
+    assert body["pipelines_total"] == 0
+    assert body["runs_total"] == 0
+    assert not body["pending_hitl_reviews"]
+    assert not body["views"]
+
+
+def test_viewmodel_current_view_as_team_existing_team_returns_200() -> None:
+    """A ``view_as_team`` naming an existing org team passes the scope guard
+    (the team-found arm of ``_require_view_as_team_scope``)."""
+    pipelines_page = MagicMock(items=[], total=0, page=1, page_size=20)
+    runs_page = MagicMock(items=[], total=0, page=1, page_size=10)
+    plan_ctx = _make_mock_plan_context()
+    team_id = uuid.uuid4()
+
+    session = _make_mock_session()
+    session.execute.return_value.scalar_one_or_none = MagicMock(return_value=MagicMock())
+
+    async def override_session() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    mock_plan = MagicMock()
+    mock_plan.feature_enabled.return_value = True
+    app.dependency_overrides[get_settings] = _make_settings
+    app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[_get_engine] = lambda: MagicMock()
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
+        username="testuser",
+        organisation_id=_ORG_ID,
+        account_id=_USER_ID,
+        org_role="admin",
+    )
+    app.dependency_overrides[get_plan_context] = lambda: mock_plan
+    try:
+        client = TestClient(app)
+        with (
+            patch("modulo.api.routes.viewmodel.list_pipelines", return_value=pipelines_page),
+            patch("modulo.api.routes.viewmodel.list_runs", return_value=runs_page),
+            patch("modulo.api.routes.viewmodel.list_views", return_value=MagicMock(items=[])),
+            patch("modulo.api.routes.viewmodel.set_rls_org"),
+            patch("modulo.api.routes.viewmodel.set_rls_user_context"),
+            patch("modulo.api.routes.viewmodel.get_organisation", return_value=_make_org()),
+            patch("modulo.api.routes.viewmodel.get_account_by_id", return_value=_make_user()),
+            patch("modulo.api.routes.viewmodel.list_team_memberships_for_account", return_value=[]),
+            patch("modulo.api.routes.viewmodel.resolve_plan_context", return_value=plan_ctx),
+        ):
+            resp = client.get(f"/api/v1/viewmodel/current?view_as_team={team_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert resp.status_code == 200

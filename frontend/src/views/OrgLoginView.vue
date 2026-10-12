@@ -37,14 +37,26 @@
         {{ $t('common.loading') }}
       </div>
 
-      <div v-else-if="notFound" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive" role="alert" aria-live="assertive" data-testid="org-login-not-found">
-        {{ $t('views.OrgLoginView.organisation_not_found') }}
-      </div>
+      <!-- Slug lookup failed: nothing to retry — the user picks another org. -->
+      <ErrorAlert
+        v-else-if="notFound"
+        :message="$t('views.OrgLoginView.organisation_not_found')"
+        :retryable="false"
+        role="alert"
+        aria-live="assertive"
+        data-testid="org-login-not-found"
+      />
 
       <template v-else>
-        <div v-if="loginError" class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive" role="alert" aria-live="assertive" data-testid="org-login-error">
-          {{ loginError }}
-        </div>
+        <!-- Login failure: the user corrects the credentials and submits again. -->
+        <ErrorAlert
+          v-if="loginError"
+          :message="loginError"
+          :retryable="false"
+          role="alert"
+          aria-live="assertive"
+          data-testid="org-login-error"
+        />
 
         <form v-if="passwordEnabled" @submit.prevent="handleLogin" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
           <div class="space-y-2">
@@ -123,6 +135,7 @@ import { setAccessToken } from '../lib/api/client'
 import { setMustChangePassword } from '../lib/mustChangePassword'
 import type { components } from '../lib/api/schema'
 import SsoBrandMark from '../components/SsoBrandMark.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 type OrgLoginProviderInfo = components['schemas']['OrgLoginProviderInfo']
 

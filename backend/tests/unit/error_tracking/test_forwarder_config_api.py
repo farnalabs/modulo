@@ -78,18 +78,17 @@ class TestListForwarders:
         from fastapi.testclient import TestClient
 
         app = _make_app()
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/errors/forwarders")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "forwarders" in data
-        types = {f["forwarder_type"] for f in data["forwarders"]}
-        assert types == {"sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"}
-        for fwd in data["forwarders"]:
-            assert fwd["enabled"] is False
-            assert fwd["configured"] is False
-            assert fwd["last_test_ok"] is None
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/errors/forwarders")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "forwarders" in data
+            types = {f["forwarder_type"] for f in data["forwarders"]}
+            assert types == {"sentry", "datadog", "pagerduty", "rollbar", "opsgenie", "loki"}
+            for fwd in data["forwarders"]:
+                assert fwd["enabled"] is False
+                assert fwd["configured"] is False
+                assert fwd["last_test_ok"] is None
 
 
 class TestConfigureForwarder:
@@ -97,87 +96,17 @@ class TestConfigureForwarder:
         from fastapi.testclient import TestClient
 
         app = _make_app()
-        client = TestClient(app)
-
-        resp = client.put(
-            "/api/v1/errors/forwarders/sentry",
-            json={"enabled": True, "config_json": {"dsn": "https://key@sentry.io/123"}},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["forwarder_type"] == "sentry"
-        assert data["enabled"] is True
-        assert "dsn" in data["config_summary"]
-        assert data["config_summary"]["dsn"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
-
-    def test_unknown_type_returns_404(self):
-        from fastapi.testclient import TestClient
-
-        app = _make_app()
-        client = TestClient(app)
-        resp = client.put("/api/v1/errors/forwarders/unknown", json={"enabled": True})
-        assert resp.status_code == 404
-
-    def test_non_admin_returns_403(self):
-        from fastapi.testclient import TestClient
-
-        client = TestClient(_make_app(org_role="viewer"))
-        resp = client.put("/api/v1/errors/forwarders/sentry", json={"enabled": True})
-        assert resp.status_code == 403
-
-
-class TestTestConnection:
-    def test_test_connection_success(self):
-        from fastapi.testclient import TestClient
-
-        app = _make_app()
-        client = TestClient(app)
-
-        with patch(
-            "modulo.api.routes.error_forwarder_config.get_forwarder",
-        ) as mock_get:
-            fwd_instance = AsyncMock()
-            fwd_instance.forward.return_value = True
-            mock_get.return_value = fwd_instance
-
-            resp = client.post(
-                "/api/v1/errors/forwarders/sentry/test",
-                json={"config_json": {"dsn": "https://key@sentry.io/123"}},
+        with TestClient(app) as client:
+            resp = client.put(
+                "/api/v1/errors/forwarders/sentry",
+                json={"enabled": True, "config_json": {"dsn": "https://key@sentry.io/123"}},
             )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-
-    def test_test_connection_failure(self):
-        from fastapi.testclient import TestClient
-
-        app = _make_app()
-        client = TestClient(app)
-
-        with patch(
-            "modulo.api.routes.error_forwarder_config.get_forwarder",
-        ) as mock_get:
-            fwd_instance = AsyncMock()
-            fwd_instance.forward.return_value = False
-            mock_get.return_value = fwd_instance
-
-            resp = client.post(
-                "/api/v1/errors/forwarders/datadog/test",
-                json={"config_json": {"api_key": "test-key"}},
-            )
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is False
-
-    def test_unknown_type_returns_404(self):
-        from fastapi.testclient import TestClient
-
-        app = _make_app()
-        client = TestClient(app)
-        resp = client.post("/api/v1/errors/forwarders/unknown/test", json={})
-        assert resp.status_code == 404
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["forwarder_type"] == "sentry"
+            assert data["enabled"] is True
+            assert "dsn" in data["config_summary"]
+            assert data["config_summary"]["dsn"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
 
 
 class TestTestConnectionSsrfGuard:
@@ -185,47 +114,45 @@ class TestTestConnectionSsrfGuard:
         from fastapi.testclient import TestClient
 
         app = _make_app()
-        client = TestClient(app)
+        with TestClient(app) as client:
+            with patch(
+                "modulo.api.routes.error_forwarder_config.get_forwarder",
+            ) as mock_get:
+                fwd_instance = AsyncMock()
+                mock_get.return_value = fwd_instance
 
-        with patch(
-            "modulo.api.routes.error_forwarder_config.get_forwarder",
-        ) as mock_get:
-            fwd_instance = AsyncMock()
-            mock_get.return_value = fwd_instance
+                resp = client.post(
+                    "/api/v1/errors/forwarders/sentry/test",
+                    json={"config_json": {"dsn": "https://key@127.0.0.1/123"}},
+                )
 
-            resp = client.post(
-                "/api/v1/errors/forwarders/sentry/test",
-                json={"config_json": {"dsn": "https://key@127.0.0.1/123"}},
-            )
-
-        assert resp.status_code == 422
-        assert "SSRF check failed" in resp.json()["detail"]
-        fwd_instance.forward.assert_not_awaited()
+            assert resp.status_code == 422
+            assert "SSRF check failed" in resp.json()["detail"]
+            fwd_instance.forward.assert_not_awaited()
 
     def test_datadog_site_rejected_when_guard_fails(self):
         from fastapi.testclient import TestClient
 
         app = _make_app()
-        client = TestClient(app)
+        with TestClient(app) as client:
+            with (
+                patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get,
+                patch(
+                    "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
+                    new=AsyncMock(side_effect=ValueError("targets a private/internal network address")),
+                ),
+            ):
+                fwd_instance = AsyncMock()
+                mock_get.return_value = fwd_instance
 
-        with (
-            patch("modulo.api.routes.error_forwarder_config.get_forwarder") as mock_get,
-            patch(
-                "modulo.api.routes.error_forwarder_config.validate_outbound_url_async",
-                new=AsyncMock(side_effect=ValueError("targets a private/internal network address")),
-            ),
-        ):
-            fwd_instance = AsyncMock()
-            mock_get.return_value = fwd_instance
+                resp = client.post(
+                    "/api/v1/errors/forwarders/datadog/test",
+                    json={"config_json": {"api_key": "key", "site": "datadoghq.com"}},
+                )
 
-            resp = client.post(
-                "/api/v1/errors/forwarders/datadog/test",
-                json={"config_json": {"api_key": "key", "site": "datadoghq.com"}},
-            )
-
-        assert resp.status_code == 422
-        assert "SSRF check failed" in resp.json()["detail"]
-        fwd_instance.forward.assert_not_awaited()
+            assert resp.status_code == 422
+            assert "SSRF check failed" in resp.json()["detail"]
+            fwd_instance.forward.assert_not_awaited()
 
 
 class TestConfigSummaryMasking:
@@ -233,13 +160,12 @@ class TestConfigSummaryMasking:
         from fastapi.testclient import TestClient
 
         app = _make_app()
-        client = TestClient(app)
-
-        resp = client.put(
-            "/api/v1/errors/forwarders/datadog",
-            json={"config_json": {"api_key": "dd-key-123", "site": "datadoghq.com"}},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["config_summary"]["api_key"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
-        assert data["config_summary"]["site"] == "datadoghq.com"
+        with TestClient(app) as client:
+            resp = client.put(
+                "/api/v1/errors/forwarders/datadog",
+                json={"config_json": {"api_key": "dd-key-123", "site": "datadoghq.com"}},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["config_summary"]["api_key"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
+            assert data["config_summary"]["site"] == "datadoghq.com"

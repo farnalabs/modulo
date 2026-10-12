@@ -863,6 +863,40 @@ class TestJsonbSanitisation:
         assert "\x00" not in json.dumps(row.schema_enforcement_json)
 
 
+class TestUpsertRowsIgnoreConflicts:
+    """``upsert_rows(ignore_conflicts=True)`` emits ON CONFLICT DO NOTHING —
+    the ``_upsert_group_stmt`` no-overwrite arm: a conflicting row keeps its
+    original blob payload instead of being overwritten from ``excluded``."""
+
+    async def test_ignore_conflicts_true_inserts_then_leaves_row_untouched(self, session: AsyncSession) -> None:
+        run = await _seed_run(session)
+        attempt_key = f"run:{run.id}:node:n1:1"
+
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await upsert_rows(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                rows=[NodeOutputWrite(node_id="n1", attempt_key=attempt_key, outputs={"v": 1})],
+                ignore_conflicts=True,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.outputs_json == {"v": 1}
+
+        async with session.begin():
+            await set_rls_org(session, run.organisation_id)
+            await upsert_rows(
+                session,
+                run_id=run.id,
+                organisation_id=run.organisation_id,
+                rows=[NodeOutputWrite(node_id="n1", attempt_key=attempt_key, outputs={"v": 2})],
+                ignore_conflicts=True,
+            )
+        row = await _read_row(session, run, node_id="n1", attempt_key=attempt_key)
+        assert row.outputs_json == {"v": 1}
+
+
 class TestBytesAccounting:
     async def test_metadata_row_is_excluded(self, session: AsyncSession) -> None:
         run = await _seed_run(session)

@@ -94,103 +94,115 @@ class NotionConnector(ConnectorBase):
         async with self._client() as client:
             match q.resource:
                 case "databases":
-                    payload: dict[str, Any] = {
-                        "filter": {"value": "database", "property": "object"},
-                    }
-                    if "query" in q.filters:
-                        payload["query"] = q.filters["query"]
-                    if q.cursor:
-                        payload["start_cursor"] = q.cursor
-                    if q.limit:
-                        payload["page_size"] = min(q.limit, 100)
-                    r = await client.post("/search", json=payload)
-                    r.raise_for_status()
-                    body = r.json()
-                    records: list[dict[str, Any]] = _safe_records(body, "results")
-                    return ConnectorResult(
-                        records=records,
-                        total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
-                    )
-
+                    return await self._query_databases(client, q)
                 case "database":
-                    database_id = q.filters.get("database_id")
-                    if not database_id:
-                        raise ValueError("Notion database query requires 'database_id' filter")
-                    r = await client.get(f"/databases/{database_id}")
-                    r.raise_for_status()
-                    body = r.json()
-                    return ConnectorResult(records=[body])
-
+                    return await self._query_database(client, q)
                 case "pages":
-                    database_id = q.filters.get("database_id")
-                    if not database_id:
-                        raise ValueError("Notion pages query requires 'database_id' filter")
-                    payload = {}
-                    if "filter" in q.filters:
-                        payload["filter"] = q.filters["filter"]
-                    if "sorts" in q.filters:
-                        payload["sorts"] = q.filters["sorts"]
-                    if q.cursor:
-                        payload["start_cursor"] = q.cursor
-                    if q.limit:
-                        payload["page_size"] = min(q.limit, 100)
-                    r = await client.post(f"/databases/{database_id}/query", json=payload)
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "results")
-                    return ConnectorResult(
-                        records=records,
-                        total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
-                    )
-
+                    return await self._query_pages(client, q)
                 case "page":
-                    page_id = q.filters.get("page_id")
-                    if not page_id:
-                        raise ValueError("Notion page query requires 'page_id' filter")
-                    r = await client.get(f"/pages/{page_id}")
-                    r.raise_for_status()
-                    body = r.json()
-                    return ConnectorResult(records=[body])
-
+                    return await self._query_page(client, q)
                 case "blocks":
-                    block_id = q.filters.get("block_id")
-                    if not block_id:
-                        raise ValueError("Notion blocks query requires 'block_id' filter")
-                    params = {}
-                    if q.cursor:
-                        params["start_cursor"] = q.cursor
-                    if q.limit:
-                        params["page_size"] = str(min(q.limit, 100))
-                    r = await client.get(f"/blocks/{block_id}/children", params=params)
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "results")
-                    return ConnectorResult(
-                        records=records,
-                        total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
-                    )
-
+                    return await self._query_blocks(client, q)
                 case "users":
-                    params = {}
-                    if q.cursor:
-                        params["start_cursor"] = q.cursor
-                    if q.limit:
-                        params["page_size"] = str(min(q.limit, 100))
-                    r = await client.get("/users", params=params)
-                    r.raise_for_status()
-                    body = r.json()
-                    records = _safe_records(body, "results")
-                    return ConnectorResult(
-                        records=records,
-                        total=len(records),
-                        next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
-                    )
-
+                    return await self._query_users(client, q)
                 case _:
                     raise ValueError(f"Unsupported Notion resource: {q.resource!r}")
+
+    async def _query_databases(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        payload: dict[str, Any] = {
+            "filter": {"value": "database", "property": "object"},
+        }
+        if "query" in q.filters:
+            payload["query"] = q.filters["query"]
+        if q.cursor:
+            payload["start_cursor"] = q.cursor
+        if q.limit:
+            payload["page_size"] = min(q.limit, 100)
+        r = await client.post("/search", json=payload)
+        r.raise_for_status()
+        body = r.json()
+        records: list[dict[str, Any]] = _safe_records(body, "results")
+        return ConnectorResult(
+            records=records,
+            total=len(records),
+            next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
+        )
+
+    async def _query_database(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        database_id = q.filters.get("database_id")
+        if not database_id:
+            raise ValueError("Notion database query requires 'database_id' filter")
+        r = await client.get(f"/databases/{database_id}")
+        r.raise_for_status()
+        body = r.json()
+        return ConnectorResult(records=[body])
+
+    async def _query_pages(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        database_id = q.filters.get("database_id")
+        if not database_id:
+            raise ValueError("Notion pages query requires 'database_id' filter")
+        payload: dict[str, Any] = {}
+        if "filter" in q.filters:
+            payload["filter"] = q.filters["filter"]
+        if "sorts" in q.filters:
+            payload["sorts"] = q.filters["sorts"]
+        if q.cursor:
+            payload["start_cursor"] = q.cursor
+        if q.limit:
+            payload["page_size"] = min(q.limit, 100)
+        r = await client.post(f"/databases/{database_id}/query", json=payload)
+        r.raise_for_status()
+        body = r.json()
+        records = _safe_records(body, "results")
+        return ConnectorResult(
+            records=records,
+            total=len(records),
+            next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
+        )
+
+    async def _query_page(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        page_id = q.filters.get("page_id")
+        if not page_id:
+            raise ValueError("Notion page query requires 'page_id' filter")
+        r = await client.get(f"/pages/{page_id}")
+        r.raise_for_status()
+        body = r.json()
+        return ConnectorResult(records=[body])
+
+    async def _query_blocks(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        block_id = q.filters.get("block_id")
+        if not block_id:
+            raise ValueError("Notion blocks query requires 'block_id' filter")
+        params: dict[str, str] = {}
+        if q.cursor:
+            params["start_cursor"] = q.cursor
+        if q.limit:
+            params["page_size"] = str(min(q.limit, 100))
+        r = await client.get(f"/blocks/{block_id}/children", params=params)
+        r.raise_for_status()
+        body = r.json()
+        records = _safe_records(body, "results")
+        return ConnectorResult(
+            records=records,
+            total=len(records),
+            next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
+        )
+
+    async def _query_users(self, client: httpx.AsyncClient, q: ConnectorQuery) -> ConnectorResult:
+        params: dict[str, str] = {}
+        if q.cursor:
+            params["start_cursor"] = q.cursor
+        if q.limit:
+            params["page_size"] = str(min(q.limit, 100))
+        r = await client.get("/users", params=params)
+        r.raise_for_status()
+        body = r.json()
+        records = _safe_records(body, "results")
+        return ConnectorResult(
+            records=records,
+            total=len(records),
+            next_cursor=_safe_cursor(body.get("next_cursor")) if isinstance(body, dict) else None,
+        )
 
     async def write(self, payload: ConnectorPayload) -> dict[str, Any]:
         async with self._client() as client:

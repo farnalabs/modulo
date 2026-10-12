@@ -31,6 +31,7 @@ from modulo.api.routes.admin import _raise_bg_pgcode
 from modulo.auth.jwt import TenantPrincipal
 from modulo.auth.scim_auth import ScimPrincipal, get_scim_principal, require_scim_feature
 from modulo.core.audit_coverage import audited
+from modulo.core.principals import is_service_account
 from modulo.core.runtime_config.key_bridge import get_public_url
 from modulo.db.crud.last_admin_guard import (
     LastAdminLockoutError,
@@ -100,6 +101,18 @@ def _scim_error(status_code: int, detail: str) -> HTTPException:
             "status": str(status_code),
         },
     )
+
+
+def _require_human_scim_user(account: Account | None, user_id: uuid.UUID) -> Account:
+    """Refuse a missing OR service-principal SCIM user (FAR-1385).
+
+    A service principal has no human identity and is excluded from every SCIM
+    flow (ADR 058). Answered as a 404 — exactly as an unknown user id — so a
+    provisioning client cannot enumerate service principals.
+    """
+    if account is None or is_service_account(account):
+        raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+    return account
 
 
 _SCIM_ADMIN_CALLER_SQL = text(
@@ -381,12 +394,19 @@ async def list_users(
         ) from None
 
     base_url = _get_base_url(settings)
+    # FAR-1385: service principals are excluded from the SCIM user list (ADR
+    # 058). They carry no email and are not provisionable, so they are dropped
+    # from the page and from the count. The server-side filter lands with the
+    # crud list change in slice 2; in slice 1 no service row can exist, so this
+    # is a no-op for every real request.
+    human_accounts = [a for a in accounts if not is_service_account(a)]
+    excluded = len(accounts) - len(human_accounts)
     return ScimListResponse(
         schemas=[_SCIM_LIST_SCHEMA],
-        totalResults=total,
+        totalResults=max(0, total - excluded),
         itemsPerPage=count,
         startIndex=start_index,
-        Resources=[_user_to_scim(a, base_url) for a in accounts],
+        Resources=[_user_to_scim(a, base_url) for a in human_accounts],
     )
 
 
@@ -522,8 +542,7 @@ async def get_user(
             detail="SCIM get_user failed due to an unexpected error",
         ) from None
 
-    if account is None:
-        raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+    account = _require_human_scim_user(account, user_id)
 
     return _user_to_scim(account, _get_base_url(settings))
 
@@ -554,8 +573,7 @@ async def replace_user(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             account = await scim_get_user(session, principal.organisation_id, user_id)
-            if account is None:
-                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            account = _require_human_scim_user(account, user_id)
 
             if not req.active:
                 account = await _deactivate_scim_user(session, principal.organisation_id, user_id)
@@ -700,8 +718,7 @@ async def patch_user(
         async with session.begin():
             await set_rls_org(session, principal.organisation_id)
             account = await scim_get_user(session, principal.organisation_id, user_id)
-            if account is None:
-                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            account = _require_human_scim_user(account, user_id)
 
             deactivate_requested = _apply_user_patch_ops(account, req.Operations)
             if deactivate_requested:
@@ -787,8 +804,7 @@ async def delete_user(
                     _MSG_NO_ACTIVE_ADMIN_EXISTS,
                 )
             account = await scim_get_user(session, principal.organisation_id, user_id)
-            if account is None:
-                raise _scim_error(status.HTTP_404_NOT_FOUND, f"User {user_id} not found")
+            account = _require_human_scim_user(account, user_id)
             await assert_not_last_admin(
                 session,
                 org_id=principal.organisation_id,

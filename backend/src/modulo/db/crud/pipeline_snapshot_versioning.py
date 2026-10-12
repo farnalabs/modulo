@@ -2,7 +2,7 @@
 
 import copy
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, Literal
 
 from sqlalchemy import delete as sa_delete
@@ -440,6 +440,153 @@ def _compute_node_changes(na: dict[str, Any], nb: dict[str, Any]) -> dict[str, A
     return changes
 
 
+def _compute_edge_changes(ea: dict[str, Any], eb: dict[str, Any]) -> dict[str, Any]:
+    """Compute per-field changes between two edge dicts (parallel to :func:`_compute_node_changes`)."""
+    changes: dict[str, Any] = {}
+    for ekey in ("edge_type", "type"):
+        if ea.get(ekey) != eb.get(ekey):
+            changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
+    if ea.get("hitl_review_config") != eb.get("hitl_review_config"):
+        changes["hitl_review_config"] = {
+            "old": ea.get("hitl_review_config"),
+            "new": eb.get("hitl_review_config"),
+        }
+    # FAR-402 P6: surface source_port/target_port deltas.
+    edge_ports = diff_edge_ports(ea, eb)
+    if edge_ports:
+        changes["ports"] = edge_ports
+    return changes
+
+
+def _edge_key(edge: dict[str, Any]) -> tuple[Any, Any]:
+    """Stable identity of an edge: (source, target), tolerating legacy key names."""
+    return (
+        edge.get("source") or edge.get("source_node_id"),
+        edge.get("target") or edge.get("target_node_id"),
+    )
+
+
+def _index_layer(
+    entities: Iterable[dict[str, Any]],
+    key_fn: Callable[[dict[str, Any]], Any],
+) -> dict[Any, dict[str, Any]]:
+    """Build the keyed layer dict an entity-layer diff operates on."""
+    return {key_fn(entity): entity for entity in entities}
+
+
+def _wrap_node_modified(key: Any, changes: dict[str, Any]) -> dict[str, Any]:
+    return {"node_id": key, "changes": changes}
+
+
+def _wrap_edge_modified(key: Any, changes: dict[str, Any]) -> dict[str, Any]:
+    source, target = key
+    return {"edge": {"source": source, "target": target}, "changes": changes}
+
+
+def _diff_entity_layer(
+    a_layer: dict[Any, dict[str, Any]],
+    b_layer: dict[Any, dict[str, Any]],
+    *,
+    compute_changes: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]],
+    wrap_modified: Callable[[Any, dict[str, Any]], dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Classify one entity layer (nodes, edges) between two keyed snapshots.
+
+    Returns ``(added, removed, modified)``: entities present only in B, only in
+    A, and present in both with at least one changed field. Implemented once
+    and reused for every layer so the exists-vs-new semantics cannot drift.
+    """
+    keys_a = set(a_layer)
+    keys_b = set(b_layer)
+    added = [b_layer[k] for k in keys_b - keys_a]
+    removed = [a_layer[k] for k in keys_a - keys_b]
+    modified: list[dict[str, Any]] = []
+    for k in keys_a & keys_b:
+        changes = compute_changes(a_layer[k], b_layer[k])
+        if changes:
+            modified.append(wrap_modified(k, changes))
+    return added, removed, modified
+
+
+def _compute_semantic_layer(
+    graph_b: dict[str, Any],
+    added_nodes: list[dict[str, Any]],
+    modified_nodes: list[dict[str, Any]],
+    added_edges: list[dict[str, Any]],
+    modified_edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """FAR-402 P6: semantic layer — aggregate port-signature deltas across the
+    node/edge sets, then run the deterministic impact oracle. ``port_changes``
+    is the union of per-node and per-edge port deltas; ``impacted_nodes`` is
+    the downstream reachability projection (which nodes a port change breaks);
+    ``breaking_changes`` flags port changes that would drop/alter data read by
+    a downstream edge (severity ``block`` vs ``warning``).
+    """
+    port_changes: list[dict[str, Any]] = []
+    for m in modified_nodes:
+        port_changes += m.get("changes", {}).get("ports", [])
+    for m in modified_edges:
+        # ``changes["ports"]`` is a ``diff_edge_ports`` delta dict (no node_id),
+        # so normalise it to the node-change shape the oracle can consume.
+        edge_port_delta: Any = m.get("changes", {}).get("ports")
+        if edge_port_delta:
+            port_changes += normalise_edge_port_delta(m["edge"], edge_port_delta)
+    for node in added_nodes:
+        port_changes += diff_node_ports({}, node)
+    for edge in added_edges:
+        delta = diff_edge_ports({}, edge)
+        if delta:
+            port_changes += normalise_edge_port_delta(edge, delta)
+
+    graph_b_for_impact: dict[str, Any] = {
+        "nodes": graph_b.get("nodes", []),
+        "edges": graph_b.get("edges", []),
+    }
+    impacted_nodes: set[str] = set()
+    breaking_changes: list[dict[str, Any]] = []
+    if port_changes:
+        impacted_nodes = compute_port_change_impact(graph_b_for_impact, port_changes)
+        breaking_changes = check_port_change_breaking(graph_b_for_impact, port_changes)
+    return {
+        "port_changes": port_changes,
+        "impacted_nodes": sorted(impacted_nodes),
+        "breaking_changes": breaking_changes,
+    }
+
+
+def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
+    graph = snapshot.graph_json
+    return {
+        "nodes": [
+            {
+                "id": n["id"],
+                "agent_id": n.get("agent_id"),
+                "label": n.get("label"),
+                "node_type": n.get("node_type", "agent"),
+                "position": n.get("position", {"x": 0, "y": 0}),
+                "output_schema_id": n.get("output_schema_id"),
+                "connector_binding": n.get("connector_binding"),
+                "environment_binding": n.get("environment_binding"),
+                "inputs": n.get("inputs"),
+                "outputs": n.get("outputs"),
+            }
+            for n in graph.get("nodes", [])
+        ],
+        "edges": [
+            {
+                "id": e.get("id"),
+                "source_node_id": e.get("source") or e.get("source_node_id", ""),
+                "target_node_id": e.get("target") or e.get("target_node_id", ""),
+                "edge_type": e.get("edge_type", e.get("type", "normal")),
+                "hitl_review_config": e.get("hitl_review_config"),
+                "source_port": e.get("source_port"),
+                "target_port": e.get("target_port"),
+            }
+            for e in graph.get("edges", [])
+        ],
+    }
+
+
 async def diff_snapshots(
     session: AsyncSession,
     snapshot_id_a: uuid.UUID,
@@ -465,130 +612,31 @@ async def diff_snapshots(
     if pipeline_id is not None and (a.pipeline_id != pipeline_id or b.pipeline_id != pipeline_id):
         return None
 
-    nodes_a = {n["id"]: n for n in a.graph_json.get("nodes", [])}
-    nodes_b = {n["id"]: n for n in b.graph_json.get("nodes", [])}
-    ids_a = set(nodes_a)
-    ids_b = set(nodes_b)
+    nodes_a = _index_layer(a.graph_json.get("nodes", []), lambda n: n["id"])
+    nodes_b = _index_layer(b.graph_json.get("nodes", []), lambda n: n["id"])
+    added_nodes, removed_nodes, modified_nodes = _diff_entity_layer(
+        nodes_a,
+        nodes_b,
+        compute_changes=_compute_node_changes,
+        wrap_modified=_wrap_node_modified,
+    )
 
-    added_nodes = [nodes_b[nid] for nid in ids_b - ids_a]
-    removed_nodes = [nodes_a[nid] for nid in ids_a - ids_b]
-    modified_nodes = []
-    for nid in ids_a & ids_b:
-        na = nodes_a[nid]
-        nb = nodes_b[nid]
-        changes = _compute_node_changes(na, nb)
-        if changes:
-            modified_nodes.append({"node_id": nid, "changes": changes})
+    edges_a = _index_layer(a.graph_json.get("edges", []), _edge_key)
+    edges_b = _index_layer(b.graph_json.get("edges", []), _edge_key)
+    added_edges, removed_edges, modified_edges = _diff_entity_layer(
+        edges_a,
+        edges_b,
+        compute_changes=_compute_edge_changes,
+        wrap_modified=_wrap_edge_modified,
+    )
 
-    edges_a = {}
-    for e in a.graph_json.get("edges", []):
-        key = (
-            e.get("source") or e.get("source_node_id"),
-            e.get("target") or e.get("target_node_id"),
-        )
-        edges_a[key] = e
-    edges_b = {}
-    for e in b.graph_json.get("edges", []):
-        key = (
-            e.get("source") or e.get("source_node_id"),
-            e.get("target") or e.get("target_node_id"),
-        )
-        edges_b[key] = e
-
-    keys_a = set(edges_a)
-    keys_b = set(edges_b)
-    added_edges = [edges_b[k] for k in keys_b - keys_a]
-    removed_edges = [edges_a[k] for k in keys_a - keys_b]
-    modified_edges = []
-    for k in keys_a & keys_b:
-        ea = edges_a[k]
-        eb = edges_b[k]
-        edge_changes = {}
-        for ekey in ("edge_type", "type"):
-            if ea.get(ekey) != eb.get(ekey):
-                edge_changes["edge_type"] = {"old": ea.get(ekey), "new": eb.get(ekey)}
-        if ea.get("hitl_review_config") != eb.get("hitl_review_config"):
-            edge_changes["hitl_review_config"] = {
-                "old": ea.get("hitl_review_config"),
-                "new": eb.get("hitl_review_config"),
-            }
-        # FAR-402 P6: surface source_port/target_port deltas.
-        edge_ports = diff_edge_ports(ea, eb)
-        if edge_ports:
-            edge_changes["ports"] = edge_ports
-        if edge_changes:
-            source = k[0]
-            target = k[1]
-            modified_edges.append(
-                {
-                    "edge": {"source": source, "target": target},
-                    "changes": edge_changes,
-                }
-            )
-
-    def _rebuild_graph(snapshot: PipelineSnapshot) -> dict[str, Any]:
-        graph = snapshot.graph_json
-        return {
-            "nodes": [
-                {
-                    "id": n["id"],
-                    "agent_id": n.get("agent_id"),
-                    "label": n.get("label"),
-                    "node_type": n.get("node_type", "agent"),
-                    "position": n.get("position", {"x": 0, "y": 0}),
-                    "output_schema_id": n.get("output_schema_id"),
-                    "connector_binding": n.get("connector_binding"),
-                    "environment_binding": n.get("environment_binding"),
-                    "inputs": n.get("inputs"),
-                    "outputs": n.get("outputs"),
-                }
-                for n in graph.get("nodes", [])
-            ],
-            "edges": [
-                {
-                    "id": e.get("id"),
-                    "source_node_id": e.get("source") or e.get("source_node_id", ""),
-                    "target_node_id": e.get("target") or e.get("target_node_id", ""),
-                    "edge_type": e.get("edge_type", e.get("type", "normal")),
-                    "hitl_review_config": e.get("hitl_review_config"),
-                    "source_port": e.get("source_port"),
-                    "target_port": e.get("target_port"),
-                }
-                for e in graph.get("edges", [])
-            ],
-        }
-
-    # FAR-402 P6: semantic layer — aggregate port-signature deltas across the
-    # node/edge sets, then run the deterministic impact oracle. ``port_changes``
-    # is the union of per-node and per-edge port deltas; ``impacted_nodes`` is
-    # the downstream reachability projection (which nodes a port change breaks);
-    # ``breaking_changes`` flags port changes that would drop/alter data read by
-    # a downstream edge (severity ``block`` vs ``warning``).
-    port_changes: list[dict[str, Any]] = []
-    for m in modified_nodes:
-        port_changes += m.get("changes", {}).get("ports", [])
-    for m in modified_edges:
-        # ``changes["ports"]`` is a ``diff_edge_ports`` delta dict (no node_id),
-        # so normalise it to the node-change shape the oracle can consume.
-        edge_port_delta: Any = m.get("changes", {}).get("ports")
-        if edge_port_delta:
-            port_changes += normalise_edge_port_delta(m["edge"], edge_port_delta)
-    for node in added_nodes:
-        port_changes += diff_node_ports({}, node)
-    for edge in added_edges:
-        delta = diff_edge_ports({}, edge)
-        if delta:
-            port_changes += normalise_edge_port_delta(edge, delta)
-
-    graph_b_for_impact: dict[str, Any] = {
-        "nodes": b.graph_json.get("nodes", []),
-        "edges": b.graph_json.get("edges", []),
-    }
-    impacted_nodes: set[str] = set()
-    breaking_changes: list[dict[str, Any]] = []
-    if port_changes:
-        impacted_nodes = compute_port_change_impact(graph_b_for_impact, port_changes)
-        breaking_changes = check_port_change_breaking(graph_b_for_impact, port_changes)
+    semantic = _compute_semantic_layer(
+        b.graph_json,
+        added_nodes,
+        modified_nodes,
+        added_edges,
+        modified_edges,
+    )
 
     return {
         "snapshot_a": {
@@ -611,9 +659,5 @@ async def diff_snapshots(
         "edges_added": added_edges,
         "edges_removed": removed_edges,
         "edges_modified": modified_edges,
-        "semantic": {
-            "port_changes": port_changes,
-            "impacted_nodes": sorted(impacted_nodes),
-            "breaking_changes": breaking_changes,
-        },
+        "semantic": semantic,
     }

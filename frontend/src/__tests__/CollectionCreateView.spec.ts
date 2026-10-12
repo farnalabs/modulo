@@ -30,6 +30,7 @@ vi.mock('../lib/api/client', () => ({
 }))
 
 import CollectionCreateView from '../views/CollectionCreateView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -111,6 +112,36 @@ describe('CollectionCreateView (FAR-760)', () => {
     await nextTick()
 
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(router.currentRoute.value.name).not.toBe('library-collection-detail')
+  })
+
+  it('renders create failures through the shared ErrorAlert with no Retry (FAR-1669)', async () => {
+    postMock.mockRejectedValue(new Error('slug already exists'))
+    router.push('/library/collections/new')
+    await router.isReady()
+    const wrapper = mount(CollectionCreateView, { global: { plugins: [router] } })
+    await nextTick()
+
+    await wrapper.find('#collection-name').setValue('Broken')
+    await wrapper.find('#collection-slug').setValue('broken')
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-create-submit"]').trigger('submit')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    // FAR-1669 prove-the-fix: the failure box must be the SHARED ErrorAlert —
+    // the pre-conversion bespoke div also showed the message under
+    // role="alert", so findComponent is what fails on a revert. No Retry is
+    // offered (`:retryable="false"`): an automatic retry could double-create
+    // the collection.
+    const alert = wrapper.findComponent(ErrorAlert)
+    expect(alert.exists()).toBe(true)
+    expect(alert.props('retryable')).toBe(false)
+    expect(alert.text()).toContain('slug already exists')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.find('[data-testid="error-alert-retry"]').exists()).toBe(false)
     expect(router.currentRoute.value.name).not.toBe('library-collection-detail')
   })
 

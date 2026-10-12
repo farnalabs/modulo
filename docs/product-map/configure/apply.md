@@ -13,6 +13,7 @@ code:
   - backend/src/modulo/cli/apply/trigger_apply.py
   - backend/src/modulo/core/pipeline_engine/git_content.py
   - backend/src/modulo/core/graph_validator/__init__.py
+  - backend/src/modulo/core/secrets_backend/references.py
 unit-tests:
   - backend/tests/unit/cli/test_apply_cli.py
   - backend/tests/unit/cli/test_apply_loader.py
@@ -24,6 +25,7 @@ unit-tests:
   - backend/tests/unit/cli/test_apply_drift.py
   - backend/tests/unit/cli/test_apply_git_content.py
   - backend/tests/unit/cli/test_apply_run_enabled.py
+  - backend/tests/unit/cli/test_apply_credential_ref.py
   - backend/tests/unit/core/test_git_content.py
   - backend/tests/unit/pipeline_engine/test_sandbox_git_content.py
   - backend/tests/unit/graph_validator/test_edges_and_sandbox_validation.py
@@ -61,14 +63,34 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
       pipeline declared only in a LATER document are load-time errors
       (`backend/src/modulo/cli/apply/loader.py`,
       `backend/tests/unit/cli/test_apply_loader.py`)
-- [x] Secrets are refs-only: backend `api_key` and trigger `config_json`
-      secret-shaped entries must be `${env:VAR}` or `secretref://<key>`
-      references – inline secret literals are forbidden at validation;
-      `${env:}` refs resolve client-side (missing/empty var blocks that
-      entity), `secretref://` is blocked pending server-side resolution, and
-      `hmac_secret` / `signing_secret` are Fernet-encrypted server-side on
-      write (`backend/src/modulo/cli/apply/models.py`,
-      `test_apply_models.py`)
+- [x] Secrets are refs-only: backend `api_key` / `credential_ref` and trigger
+      `config_json` secret-shaped entries must be `${env:VAR}` or
+      `secretref://<key>` references – inline secret literals are forbidden at
+      validation; `${env:}` refs resolve client-side (missing/empty var blocks
+      that entity), `secretref://` is resolved SERVER-SIDE against the org vault
+      at write time (FAR-1640, `core/secrets_backend/references.py`) and a
+      missing/foreign key fails the entity with a typed
+      `credential_reference_error` (422) naming the key, and `hmac_secret` /
+      `signing_secret` are Fernet-encrypted server-side on write
+      (`backend/src/modulo/cli/apply/models.py`, `test_apply_models.py`)
+- [x] A model backend credential may instead be declared as
+      `credential_ref: <key>` (FAR-1216): the declarative short form naming a
+      bare org-vault key. Exactly one of `api_key` / `credential_ref` is
+      required; the CLI normalises `credential_ref` to the server's
+      `secretref://<key>` token (one wire form, one server resolver, so there is
+      no parallel mechanism), and the key is validated at PLAN time against the
+      org vault so a missing key blocks the entity (in the plan's `blocked`
+      list, with a reason naming the key) before any write – the value never
+      crosses the client boundary. Plan-time validation reads the vault keys
+      through the server's MCP `list_secrets` tool, which requires the apply key
+      to hold the `secret.manage` scope; an operator key that cannot list
+      secrets blocks the entity rather than silently passing, and the validator
+      fails CLOSED if the listing surface is unreachable.
+      `credential_ref` applies to model backends only in this increment –
+      connectors and SSO credentials are out of scope
+      (`cli/apply/models.py` `credential_reference()` /
+      `_exactly_one_credential`, `cli/apply/executor.py`
+      `_block_missing_credential_refs`, `test_apply_credential_ref.py`)
 - [x] Planning is name-based upsert scoped to the org (the HTTP transport is
       the operator's `MODULO_URL` + `MODULO_API_KEY` bearer org key):
       per-entity decisions `created` / `updated` / `unchanged` / `blocked`,
@@ -190,6 +212,18 @@ see the [`modulo apply` GitHub Actions example](../../modulo-apply-github-action
 ## Known Gaps
 
 ## QA History
+- 2026-10-11: **spec-accuracy fix (FAR-1216)** – the tracker and the manifest
+  `feat-apply` registry still asserted the OPPOSITE of what shipped: both said
+  `secretref://` is "blocked pending server-side resolution", which has been
+  false since FAR-1640 (`core/secrets_backend/references.py` resolves a
+  `secretref://<key>` token against the org vault server-side at write time).
+  Corrected both stale lines and added the new `credential_ref` behaviour
+  (declarative bare-vault-key reference, mutually exclusive with `api_key`,
+  normalised to the server's `secretref://<key>` token, validated at plan time
+  so a missing key blocks the entity), including the plan-validation
+  `list_secrets` / `secret.manage` scope requirement and fail-closed behaviour.
+  Also registered `core/secrets_backend/references.py` and
+  `test_apply_credential_ref.py` in the frontmatter surfaces.
 - 2026-10-07: **Improve Architecture product-map walk** – closed the untracked
   `feat-apply` sub-surface for FAR-1530: `modulo apply` gained declarative
   pipeline pausing (`run_enabled: false`) in PR #1367 but neither the manifest
