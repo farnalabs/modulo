@@ -743,3 +743,91 @@ async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Excep
             )
 
     assert exc_info.value.status_code == expected_status
+
+
+async def test_verify_slack_delivery_maps_inactive_trigger_to_404() -> None:
+    """S3776 split invariant: ``_verify_slack_delivery`` maps the bootstrap
+    ladder's ``TriggerInactiveError`` -> 404, exactly as the original inline
+    ladder did (the bootstrap helper and the engine's mid-dispatch re-read can
+    both raise it, so both ladders keep the arm)."""
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            side_effect=TriggerInactiveError(_TRIGGER_ID),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=b"{}",
+            slack_signature="v0=bad",
+            slack_timestamp="1",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Trigger not found"
+
+
+async def test_verify_slack_delivery_missing_signing_secret_returns_401() -> None:
+    """S3776 split changed-lines coverage: a well-formed config with NO signing
+    secret (``{}``, not the invalid non-dict shape) must fail closed with 401
+    before any snapshot/dedup work — never reach the engine unauthenticated."""
+    from modulo.api.routes.slack import _verify_slack_delivery
+
+    trigger = MagicMock()
+    trigger.config_json = {}
+    with (
+        patch(
+            "modulo.api.routes.slack.load_trigger_and_org_global",
+            new_callable=AsyncMock,
+            return_value=(trigger, _ORG_ID),
+        ),
+        patch("modulo.api.routes.slack.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.set_rls_execution_context", new_callable=AsyncMock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _verify_slack_delivery(
+            session=AsyncMock(),
+            system_session=AsyncMock(),
+            request=MagicMock(),
+            trigger_id=_TRIGGER_ID,
+            principal=None,
+            raw_body=b"{}",
+            slack_signature="v0=bad",
+            slack_timestamp="1",
+        )
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Slack signature verification failed"
+
+
+async def test_create_slack_snapshot_none_returns_500_and_skips_pause_check() -> None:
+    """S3776 split changed-lines coverage: an INACTIVE trigger skips the org
+    pause pre-check, and a ``None`` snapshot fails closed with 500 rather than
+    dispatching against a missing snapshot."""
+    from modulo.api.routes.slack import _create_slack_snapshot
+
+    trigger = MagicMock()
+    trigger.active = False
+    trigger.pipeline_id = uuid.uuid4()
+    with (
+        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock) as ensure,
+        patch(
+            "modulo.api.routes.slack.create_snapshot_from_live_graph",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _create_slack_snapshot(session=AsyncMock(), trigger=trigger, trigger_id=_TRIGGER_ID, org_id=_ORG_ID)
+
+    ensure.assert_not_called()
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to create pipeline snapshot for slack trigger"
