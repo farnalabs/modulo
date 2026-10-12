@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import httpx
 
@@ -159,6 +159,25 @@ def _parse_vault_key_listing(envelope: dict[str, Any]) -> set[str]:
         # distinguished from a key beyond the page, so refuse to validate.
         raise VaultListingError(f"vault holds {total} keys but only {len(data['secrets'])} were listed")
     return keys
+
+
+class _PipelineBundle(NamedTuple):
+    """Pipeline-family slices of ``fetch_current`` (S3776 split).
+
+    Returned by :meth:`ApplyExecutor._fetch_pipeline_bundle`; the
+    orchestrator assembles these into the same ``fetch_current`` result
+    dict the monolith used to build inline.
+    """
+
+    agents: dict[str, str]
+    ambiguous_agent_names: dict[str, int]
+    pipelines: dict[str, dict[str, Any]]
+    ambiguous_pipeline_names: dict[str, int]
+    unreadable_graph_pipelines: dict[str, str]
+    users: dict[str, str]
+    users_error: str | None
+    evals: dict[str, dict[str, Any]]
+    evals_error: str | None
 
 
 class ApplyExecutor:
@@ -400,6 +419,11 @@ class ApplyExecutor:
         ``ambiguous_agent_names`` (name -> match count; ambiguous names are
         EXCLUDED from the maps — name-based upsert cannot pick a row) and
         duplicate live trigger composite keys as ``duplicate_trigger_keys``.
+
+        S3776 split: the pipeline-family lookups/normalisation live in
+        :meth:`_fetch_pipeline_bundle` and the trigger composite-key maps
+        in :meth:`_fetch_trigger_lists`; the per-kind wants/lazy flags are
+        evaluated HERE (never inside the helpers) and passed in.
         """
         schemas_list = self._get_paginated(_PATH_SCHEMAS)
         try:
@@ -431,38 +455,102 @@ class ApplyExecutor:
             ]
             schemas[name]["versions"] = versions
 
-        from modulo.cli.apply import pipeline_apply
-
+        # Per-kind flags: which kinds the config declares (wants_*) and
+        # which lazy per-kind lookups are actually needed (needs_*). All
+        # evaluated here so the helpers stay pure fetch/normalise steps.
         wants_pipelines = bool(config.entities.pipelines)
         wants_triggers = bool(config.entities.triggers)
-        pipelines_list: list[dict[str, Any]] = []
-        agents_list: list[dict[str, Any]] = []
-        triggers_list: list[dict[str, Any]] = []
-        if wants_pipelines or wants_triggers:
-            pipelines_list = self._get_paginated("/pipelines")
-        # /agents is fetched LAZILY: only when a declared pipeline node
-        # actually references an agent (FAR-681 QA — a graph-less or
-        # agent-free config never needs the agents list).
         needs_agents = any(
             entity.graph is not None and any(node.agent is not None for node in entity.graph.nodes)
             for entity in config.entities.pipelines
         )
-        if needs_agents:
-            agents_list = self._get_paginated("/agents")
-        if wants_triggers:
-            triggers_list = self._get_paginated("/triggers")
-        # FAR-1161: owner emails resolve to account ids via the org member
-        # directory (/admin/users). LAZILY fetched only when a declared
-        # pipeline actually names an owner email (configs without owners
-        # never need it). A directory fetch failure (403 for a non-admin
-        # credential, 404, ...) is STORED, not raised: only the pipelines
-        # that declare an owner email are blocked with that specific reason
-        # and the rest of the config still plans (per-entity containment,
-        # mirroring unreadable_graph_pipelines). Network errors propagate
-        # like every other fetch.
         needs_users = any(
             entity.business_owner_email or entity.reliability_owner_email for entity in config.entities.pipelines
         )
+        needs_evals = any(
+            entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes)
+            for entity in config.entities.pipelines
+        )
+        # /pipelines is fetched once here: BOTH helpers need it (graph
+        # normalisation reads pipeline ids, the trigger identity map reads
+        # pipeline id -> name).
+        pipelines_list: list[dict[str, Any]] = []
+        if wants_pipelines or wants_triggers:
+            pipelines_list = self._get_paginated("/pipelines")
+
+        bundle = self._fetch_pipeline_bundle(
+            config,
+            pipelines_list=pipelines_list,
+            wants_pipelines=wants_pipelines,
+            needs_agents=needs_agents,
+            needs_users=needs_users,
+            needs_evals=needs_evals,
+        )
+        triggers, duplicate_trigger_keys = self._fetch_trigger_lists(
+            wants_triggers=wants_triggers,
+            pipelines_list=pipelines_list,
+            ambiguous_pipeline_names=bundle.ambiguous_pipeline_names,
+        )
+        return {
+            KIND_SCHEMA: schemas,
+            KIND_BACKEND: backends,
+            KIND_PIPELINE: bundle.pipelines,
+            KIND_TRIGGER: triggers,
+            "agents": bundle.agents,
+            "users": bundle.users,
+            "users_error": bundle.users_error,
+            "evals": bundle.evals,
+            "evals_error": bundle.evals_error,
+            "ambiguous_agent_names": bundle.ambiguous_agent_names,
+            "ambiguous_pipeline_names": bundle.ambiguous_pipeline_names,
+            "duplicate_trigger_keys": duplicate_trigger_keys,
+            "unreadable_graph_pipelines": bundle.unreadable_graph_pipelines,
+        }
+
+    def _fetch_pipeline_bundle(
+        self,
+        config: ApplyConfig,
+        *,
+        pipelines_list: list[dict[str, Any]],
+        wants_pipelines: bool,
+        needs_agents: bool,
+        needs_users: bool,
+        needs_evals: bool,
+    ) -> _PipelineBundle:
+        """Fetch the pipeline-family lookups and normalise pipeline state.
+
+        ``pipelines_list`` is the shared /pipelines fetch the orchestrator
+        already made; ``wants_pipelines``/``needs_*`` are evaluated by the
+        orchestrator (per-kind flags never re-derived here).
+
+        /agents is fetched LAZILY: only when a declared pipeline node
+        actually references an agent (FAR-681 QA — a graph-less or
+        agent-free config never needs the agents list).
+
+        The owner-email directory (/admin/users, FAR-1161) is fetched
+        LAZILY only when a declared pipeline names an owner email. A
+        directory fetch failure (403 for a non-admin credential, 404, ...)
+        is STORED, not raised: only the pipelines that declare an owner
+        email are blocked with that specific reason and the rest of the
+        config still plans (per-entity containment, mirroring
+        unreadable_graph_pipelines). Network errors propagate like every
+        other fetch.
+
+        FAR-1109: a declared node policy gate references an eval by UUID.
+        The eval map resolves that reference at plan time (a missing eval
+        blocks the entity). Fetched LAZILY — only when some declared
+        pipeline node carries a ``policy_gate`` — and a fetch failure is
+        STORED, not raised: only the gate-declaring pipelines block
+        (per-entity containment, mirroring ``users_error`` /
+        ``unreadable_graph_pipelines``). The /evals list route already
+        filters soft-deleted evals (a soft-deleted eval cannot receive new
+        results, so its gate would always resolve 'undefined').
+        """
+        from modulo.cli.apply import pipeline_apply
+
+        agents_list: list[dict[str, Any]] = []
+        if needs_agents:
+            agents_list = self._get_paginated("/agents")
         users: dict[str, str] = {}
         users_error: str | None = None
         if needs_users:
@@ -476,20 +564,6 @@ class ApplyExecutor:
             except ApplyHttpError as exc:
                 users_error = str(exc)
                 _log.warning("apply.fetch_users_failed: %s", users_error)
-
-        # FAR-1109: a declared node policy gate references an eval by UUID. The
-        # eval map resolves that reference at plan time (a missing eval blocks
-        # the entity). Fetched LAZILY — only when some declared pipeline node
-        # carries a ``policy_gate`` — and a fetch failure is STORED, not raised:
-        # only the gate-declaring pipelines block (per-entity containment,
-        # mirroring ``users_error`` / ``unreadable_graph_pipelines``). The
-        # /evals list route already filters soft-deleted evals (a soft-deleted
-        # eval cannot receive new results, so its gate would always resolve
-        # 'undefined').
-        needs_evals = any(
-            entity.graph is not None and any(node.policy_gate is not None for node in entity.graph.nodes)
-            for entity in config.entities.pipelines
-        )
         evals: dict[str, dict[str, Any]] = {}
         evals_error: str | None = None
         if needs_evals:
@@ -532,6 +606,37 @@ class ApplyExecutor:
                     reason = str(exc) or exc.__class__.__name__
                     _log.warning("apply.fetch_graph_unreadable: %s: %s", name, reason)
                     unreadable_graph_pipelines[name] = reason
+        return _PipelineBundle(
+            agents=agents,
+            ambiguous_agent_names=ambiguous_agent_names,
+            pipelines=pipelines,
+            ambiguous_pipeline_names=ambiguous_pipeline_names,
+            unreadable_graph_pipelines=unreadable_graph_pipelines,
+            users=users,
+            users_error=users_error,
+            evals=evals,
+            evals_error=evals_error,
+        )
+
+    def _fetch_trigger_lists(
+        self,
+        *,
+        wants_triggers: bool,
+        pipelines_list: list[dict[str, Any]],
+        ambiguous_pipeline_names: dict[str, int],
+    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
+        """Fetch the trigger list and build the composite-key maps.
+
+        Triggers are keyed by ``pipeline/name`` (pre-name rows and triggers
+        whose pipeline is invisible are unmanaged by apply); duplicate live
+        trigger composite keys are reported as ``duplicate_trigger_keys``.
+        ``pipelines_list``/``ambiguous_pipeline_names`` come from the
+        orchestrator's shared /pipelines fetch; ``wants_triggers`` is its
+        per-kind flag (evaluated there, not here).
+        """
+        triggers_list: list[dict[str, Any]] = []
+        if wants_triggers:
+            triggers_list = self._get_paginated("/triggers")
         # Trigger identity map: pipeline ids -> names. Pipeline ids whose name
         # is ambiguous are EXCLUDED (their composite key would be unreliable).
         pipeline_names_by_id = {
@@ -560,21 +665,7 @@ class ApplyExecutor:
             if key in duplicate_trigger_keys:
                 continue
             triggers[key] = item
-        return {
-            KIND_SCHEMA: schemas,
-            KIND_BACKEND: backends,
-            KIND_PIPELINE: pipelines,
-            KIND_TRIGGER: triggers,
-            "agents": agents,
-            "users": users,
-            "users_error": users_error,
-            "evals": evals,
-            "evals_error": evals_error,
-            "ambiguous_agent_names": ambiguous_agent_names,
-            "ambiguous_pipeline_names": ambiguous_pipeline_names,
-            "duplicate_trigger_keys": duplicate_trigger_keys,
-            "unreadable_graph_pipelines": unreadable_graph_pipelines,
-        }
+        return triggers, duplicate_trigger_keys
 
     # ------------------------------------------------------------------
     # Execution
