@@ -20,8 +20,10 @@ import itertools
 import json
 import time
 import uuid
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,7 +33,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
 from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
-from tests.unit.crud.helpers import compile_sql, fake_nested_cm
+from tests.unit.crud.helpers import compile_sql, fake_nested_cm, is_statement_timeout_plumbing
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 # Literal-binds compilation under the sqlite dialect (Uuid → 32-char hex) —
@@ -136,6 +138,103 @@ class TestRetentionConditions:
 
 
 # ---------------------------------------------------------------------------
+# orchestration-boundary mocks — the ~10 repeated patch blocks, consolidated
+# ---------------------------------------------------------------------------
+
+
+class _CandidateMocks(NamedTuple):
+    """The boundaries ``list_retention_candidates`` touches (est optional)."""
+
+    page: AsyncMock
+    checkpoint: AsyncMock
+    estimate: AsyncMock | None
+    read_blobs: AsyncMock
+
+
+@contextmanager
+def _candidate_mocks(
+    runs: Sequence[Run],
+    *,
+    checkpoint: tuple[dict[str, int], dict[str, int]] = ({}, {}),
+    node_blobs: dict[uuid.UUID, int] | None = None,
+    estimate: AsyncMock | None = None,
+) -> Iterator[_CandidateMocks]:
+    """Patch the orchestration boundaries of ``list_retention_candidates``.
+
+    Pass mocks in for boundaries a test asserts joins through (call args,
+    awaited counts); pass ``estimate=`` an AsyncMock when the estimator is
+    being stubbed, and leave it ``None`` (the default) to run the REAL
+    estimator — the degraded-deadline test must exercise the real path.
+    """
+    with ExitStack() as stack:
+        page = stack.enter_context(patch.object(rr, "_select_run_page", new=AsyncMock(return_value=list(runs))))
+        ckpt = stack.enter_context(patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=checkpoint)))
+        est: AsyncMock | None = None
+        if estimate is not None:
+            est = stack.enter_context(patch.object(rr, "_estimate_bytes_by_status", new=estimate))
+        blobs = stack.enter_context(
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value=node_blobs or {}))
+        )
+        yield _CandidateMocks(page=page, checkpoint=ckpt, estimate=est, read_blobs=blobs)
+
+
+class _PurgeMocks(NamedTuple):
+    """The boundaries ``purge_terminal_runs`` touches."""
+
+    page: AsyncMock
+    checkpoint: AsyncMock
+    delete_checkpoints: AsyncMock
+    delete_quarantine: AsyncMock | None  # patched ONLY when passed — see below
+    delete_run_id_rows: AsyncMock
+    read_blobs: AsyncMock
+
+
+@contextmanager
+def _purge_mocks(
+    fetches: Sequence[Sequence[Run]],
+    *,
+    checkpoint: tuple[dict[str, int], dict[str, int]] = ({}, {}),
+    delete_checkpoints: AsyncMock | None = None,
+    delete_quarantine: AsyncMock | None = None,
+    delete_run_id_rows: AsyncMock | None = None,
+) -> Iterator[_PurgeMocks]:
+    """Patch the module boundaries of ``purge_terminal_runs``.
+
+    ``fetches`` pages the terminal-run selection (an automatic final empty
+    page ends the loop, like the production loop's own termination). The
+    delete helpers are fresh AsyncMocks unless passed in for join asserts.
+
+    ``_delete_quarantine_rows`` is deliberately NOT patched by default: it is
+    the ONLY boundary whose real body opens its own savepoint, and the
+    batching tests pin that savepoint on the real path — shadowing it would
+    silently change what those savepoint counts measure.
+    """
+    with ExitStack() as stack:
+        page = stack.enter_context(
+            patch.object(
+                rr,
+                "_select_run_page",
+                new=AsyncMock(side_effect=[*[list(page_runs) for page_runs in fetches], []]),
+            )
+        )
+        ckpt = stack.enter_context(patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=checkpoint)))
+        del_cp = stack.enter_context(patch.object(rr, "_delete_checkpoints", new=delete_checkpoints or AsyncMock()))
+        del_q: AsyncMock | None = None
+        if delete_quarantine is not None:
+            del_q = stack.enter_context(patch.object(rr, "_delete_quarantine_rows", new=delete_quarantine))
+        del_r = stack.enter_context(patch.object(rr, "_delete_run_id_rows", new=delete_run_id_rows or AsyncMock()))
+        blobs = stack.enter_context(patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})))
+        yield _PurgeMocks(
+            page=page,
+            checkpoint=ckpt,
+            delete_checkpoints=del_cp,
+            delete_quarantine=del_q,
+            delete_run_id_rows=del_r,
+            read_blobs=blobs,
+        )
+
+
+# ---------------------------------------------------------------------------
 # list_retention_candidates — count + page + per-run estimate orchestration
 # ---------------------------------------------------------------------------
 
@@ -160,13 +259,11 @@ class TestListRetentionCandidates:
         # the reader (zero bytes) like _checkpoint_detail above.
         # FAR-660: the whole-set estimate is the SQL-side grouped scan —
         # mocked here at the orchestration boundary.
-        with (
-            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=(checkpoint_bytes, checkpoint_counts))),
-            patch.object(
-                rr, "_estimate_bytes_by_status", new=AsyncMock(return_value=({"complete": 100, "failed": 23}, False))
-            ),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value=node_bytes)),
+        with _candidate_mocks(
+            runs,
+            checkpoint=(checkpoint_bytes, checkpoint_counts),
+            node_blobs=node_bytes,
+            estimate=AsyncMock(return_value=({"complete": 100, "failed": 23}, False)),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -202,13 +299,9 @@ class TestListRetentionCandidates:
         session.execute = AsyncMock(side_effect=[total_result, terminal_result])
         runs = [_run("complete"), _run("failed")]
 
-        with (
-            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(
-                rr, "_estimate_bytes_by_status", new=AsyncMock(return_value=({"complete": 99, "pending": 5}, False))
-            ),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        with _candidate_mocks(
+            runs,
+            estimate=AsyncMock(return_value=({"complete": 99, "pending": 5}, False)),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -231,11 +324,10 @@ class TestListRetentionCandidates:
         count_result.scalar_one.return_value = 3
         session.execute = AsyncMock(return_value=count_result)
 
-        with (
-            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        # The estimator boundary is deliberately NOT patched (estimate=None in
+        # _candidate_mocks) — the REAL estimator must run to produce the
+        # degraded signal.
+        with _candidate_mocks([]):
             result = await rr.list_retention_candidates(
                 session, org_id=_ORG, status=None, deadline=time.monotonic() - 1
             )
@@ -259,17 +351,11 @@ class TestListRetentionCandidates:
         count_result.scalar_one.return_value = 0
         session.execute = AsyncMock(return_value=count_result)
         estimate = AsyncMock(return_value=({}, False))
-
-        with (
-            patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_estimate_bytes_by_status", new=estimate),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        explicit_deadline = time.monotonic() + 5
+        with _candidate_mocks([], estimate=estimate):
             await rr.list_retention_candidates(session, org_id=_ORG, status=None)
             assert estimate.call_args.kwargs["deadline"] is None
 
-            explicit_deadline = time.monotonic() + 5
             await rr.list_retention_candidates(session, org_id=_ORG, status=None, deadline=explicit_deadline)
             assert estimate.call_args.kwargs["deadline"] == explicit_deadline
 
@@ -307,7 +393,7 @@ class _EstimateSession:
 
     async def execute(self, stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
         self.executed.append(stmt)
-        if "set_config" in str(stmt):
+        if is_statement_timeout_plumbing(stmt):
             self.timeout_budgets.append(str(dict(params or {}).get("ms")))
             return MagicMock()
         rows = self._results.pop(0) if self._results else []
@@ -386,7 +472,7 @@ class TestEstimateBytesByStatus:
         # preceded by its transaction-local statement_timeout set and followed
         # by the reset-to-0 (before the savepoint releases). The scan count is
         # derived from the production source, not a frozen `5`.
-        scans = [s for s in session.executed if "set_config" not in str(s)]
+        scans = [s for s in session.executed if not is_statement_timeout_plumbing(s)]
         assert len(scans) == _expected_components()
         assert len(session.executed) == 3 * _expected_components()
         assert session.begin_nested.call_count == _expected_components()
@@ -441,7 +527,7 @@ class TestEstimateBytesByStatus:
         session = _EstimateSession([])
 
         async def flaky_execute(stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
-            if "set_config" in str(stmt):
+            if is_statement_timeout_plumbing(stmt):
                 return MagicMock()
             calls["n"] += 1
             if calls["n"] == 2:
@@ -469,7 +555,7 @@ class TestEstimateBytesByStatus:
             return DBAPIError("SELECT ...", {}, orig)
 
         async def timing_out_execute(stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
-            if "set_config" in str(stmt):
+            if is_statement_timeout_plumbing(stmt):
                 return MagicMock()
             calls["n"] += 1
             if calls["n"] == 2:
@@ -608,14 +694,7 @@ class TestPurgeTerminalRuns:
         runs = [_run("complete"), _run("failed")]
         spy = MagicMock()
 
-        with (
-            patch.object(rr, "_select_run_page", side_effect=[runs, []]),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
-            patch.object(rr, "_delete_quarantine_rows", new=AsyncMock()),
-            patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        with _purge_mocks([runs]):
             await self._purge(session, batch_size=2, on_batch_purge=spy)
 
         spy.assert_called_once()
@@ -631,12 +710,11 @@ class TestPurgeTerminalRuns:
         delete_checkpoints = AsyncMock()
         delete_run_id_rows = AsyncMock()
 
-        with (
-            patch.object(rr, "_select_run_page", side_effect=[runs, []]),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {"t1": 3}))),
-            patch.object(rr, "_delete_checkpoints", new=delete_checkpoints),
-            patch.object(rr, "_delete_run_id_rows", new=delete_run_id_rows),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        with _purge_mocks(
+            [runs],
+            checkpoint=({}, {"t1": 3}),
+            delete_checkpoints=delete_checkpoints,
+            delete_run_id_rows=delete_run_id_rows,
         ):
             result = await self._purge(session)
 
@@ -663,14 +741,7 @@ class TestPurgeTerminalRuns:
         runs = [_run("complete")]
         delete_quarantine = AsyncMock()
 
-        with (
-            patch.object(rr, "_select_run_page", side_effect=[runs, []]),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
-            patch.object(rr, "_delete_quarantine_rows", new=delete_quarantine),
-            patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        with _purge_mocks([runs], delete_quarantine=delete_quarantine):
             await self._purge(session)
 
         delete_quarantine.assert_awaited_once_with(session, [runs[0].id])
@@ -680,23 +751,8 @@ class TestPurgeTerminalRuns:
         session = AsyncMock()
         session.begin_nested = MagicMock(return_value=fake_nested_cm())
         runs = [_run("complete") for _ in range(5)]
-        counter = {"n": 0}
 
-        def fake_select(session_arg, **kwargs):
-            counter["n"] += 1
-            if counter["n"] == 1:
-                return runs[:2]
-            if counter["n"] == 2:
-                return runs[2:]
-            return []
-
-        with (
-            patch.object(rr, "_select_run_page", side_effect=fake_select),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
-            patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        with _purge_mocks([runs[:2], runs[2:]]):
             result = await self._purge(session, batch_size=2)
 
         assert result["purged_runs"] == 5
@@ -718,17 +774,8 @@ class TestPurgeTerminalRuns:
         session = AsyncMock()
         session.begin_nested = MagicMock(return_value=fake_nested_cm(enter_exc=RuntimeError("boom")))
         runs = [_run("complete")]
-        counter = {"n": 0}
 
-        def fake_select(session_arg, **kwargs):
-            counter["n"] += 1
-            return runs if counter["n"] == 1 else []
-
-        with (
-            patch.object(rr, "_select_run_page", side_effect=fake_select),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
-        ):
+        with _purge_mocks([runs]):
             result = await self._purge(session)
 
         assert result["purged_runs"] == 0  # the failed batch was rolled back

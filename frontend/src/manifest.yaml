@@ -2163,9 +2163,6 @@ elements:
       - testid: assistant-skill-delete
         type: button
         dynamic_testid: false
-      - testid: assistant-primer-regenerate
-        type: button
-        dynamic_testid: false
     /admin/run-retention:
       - testid: admin-run-retention-refresh
         type: button

@@ -532,6 +532,20 @@ async def run_evals_persist_before_decide(
     compute_run_id = run_id if run_id is not None else uuid.uuid4()
 
     for eval_def in eval_defs:
+        # FAR-209 Track B: guardrail-typed defs never enter the eval loop —
+        # the eval engine raises GuardrailMisroutedError on them (a run
+        # crash). Interception owns them: the input seam (run creation) and
+        # the executor's output seam (_run_output_guardrails). A straggler
+        # here is a wiring defect — log it loud and skip (guardrail defs on
+        # BOTH call sites arrive through _build_eval_defs_by_node, which the
+        # chained-Fix upstream split already routes around).
+        if str(eval_def.eval_type) == "guardrail":
+            _log.warning(
+                "evals.guardrail_typed_def_skipped_in_eval_loop",
+                extra={"eval_name": eval_def.name, "node_id": node_id},
+            )
+            continue
+
         # --- 1. Compute (never raises EvalBlockedError) ----------------
         eval_result = _compute_eval_result(
             eval_def,
