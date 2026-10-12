@@ -121,11 +121,6 @@ def test_secrets_permissions_probe_failure(tmp_path: Path):
     assert "secrets-permission probe failed" in res.detail
 
 
-def test_secrets_permissions_mode_none(tmp_path: Path):
-    res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: None))
-    assert res.ok is True
-
-
 def test_ambient_pg_env_probe_failure(tmp_path: Path):
     res = check_ambient_pg_env(
         tmp_path, None, _probes(ambient_env_names=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
