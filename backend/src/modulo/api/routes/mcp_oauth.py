@@ -73,6 +73,7 @@ _CODE_MCP_OAUTH_REGISTER_OAUTH_CLIENT = "mcp_oauth.register_oauth_client"
 _CODE_MCP_OAUTH_LIST_OAUTH_CLIENTS_ENDPOINT = "mcp_oauth.list_oauth_clients_endpoint"
 _CODE_MCP_OAUTH_REMOVE_OAUTH_CLIENT = "mcp_oauth.remove_oauth_client"
 _CODE_MCP_OAUTH_APPROVE_CONSENT = "mcp_oauth.approve_consent"
+_CODE_MCP_OAUTH_CONSENT_CONTEXT = "mcp_oauth.consent_context"
 
 _log = logging.getLogger(__name__)
 
@@ -456,6 +457,65 @@ class ConsentApproveResponse(BaseModel):
     redirect_url: str
 
 
+async def _resolve_granted_scopes(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    state_row: OAuthConsentState,
+    requested: list[str] | None,
+) -> list[str]:
+    """Resolve the consent approve's granted scope subset (FAR-1476 slice 3).
+
+    ``None`` (omitted) grants every stored scope — the pre-slice behaviour.
+    A provided list is canonicalised and must be a non-empty SUBSET of the
+    stored scopes; anything outside fails closed with 400 and never widens the
+    grant. The live role is then re-verified against the granted subset so a
+    demotion between authorize and approve still degrades (the token endpoint
+    re-checks again at exchange).
+
+    Extracted from :func:`approve_consent` to keep the route's cognitive
+    complexity under the Sonar limit (python:S3776).
+    """
+    stored_scopes = list(state_row.scopes)
+    if requested is None:
+        return stored_scopes
+    try:
+        granted_scopes = sorted(set(normalize_scopes(" ".join(requested))))
+    except InvalidScopeError as e:
+        # Unknown scope keys fail closed before the subset check — an
+        # unrecognised key can never ride along.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    if not granted_scopes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="granted_scopes must grant at least one scope; decline the consent instead",
+        )
+    outside = sorted(set(granted_scopes) - set(stored_scopes))
+    if outside:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="granted_scopes must be a subset of the requested scopes; not requested: " + ", ".join(outside),
+        )
+    # Re-verify the live role against the GRANTED subset (the token endpoint
+    # re-checks again at exchange; a demotion between authorize and approve
+    # degrades here too, fail closed).
+    try:
+        await verify_live_role_covers_scopes(
+            session,
+            account_id=principal.account_id,
+            org_id=state_row.organisation_id,
+            scopes=granted_scopes,
+        )
+    except InvalidGrantError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        ) from e
+    return granted_scopes
+
+
 # Consent is the grant that lets an OAuth client act for this user -> fail closed.
 @router.post(
     "/consent/approve",
@@ -531,46 +591,7 @@ async def approve_consent(
 
             # FAR-1476 slice 3: resolve the granted set. Omitted = every stored
             # scope (pre-slice behaviour). Provided = canonical subset only.
-            stored_scopes = list(state_row.scopes)
-            if req.granted_scopes is None:
-                granted_scopes = stored_scopes
-            else:
-                try:
-                    granted_scopes = sorted(set(normalize_scopes(" ".join(req.granted_scopes))))
-                except InvalidScopeError as e:
-                    # Unknown scope keys fail closed before the subset check —
-                    # an unrecognised key can never ride along.
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=str(e),
-                    ) from e
-                if not granted_scopes:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="granted_scopes must grant at least one scope; decline the consent instead",
-                    )
-                outside = sorted(set(granted_scopes) - set(stored_scopes))
-                if outside:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="granted_scopes must be a subset of the requested scopes; not requested: "
-                        + ", ".join(outside),
-                    )
-                # Re-verify the live role against the GRANTED subset (the token
-                # endpoint re-checks again at exchange; a demotion between
-                # authorize and approve degrades here too, fail closed).
-                try:
-                    await verify_live_role_covers_scopes(
-                        session,
-                        account_id=principal.account_id,
-                        org_id=state_row.organisation_id,
-                        scopes=granted_scopes,
-                    )
-                except InvalidGrantError as e:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=str(e),
-                    ) from e
+            granted_scopes = await _resolve_granted_scopes(session, principal, state_row, req.granted_scopes)
 
             code = await create_authorization_code(
                 session,
@@ -670,8 +691,62 @@ async def _query_team_for_consent(session: AsyncSession, team_id: uuid.UUID) -> 
     return result.scalar_one_or_none()
 
 
+async def _resolve_consent_context(session: AsyncSession, state: str) -> ConsentContextResponse | JSONResponse:
+    """Resolve a pending consent's display context inside one transaction.
+
+    Split out of :func:`consent_context` so the route body carries only its
+    DB-error translation arms — the inline body pushed the route's cognitive
+    complexity over the Sonar limit (python:S3776).
+    """
+    # Imported here (not at module level) to avoid a circular import with the
+    # MCP sub-app, which imports route modules during its own construction.
+    from modulo.api.mcp_server import (  # nosemgrep: inline-import-route-files
+        _mcp_feature_unavailable_response,
+        _mcp_server_flag_enabled,
+    )
+
+    async with session.begin():
+        state_row = await _query_pending_consent_state(session, state)
+        if state_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Consent request not found",
+            )
+
+        # Bind the session's org BEFORE the client/team reads and the flag
+        # resolution, so every subsequent read is org-scoped (teams carries
+        # a team-isolation policy that needs the org GUC).
+        await set_rls_org(session, state_row.organisation_id)
+
+        # FAR-1283, pre-auth edition: the kill switch is enforced against
+        # the org the caller just proved (the pending consent row) without
+        # an authenticated dependency chain.
+        if not await _mcp_server_flag_enabled(state_row.organisation_id, session):
+            return _mcp_feature_unavailable_response()
+
+        client_row = await _query_oauth_client_for_consent(session, state_row.client_id)
+        if client_row is None:
+            # Client deleted mid-flow — same undifferentiated 404.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Consent request not found",
+            )
+
+        team: ConsentContextTeam | None = None
+        if client_row.team_id is not None:
+            team_row = await _query_team_for_consent(session, client_row.team_id)
+            if team_row is not None:
+                team = ConsentContextTeam(id=str(team_row.id), name=team_row.name)
+
+        return ConsentContextResponse(
+            client_name=client_row.name,
+            scopes=list(state_row.scopes),
+            team=team,
+        )
+
+
 @router.get("/consent/context", response_model=None)
-@handle_db_errors("mcp_oauth.consent_context")
+@handle_db_errors(_CODE_MCP_OAUTH_CONSENT_CONTEXT)
 async def consent_context(
     state: str = Query(min_length=1, max_length=128),
     session: AsyncSession = Depends(get_db_session),
@@ -693,59 +768,18 @@ async def consent_context(
     404 that does not leak whether a client exists. Nothing beyond the display
     context is returned — never the redirect_uri, secrets, or org internals.
     """
-    # Imported here (not at module level) to avoid a circular import with the
-    # MCP sub-app, which imports route modules during its own construction.
-    from modulo.api.mcp_server import _mcp_feature_unavailable_response, _mcp_server_flag_enabled
-
     try:
-        async with session.begin():
-            state_row = await _query_pending_consent_state(session, state)
-            if state_row is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Consent request not found",
-                )
-
-            # Bind the session's org BEFORE the client/team reads and the flag
-            # resolution, so every subsequent read is org-scoped (teams carries
-            # a team-isolation policy that needs the org GUC).
-            await set_rls_org(session, state_row.organisation_id)
-
-            # FAR-1283, pre-auth edition: the kill switch is enforced against
-            # the org the caller just proved (the pending consent row) without
-            # an authenticated dependency chain.
-            if not await _mcp_server_flag_enabled(state_row.organisation_id, session):
-                return _mcp_feature_unavailable_response()
-
-            client_row = await _query_oauth_client_for_consent(session, state_row.client_id)
-            if client_row is None:
-                # Client deleted mid-flow — same undifferentiated 404.
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Consent request not found",
-                )
-
-            team: ConsentContextTeam | None = None
-            if client_row.team_id is not None:
-                team_row = await _query_team_for_consent(session, client_row.team_id)
-                if team_row is not None:
-                    team = ConsentContextTeam(id=str(team_row.id), name=team_row.name)
-
-            return ConsentContextResponse(
-                client_name=client_row.name,
-                scopes=list(state_row.scopes),
-                team=team,
-            )
+        return await _resolve_consent_context(session, state)
     except ProgrammingError:
-        _log.exception("mcp_oauth.consent_context")
+        _log.exception(_CODE_MCP_OAUTH_CONSENT_CONTEXT)
         _log.warning("mcp_oauth.consent_context.programming_error")
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail=MSG_FEATURE_NOT_AVAILABLE,
         ) from None
     except SQLAlchemyError as exc:
-        raise_session_contract_error(exc, "mcp_oauth.consent_context")
-        _log.exception("mcp_oauth.consent_context")
+        raise_session_contract_error(exc, _CODE_MCP_OAUTH_CONSENT_CONTEXT)
+        _log.exception(_CODE_MCP_OAUTH_CONSENT_CONTEXT)
         _log.warning("mcp_oauth.consent_context.sqlalchemy_error")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

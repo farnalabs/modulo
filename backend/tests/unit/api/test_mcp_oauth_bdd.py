@@ -836,6 +836,28 @@ class TestConsentContext:
         assert body["client_name"] == "Org-wide App"
         assert body["team"] is None
 
+    def test_context_bound_team_missing_has_null_team(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
+        """The client carries a team_id but its team row is gone: the team line
+        is simply omitted (no crash, no partial context)."""
+        client, session = anon_consent_client
+        state_row = _make_mock_consent_state(state="state-xyz", scopes=["trigger:run"])
+        client_row = _make_mock_client(name="Bound App")
+        client_row.team_id = _TEAM_ID
+        session.execute = AsyncMock(
+            side_effect=[
+                self._result_for(state_row),
+                self._result_for(client_row),
+                self._result_for(None),
+            ]
+        )
+        with patch("modulo.api.routes.mcp_oauth.set_rls_org", new=AsyncMock()):
+            resp = client.get(self.ENDPOINT, params={"state": "state-xyz"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["client_name"] == "Bound App"
+        assert body["team"] is None
+
     def test_context_deleted_client_is_404(self, anon_consent_client: tuple[TestClient, AsyncMock]) -> None:
         """Client deleted between authorize and consent — same undifferentiated 404."""
         client, session = anon_consent_client

@@ -37,26 +37,22 @@
         {{ contextError }}
       </div>
 
-      <div
+      <output
         v-if="success"
-        role="status"
-        aria-live="polite"
-        class="rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-sm"
+        class="block rounded-lg border border-emerald-500/50 bg-emerald-500/10 p-4 text-sm"
         data-testid="oauth-consent-success"
       >
         {{ $t('views.OAuthConsentView.approved_redirecting') }}
-      </div>
+      </output>
 
-      <div
+      <output
         v-if="declined"
-        role="status"
-        aria-live="polite"
-        class="rounded-xl border bg-card p-6 space-y-2 shadow-sm"
+        class="block rounded-xl border bg-card p-6 space-y-2 shadow-sm"
         data-testid="oauth-consent-declined"
       >
         <p class="text-lg font-semibold">{{ $t('views.OAuthConsentView.declined_title') }}</p>
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.declined_description') }}</p>
-      </div>
+      </output>
 
       <div v-if="!hasToken && !declined" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.login_required') }}</p>
@@ -65,15 +61,13 @@
         </Button>
       </div>
 
-      <div
+      <output
         v-else-if="hasToken && !declined && loadingContext"
-        role="status"
-        aria-live="polite"
-        class="rounded-xl border bg-card p-6 shadow-sm"
+        class="block rounded-xl border bg-card p-6 shadow-sm"
         data-testid="oauth-consent-loading"
       >
         <p class="text-sm text-muted-foreground">{{ $t('views.OAuthConsentView.loading_request') }}</p>
-      </div>
+      </output>
 
       <div v-else-if="hasToken && !declined && context" class="rounded-xl border bg-card p-6 space-y-4 shadow-sm">
         <div class="space-y-1">
@@ -108,15 +102,13 @@
           </label>
         </fieldset>
 
-        <p
+        <output
           v-if="grantedScopes.length === 0"
-          role="status"
-          aria-live="polite"
-          class="text-sm text-muted-foreground"
+          class="block text-sm text-muted-foreground"
           data-testid="oauth-consent-no-scopes-hint"
         >
           {{ $t('views.OAuthConsentView.no_scopes_selected') }}
-        </p>
+        </output>
 
         <div class="space-y-2">
           <Button
