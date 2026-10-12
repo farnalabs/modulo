@@ -42,6 +42,7 @@ from modulo.api.middleware.rate_limiter import AuthRateLimitMiddleware, RateLimi
 from modulo.api.middleware.request_timeout import RequestTimeoutMiddleware
 from modulo.api.middleware.security_headers import SecurityHeadersMiddleware
 from modulo.api.middleware.sensitive_mask import router as sensitive_router
+from modulo.api.openapi import apply_error_response_schemas
 from modulo.api.routes.admin import router as admin_router
 from modulo.api.routes.admin_assistant import router as admin_assistant_router
 from modulo.api.routes.admin_capacity import router as admin_capacity_router
@@ -1317,6 +1318,24 @@ app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # typ
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(StorageExhaustedError, storage_exhausted_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
+
+
+_raw_openapi = app.openapi
+
+
+def _openapi_schema() -> dict[str, Any]:
+    """Generated OpenAPI document, with error response bodies corrected.
+
+    FastAPI declares a ``422`` body shaped like its own ``HTTPValidationError``;
+    the handlers registered above actually render RFC 9457 Problem Details.
+    Wrapping the generator keeps that correction inside ``app.openapi()`` so
+    ``/openapi.json``, ``/docs`` and the schema-freshness generator all see the
+    same truthful document. See ``modulo.api.openapi``.
+    """
+    return apply_error_response_schemas(_raw_openapi())
+
+
+app.openapi = _openapi_schema  # type: ignore[method-assign]
 
 
 # ---------------------------------------------------------------------------
