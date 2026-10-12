@@ -38,6 +38,79 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _reject_invalid_action(config_json: dict[str, Any]) -> None:
+    """Reject a guardrail action outside the config vocabulary."""
+    action = config_json.get("action")
+    if action is not None and action not in ("observe", "warn", "block", "redact"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
+        )
+
+
+def _reject_invalid_interception_point(config_json: dict[str, Any]) -> None:
+    """Reject an unknown interception-point seam (FAR-209 Track B).
+
+    An unknown seam value must never silently bind — the engine's
+    input-passthrough/output-strict split would strand it.
+    """
+    interception_point = config_json.get("interception_point")
+    if interception_point is not None and interception_point not in ("input", "output"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(f"Guardrail interception_point must be one of input|output (got {interception_point!r})."),
+        )
+
+
+def _reject_invalid_detection_type(config_json: dict[str, Any]) -> None:
+    """Reject a top-level detection type outside regex|json_schema."""
+    detection_type = config_json.get("type")
+    if detection_type is not None and detection_type not in ("regex", "json_schema"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
+        )
+
+
+def _reject_invalid_detection_envelope(config_json: dict[str, Any]) -> None:
+    """Reject a nested detection-envelope type outside regex|json_schema (PRD §8.17)."""
+    envelope = config_json.get("detection")
+    if isinstance(envelope, dict):
+        env_type = envelope.get("type")
+        if env_type is not None and env_type not in ("regex", "json_schema"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
+            )
+
+
+def _reject_destroy_without_pepper(config_json: dict[str, Any]) -> None:
+    """Reject a destroy-redaction rule with no configured deployment pepper (FAR-209 Track B).
+
+    The config-as-code propose path enforces this (``_validate_config_item``)
+    but the graph-save authoring paths did not, so a destroy rule could be
+    authored with the pepper unset and only fail (closed) at the runtime edge.
+    Reject at authoring here too. Checked regardless of ``action`` (mirroring
+    ``_validate_config_item``); a non-list ``redaction`` is left to shape-level
+    validation elsewhere.
+    """
+    redaction = config_json.get("redaction")
+    if isinstance(redaction, list):
+        from modulo.core.guardrails import FieldRedactionMode
+        from modulo.core.guardrails.redaction_mode import resolve_guardrail_destroy_pepper
+
+        if (
+            any(isinstance(rule, dict) and rule.get("mode") == FieldRedactionMode.DESTROY for rule in redaction)
+            and not resolve_guardrail_destroy_pepper()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "Guardrail destroy redaction mode requires the guardrail_destroy_pepper setting to be configured."
+                ),
+            )
+
+
 def validate_guardrail_request(
     *,
     eval_type: str,
@@ -68,62 +141,11 @@ def validate_guardrail_request(
     if config_json is None:
         return
 
-    # 1. Config-vocabulary check on the guardrail action
-    action = config_json.get("action")
-    if action is not None and action not in ("observe", "warn", "block", "redact"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
-        )
-
-    # FAR-209 Track B — interception point vocabulary check
-    interception_point = config_json.get("interception_point")
-    if interception_point is not None and interception_point not in ("input", "output"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=(f"Guardrail interception_point must be one of input|output (got {interception_point!r})."),
-        )
-
-    # 2. Top-level detection type check
-    detection_type = config_json.get("type")
-    if detection_type is not None and detection_type not in ("regex", "json_schema"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Guardrail detection must be regex|json_schema (got {detection_type!r}).",
-        )
-
-    # 3. Nested detection-envelope type check (PRD §8.17)
-    envelope = config_json.get("detection")
-    if isinstance(envelope, dict):
-        env_type = envelope.get("type")
-        if env_type is not None and env_type not in ("regex", "json_schema"):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
-            )
-
-    # 5. FAR-209 Track B — a destroy-redaction rule cannot run without the
-    # deployment pepper. The config-as-code propose path enforces this
-    # (``_validate_config_item``) but the graph-save authoring paths did not,
-    # so a destroy rule could be authored with the pepper unset and only fail
-    # (closed) at the runtime edge. Reject at authoring here too. Checked
-    # regardless of ``action`` (mirroring ``_validate_config_item``); a
-    # non-list ``redaction`` is left to shape-level validation elsewhere.
-    redaction = config_json.get("redaction")
-    if isinstance(redaction, list):
-        from modulo.core.guardrails import FieldRedactionMode
-        from modulo.core.guardrails.redaction_mode import resolve_guardrail_destroy_pepper
-
-        if (
-            any(isinstance(rule, dict) and rule.get("mode") == FieldRedactionMode.DESTROY for rule in redaction)
-            and not resolve_guardrail_destroy_pepper()
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    "Guardrail destroy redaction mode requires the guardrail_destroy_pepper setting to be configured."
-                ),
-            )
+    _reject_invalid_action(config_json)
+    _reject_invalid_interception_point(config_json)
+    _reject_invalid_detection_type(config_json)
+    _reject_invalid_detection_envelope(config_json)
+    _reject_destroy_without_pepper(config_json)
 
 
 # ---------------------------------------------------------------------------
