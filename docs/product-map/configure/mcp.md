@@ -290,11 +290,13 @@ applications. Built on the auth + model-backend core.
       boundary (`team: {id, name}` when `team_id` is set, so a team-bounded
       client can say so) — and NOTHING else (no redirect_uri, no secrets, no
       org internals; unknown/expired/consumed states are one undifferentiated
-      404). Migration 0296 widened the table's RLS policy with the
+      404). Migration 0300 widened the table's RLS policy with the
       NULL-context arm (the same contract `oauth_clients` already has) so the
       pre-auth read is visible to the runtime `modulo_app` role. The view
-      renders each scope with the registration picker's existing i18n labels
-      (`views.SettingsMcpView.scope_*_desc` — one labelling scheme, not two),
+      renders each scope's raw canonical key verbatim — the same single
+      labelling scheme the registration picker uses, since the grantable
+      vocabulary is the whole delegable `PERMISSIONS` registry and there is no
+      fixed per-scope description set any more (one scheme, not two),
       a per-scope deny checkbox (all granted by default), and a
       "limited to team X" line; Approve sends
       `{state, granted_scopes: <still-granted keys>}` and the approve POST
@@ -311,7 +313,7 @@ applications. Built on the auth + model-backend core.
       query-supplied redirect would be an open redirect); the pending state
       simply expires (~15 min)
       (`frontend/src/views/OAuthConsentView.vue`,
-      `frontend/src/__tests__/views/OAuthConsentView.spec.ts`,
+      `frontend/src/__tests__/OAuthConsentView.spec.ts`,
       `backend/tests/unit/api/test_mcp_oauth_bdd.py`,
       migration `0300_oauth_consent_state_preauth_rls`)
 - [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
