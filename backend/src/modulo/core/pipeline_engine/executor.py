@@ -225,17 +225,12 @@ _log = logging.getLogger(__name__)
 # the eval engine raises GuardrailMisroutedError on a guardrail-typed def).
 GUARDRAIL_EVAL_TYPE = "guardrail"
 
-
-def is_output_interception(eval_def: Any) -> bool:
-    """FAR-209 Track B: True when a guardrail-typed def declares an output point.
-
-    Strictly the literal ``"output"`` — an unknown ``interception_point`` value
-    stays with the input seam, where strict validation fails closed. Local
-    re-implementation of the helper (importing the sibling module at module
-    import time cycles through guardrails -> eval_engine -> executor).
-    """
-    point = eval_def.config.get("interception_point", "input")
-    return bool(point == "output")
+# NOTE: the output-point predicate is NOT re-implemented here. The canonical
+# ``is_output_interception`` lives in ``modulo.core.guardrails.output_intercept``
+# and is lazily imported inside ``_handle_chain_end_event`` (a module-level
+# import cycles guardrails -> eval_engine -> executor). A local copy of a
+# security-seam predicate is exactly the duplication the FAR-209 review
+# flagged — never reintroduce one.
 
 
 # Pipeline retry_policy events (must stay in sync with the API schema in
@@ -6632,6 +6627,11 @@ class PipelineExecutor:
         # ones intercept THIS envelope (see below); anything else would raise
         # GuardrailMisroutedError inside the eval engine and crash the run.
         if ctx.eval_definitions_by_node:
+            # FAR-209 Track B: single canonical predicate, imported lazily (a
+            # module-level import cycles guardrails -> eval_engine -> executor,
+            # the same reason every seam function below is imported in-body).
+            from modulo.core.guardrails.output_intercept import is_output_interception
+
             node_defs = ctx.eval_definitions_by_node.get(name) or []
             # Only the OUTPUT-point guardrail defs intercept THIS envelope
             # (strictly the "output" literal -- an unknown value stays with

@@ -5,18 +5,25 @@ Covers:
   generation, fail-closed mechanics),
 - the ``interception_point`` seam vocabulary (engine + authoring schema),
 - the output/input filter helpers' UNKNOWN-point semantics (D5),
+- authoring fail-closed: an output-point guardrail MUST be node-bound
+  (``create_or_update_eval`` rejects ``node_id IS NULL``),
+- the executor's node-output seam (flags read, detection-driven block,
+  fail-closed mechanism handling),
 - the executor's node-output split shim (guardrails out of the eval loop,
   a guardrail-typed straggler never reaches the eval engine).
 """
 
 from __future__ import annotations
 
+import contextlib
 import unittest.mock
 import uuid
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 import modulo.core.pipeline_engine.executor as executor_mod
 from modulo.core.eval_engine import (
@@ -25,6 +32,7 @@ from modulo.core.eval_engine import (
     EvalType,
     GuardrailMisroutedError,
 )
+from modulo.core.eval_engine.eval_definition_write import create_or_update_eval
 from modulo.core.guardrails import (
     GuardrailBlockedError,
     GuardrailConfig,
@@ -294,7 +302,7 @@ def test_output_interception_filter_semantics_unknown_point_is_not_output():
     assert is_output_interception(unknown_def) is False
 
     assert filter_output_interception_definitions([output_def, unknown_def]) == [output_def]
-    assert filter_output_interception_definitions([input_def, unknown_def]) == []
+    assert not filter_output_interception_definitions([input_def, unknown_def])
 
     # D5: an UNKNOWN point value KEEPS the input pass (strict validation there
     # fails closed) — it is never silently unbound from both passes.
@@ -354,7 +362,132 @@ def test_validate_config_set_destroy_requires_configured_pepper_fail_closed():
 def test_output_filter_unknown_value_stays_on_input_pass():
     unknown = _guardrail(name="gr-unknown", interception_point="midstream")
     assert exclude_output_interception_definitions([unknown]) == [unknown]
-    assert filter_output_interception_definitions([unknown]) == []
+    assert not filter_output_interception_definitions([unknown])
+
+
+# ---------------------------------------------------------------------------
+# Authoring (FAR-209 Track B): an output-point guardrail MUST be node-bound
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSession:
+    """Create-path AsyncSession stand-in: records adds/flushes, never reads.
+
+    The guard under test must fire BEFORE any persistence, so ``execute``
+    (the UPDATE-path read) failing loudly proves nothing touched the DB.
+    """
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+        self.flushed = 0
+        self.executed = 0
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+
+    async def flush(self) -> None:
+        self.flushed += 1
+
+    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.executed += 1
+        raise AssertionError("the create path must not read the DB before the guard fires")
+
+
+def _output_point_config() -> dict[str, Any]:
+    return {"action": "block", "interception_point": "output", "type": "regex"}
+
+
+async def test_create_or_update_eval_rejects_unbound_output_point_guardrail():
+    """A pipeline-level (``node_id IS NULL``) output-point guardrail is enforced
+    by NO seam — the input pass excludes it and the output seam never loads an
+    unbound row. Reject at authoring (422) instead of persisting a
+    silently-unenforced block/redact guardrail."""
+    session = _RecordingSession()
+    with pytest.raises(HTTPException) as excinfo:
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            node_id=None,
+            name="gr-unbound-out",
+            eval_type="guardrail",
+            config_json=_output_point_config(),
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+        )
+    assert excinfo.value.status_code == 422
+    assert "node binding" in str(excinfo.value.detail)
+    # Fail CLOSED before any write: nothing was added or flushed.
+    assert not session.added
+    assert session.flushed == 0
+    assert session.executed == 0
+
+
+async def test_create_or_update_eval_allows_node_bound_output_point_guardrail():
+    """The SAME config persists when bound to a node — the guard is about the
+    missing binding, never about the output point itself."""
+    session = _RecordingSession()
+    node_id = uuid.uuid4()
+    row = await create_or_update_eval(
+        session,
+        org_id=_ORG_ID,
+        account_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        node_id=node_id,
+        name="gr-bound-out",
+        eval_type="guardrail",
+        config_json=_output_point_config(),
+        failure_behaviour="warn",
+        pass_threshold=None,
+        suite_id=None,
+    )
+    assert row.node_id == node_id
+    assert len(session.added) == 1
+    assert session.flushed == 1
+
+
+async def test_create_or_update_eval_allows_unbound_input_point_guardrail():
+    """The pipeline-level INPUT path (config-as-code's shape) is untouched — an
+    unbound INPUT-point guardrail still persists, because the ingestion edge
+    loads pipeline-level rows and enforces it there."""
+    session = _RecordingSession()
+    row = await create_or_update_eval(
+        session,
+        org_id=_ORG_ID,
+        account_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        node_id=None,
+        name="gr-unbound-in",
+        eval_type="guardrail",
+        config_json={"action": "block", "interception_point": "input", "type": "regex"},
+        failure_behaviour="warn",
+        pass_threshold=None,
+        suite_id=None,
+    )
+    assert row.node_id is None
+    assert len(session.added) == 1
+
+
+async def test_create_or_update_eval_allows_unbound_guardrail_without_a_point():
+    """No ``interception_point`` key = the input default — unbound stays legal."""
+    session = _RecordingSession()
+    row = await create_or_update_eval(
+        session,
+        org_id=_ORG_ID,
+        account_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        node_id=None,
+        name="gr-unbound-default",
+        eval_type="guardrail",
+        config_json={"action": "observe", "type": "regex"},
+        failure_behaviour="warn",
+        pass_threshold=None,
+        suite_id=None,
+    )
+    assert row.node_id is None
+    assert len(session.added) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -493,26 +626,154 @@ async def test_chain_end_redaction_overwrites_completed_node_outputs(
 # ---------------------------------------------------------------------------
 
 
-async def test_run_output_guardrails_block_raise():
-    guardrail_defs = [
-        _guardrail(
-            name="gr-block",
-            action="block",
-            detection={
-                "type": "regex",
-                "pattern": r"SECRET_[A-Z0-9]{8}",
-                "field": "body",
-            },
-            interception_point="output",
-        )
-    ]
-    envelope = {"body": "SECRET_ABC12345"}
+def _flags_session_factory(row: tuple[bool, bool] | None = (False, False)) -> Any:
+    """Session factory whose flags read yields *row* (replay=False, kill=False).
+
+    ``read_output_interception_flags`` drives detection-only mode for the
+    output seam. A bare ``MagicMock()`` factory BREAKS that read — the error
+    escapes as the fail-closed mechanism guard, so a test would pass even with
+    a NON-violating envelope. Wiring a real row is what makes a block in these
+    tests attributable to DETECTION.
+    """
+    session = unittest.mock.AsyncMock()
+    result = unittest.mock.MagicMock()
+    result.first = unittest.mock.MagicMock(return_value=row)
+    session.execute = unittest.mock.AsyncMock(return_value=result)
+
+    @contextlib.asynccontextmanager
+    async def _factory() -> Any:
+        yield session
+
+    return _factory
+
+
+def _raising_flags_session_factory(exc: BaseException) -> Any:
+    """Session factory whose construction raises *exc* (a broken flags read)."""
+
+    def _factory() -> Any:
+        raise exc
+
+    return _factory
+
+
+def _block_output_guardrail() -> EvalDefinition:
+    return _guardrail(
+        name="gr-block",
+        action="block",
+        detection={
+            "type": "regex",
+            "pattern": r"SECRET_[A-Z0-9]{8}",
+            "field": "body",
+        },
+        interception_point="output",
+    )
+
+
+def _output_executor(flags_factory: Any) -> executor_mod.PipelineExecutor:
     executor = executor_mod.PipelineExecutor(unittest.mock.MagicMock())
-    with pytest.raises(GuardrailBlockedError):
+    executor._session_factory = flags_factory
+    return executor
+
+
+async def test_run_output_guardrails_block_raise():
+    """A VIOLATING envelope blocks, and the block comes from DETECTION.
+
+    The session factory returns ``(is_replay=False, kill_switch=False)`` so
+    the flags read succeeds and enforcement is active. The assertions pin the
+    attribution: a detection block names the GUARDRAIL, the fail-closed
+    mechanism guard names the NODE.
+    """
+    executor = _output_executor(_flags_session_factory())
+    with pytest.raises(GuardrailBlockedError) as excinfo:
         await executor._run_output_guardrails(
             node_id="n1",
-            envelope=envelope,
-            guardrail_defs=guardrail_defs,
+            envelope={"body": "SECRET_ABC12345"},
+            guardrail_defs=[_block_output_guardrail()],
             run_id=uuid.uuid4(),
             org_id=_ORG_ID,
         )
+    assert excinfo.value.eval_name == "gr-block"
+    assert "mechanism error" not in excinfo.value.detail
+
+
+async def test_run_output_guardrails_non_violating_envelope_is_not_blocked():
+    """Same wiring, a clean envelope — NO block.
+
+    This is the discriminating half of the test above: with the old bare
+    ``MagicMock()`` session factory the flags read itself failed and the
+    seam's fail-closed guard raised on ANY envelope, so a green block test
+    proved nothing about detection.
+    """
+    executor = _output_executor(_flags_session_factory())
+    envelope = {"body": "harmless"}
+    result = await executor._run_output_guardrails(
+        node_id="n1",
+        envelope=envelope,
+        guardrail_defs=[_block_output_guardrail()],
+        run_id=uuid.uuid4(),
+        org_id=_ORG_ID,
+    )
+    assert result == envelope
+
+
+async def test_run_output_guardrails_flags_read_failure_keeps_enforcement():
+    """A ``SQLAlchemyError`` on the flags read fails open to ``(False, False)``
+    — enforcement stays ACTIVE. The unavailable kill-switch/replay downgrade
+    must never be assumed ON (that would be a fail-open on a data-safety
+    control)."""
+    executor = _output_executor(_raising_flags_session_factory(SQLAlchemyError("flags read unavailable")))
+    with pytest.raises(GuardrailBlockedError) as excinfo:
+        await executor._run_output_guardrails(
+            node_id="n1",
+            envelope={"body": "SECRET_ABC12345"},
+            guardrail_defs=[_block_output_guardrail()],
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+        )
+    assert excinfo.value.eval_name == "gr-block"
+
+
+async def test_run_output_guardrails_broken_flags_read_fails_closed():
+    """A NON-SQLAlchemy flags-read failure escapes the read, and the seam's
+    defect-path guard fail-closes: a blocking guardrail is bound, so the
+    envelope must never pass through unredacted — even a clean one."""
+    executor = _output_executor(_raising_flags_session_factory(RuntimeError("flags read exploded")))
+    with pytest.raises(GuardrailBlockedError) as excinfo:
+        await executor._run_output_guardrails(
+            node_id="n1",
+            envelope={"body": "harmless"},
+            guardrail_defs=[_block_output_guardrail()],
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+        )
+    assert excinfo.value.eval_name == "n1"
+    assert "mechanism error" in excinfo.value.detail
+
+
+async def test_run_output_guardrails_mechanism_error_names_node_output_seam():
+    """A detection mechanism error at this seam must be labelled THIS seam.
+
+    The shared pass is driven by both seams; without the ``seam`` parameter a
+    mechanism-error block here read "guardrail mechanism error at ingestion
+    edge" — the FAR-209 review's misleading-detail finding. An unsupported
+    detection type makes ``_validate_guardrail_definition`` raise
+    ``GuardrailConfigError`` inside the detection loop (the mechanism path),
+    deliberately distinct from the detection block asserted above.
+    """
+    malformed = _guardrail(
+        name="gr-malformed",
+        action="block",
+        detection={"type": "py_eval"},
+        interception_point="output",
+    )
+    executor = _output_executor(_flags_session_factory())
+    with pytest.raises(GuardrailBlockedError) as excinfo:
+        await executor._run_output_guardrails(
+            node_id="n1",
+            envelope={"body": "harmless"},
+            guardrail_defs=[malformed],
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+        )
+    assert excinfo.value.detail == "guardrail mechanism error at node-output edge"
+    assert "ingestion edge" not in excinfo.value.detail

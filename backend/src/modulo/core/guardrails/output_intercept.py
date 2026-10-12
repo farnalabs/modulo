@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from modulo.core.eval_engine import EvalDefinition
 from modulo.core.guardrails import run_interception_pass_async
@@ -44,11 +44,28 @@ INPUT_INTERCEPTION_POINT = "input"
 OUTPUT_INTERCEPTION_POINT = "output"
 
 
-def is_output_interception(eval_def: EvalDefinition) -> bool:
+class SupportsGuardrailConfig(Protocol):
+    """Structural contract for anything carrying a guardrail ``config`` mapping.
+
+    Satisfied by BOTH DTOs that reach the output-point predicate: the engine's
+    pydantic ``EvalDefinition`` (ingestion-edge selection) and the executor's
+    ``EvalDefDTO`` (the node-output seam). The predicate reads only ``config``,
+    so the seam's single source of truth serves either without a duck-typed
+    ``type: ignore`` — or, worse, a second local copy of a security predicate.
+    """
+
+    config: dict[str, Any]
+
+
+def is_output_interception(eval_def: SupportsGuardrailConfig) -> bool:
     """True when *eval_def* (a guardrail-typed DTO) declares an output point.
 
     Strictly the literal ``"output"`` — an unknown value is NOT output (it
     stays with the input pass, where strict validation fails closed).
+
+    This is the ONE implementation: ``pipeline_engine.executor`` lazily
+    imports it inside ``_handle_chain_end_event`` (a module-level import
+    cycles guardrails -> eval_engine -> executor). Never re-implement it.
     """
     point = eval_def.config.get("interception_point", INPUT_INTERCEPTION_POINT)
     return bool(point == OUTPUT_INTERCEPTION_POINT)
@@ -132,6 +149,7 @@ async def run_output_interception_async(
     redacted envelope.
     """
     from modulo.core.eval_engine import EvalEngine
+    from modulo.core.guardrails import SEAM_NODE_OUTPUT_EDGE
 
     flag_replay, kill_switch = await read_output_interception_flags(session_factory, run_id=run_id, org_id=org_id)
     detection_only = flag_replay or kill_switch
@@ -145,12 +163,17 @@ async def run_output_interception_async(
         list(definitions),
         envelope,
         detection_only=detection_only,
+        # The shared pass labels its mechanism-error block messages with the
+        # seam it ran on — without this the node-output seam would report
+        # "at ingestion edge" (FAR-209 Track B review finding).
+        seam=SEAM_NODE_OUTPUT_EDGE,
     )
 
 
 __all__ = [
     "INPUT_INTERCEPTION_POINT",
     "OUTPUT_INTERCEPTION_POINT",
+    "SupportsGuardrailConfig",
     "exclude_output_interception_definitions",
     "filter_output_interception_definitions",
     "is_output_interception",

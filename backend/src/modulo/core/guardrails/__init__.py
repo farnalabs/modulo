@@ -152,6 +152,13 @@ GUARDRAIL_DETECTION_TYPES: frozenset[str] = frozenset({EvalType.REGEX, EvalType.
 # guardrail block is terminal and retries are excluded by design (item 5).
 GUARDRAIL_FORBIDDEN_FAILURE_BEHAVIOURS: frozenset[str] = frozenset({"retry"})
 
+# Seam labels carried in a mechanism-error block message so the operator can
+# tell WHERE the pass failed closed. The shared async pass is driven by both
+# seams (FAR-209 Track B added the executor's node-output seam), so a
+# hardcoded "ingestion edge" would mislabel the output seam's failures.
+SEAM_INGESTION_EDGE = "ingestion edge"
+SEAM_NODE_OUTPUT_EDGE = "node-output edge"
+
 
 class GuardrailConfigError(ValueError):
     """Raised when a guardrail definition is malformed."""
@@ -1157,16 +1164,17 @@ def _over_budget_enforcement_outcome(
     payload: dict[str, Any],
     reason: str,
     skipped: Sequence[GuardrailSkip],
+    seam: str,
 ) -> GuardrailInterceptionOutcome:
     """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
     any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
     if any_guarding:
-        _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+        _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
             payload=copy.deepcopy(payload),
             skipped=list(skipped),
             blocked=True,
-            block_message="guardrail mechanism error at ingestion edge",
+            block_message=f"guardrail mechanism error at {seam}",
             blocking_eval_name="<payload-budget>",
         )
     _log.warning("guardrails.payload_over_budget_observe", extra={"reason": reason})
@@ -1184,6 +1192,7 @@ def _payload_budget_outcome(
     detection_only: bool,
     max_payload_bytes: int,
     skipped: Sequence[GuardrailSkip],
+    seam: str,
 ) -> GuardrailInterceptionOutcome | None:
     """Return the outcome for an over-budget payload, else ``None`` when within budget.
 
@@ -1195,7 +1204,7 @@ def _payload_budget_outcome(
     reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
     if detection_only:
         return _over_budget_replay_outcome(definitions, payload, reason, skipped)
-    return _over_budget_enforcement_outcome(definitions, payload, reason, skipped)
+    return _over_budget_enforcement_outcome(definitions, payload, reason, skipped, seam)
 
 
 def _mechanism_error_reason(exc: Exception, timeout: float) -> str:
@@ -1235,6 +1244,7 @@ async def _run_detection_loop(
     *,
     detection_only: bool,
     timeout_seconds: float,
+    seam: str,
 ) -> DetectionLoopOutcome:
     """Run every guardrail detection under its budget.
 
@@ -1271,7 +1281,7 @@ async def _run_detection_loop(
             if guarding and not detection_only:
                 decision = BlockDecision(
                     blocked=True,
-                    block_message="guardrail mechanism error at ingestion edge",
+                    block_message=f"guardrail mechanism error at {seam}",
                     blocking_eval_name=eval_def.name,
                 )
             else:
@@ -1293,6 +1303,7 @@ async def run_interception_pass_async(
     timeout_seconds: float | None = None,
     max_payload_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
     skipped: Sequence[GuardrailSkip] = (),
+    seam: str = SEAM_INGESTION_EDGE,
 ) -> GuardrailInterceptionOutcome:
     """Async two-phase guardrail pass with per-guardrail hard timeouts (item 7).
 
@@ -1319,6 +1330,13 @@ async def run_interception_pass_async(
     way as a timeout: fail-closed for block/redact, log-and-continue for
     observe/warn — except in detection-only mode, where a guarding guardrail's
     mechanism error is recorded (not dropped) so the replay keeps the evidence.
+
+    *seam* names the caller's interception point and is carried verbatim in a
+    mechanism-error ``block_message`` (``f"guardrail mechanism error at
+    {seam}"``). The default (:data:`SEAM_INGESTION_EDGE`) matches every
+    pre-FAR-209 call site; the executor's node-output seam passes
+    :data:`SEAM_NODE_OUTPUT_EDGE` so its failures are never mislabelled as
+    ingestion-edge failures.
     """
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), skipped=list(skipped))
@@ -1329,6 +1347,7 @@ async def run_interception_pass_async(
         detection_only=detection_only,
         max_payload_bytes=max_payload_bytes,
         skipped=skipped,
+        seam=seam,
     )
     if budget_outcome is not None:
         return budget_outcome
@@ -1341,6 +1360,7 @@ async def run_interception_pass_async(
         pre_act,
         detection_only=detection_only,
         timeout_seconds=timeout,
+        seam=seam,
     )
 
     decision = detection_outcome.decision
@@ -1832,6 +1852,8 @@ __all__ = [
     "GUARDRAIL_NEVER_TOUCH_FIELDS",
     "GUARDRAIL_SKIP_EXPECTED_REASONS",
     "REDACTION_MASK",
+    "SEAM_INGESTION_EDGE",
+    "SEAM_NODE_OUTPUT_EDGE",
     "ConformanceDerivation",
     "ConformanceState",
     "FieldRedactionMode",
