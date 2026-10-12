@@ -7,6 +7,7 @@ code:
   - backend/src/modulo/core/license_signing.py
   - backend/src/modulo/core/feature_flags.py
   - backend/src/modulo/api/routes/admin_license.py
+  - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
   - backend/src/modulo/api/routes/stripe_webhook.py
@@ -14,6 +15,7 @@ unit-tests:
   - backend/tests/unit/core/test_license_key.py
   - backend/tests/unit/core/test_license_signing.py
   - backend/tests/unit/api/test_admin_license.py
+  - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/api/test_admin_feature_flags.py
   - backend/tests/unit/api/test_admin_tiers_endpoint.py
   - backend/tests/unit/api/test_stripe_webhook.py
@@ -82,6 +84,17 @@ and feature-flag inspection endpoints.
       customer email or of an unrelated type is acknowledged without dispatch, and the
       webhook is 404 when Stripe is not configured (`licensing/stripe_billing.feature`,
       `test_stripe_billing.py`, `test_stripe_webhook.py`)
+- [x] Licence-status cache is invalidated on every licence mutation: the admin
+      status cache (`license:{org_id}`, 60s TTL in `admin_license.py`) is busted
+      when the underlying licence changes — a system upload
+      (`POST /api/v1/admin/license`) deletes every `license:*` entry, and an
+      org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
+      deletes that org's entry — so the next status read reflects the new state
+      instead of serving the stale resolution until TTL. Invalidation is
+      best-effort (fails open with a logged warning; the licence mutation has
+      already committed) (`test_admin_license.py`
+      `TestLicenseCacheInvalidationSystemChange`,
+      `test_admin_orgs_coverage_gaps.py` set/remove invalidation tests; FAR-1719)
 
 ## Known Gaps
 
@@ -97,6 +110,23 @@ and feature-flag inspection endpoints.
   cited above.
 
 ## QA History
+
+- 2026-10-12: **FAR-1719** — closed the licence-status cache-invalidation gap
+  raised by the improve-architecture `feat-license` pass. A system upload
+  (`POST /api/v1/admin/license`) now busts every `license:*` Redis entry, and
+  an org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
+  busts the mutated org's `license:{org_id}` entry. Both invalidations are
+  best-effort (fail open with a logged `license.cache_invalidate_failed`
+  warning) — the licence mutation has already committed, so a Redis failure
+  must not turn the request into a 500 (commit-then-error). Regression tests
+  drive the real routes over a shared fakeredis server and prove the second
+  status read reflects the new licence rather than the stale cache
+  (`test_admin_license.py` `TestLicenseCacheInvalidationSystemChange`,
+  `test_admin_orgs_coverage_gaps.py` `test_set_org_license_invalidates_org_status_cache`
+  and `test_remove_org_license_invalidates_org_status_cache`). The
+  previously-tracked "admin license-status Redis cache is not invalidated on a
+  licence mutation" gap is resolved. The public `/api/v1/license` surface is
+  intentionally untouched (FAR-1720).
 
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-license` registry: the

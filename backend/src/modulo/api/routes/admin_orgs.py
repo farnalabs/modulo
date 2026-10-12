@@ -23,6 +23,7 @@ from modulo.api.dependencies import (
     require_target_org_role,
     resolve_audit_principal,
 )
+from modulo.api.routes.admin_license import invalidate_license_status_cache
 from modulo.auth.jwt import AuthenticatedPrincipal
 from modulo.auth.passwords import hash_password, validate_password_strength
 from modulo.core.audit_coverage import audited
@@ -605,6 +606,7 @@ async def admin_set_org_license(
     req: SetOrgLicenseRequest,
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
         # Single locked transaction: read the org FOR UPDATE, verify, then
@@ -647,6 +649,11 @@ async def admin_set_org_license(
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_set_org_license (update)", exc)
 
+    # The org's cached effective status is now stale — bust it (FAR-1719).
+    # Best-effort: the DB mutation above already committed, so a Redis
+    # failure must not turn the request into a 500.
+    await invalidate_license_status_cache(settings, org_id=str(org_id))
+
     return _license_response_from_data(d)
 
 
@@ -668,6 +675,7 @@ async def admin_remove_org_license(
     org_id: uuid.UUID,
     _: Annotated[AuthenticatedPrincipal, require_target_org_role("org.license.manage", "admin")],
     session: AsyncSession = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
 ) -> OrgLicenseResponse:
     try:
         # Same locked read-modify-write transaction as admin_set_org_license —
@@ -702,6 +710,11 @@ async def admin_remove_org_license(
         raise
     except Exception as exc:
         _raise_internal_error("Unexpected error in admin_remove_org_license (remove)", exc)
+
+    # The org's cached effective status is now stale — bust it (FAR-1719).
+    # Best-effort: the DB mutation above already committed, so a Redis
+    # failure must not turn the request into a 500.
+    await invalidate_license_status_cache(settings, org_id=str(org_id))
 
     return OrgLicenseResponse(has_license=False)
 
