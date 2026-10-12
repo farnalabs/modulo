@@ -546,8 +546,6 @@ class ApplyExecutor:
         filters soft-deleted evals (a soft-deleted eval cannot receive new
         results, so its gate would always resolve 'undefined').
         """
-        from modulo.cli.apply import pipeline_apply
-
         agents_list: list[dict[str, Any]] = []
         if needs_agents:
             agents_list = self._get_paginated("/agents")
@@ -590,22 +588,11 @@ class ApplyExecutor:
             for item in pipelines_list
             if item.get("name") is not None and item["name"] not in ambiguous_pipeline_names
         }
-        unreadable_graph_pipelines: dict[str, str] = {}
-        if wants_pipelines:
-            # Only pipelines whose config DECLARES a graph need the fetched
-            # graph (a graph-less config does not manage the graph at all).
-            for name in {e.name for e in config.entities.pipelines if e.graph is not None} & pipelines.keys():
-                try:
-                    graph_payload = self._get(f"/pipelines/{pipelines[name]['id']}/graph")
-                    pipelines[name]["graph"] = pipeline_apply.normalize_current_graph(graph_payload)
-                except (ApplyHttpError, ValueError, KeyError, TypeError) as exc:
-                    # A stored graph the models reject (legacy data, version
-                    # skew) must not abort the whole run: demote this pipeline
-                    # to blocked ("current graph unreadable") and keep
-                    # planning the rest of the config.
-                    reason = str(exc) or exc.__class__.__name__
-                    _log.warning("apply.fetch_graph_unreadable: %s: %s", name, reason)
-                    unreadable_graph_pipelines[name] = reason
+        unreadable_graph_pipelines = self._normalize_pipeline_graphs(
+            config,
+            pipelines,
+            wants_pipelines=wants_pipelines,
+        )
         return _PipelineBundle(
             agents=agents,
             ambiguous_agent_names=ambiguous_agent_names,
@@ -617,6 +604,39 @@ class ApplyExecutor:
             evals=evals,
             evals_error=evals_error,
         )
+
+    def _normalize_pipeline_graphs(
+        self,
+        config: ApplyConfig,
+        pipelines: dict[str, dict[str, Any]],
+        *,
+        wants_pipelines: bool,
+    ) -> dict[str, str]:
+        """Fetch and normalise the stored graph for each declared pipeline.
+
+        Only pipelines whose config DECLARES a graph need the fetched graph
+        (a graph-less config does not manage the graph at all); when the
+        config declares no pipelines at all (``wants_pipelines`` false) the
+        whole pass is skipped. A stored graph the models reject (legacy data,
+        version skew) must not abort the whole run: demote this pipeline to
+        blocked ("current graph unreadable") and keep planning the rest of
+        the config. Returns name -> reason for each demoted pipeline.
+        """
+        from modulo.cli.apply import pipeline_apply
+
+        unreadable_graph_pipelines: dict[str, str] = {}
+        if not wants_pipelines:
+            return unreadable_graph_pipelines
+        declared_names = {e.name for e in config.entities.pipelines if e.graph is not None}
+        for name in declared_names & pipelines.keys():
+            try:
+                graph_payload = self._get(f"/pipelines/{pipelines[name]['id']}/graph")
+                pipelines[name]["graph"] = pipeline_apply.normalize_current_graph(graph_payload)
+            except (ApplyHttpError, ValueError, KeyError, TypeError) as exc:
+                reason = str(exc) or exc.__class__.__name__
+                _log.warning("apply.fetch_graph_unreadable: %s: %s", name, reason)
+                unreadable_graph_pipelines[name] = reason
+        return unreadable_graph_pipelines
 
     def _fetch_trigger_lists(
         self,
