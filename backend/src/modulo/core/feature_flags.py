@@ -383,38 +383,52 @@ class DbPlanContext:
         return [f for f in self._registry.list_flags() if f.currently_active]
 
 
-async def resolve_plan_context(settings: Any, session: Any, org: Any | None = None) -> PlanContext:
-    """Resolve a PlanContext from an org-level license, system-level license, or CommunityTier.
+async def _context_from_license_key(session: Any, raw_key: str, error_log: str) -> PlanContext | None:
+    """Parse and verify ``raw_key`` into a licensed plan context.
 
-    Resolution order:
+    Returns ``None`` when verification fails or the payload carries no license
+    data, so the caller continues the resolution ladder. Cancellation
+    propagates; any other parse failure is logged under ``error_log`` and
+    treated as absent — the exact fall-through behaviour of the inline license
+    steps this was extracted from.
+    """
+    from modulo.core.license import parse_and_verify
+
+    try:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return await DbPlanContext.from_db(
+                session,
+                validation.license_data.tier,
+                has_license_key=True,
+                license_features=set(validation.license_data.features),
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(error_log, exc_info=True)
+    return None
+
+
+async def _resolve_paid_plan(settings: Any, session: Any, org: Any | None) -> PlanContext | None:
+    """Resolve a licensed (paid) plan context, or ``None`` when no valid license exists.
+
+    License ladder (first valid source wins, absent/invalid falls through):
     1. Org-level license key (from ``org.settings_json["license_key"]``)
     2. System-level in-memory license (``store_license()``)
     3. System-level env-var license (``settings.modulo_license_key``)
-    4. Org-level ``plan_id`` — used ONLY for the free "community" tier. Any
-       higher tier (e.g. "team") requires a VALID SIGNED LICENSE; a bare
-       ``plan_id`` with no license (steps 1-3 all empty) resolves to community.
-    5. Community tier (default fallback)
     """
-    from modulo.core.license import get_license, parse_and_verify
+    from modulo.core.license import get_license
 
     # 1. Org-level license key
+    org_license_key = None
     if org is not None:
         org_settings = getattr(org, "settings_json", None)
         org_license_key = org_settings.get("license_key") if isinstance(org_settings, dict) else None
-        if org_license_key:
-            try:
-                validation = parse_and_verify(org_license_key)
-                if validation.valid and validation.license_data is not None:
-                    return await DbPlanContext.from_db(
-                        session,
-                        validation.license_data.tier,
-                        has_license_key=True,
-                        license_features=set(validation.license_data.features),
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.warning("Failed to parse org-level license key", exc_info=True)
+    if org_license_key:
+        licensed = await _context_from_license_key(session, org_license_key, "Failed to parse org-level license key")
+        if licensed is not None:
+            return licensed
 
     # 2. System-level in-memory license
     lic = get_license()
@@ -429,26 +443,24 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
     # 3. System-level env-var license
     raw_key: str = getattr(settings, "modulo_license_key", "") or ""
     if raw_key:
-        try:
-            validation = parse_and_verify(raw_key)
-            if validation.valid and validation.license_data is not None:
-                return await DbPlanContext.from_db(
-                    session,
-                    validation.license_data.tier,
-                    has_license_key=True,
-                    license_features=set(validation.license_data.features),
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning("Failed to parse env-var license key", exc_info=True)
+        licensed = await _context_from_license_key(session, raw_key, "Failed to parse env-var license key")
+        if licensed is not None:
+            return licensed
 
-    # 4. Org-level plan_id (per-org, from DB). Community is the free tier and
-    #    activates without a license. Any higher tier (e.g. "team") may only
-    #    grant paid features when a VALID SIGNED LICENSE is present — steps 1-3
-    #    already returned when one exists, so reaching here with a paid plan_id
-    #    means NO license is present. Downgrade to community instead of silently
-    #    granting the paid tier from a bare plan_id.
+    return None
+
+
+async def _resolve_trial_state(session: Any, org: Any | None) -> PlanContext:
+    """Resolve the unlicensed fallback state once no valid license matched.
+
+    4. Org-level ``plan_id`` — used ONLY for the free "community" tier. Any
+       higher tier (e.g. "team") requires a VALID SIGNED LICENSE; the license
+       ladder in ``_resolve_paid_plan`` already returned when one exists, so
+       reaching here with a paid plan_id means NO license is present. Downgrade
+       to community instead of silently granting the paid tier from a bare
+       plan_id.
+    5. Community tier (default fallback)
+    """
     if org is not None:
         org_plan_id: str | None = getattr(org, "plan_id", None)
         if org_plan_id:
@@ -461,6 +473,27 @@ async def resolve_plan_context(settings: Any, session: Any, org: Any | None = No
 
     # 5. Community fallback
     return await DbPlanContext.from_db(session, "community")
+
+
+async def resolve_plan_context(settings: Any, session: Any, org: Any | None = None) -> PlanContext:
+    """Resolve a PlanContext from an org-level license, system-level license, or CommunityTier.
+
+    Resolution order:
+    1. Org-level license key (from ``org.settings_json["license_key"]``)
+    2. System-level in-memory license (``store_license()``)
+    3. System-level env-var license (``settings.modulo_license_key``)
+    4. Org-level ``plan_id`` — used ONLY for the free "community" tier. Any
+       higher tier (e.g. "team") requires a VALID SIGNED LICENSE; a bare
+       ``plan_id`` with no license (steps 1-3 all empty) resolves to community.
+    5. Community tier (default fallback)
+
+    Steps 1-3 delegate to ``_resolve_paid_plan`` (license ladder); steps 4-5
+    delegate to ``_resolve_trial_state`` (unlicensed fallback).
+    """
+    licensed = await _resolve_paid_plan(settings, session, org)
+    if licensed is not None:
+        return licensed
+    return await _resolve_trial_state(session, org)
 
 
 class FeatureFlagRegistry:
