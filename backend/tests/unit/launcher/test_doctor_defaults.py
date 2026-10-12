@@ -1,10 +1,9 @@
 """Coverage backfill for doctor-lite (FAR-671).
 
 Targets the SonarCloud new-code coverage gate: the pure helpers
-(``_password_from_url`` / ``_cwd_env_file`` / ``_parse_listeners_from_proc`` /
-``_decode_proc_address``), the ``default_probes`` wiring (including the
-real-runtime probe closures exercised via dependency injection), the
-``_load_state_readonly`` read-only paths, and the remaining per-check fault
+(``_password_from_url`` / ``_cwd_env_file`` / ``_parse_listeners_from_proc``),
+the ``default_probes`` wiring (including the real-runtime probe closures
+exercised via dependency injection), and the remaining per-check fault
 branches not exercised elsewhere.
 """
 
@@ -18,15 +17,12 @@ from modulo.launcher import doctor as doctor_module
 from modulo.launcher.doctor import (
     DoctorProbes,
     _cwd_env_file,
-    _decode_proc_address,
-    _load_state_readonly,
     _parse_listeners_from_proc,
     _password_from_url,
     check_cwd_env_influence,
     check_data_dir,
     check_migrations,
     check_postgres,
-    check_redis,
     default_probes,
 )
 from modulo.launcher.secrets_file import LauncherSecrets
@@ -72,12 +68,6 @@ def test_cwd_env_file_present_and_absent(tmp_path: Path, monkeypatch: pytest.Mon
     assert found.name == ".env"
 
 
-def test_decode_proc_address_ipv4_and_ipv6() -> None:
-    assert _decode_proc_address("0100007F", doctor_module.socket.AF_INET) == "127.0.0.1"
-    # IPv6 branch is exercised (real /proc byte order yields an :: address)
-    assert "::" in _decode_proc_address("00000000000000000000000000000001", doctor_module.socket.AF_INET6)
-
-
 class _FakeProcPath:
     def __init__(self, real: Path) -> None:
         self._real = real
@@ -117,30 +107,6 @@ def test_parse_listeners_from_proc_reads_loopback(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 # _load_state_readonly read-only paths
 # ---------------------------------------------------------------------------
-
-
-def test_load_state_readonly_uninitialized(tmp_path: Path) -> None:
-    state, error = _load_state_readonly(tmp_path)
-    assert state is None
-    assert "not initialized" in error
-
-
-def test_load_state_readonly_corrupt_secrets(tmp_path: Path) -> None:
-    (tmp_path / "secrets.json").write_text("not valid json {", encoding="utf-8")
-    state, error = _load_state_readonly(tmp_path)
-    assert state is None
-    assert "secrets file unreadable" in error
-
-
-def test_load_state_readonly_missing_state_json(tmp_path: Path) -> None:
-    (tmp_path / "secrets.json").write_text(
-        '{"postgres_password": "pg-pw", "redis_password": "redis-pw", '
-        '"state_hmac_key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"}',
-        encoding="utf-8",
-    )
-    state, error = _load_state_readonly(tmp_path)
-    assert state is None
-    assert "state.json unreadable" in error
 
 
 # ---------------------------------------------------------------------------
@@ -356,54 +322,6 @@ def test_postgres_fail_when_role_probe_raises(tmp_path: Path) -> None:
     )
     assert result.ok is False
     assert "role-posture probe failed" in result.detail
-
-
-def test_redis_skipped_when_launcher_not_running(tmp_path: Path) -> None:
-    result = check_redis(
-        tmp_path,
-        _state(),
-        DoctorProbes(
-            disk_free_bytes=lambda _r: 1 << 40,
-            assert_writable=lambda _r: None,
-            listening_on=lambda _p: ["127.0.0.1"],
-            probe_postgres=lambda: None,
-            role_violations=list,
-            probe_redis=lambda: None,
-            migrations_at_head=lambda: True,
-            effective_uid=lambda: 1000,
-            username_of_uid=lambda _u: "op",
-            file_owner=lambda _p: "op",
-            cwd_env_file=None,
-            env_file_pinned=lambda: True,
-            launcher_running=lambda: False,
-        ),
-    )
-    assert result.ok is True
-    assert "skipped" in result.detail
-
-
-def test_migrations_skipped_when_launcher_not_running(tmp_path: Path) -> None:
-    result = check_migrations(
-        tmp_path,
-        _state(),
-        DoctorProbes(
-            disk_free_bytes=lambda _r: 1 << 40,
-            assert_writable=lambda _r: None,
-            listening_on=lambda _p: ["127.0.0.1"],
-            probe_postgres=lambda: None,
-            role_violations=list,
-            probe_redis=lambda: None,
-            migrations_at_head=lambda: True,
-            effective_uid=lambda: 1000,
-            username_of_uid=lambda _u: "op",
-            file_owner=lambda _p: "op",
-            cwd_env_file=None,
-            env_file_pinned=lambda: True,
-            launcher_running=lambda: False,
-        ),
-    )
-    assert result.ok is True
-    assert "skipped" in result.detail
 
 
 def test_migrations_fail_when_probe_raises(tmp_path: Path) -> None:

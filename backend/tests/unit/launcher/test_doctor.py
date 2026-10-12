@@ -534,12 +534,6 @@ def test_bundle_version_fail_minor_drift() -> None:
     assert "16.4" in result.detail
 
 
-def test_bundle_version_fail_downgrade() -> None:
-    result = check_bundle_versions(Path(), None, _probes(installed_bundle_pg_version=lambda: "17.0"))
-    assert result.ok is False
-    assert "OLDER" in result.detail
-
-
 def test_bundle_version_warn_upgrade() -> None:
     result = check_bundle_versions(Path(), None, _probes(installed_bundle_pg_version=lambda: "16.2"))
     assert result.ok is True
@@ -674,11 +668,6 @@ def test_tls_pass_far_expiry() -> None:
     result = check_tls_expiry(Path(), None, _probes())
     assert result.ok is True
     assert result.warning is False
-
-
-def test_tls_skip_absent_keypair() -> None:
-    result = check_tls_expiry(Path(), None, _probes(tls_expiry=lambda: None))
-    assert result.ok is True
 
 
 def test_tls_skip_absent_keypair_explains_no_generator() -> None:

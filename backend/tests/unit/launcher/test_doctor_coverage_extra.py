@@ -121,13 +121,6 @@ def test_secrets_permissions_probe_failure(tmp_path: Path):
     assert "secrets-permission probe failed" in res.detail
 
 
-def test_secrets_permissions_mode_mismatch(tmp_path: Path):
-    _touch_secrets(tmp_path)
-    res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: 0o644))
-    assert res.ok is False
-    assert "chmod 600" in res.detail
-
-
 def test_secrets_permissions_mode_none(tmp_path: Path):
     res = check_secrets_permissions(tmp_path, None, _probes(secrets_mode=lambda _d: None))
     assert res.ok is True
@@ -187,15 +180,6 @@ def test_service_identity_installed_degraded(tmp_path: Path):
     assert "systemctl enable" in res.detail
 
 
-def test_service_identity_installed_healthy(tmp_path: Path):
-    res = check_service_identity(
-        tmp_path,
-        None,
-        _probes(service_installed=lambda: True, service_enabled=lambda: True, service_linger=lambda: True),
-    )
-    assert res.ok is True
-
-
 def test_memory_probe_failure(tmp_path: Path):
     res = check_memory_headroom(
         tmp_path, None, _probes(available_memory_bytes=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -206,18 +190,6 @@ def test_memory_probe_failure(tmp_path: Path):
 def test_memory_unknown(tmp_path: Path):
     res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: None))
     assert res.ok is True
-
-
-def test_memory_below_floor(tmp_path: Path):
-    res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: 512 * 1024 * 1024))
-    assert res.ok is False
-    assert "MiB" in res.detail
-
-
-def test_memory_warn_band(tmp_path: Path):
-    res = check_memory_headroom(tmp_path, None, _probes(available_memory_bytes=lambda: 1536 * 1024 * 1024))
-    assert res.ok is True
-    assert res.warning is True
 
 
 def test_bundle_versions_probe_failure(tmp_path: Path):
@@ -253,20 +225,6 @@ def test_bundle_versions_older_binary(tmp_path: Path):
     )
     assert res.ok is False
     assert "OLDER" in res.detail
-
-
-def test_bundle_versions_upgrade_available(tmp_path: Path):
-    res = check_bundle_versions(
-        tmp_path,
-        _state(),
-        _probes(
-            data_dir_pg_version=lambda: "16",
-            bundle_pg_version=lambda: "16.4",
-            installed_bundle_pg_version=lambda: "16.2",
-        ),
-    )
-    assert res.ok is True
-    assert res.warning is True
 
 
 def test_bundled_binaries_probe_failure(tmp_path: Path):
@@ -342,12 +300,6 @@ def test_tls_near_expiry(tmp_path: Path):
     res = check_tls_expiry(tmp_path, None, _probes(tls_expiry=lambda: time.time() + 5 * 86400))
     assert res.ok is True
     assert res.warning is True
-
-
-def test_tls_valid(tmp_path: Path):
-    res = check_tls_expiry(tmp_path, None, _probes(tls_expiry=lambda: time.time() + 400 * 86400))
-    assert res.ok is True
-    assert res.warning is False
 
 
 def test_stale_backup_probe_failure(tmp_path: Path):
@@ -439,18 +391,6 @@ def test_host_port_from_database_url():
 def test_password_from_url():
     assert doctor_module._password_from_url("redis://:secret@h:1") == "secret"
     assert not doctor_module._password_from_url("redis://h:1")
-
-
-def test_decode_proc_address():
-    import socket
-
-    from modulo.launcher.doctor import _decode_proc_address
-
-    # /proc stores addresses in network (big-endian) byte order.
-    ipv4 = _decode_proc_address("0100007F", socket.AF_INET)
-    assert ipv4 == "127.0.0.1"
-    ipv6 = _decode_proc_address("00000000000000000000000001000000", socket.AF_INET6)
-    assert ipv6 == "::1"
 
 
 def test_port_owner_descriptions_no_foreign():

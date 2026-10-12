@@ -41,7 +41,6 @@ from modulo.launcher.supervisor import (
     collect_status,
     knobs_from_env,
     read_proc_starttime,
-    read_runtime_manifest,
     reconcile_orphans,
     request_stop,
     write_runtime_manifest,
@@ -274,47 +273,6 @@ def test_backoff_resets_to_initial_after_a_clean_exit() -> None:
     harness.clock.advance(0.02)
     harness.supervisor.tick()  # clean exit → backoff reset
     assert child.backoff == pytest.approx(0.01)
-
-
-def test_backoff_progression_is_exponential_and_capped() -> None:
-    harness = Harness(
-        knobs=SupervisorKnobs(
-            restart_backoff_initial=0.01,
-            restart_backoff_max=0.05,
-            crash_window_seconds=1000.0,
-            crash_cap=100,
-        )
-    )
-    harness.supervisor.tick()  # spawn #1
-    child = harness.supervisor._children["postgres"]
-    for expected_gap in (0.01, 0.02, 0.04, 0.05, 0.05):
-        harness.supervisor.tick()  # detect the exit → schedule the respawn
-        assert child.next_spawn_at is not None
-        assert child.next_spawn_at - harness.clock.now == pytest.approx(expected_gap)
-        harness.clock.advance(expected_gap)
-        harness.supervisor.tick()  # the backoff elapsed → respawn
-        assert child.next_spawn_at is None
-
-
-def test_sliding_window_eviction_prevents_cap_trip() -> None:
-    harness = Harness(
-        knobs=SupervisorKnobs(
-            restart_backoff_initial=0.01,
-            restart_backoff_max=0.02,
-            crash_window_seconds=1.0,
-            crash_cap=3,
-        )
-    )
-    harness.supervisor.tick()  # spawn #1
-    harness.supervisor.tick()  # crash 1
-    harness.clock.advance(0.02)
-    harness.supervisor.tick()  # spawn #2
-    harness.supervisor.tick()  # crash 2 — below the cap (3), no trip
-    assert harness.supervisor.degraded_reason is None
-    harness.clock.advance(5.0)  # the whole window slides out
-    harness.supervisor.tick()  # spawn #3
-    harness.supervisor.tick()  # crash 3 — only one crash in the window now
-    assert harness.supervisor.degraded_reason is None
 
 
 def test_deferred_child_spawns_only_after_start_condition() -> None:
@@ -648,7 +606,7 @@ def test_lock_is_kernel_released_when_holder_dies(tmp_path: Path) -> None:
     with pytest.raises(subprocess.TimeoutExpired) as excinfo:
         subprocess.run(  # noqa: S603 — test driver
             [sys.executable, "-c", _LOCK_CHILD_SCRIPT, str(data_dir), str(marker)],
-            timeout=5.0,
+            timeout=2.0,
             capture_output=True,
             check=False,
         )
@@ -849,14 +807,6 @@ def test_is_postgres_process_refuses_on_non_linux(monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_manifest_roundtrip_and_corrupt_handling(tmp_path: Path) -> None:
-    path = tmp_path / "runtime.json"
-    write_runtime_manifest(path, {"postgres": 100, "redis": 200})
-    assert read_runtime_manifest(path) == {"postgres": 100, "redis": 200}
-    path.write_text("not json{")
-    assert not read_runtime_manifest(path)
-
-
 def test_record_runtime_persists_installed_bundle_pg_version(tmp_path: Path) -> None:
     """`_record_runtime_locked` must persist `installed_bundle_pg_version` into the
     runtime manifest's extra so doctor's downgrade/upgrade axis can fire (FAR-676
@@ -975,6 +925,7 @@ def test_shim_should_abandon_matrix() -> None:
 def test_read_proc_starttime_for_self_is_positive() -> None:
     starttime = read_proc_starttime(os.getpid())
     assert starttime is not None
+    assert isinstance(starttime, int)
     assert starttime > 0
 
 

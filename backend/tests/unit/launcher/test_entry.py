@@ -80,10 +80,12 @@ def _top_level_modulo_imports(tree: ast.Module) -> list[str]:
 def test_entry_first_modulo_import_is_env_safety() -> None:
     tree = _entry_tree()
     imports = _top_level_modulo_imports(tree)
-    # The ordering contract: env_safety must be the FIRST top-level modulo
-    # import. The forbidden-import policy (settings/cli/api/db) is owned
-    # separately by test_entry_has_no_top_level_settings_or_cli_imports.
-    assert imports[:1] == ["modulo.launcher.env_safety"]
+    # Pins BOTH halves of the module docstring's import-order contract:
+    # env_safety must be the FIRST top-level modulo import AND no other
+    # top-level modulo import may appear (the exact set). The forbidden-prefix
+    # policy (settings/cli/api/db) is owned separately by
+    # test_entry_has_no_top_level_settings_or_cli_imports.
+    assert imports == ["modulo.launcher.env_safety"]
 
 
 def test_run_start_scrub_is_the_first_action() -> None:

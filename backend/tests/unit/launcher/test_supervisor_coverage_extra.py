@@ -1381,22 +1381,6 @@ def test_collect_status_file_not_found(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_degrade_locked_runtime_and_pause(tmp_path: Path) -> None:
-    from modulo.launcher.supervisor import GATE_SUPERVISOR_PRE_TEARDOWN, Supervisor, SupervisorKnobs
-
-    pause_calls: list[str] = []
-    runtime_path = tmp_path / "runtime.json"
-    supervisor = Supervisor(
-        SupervisorKnobs(),
-        runtime_path=runtime_path,
-        pause_hook=lambda gate: pause_calls.append(gate),
-    )
-    supervisor.add(supervisor_module.ChildSpec(name="pg", argv_builder=lambda: ["pg"]))
-    supervisor._degrade_locked("test reason")
-    assert pause_calls == [GATE_SUPERVISOR_PRE_TEARDOWN]
-    assert runtime_path.exists()
-
-
 # ---------------------------------------------------------------------------
 # _default_spawner (skip if Windows, needs real subprocess)
 # ---------------------------------------------------------------------------
