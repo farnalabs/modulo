@@ -24,6 +24,16 @@ wedging a run:
 Either timeout surfaces as a FAIL-CLOSED eval result (``passed=False``,
 ``score=0.0`` with a clear detail): a judge decides a gate, so output that
 was never judged must not pass.
+
+Type note (FAR-1652 review): the judge callables built below annotate their
+``eval_def`` parameter as
+:class:`~modulo.core.eval_engine.EvalDefinition` because that is what the
+:class:`~modulo.core.eval_engine.LLMJudgeCallable` protocol declares, while
+both call sites actually pass the duck-typed
+:class:`~modulo.core.pipeline_engine.eval_persist_order.EvalDefDTO` (FAR-1100
+cutover).  Only ``eval_def.config`` is read, and ``EvalDefDTO`` mirrors the
+legacy ``EvalDefinition`` attribute names by design, so the annotation is
+intentionally looser than the runtime payload rather than an inaccurate one.
 """
 
 from __future__ import annotations
