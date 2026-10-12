@@ -144,6 +144,27 @@ class TestTimeoutResolution:
         assert middleware._default == 120
 
 
+class TestProductionTimeoutConfig:
+    def test_healthz_ready_not_shadowed_by_healthz_override(self) -> None:
+        """Regression: the production override dict must list the most-specific
+        prefix first. With ``/healthz`` first, first-match-wins made the 5s
+        deadline shadow ``/healthz/ready``'s intended
+        ``_HEALTHZ_READY_TIMEOUT_SECONDS`` (15s), so the 15-sub-check readiness
+        probe intermittently 504'd under CI load. That surfaced as
+        ``KeyError: 'checks'`` in tests/unit/api/test_health.py because the
+        timeout body is a ProblemDetail, not a ReadinessResponse."""
+        from modulo.api.main import (
+            _HEALTHZ_READY_TIMEOUT_SECONDS,
+            _HEALTHZ_TIMEOUT_SECONDS,
+            app,
+        )
+
+        configured = next(m for m in app.user_middleware if m.cls is RequestTimeoutMiddleware)
+        middleware = RequestTimeoutMiddleware(app=object(), **configured.kwargs)
+        assert middleware._timeout_for("/healthz/ready") == _HEALTHZ_READY_TIMEOUT_SECONDS
+        assert middleware._timeout_for("/healthz") == _HEALTHZ_TIMEOUT_SECONDS
+
+
 class TestCancelledError:
     @pytest.mark.anyio
     async def test_cancelled_error_is_re_raised(self) -> None:

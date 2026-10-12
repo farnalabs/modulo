@@ -507,7 +507,7 @@ def _make_mock_entry_point(
     dist_name: str = "pkg-demo",
     dist_version: str = "1.0.0",
     load_result: object | None = None,
-    load_side_effect: type[Exception] | None = None,
+    load_side_effect: type[BaseException] | None = None,
     metadata: dict[str, str] | None = None,
 ) -> object:
     """Build a minimal mock of importlib.metadata.EntryPoint."""
@@ -673,6 +673,94 @@ def test_load_entry_point_failure_variants_are_skipped():
             discovered = registry.discover_plugins()
         assert discovered == []
         assert not registry.has_connector_type("broken_con")
+
+
+@pytest.mark.parametrize("exc_type", [RuntimeError, ValueError, KeyError, OSError, LookupError])
+def test_load_entry_point_unexpected_exception_is_surfaced_not_raised(exc_type):
+    """An entry point whose ``load()`` raises anything must not abort discovery.
+
+    ``discover_plugins`` runs on the startup critical path, so an escaping raise
+    makes the whole instance unbootable. Only four exception types used to be
+    caught; every other raise (a non-ImportError missing dependency, a
+    module-scope config error, an OSError, …) propagated out of startup. The
+    plugin must instead be surfaced unhealthy under the documented
+    "Failed to load entry point …" detail.
+    """
+    registry = PluginRegistry()
+    dist_name = f"pkg-{exc_type.__name__.lower()}"
+    fail_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "broken_con",
+        dist_name=dist_name,
+        load_side_effect=exc_type,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[fail_ep], [], [], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert discovered == []
+    assert not registry.has_connector_type("broken_con")
+    health = registry.health_check(dist_name)
+    assert health[dist_name].ok is False
+    assert health[dist_name].detail == "Failed to load entry point broken_con"
+
+
+def test_discover_plugins_isolates_broken_plugin_from_healthy_ones():
+    """One plugin failing to load must not prevent the others being discovered."""
+    registry = PluginRegistry()
+    bad_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "bad_con",
+        dist_name="pkg-bad",
+        load_side_effect=RuntimeError,
+    )
+    good_ep = _make_mock_entry_point(
+        "modulo.model_backends",
+        "good_backend",
+        dist_name="pkg-good",
+        load_result=_build_stub_backend,
+    )
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        side_effect=[[bad_ep], [good_ep], [], []],
+    ):
+        discovered = registry.discover_plugins()
+
+    assert [m.PLUGIN_ID for m in discovered] == ["pkg-good"]
+    assert registry.has_model_backend("good_backend")
+    assert not registry.has_connector_type("bad_con")
+    assert registry.health_check("pkg-bad")["pkg-bad"].ok is False
+
+
+def test_load_entry_point_cancelled_error_is_reraised():
+    """A cancelled plugin import must propagate, never be surfaced as unhealthy.
+
+    ``_load_entry_point`` catches ``Exception`` broadly so that one broken
+    plugin cannot abort discovery, but cancellation is cooperative control
+    flow, not a plugin defect: ``asyncio.CancelledError`` (a ``BaseException``,
+    so invisible to ``except Exception``) must re-raise. This pins the explicit
+    ``except asyncio.CancelledError: raise`` arm placed ahead of the broad
+    handler — without it a cancelled startup could be silently swallowed.
+    """
+    registry = PluginRegistry()
+    cancelled_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "cancelled_con",
+        dist_name="pkg-cancelled",
+        load_side_effect=asyncio.CancelledError,
+    )
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=[[cancelled_ep], [], [], []],
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        registry.discover_plugins()
+
+    assert not registry.has_connector_type("cancelled_con")
 
 
 def test_discover_plugins_connector_entry_point():

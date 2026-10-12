@@ -121,6 +121,13 @@ ignore_imports =
     # thin DTO conversion (to_engine_definition); all guardrail logic stays in
     # core.
     modulo.db.crud.run -> modulo.core.guardrails
+    # FAR-209 Track B — output-side interception: db.crud.run's guardrail
+    # selection seams ALSO invoke the output-point exclusion helper
+    # (exclude_output_interception_definitions) so the input pass never sees
+    # an output-point def. Same narrow cross-boundary category as the FAR-208
+    # exemption above: db.crud.run only invokes the filter helper; all
+    # guardrail logic stays in core.
+    modulo.db.crud.run -> modulo.core.guardrails.output_intercept
     modulo.db.crud.run -> modulo.core.eval_engine
     # FAR-1293 — the evidence store's first production producer: the guardrail
     # persist seam (db.crud.run._persist_guardrail_eval_results) appends one

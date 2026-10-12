@@ -447,27 +447,15 @@ describe('AdminAssistantView — save flows', () => {
     wrapper.unmount()
   })
 
-  it('regenerates the product primer and shows the success message', async () => {
+  it('does not render the dead primer-regenerate control (route never existed)', async () => {
+    // FAR-1724: POST /api/v1/admin/assistant/primer/regenerate was never
+    // implemented on the backend (routes/admin_assistant.py exposes only
+    // /config, /available-providers, /skills, /context-sources), so the
+    // control was removed. Pin the absence so it cannot silently return.
     const wrapper = await mountAssistant()
 
-    await wrapper.find('[data-testid="assistant-primer-regenerate"]').trigger('click')
-    await flushPromises()
-
-    const post = vi.mocked((await import('../lib/api/client')).api.POST).mock.calls[0]
-    expect(post[0]).toBe('/api/v1/admin/assistant/primer/regenerate')
-    expect(wrapper.text()).toContain('Primer regenerated')
-    wrapper.unmount()
-  })
-
-  it('shows a failure message when primer regeneration errors', async () => {
-    const { api } = await import('../lib/api/client')
-    const wrapper = await mountAssistant()
-    vi.mocked(api.POST).mockResolvedValue({ data: null, error: { detail: 'primer_budget' } } as any)
-
-    await wrapper.find('[data-testid="assistant-primer-regenerate"]').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('primer_budget')
+    expect(wrapper.find('[data-testid="assistant-primer-regenerate"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Regenerate Primer')
     wrapper.unmount()
   })
 })

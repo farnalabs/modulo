@@ -26,12 +26,29 @@ export const useCompositeStore = defineStore("composite", () => {
     loading.value = true;
     error.value = null;
     try {
-      const result = await withTimeout(
-        get<{ items: CompositeDefinition[] }>("/api/v1/composites"),
-        15000,
-        "Composites request",
-      );
-      composites.value = result.items || [];
+      // The backend route is GET /api/v1/composite-templates (composite_templates.py),
+      // and it is paginated (page/page_size, max 100). Walk every page so the
+      // id→template map is complete — a silent first-page-only load would make
+      // getCompositeById miss templates past page_size.
+      const all: CompositeDefinition[] = [];
+      let page = 1;
+      for (;;) {
+        const result = await withTimeout(
+          get<{ items: CompositeDefinition[]; total?: number }>(
+            `/api/v1/composite-templates?page=${page}&page_size=100`,
+          ),
+          15000,
+          "Composites request",
+        );
+        const items = result.items || [];
+        all.push(...items);
+        page += 1;
+        // Stop when the page was empty, the API reported no more rows than we
+        // hold, or a payload without `total` (single-page) was returned.
+        const total = typeof result.total === "number" ? result.total : all.length;
+        if (items.length === 0 || all.length >= total) break;
+      }
+      composites.value = all;
       hasLoadedOnce = true;
     } catch (e: unknown) {
       error.value = asErrorMessage(e);

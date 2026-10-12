@@ -41,6 +41,12 @@ Both non-DB seams are mocked narrowly: the SSRF discovery-URL validation
 (which performs real DNS) and the discovery-document HTTPS fetch stay out of
 the RLS story being proven — exactly as the SAML regression mocks only the
 XML-signature step.
+
+FAR-1126 note: the sibling ``conftest.py`` session-scoped autouse
+``keycloak_tls_trust_env`` fixture sets ``SSRF_TRUST_PROXY=1`` process-wide for
+every test in this directory, deliberately relaxing the pinned transport's
+fail-closed default. It is inert without a proxy env var, but a test here that
+asserts the proxy-ignore guard must clear ``SSRF_TRUST_PROXY`` explicitly.
 """
 
 import os

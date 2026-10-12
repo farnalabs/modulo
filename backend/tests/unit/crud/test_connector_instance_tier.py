@@ -12,7 +12,15 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
-from tests.unit.crud.helpers import compile_sql, executed_sql, mock_execute, mock_session
+from tests.unit.crud.helpers import (
+    compile_sql,
+    executed_sql,
+    executed_statements,
+    find_entity_statement,
+    mock_execute,
+    mock_session,
+    where_column_names,
+)
 
 _ORG = uuid.UUID("33333333-3333-3333-3333-333333333333")
 # Statement compilation with literal binds under the DEFAULT dialect renders
@@ -40,7 +48,9 @@ async def test_excluded_tiers_empty_skips_filter() -> None:
     result = await list_connector_instances(session, excluded_tiers=[])
 
     assert result.total == 5
-    assert all("tier NOT IN" not in sql for sql in executed_sql(session))
+    # Structural negative: no tier column may appear in either where clause.
+    for stmt in executed_statements(session):
+        assert "tier" not in where_column_names(stmt)
 
 
 async def test_excluded_tiers_preview() -> None:
@@ -75,10 +85,11 @@ async def test_page_offset_applied() -> None:
     result = await list_connector_instances(session, page=2, page_size=10, excluded_tiers=["preview"])
 
     assert result.total == 7
-    items_sql = executed_sql(session)[1]
-    assert "LIMIT 10" in items_sql
-    assert "OFFSET 10" in items_sql
-    assert "tier NOT IN ('preview')" in items_sql
+    # Selected semantically as the row-select (shape-routed), not by position.
+    page_sql = compile_sql(find_entity_statement(executed_statements(session), ConnectorInstance))
+    assert "LIMIT 10" in page_sql
+    assert "OFFSET 10" in page_sql
+    assert "tier NOT IN ('preview')" in page_sql
 
 
 async def test_programming_error_returns_empty_result() -> None:

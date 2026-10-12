@@ -245,3 +245,45 @@ async def test_guardrail_override_persists_post_redaction_payload():
     assert result.status == "pending"
     assert result.input_payload["credentials"]["api_key"] == "\u2022\u2022\u2022\u2022\u2022\u2022"
     assert result.input_payload["body"] == "clean"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_destroy_mechanism_error_fails_closed():
+    """FAR-209 Track B: a destroy-redaction mechanism error escaping the
+    re-run pass must fail CLOSED (override rejected, run stays terminal), not
+    surface as an unhandled 500 from the operator override endpoint.
+    """
+    from modulo.core.guardrails import GuardrailRedactionMechanismError
+
+    run = _make_run()
+    session = _mock_session()
+    # Only 4 execute calls happen before the pass raises (no status UPDATE).
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = run
+    pipeline_result = MagicMock()
+    pipeline_result.scalar_one.return_value = MagicMock()
+    rows_result = MagicMock()
+    rows_result.scalars.return_value.all.return_value = [_guardrail_row()]
+    session.execute = AsyncMock(side_effect=[run_result, pipeline_result, run_result, rows_result])
+
+    with (
+        patch(
+            "modulo.core.guardrails.run_interception_pass_async",
+            AsyncMock(side_effect=GuardrailRedactionMechanismError("guardrail_destroy_pepper unset")),
+        ),
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        pytest.raises(GuardrailOverrideRejectedError) as exc_info,
+    ):
+        await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"body": "anything"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert exc_info.value.guardrail_name == "<guardrail>"
+    assert "guardrail mechanism error" in exc_info.value.detail
+    assert run.status == "eval_failed"  # run never flipped
+    assert run.is_replay is False
+    mock_audit.assert_not_called()

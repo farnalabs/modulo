@@ -12,7 +12,15 @@ from sqlalchemy.exc import ProgrammingError
 
 from modulo.db.crud.model_backend import list_model_backends
 from modulo.db.models.model_backend import ModelBackend
-from tests.unit.crud.helpers import compile_sql, executed_sql, mock_execute, mock_session
+from tests.unit.crud.helpers import (
+    compile_sql,
+    executed_sql,
+    executed_statements,
+    find_entity_statement,
+    mock_execute,
+    mock_session,
+    where_column_names,
+)
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 # Literal-binds compilation under the DEFAULT dialect renders the org
@@ -41,9 +49,11 @@ async def test_excluded_tiers_empty_list_in_dev() -> None:
     result = await list_model_backends(session, org_id=_ORG_ID, excluded_tiers=[])
 
     assert result.total == 2
-    for sql in executed_sql(session):
-        assert "tier NOT IN" not in sql
-        assert _ORG_SQL in sql
+    # The negative is structural: NO tier column may appear in either where
+    # clause — not the excluded-tiers predicate, not any other tier term.
+    for stmt in executed_statements(session):
+        assert "tier" not in where_column_names(stmt)
+        assert _ORG_SQL in compile_sql(stmt)
 
 
 async def test_excluded_tiers_preview_still_filters() -> None:
@@ -65,11 +75,12 @@ async def test_page_offset_applied() -> None:
     result = await list_model_backends(session, org_id=_ORG_ID, page=2, page_size=10, excluded_tiers=["preview"])
 
     assert result.total == 7
-    items_sql = executed_sql(session)[1]
-    assert "LIMIT 10" in items_sql
-    assert "OFFSET 10" in items_sql
-    assert "tier NOT IN ('preview')" in items_sql
-    assert _ORG_SQL in items_sql
+    # Selected semantically as the row-select (shape-routed), not by position.
+    page_sql = compile_sql(find_entity_statement(executed_statements(session), ModelBackend))
+    assert "LIMIT 10" in page_sql
+    assert "OFFSET 10" in page_sql
+    assert "tier NOT IN ('preview')" in page_sql
+    assert _ORG_SQL in page_sql
 
 
 async def test_cursor_pagination_applies_filters() -> None:
