@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from modulo.core.eval_engine.author_warnings import (
     AuthorWarning,
     _extract_evidence_keys_from_node,
+    _graph_node_uuid,
     _is_producer_downstream,
     check_author_warnings,
 )
@@ -530,6 +531,17 @@ def test_is_producer_downstream_ignores_revisits_of_already_visited_nodes() -> N
     ]
 
     assert _is_producer_downstream(uuid.uuid4(), binding, edges) is False
+
+
+def test_graph_node_uuid_returns_uuid_instance_unchanged() -> None:
+    """A node ``id`` that is already a UUID object is returned unchanged.
+
+    ``graph_nodes_json`` normally yields string ids from JSON, but the helper
+    is defensive: a UUID-typed id must not be re-wrapped.
+    """
+    node_id = uuid.uuid4()
+
+    assert _graph_node_uuid({"id": node_id}) is node_id
 
 
 async def test_node_producer_without_node_id_skips_temporal_ordering(session: AsyncSession) -> None:

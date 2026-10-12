@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from modulo.core.audit_logger import append_audit_event
+from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.hitl_review_guard import (
     HitlReviewWeakeningDenied,
@@ -1083,18 +1084,40 @@ async def _clone_snapshots(
     """Copy the source's snapshots (and their schema pins) onto the clone.
 
     Returns the number of snapshots copied. The JSON blobs are deep-copied so
-    the cloned snapshots are fully independent of the source.
+    the cloned snapshots are fully independent of the source. A declared
+    ``policy_gate`` block in a snapshot's graph is stripped with a recorded
+    warning (FAR-1666) — see the inline comment below.
     """
     _log.info("Copying snapshots for pipeline %s -> %s", source_id, cloned_id)
     snap_count = 0
     for snap in snapshots:
+        # FAR-1666: a cloned snapshot must not carry a declared ``policy_gate``
+        # block either. Evals (and their gate rows) are not cloned, and a gate
+        # row is eval-keyed with a hard cross-pipeline binding check — rolling
+        # the clone back to this snapshot would replay the block through
+        # ``reconcile_graph_policy_gates`` and 422 on the foreign binding.
+        # Strip through the SAME shared helper the clone-config path uses, and
+        # disclose what was dropped — never a silent drop.
+        graph_json = copy.deepcopy(snap["graph_json"])
+        dropped_policy_gates: list[str] = []
+        if isinstance(graph_json, dict):
+            cloned_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_json.get("nodes", []))
+            graph_json["nodes"] = cloned_nodes
+        if dropped_policy_gates:
+            _log.warning(
+                "policy_gate declaration(s) dropped on clone of snapshot %s of pipeline %s "
+                "(evals/gates are not cloned): %s",
+                _sanitise_log_value(str(snap["snapshot_version"])),
+                _sanitise_log_value(str(source_id)),
+                "; ".join(dropped_policy_gates),
+            )
         cloned_snap = PipelineSnapshot(
             organisation_id=org_id,
             pipeline_id=cloned_id,
             snapshot_version=snap["snapshot_version"],
             account_id=snap["account_id"],
             environment_profile_id=snap["environment_profile_id"],
-            graph_json=copy.deepcopy(snap["graph_json"]),
+            graph_json=graph_json,
             connector_bindings_json=copy.deepcopy(snap["connector_bindings_json"]),
             schema_pins_json=copy.deepcopy(snap["schema_pins_json"]),
             prompt_pins_json=copy.deepcopy(snap["prompt_pins_json"]),
@@ -1522,36 +1545,17 @@ def graph_update_audit_payload(
 # rollback, which is a graph write, translates through
 # ``reconcile_graph_policy_gates`` directly.
 #
-# The per-eval advisory lock key MUST stay identical to the FAR-1106 authoring
-# routes' ``modulo.api.routes.evals._with_gate_advisory_lock``
-# (``policy_gate:<eval_id>`` through ``hashtext``) so the declarative
-# translation serialises against the in-product
-# ``/evals/{eval_id}/policy-gate`` writers. The lock helper is re-implemented
-# here rather than imported: the ``db-does-not-import-core`` import-linter
-# contract forbids ``modulo.db`` -> ``modulo.api``.
+# The per-eval advisory lock is SHARED with the FAR-1106 authoring routes:
+# both the declarative translation here and the in-product
+# ``/evals/{eval_id}/policy-gate`` writers reach
+# ``modulo.db.crud._gate_advisory_lock.with_gate_advisory_lock`` — the SAME
+# ``policy_gate:<eval_id>`` key through ``hashtext``. The helper lives in a
+# neutral ``db``-side module (FAR-1688) because the
+# ``db-does-not-import-core`` import-linter contract forbids
+# ``modulo.db`` -> ``modulo.api``, so neither layer may own the other's copy;
+# a duplicate on either side would let an edit silently desynchronise the key.
 
 _POLICY_GATE_ACTIONS = ("warn", "block")
-_GATE_LOCK_TIMEOUT_SQL = "SET LOCAL statement_timeout = '5s'"
-_GATE_ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtext(:key))"
-_GATE_LOCK_KEY_PREFIX = "policy_gate:"
-
-
-async def _with_gate_advisory_lock[T](
-    eval_id: uuid.UUID,
-    session: AsyncSession,
-    fn: Callable[..., Awaitable[T]],
-) -> T:
-    """Run *fn* holding the transaction-scoped per-eval advisory lock.
-
-    Mirrors ``modulo.api.routes.evals._with_gate_advisory_lock`` — the SAME key
-    and the same 5s statement timeout — so the declarative translation and the
-    authoring routes serialise on one lock. The lock releases when the
-    surrounding transaction commits or rolls back.
-    """
-    lock_key = f"{_GATE_LOCK_KEY_PREFIX}{eval_id}"
-    await session.execute(text(_GATE_LOCK_TIMEOUT_SQL))
-    await session.execute(text(_GATE_ADVISORY_LOCK_SQL), {"key": lock_key})
-    return await fn()
 
 
 def _iter_declared_policy_gates(nodes: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
@@ -1796,7 +1800,7 @@ async def _ensure_declared_gate(
             },
         )
 
-    await _with_gate_advisory_lock(eval_id, session, _do)
+    await with_gate_advisory_lock(eval_id, session, _do)
 
 
 async def _soft_delete_declared_gate(
@@ -1837,7 +1841,7 @@ async def _soft_delete_declared_gate(
             payload_json={"eval_id": str(eval_id), "action": action},
         )
 
-    await _with_gate_advisory_lock(eval_id, session, _do)
+    await with_gate_advisory_lock(eval_id, session, _do)
 
 
 async def reconcile_graph_policy_gates(
@@ -1902,7 +1906,7 @@ async def reconcile_graph_policy_gates(
                     eval_id=eval_uuid,
                 )
     finally:
-        # ``_with_gate_advisory_lock`` sets ``SET LOCAL statement_timeout = '5s'``
+        # ``with_gate_advisory_lock`` sets ``SET LOCAL statement_timeout = '5s'``
         # for the CURRENT transaction, so it would otherwise bound every
         # remaining statement in the caller's transaction (the graph_updated
         # audit write, and post-write work on the route paths). Reset it to the

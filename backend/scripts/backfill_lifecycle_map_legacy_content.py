@@ -189,6 +189,58 @@ def _scan_maps(conn: Any, *, after_id: Any, batch_size: int) -> list[Any]:
     return cast(list[Any], conn.execute(text(stmt), params).fetchall())
 
 
+def _backfill_one_page(
+    conn: Any,
+    rows: list[Any],
+    *,
+    apply: bool,
+    dialect_name: str,
+    scanned_total: int,
+    limit: int | None,
+    skips: list[tuple[str, str]],
+    sample: list[tuple[str, list[str]]],
+) -> tuple[int, int]:
+    """Repair every map in one keyset page; persist when ``apply``.
+
+    Mutates ``skips`` and ``sample`` in place so the whole-run invariants are
+    preserved: every skip is recorded, and the dry-run ``sample`` stays capped
+    at 5 entries across the whole run (not per page). Returns
+    ``(repaired, scanned_total)`` — the repaired count for this page and the
+    running scan total including it, which the caller clamps the next page's
+    ``limit`` against.
+    """
+    repaired = 0
+    for row in rows:
+        if limit is not None and scanned_total >= limit:
+            break
+        scanned_total += 1
+        map_id = str(row.id)
+        cleaned, changes, ok, reason = _clean_map(_load_content(row.content_json))
+        if not ok:
+            _log.warning(
+                "backfill_lifecycle_map_legacy_content.skip",
+                extra={"map_id": map_id, "reason": reason or "unknown"},
+            )
+            skips.append((map_id, reason or "unknown"))
+            continue
+        if not changes:
+            continue
+        assert cleaned is not None, "repairable content must be returned when ok"
+        repaired += 1
+        if apply:
+            conn.execute(
+                _UPDATE_SQL,
+                {
+                    "content": _bind_json_param(cleaned, dialect_name),
+                    "map_id": row.id,
+                },
+            )
+            _reproject_junction(conn, row, cleaned, dialect_name=dialect_name)
+        elif len(sample) < 5:
+            sample.append((map_id, changes))
+    return repaired, scanned_total
+
+
 def _run_backfill(conn: Any, *, apply: bool, batch_size: int, limit: int | None) -> dict[str, Any]:
     """Walk maps in PK batches, repairing legacy content where detected.
 
@@ -214,34 +266,17 @@ def _run_backfill(conn: Any, *, apply: bool, batch_size: int, limit: int | None)
         if not rows:
             break
         batches += 1
-        for row in rows:
-            if limit is not None and scanned_total >= limit:
-                break
-            scanned_total += 1
-            map_id = str(row.id)
-            cleaned, changes, ok, reason = _clean_map(_load_content(row.content_json))
-            if not ok:
-                _log.warning(
-                    "backfill_lifecycle_map_legacy_content.skip",
-                    extra={"map_id": map_id, "reason": reason or "unknown"},
-                )
-                skips.append((map_id, reason or "unknown"))
-                continue
-            if not changes:
-                continue
-            assert cleaned is not None, "repairable content must be returned when ok"
-            repaired += 1
-            if apply:
-                conn.execute(
-                    _UPDATE_SQL,
-                    {
-                        "content": _bind_json_param(cleaned, dialect_name),
-                        "map_id": row.id,
-                    },
-                )
-                _reproject_junction(conn, row, cleaned, dialect_name=dialect_name)
-            elif len(sample) < 5:
-                sample.append((map_id, changes))
+        page_repaired, scanned_total = _backfill_one_page(
+            conn,
+            rows,
+            apply=apply,
+            dialect_name=dialect_name,
+            scanned_total=scanned_total,
+            limit=limit,
+            skips=skips,
+            sample=sample,
+        )
+        repaired += page_repaired
         # Commit each batch so a crash never rolls back already-repaired maps
         # (engine.connect() autobegins a transaction that would otherwise roll
         # back silently on close).

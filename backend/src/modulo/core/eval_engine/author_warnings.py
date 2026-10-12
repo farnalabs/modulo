@@ -157,6 +157,144 @@ def _is_producer_downstream(
     return False
 
 
+def _graph_node_uuid(node: dict[str, Any]) -> uuid.UUID | None:
+    """Return the graph node's id as a UUID, or None when the entry has none."""
+    node_id_raw = node.get("id")
+    if node_id_raw is None:
+        return None
+    if isinstance(node_id_raw, uuid.UUID):
+        return node_id_raw
+    return uuid.UUID(str(node_id_raw))
+
+
+async def _check_one_rule_family(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    pipeline_id: uuid.UUID,
+    evidence_key: str,
+    graph_nodes: list[dict[str, Any]],
+) -> tuple[bool, uuid.UUID | None]:
+    """Condition (a): resolve the key's guaranteed producer, if any.
+
+    The producer-lookup ladder — eval definitions bound to the pipeline,
+    evidence-key references in graph-node configs, then system-state
+    producer patterns — stops at the first hit.  Returns
+    ``(producer_found, producer_node_id)``: the node id seeds the
+    temporal-ordering check, and is ``None`` for system-state producers
+    (runtime builtins have no single node) or a graph node without an id.
+    """
+    evals_result = await session.execute(
+        select(Eval).where(
+            Eval.pipeline_id == pipeline_id,
+            Eval.organisation_id == org_id,
+            Eval.deleted_at.is_(None),
+        )
+    )
+
+    for eval_row in evals_result.scalars().all():
+        if evidence_key in _extract_evidence_keys_from_eval(eval_row):
+            return True, eval_row.node_id
+
+    for node in graph_nodes:
+        if evidence_key in _extract_evidence_keys_from_node(node):
+            return True, _graph_node_uuid(node)
+
+    # System-state producers are written unconditionally by the runtime;
+    # temporal ordering is N/A for them.
+    if _is_system_state_key(evidence_key):
+        return True, None
+
+    return False, None
+
+
+def _check_temporal_ordering(
+    *,
+    evidence_key: str,
+    producer_node_id: uuid.UUID | None,
+    binding_node_id: uuid.UUID | None,
+    edges: list[dict[str, Any]],
+) -> list[AuthorWarning]:
+    """Condition (b): producer-vs-binding temporal ordering (§3.2).
+
+    Only checked when the producer has a known node id.  When the binding
+    node is indeterminate the safe direction is to warn — a false
+    advisory is preferred over a missed warning.
+    """
+    if producer_node_id is None:
+        return []
+
+    if binding_node_id is None:
+        return [
+            AuthorWarning(
+                "temporal_ordering",
+                f"Key '{evidence_key}' producer node is known but binding "
+                f"node is indeterminate — temporal ordering cannot be verified.",
+            )
+        ]
+
+    if _is_producer_downstream(producer_node_id, binding_node_id, edges):
+        return [
+            AuthorWarning(
+                "temporal_ordering",
+                f"Key '{evidence_key}' producer node runs after the gate's binding node.",
+            )
+        ]
+
+    return []
+
+
+async def _check_recent_undefined(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    evidence_key: str,
+) -> list[AuthorWarning]:
+    """Condition (c): recent undefined outcomes in the evidence store.
+
+    The evidence store may be dormant (no rows yet) — that is expected
+    and produces no warning.  A query failure falls back to warn (the
+    safe direction).
+    """
+    try:
+        recent_result = await session.execute(
+            select(Evidence.value)
+            .where(
+                Evidence.organisation_id == org_id,
+                Evidence.key == evidence_key,
+            )
+            .order_by(Evidence.created_at.desc())
+            .limit(_RECENT_RUNS_WINDOW)
+        )
+        recent_values: list[Any] = list(recent_result.scalars().all())
+
+        # undefined = value is None (JSONB null)
+        undefined_count = sum(1 for v in recent_values if v is None)
+    except Exception:
+        # Evidence store query failure — fallback to warn (safe direction)
+        _log.warning(
+            "author_warnings.evidence_store_query_failed",
+            extra={"key": evidence_key, "org_id": str(org_id)},
+            exc_info=True,
+        )
+        return [
+            AuthorWarning(
+                "recent_undefined",
+                f"Cannot determine recent undefined status for key '{evidence_key}': evidence store query failed.",
+            )
+        ]
+
+    if undefined_count > 0:
+        return [
+            AuthorWarning(
+                "recent_undefined",
+                f"Key '{evidence_key}' produced undefined in {undefined_count} of the last {len(recent_values)} runs.",
+            )
+        ]
+
+    return []
+
+
 async def check_author_warnings(
     session: AsyncSession,
     *,
@@ -207,7 +345,6 @@ async def check_author_warnings(
             )
             return warnings
 
-        graph_nodes = pipeline.graph_nodes_json or []
         graph_edges_raw = await session.execute(select(PipelineEdge).where(PipelineEdge.pipeline_id == pipeline_id))
         edges_raw = graph_edges_raw.scalars().all()
         edges = [
@@ -219,45 +356,13 @@ async def check_author_warnings(
         ]
 
         # ── Condition (a): no guaranteed producer ──────────────────────────
-        # Check 1: eval definitions bound to this pipeline
-        evals_result = await session.execute(
-            select(Eval).where(
-                Eval.pipeline_id == pipeline_id,
-                Eval.organisation_id == org_id,
-                Eval.deleted_at.is_(None),
-            )
+        producer_found, producer_node_id = await _check_one_rule_family(
+            session,
+            org_id=org_id,
+            pipeline_id=pipeline_id,
+            evidence_key=evidence_key,
+            graph_nodes=pipeline.graph_nodes_json or [],
         )
-        evals = evals_result.scalars().all()
-
-        producer_found = False
-        producer_node_id: uuid.UUID | None = None
-
-        for eval_row in evals:
-            eval_keys = _extract_evidence_keys_from_eval(eval_row)
-            if evidence_key in eval_keys:
-                producer_found = True
-                producer_node_id = eval_row.node_id
-                break
-
-        # Check 2: evidence-producing node configurations
-        if not producer_found:
-            for node in graph_nodes:
-                node_keys = _extract_evidence_keys_from_node(node)
-                if evidence_key in node_keys:
-                    producer_found = True
-                    node_id_raw = node.get("id")
-                    if node_id_raw is not None:
-                        producer_node_id = (
-                            uuid.UUID(str(node_id_raw)) if not isinstance(node_id_raw, uuid.UUID) else node_id_raw
-                        )
-                    break
-
-        # Check 3: system-state producer patterns
-        if not producer_found and _is_system_state_key(evidence_key):
-            producer_found = True
-            # System-state producers have no single node — they're runtime
-            # builtins.  Temporal ordering is N/A for them.
-
         if not producer_found:
             warnings.append(
                 AuthorWarning(
@@ -267,64 +372,23 @@ async def check_author_warnings(
             )
 
         # ── Condition (b): temporal ordering ───────────────────────────────
-        # Only check if we found a producer with a known node_id
-        if producer_found and producer_node_id is not None:
-            if binding_node_id is None:
-                # Binding node is unknown — ordering cannot be resolved → warn.
-                warnings.append(
-                    AuthorWarning(
-                        "temporal_ordering",
-                        f"Key '{evidence_key}' producer node is known but binding "
-                        f"node is indeterminate — temporal ordering cannot be verified.",
-                    )
-                )
-            elif _is_producer_downstream(producer_node_id, binding_node_id, edges):
-                warnings.append(
-                    AuthorWarning(
-                        "temporal_ordering",
-                        f"Key '{evidence_key}' producer node runs after the gate's binding node.",
-                    )
-                )
+        warnings.extend(
+            _check_temporal_ordering(
+                evidence_key=evidence_key,
+                producer_node_id=producer_node_id,
+                binding_node_id=binding_node_id,
+                edges=edges,
+            )
+        )
 
         # ── Condition (c): recent undefined ────────────────────────────────
-        # Query the evidence store for recent undefined outcomes on this key.
-        # The evidence store may be dormant (no rows yet) — this is expected
-        # and produces no warning.
-        try:
-            recent_result = await session.execute(
-                select(Evidence.value)
-                .where(
-                    Evidence.organisation_id == org_id,
-                    Evidence.key == evidence_key,
-                )
-                .order_by(Evidence.created_at.desc())
-                .limit(_RECENT_RUNS_WINDOW)
+        warnings.extend(
+            await _check_recent_undefined(
+                session,
+                org_id=org_id,
+                evidence_key=evidence_key,
             )
-            recent_values: list[Any] = list(recent_result.scalars().all())
-
-            # undefined = value is None (JSONB null)
-            undefined_count = sum(1 for v in recent_values if v is None)
-            if undefined_count > 0:
-                warnings.append(
-                    AuthorWarning(
-                        "recent_undefined",
-                        f"Key '{evidence_key}' produced undefined in "
-                        f"{undefined_count} of the last {len(recent_values)} runs.",
-                    )
-                )
-        except Exception:
-            # Evidence store query failure — fallback to warn (safe direction)
-            _log.warning(
-                "author_warnings.evidence_store_query_failed",
-                extra={"key": evidence_key, "org_id": str(org_id)},
-                exc_info=True,
-            )
-            warnings.append(
-                AuthorWarning(
-                    "recent_undefined",
-                    f"Cannot determine recent undefined status for key '{evidence_key}': evidence store query failed.",
-                )
-            )
+        )
 
     except Exception:
         # Any unexpected failure — fallback to warn (safe direction)
