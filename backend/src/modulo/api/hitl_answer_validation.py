@@ -80,6 +80,31 @@ def _validate_approval(answer: dict[str, Any]) -> None:
         raise AnswerValidationError("option_id is not permitted on an approval gate")
 
 
+def _validate_no_contract_answer(answer: dict[str, Any], kind: str) -> None:
+    """Validate an answer against an implicit approval gate (no contract declared)."""
+    if kind != "approval":
+        raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
+    # Reject option_id on a no-contract (approval) gate.
+    _validate_approval(answer)
+
+
+def _validate_contract_answer(answer: dict[str, Any], response_contract: dict[str, Any]) -> None:
+    """Dispatch an answer to its kind validator against a declared contract."""
+    kind = answer.get("kind")
+    declared_kind = response_contract.get("kind")
+    if kind != declared_kind:
+        raise AnswerValidationError(
+            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
+        )
+
+    if kind == "choice":
+        _validate_choice(answer, response_contract)
+    elif kind == "approval":
+        _validate_approval(answer)
+    else:
+        raise AnswerValidationError(f"unsupported answer kind {kind!r}; expected 'choice' or 'approval'")
+
+
 async def validate_hitl_answer(
     session: AsyncSession,
     *,
@@ -124,23 +149,8 @@ async def validate_hitl_answer(
     rc = config.get("response_contract")
     if not isinstance(rc, dict):
         # No contract declared: the gate is approval-type.
-        if kind != "approval":
-            raise AnswerValidationError(f"gate has no response_contract; answer kind must be 'approval', got {kind!r}")
-        # Reject option_id on a no-contract (approval) gate.
-        _validate_approval(answer)
+        _validate_no_contract_answer(answer, kind)
         return answer
 
-    declared_kind = rc.get("kind")
-    if kind != declared_kind:
-        raise AnswerValidationError(
-            f"answer kind {kind!r} does not match gate response_contract kind {declared_kind!r}"
-        )
-
-    if kind == "choice":
-        _validate_choice(answer, rc)
-    elif kind == "approval":
-        _validate_approval(answer)
-    else:
-        raise AnswerValidationError(f"unsupported answer kind {kind!r}; expected 'choice' or 'approval'")
-
+    _validate_contract_answer(answer, rc)
     return answer
