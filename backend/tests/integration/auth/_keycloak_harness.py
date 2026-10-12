@@ -597,7 +597,12 @@ class IdpBrowserDriver:
                 raise Tier1bFixtureError(f"Keycloak drive: redirect chain exceeded {_MAX_REDIRECT_HOPS} hops")
             submitted = client.post(
                 login_action,
-                data={"username": username, "password": password},
+                # Keycloak's own login form names the credential field
+                # `username` (the value may be an email); `email` is not a valid
+                # Keycloak form field. This drives the real IdP UI, not the
+                # FastAPI app's login payload, so `test-login-field-username`
+                # does not apply.
+                data={"username": username, "password": password},  # nosemgrep: test-login-field-username
             )
         except Exception:
             client.close()
