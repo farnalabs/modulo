@@ -234,6 +234,7 @@ class TestDecisionRecordPersistSuccessPath:
             results = await run_evals_persist_before_decide(
                 eval_defs=[eval_def],
                 resolve_eval_target=lambda ed: {"text": "pass"},
+                resolve_llm_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=_session_factory(session),
@@ -400,6 +401,7 @@ class TestFailOpenDoesNotBlockContinue:
         results = await run_evals_persist_before_decide(
             eval_defs=[eval_def],
             resolve_eval_target=lambda ed: eval_out,
+            resolve_llm_judge=lambda _ed: None,
             run_id=run_id,
             org_id=org_id,
             session_factory=_factory,
