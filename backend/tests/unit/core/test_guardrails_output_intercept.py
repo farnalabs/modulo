@@ -25,6 +25,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
+import modulo.core.guardrails.redaction_mode as redaction_mode
 import modulo.core.pipeline_engine.executor as executor_mod
 from modulo.core.eval_engine import (
     EvalDefinition,
@@ -52,13 +53,17 @@ from modulo.core.guardrails.output_intercept import (
     exclude_output_interception_definitions,
     filter_output_interception_definitions,
     is_output_interception,
+    read_output_interception_flags,
+    run_output_interception_async,
 )
 from modulo.core.guardrails.redaction_mode import (
     DESTROY_TOKEN_PREFIX,
     GuardrailRedactionMechanismError,
     destroy_candidates,
     destroy_token,
+    resolve_guardrail_destroy_pepper,
 )
+from modulo.core.pipeline_engine.eval_persist_order import run_evals_persist_before_decide
 
 _ORG_ID = uuid.uuid4()
 
@@ -777,3 +782,287 @@ async def test_run_output_guardrails_mechanism_error_names_node_output_seam():
         )
     assert excinfo.value.detail == "guardrail mechanism error at node-output edge"
     assert "ingestion edge" not in excinfo.value.detail
+
+
+# ---------------------------------------------------------------------------
+# Pepper resolution + destroy candidate error handling (redaction_mode)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_guardrail_destroy_pepper_explicit_argument_wins():
+    """An explicit non-empty pepper short-circuits the settings read."""
+    assert resolve_guardrail_destroy_pepper("explicit-pepper") == "explicit-pepper"
+
+
+def test_resolve_guardrail_destroy_pepper_falls_back_to_settings(monkeypatch: pytest.MonkeyPatch):
+    """No explicit argument → the lazily-loaded settings value is used."""
+    settings = unittest.mock.MagicMock()
+    settings.guardrail_destroy_pepper = "settings-pepper"
+    monkeypatch.setattr(redaction_mode, "get_settings", lambda: settings)
+    assert resolve_guardrail_destroy_pepper() == "settings-pepper"
+
+
+def test_destroy_candidates_unusable_pattern_fails_closed():
+    """An invalid regex in a destroy policy's candidate pattern raises the
+    mechanism error — the seam then fails closed, never a silent no-act."""
+    with pytest.raises(GuardrailRedactionMechanismError):
+        destroy_candidates("value", "(")
+
+
+def test_destroy_redaction_duplicate_candidate_is_replaced_once():
+    """Repeated candidates (same match text) are destroyed once and the
+    duplicate is skipped — the per-candidate loop never re-replaces."""
+    payload = {"body": "SECRET_ABC12345 SECRET_ABC12345"}
+    with unittest.mock.patch(
+        "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+        return_value="pepper",
+    ):
+        redacted, entries = apply_redaction_masks(
+            payload,
+            [{"path": "body", "mode": "destroy"}],
+            raise_on_block=True,
+            guardrail_name="gr",
+            detection_pattern=r"SECRET_[A-Z0-9]{8}",
+        )
+    body = redacted["body"]
+    assert "SECRET_ABC12345" not in body
+    assert body.count(DESTROY_TOKEN_PREFIX) == 2
+    assert len(entries) == 1
+
+
+# ---------------------------------------------------------------------------
+# Output seam flags + kill-switch downgrade (output_intercept)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_output_interception_flags_no_row_defaults_enforcement():
+    """A flags read that returns NO row (run/org not found) defaults to
+    ``(False, False)`` — enforcement stays active, never a silent downgrade."""
+    factory = _flags_session_factory(None)
+    replay, kill = await read_output_interception_flags(factory, run_id=uuid.uuid4(), org_id=_ORG_ID)
+    assert (replay, kill) == (False, False)
+
+
+async def test_output_kill_switch_downgrades_pass_to_detection_only():
+    """Kill switch ON → the pass is detection-only and never acts, so a
+    would-block envelope passes through untouched."""
+    envelope = {"body": "SECRET_ABC12345"}
+    outcome = await run_output_interception_async(
+        [_block_output_guardrail()],
+        envelope,
+        session_factory=_flags_session_factory((False, True)),
+        run_id=uuid.uuid4(),
+        org_id=_ORG_ID,
+    )
+    assert outcome.blocked is False
+    assert outcome.payload == envelope
+
+
+# ---------------------------------------------------------------------------
+# Authoring: unknown interception_point fails closed (eval_definition_write)
+# ---------------------------------------------------------------------------
+
+
+async def test_create_or_update_eval_rejects_unknown_interception_point():
+    """A value outside the input|output vocabulary is a 422 at authoring —
+    never a silently-unenforced guardrail."""
+    session = _RecordingSession()
+    with pytest.raises(HTTPException) as excinfo:
+        await create_or_update_eval(
+            session,
+            org_id=_ORG_ID,
+            account_id=uuid.uuid4(),
+            pipeline_id=uuid.uuid4(),
+            node_id=uuid.uuid4(),
+            name="gr-bogus-point",
+            eval_type="guardrail",
+            config_json={"action": "block", "interception_point": "midstream", "type": "regex"},
+            failure_behaviour="warn",
+            pass_threshold=None,
+            suite_id=None,
+        )
+    assert excinfo.value.status_code == 422
+    assert "interception_point" in str(excinfo.value.detail)
+    assert not session.added
+
+
+# ---------------------------------------------------------------------------
+# Eval persist loop: a guardrail-typed straggler is skipped (eval_persist_order)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_evals_persist_before_decide_skips_guardrail_typed_def():
+    """A guardrail-typed def reaching the shared eval loop is skipped loudly —
+    it is interception-owned; the eval engine would crash on it. The sibling
+    non-guardrail eval in the same batch is still computed."""
+    normal = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="eval-ok",
+        eval_type=EvalType.REGEX,
+        config={"type": "regex", "pattern": "x", "field": "body"},
+        failure_behaviour="warn",
+    )
+    results = await run_evals_persist_before_decide(
+        eval_defs=[_guardrail(name="gr-straggler"), normal],
+        resolve_eval_target=lambda _d: {"body": "x"},
+        resolve_llm_judge=lambda _d: None,
+        node_id="n1",
+    )
+    assert set(results) == {"eval-ok"}
+
+
+def test_validate_config_set_rejects_json_schema_without_schema_dict():
+    """A ``json_schema`` detection with no schema dict fails the cross-field
+    check at propose time (the DTO allows the omission; validation catches it)."""
+    item = GuardrailConfigItem.model_validate(
+        {
+            "id": "gr-no-schema",
+            "name": "gr",
+            "detection": {"type": "json_schema"},
+        }
+    )
+    config_set = GuardrailConfigSet.model_validate({"version": 1, "guardrails": [item.model_dump()]})
+    with pytest.raises(GuardrailConfigError, match="schema"):
+        validate_config_set(config_set)
+
+
+def test_validate_config_set_rejects_whitespace_only_redaction_path():
+    """A redaction path that is only whitespace passes the DTO's min_length but
+    is empty after strip — validated out at propose time."""
+    item = GuardrailConfigItem.model_validate(
+        {
+            "id": "gr-blank-path",
+            "name": "gr",
+            "detection": {"type": "regex", "pattern": "x", "field": "body"},
+            "action": "redact",
+            "redaction": [{"path": " ", "mode": "drop"}],
+        }
+    )
+    config_set = GuardrailConfigSet.model_validate({"version": 1, "guardrails": [item.model_dump()]})
+    with pytest.raises(GuardrailConfigError, match="empty redaction path"):
+        validate_config_set(config_set)
+
+
+# ---------------------------------------------------------------------------
+# Executor node-output seam: no-org, destroy mechanism, fail-open, split arms
+# ---------------------------------------------------------------------------
+
+
+async def test_run_output_guardrails_without_org_returns_envelope_untouched():
+    """No org context → the seam cannot read or persist, so it returns the
+    envelope untouched (nothing to attribute the interception to)."""
+    executor = _output_executor(_flags_session_factory())
+    envelope = {"body": "SECRET_ABC12345"}
+    result = await executor._run_output_guardrails(
+        node_id="n1",
+        envelope=envelope,
+        guardrail_defs=[_block_output_guardrail()],
+        run_id=uuid.uuid4(),
+        org_id=None,
+    )
+    assert result == envelope
+
+
+async def test_run_output_guardrails_destroy_mechanism_error_blocks():
+    """A destroy policy with no pepper fails closed through the seam: the
+    mechanism error becomes a terminal GuardrailBlockedError."""
+    destroy_def = _guardrail(
+        name="gr-destroy",
+        action="redact",
+        detection={"type": "regex", "pattern": r"SECRET_[A-Z0-9]{8}", "field": "body"},
+        redaction=[{"path": "body", "mode": "destroy"}],
+        interception_point="output",
+    )
+    executor = _output_executor(_flags_session_factory())
+    with (
+        unittest.mock.patch(
+            "modulo.core.guardrails.resolve_guardrail_destroy_pepper",
+            return_value="",
+        ),
+        pytest.raises(GuardrailBlockedError) as excinfo,
+    ):
+        await executor._run_output_guardrails(
+            node_id="n1",
+            envelope={"body": "SECRET_ABC12345"},
+            guardrail_defs=[destroy_def],
+            run_id=uuid.uuid4(),
+            org_id=_ORG_ID,
+        )
+    assert "destroy redaction failed closed" in excinfo.value.detail
+
+
+async def test_run_output_guardrails_non_guarding_pass_failure_fails_open():
+    """An unexpected pass failure with ONLY observe/warn guardrails fails open
+    (log + pass through) — there is no guarding action to fail closed for."""
+    observe_def = _guardrail(name="gr-observe", action="observe", interception_point="output")
+    executor = _output_executor(_raising_flags_session_factory(RuntimeError("flags read exploded")))
+    envelope = {"body": "harmless"}
+    result = await executor._run_output_guardrails(
+        node_id="n1",
+        envelope=envelope,
+        guardrail_defs=[observe_def],
+        run_id=uuid.uuid4(),
+        org_id=_ORG_ID,
+    )
+    assert result == envelope
+
+
+async def test_chain_end_without_output_guardrail_runs_eval_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A node bound to no output-point guardrail skips the interception seam
+    and still runs its non-guardrail evals through the eval path."""
+    non_guardrail = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="eval-check",
+        eval_type=EvalType.REGEX,
+        config={"type": "regex"},
+        failure_behaviour="warn",
+    )
+    harness = _RecordingHarness()
+    ctx = _stream_ctx([non_guardrail])
+    ctx.completed_node_outputs = {"n1": {"body": "x"}}
+    harness._wire(monkeypatch, ctx)
+    state = executor_mod._StreamState()
+
+    await harness.executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=_event("n1"))
+
+    assert harness.guard_calls == []
+    assert len(harness.post_eval_calls) == 1
+    assert [d.name for d in harness.post_eval_calls[0]] == ["eval-check"]
+
+
+async def test_chain_end_redaction_without_completed_outputs_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``completed_node_outputs`` is absent (None) the redacted envelope
+    is still returned — the write-back is skipped, never a crash."""
+    envelope = {"body": "plain text"}
+    redacted_envelope = {"body": "redacted"}
+    output_def = _guardrail(name="gr-out", action="block", interception_point="output")
+
+    async def _guard(**kwargs: Any) -> dict[str, Any]:
+        return redacted_envelope
+
+    harness = _RecordingHarness()
+    monkeypatch.setattr(harness.executor, "_run_output_guardrails", _guard)
+    ctx = _stream_ctx([output_def])
+    ctx.completed_node_outputs = None
+    monkeypatch.setattr(
+        executor_mod,
+        "_record_chain_end_output",
+        unittest.mock.MagicMock(return_value=envelope),
+    )
+    monkeypatch.setattr(
+        executor_mod,
+        "_record_node_markers",
+        unittest.mock.MagicMock(return_value=(None, None, None)),
+    )
+    state = executor_mod._StreamState()
+
+    await harness.executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=_event("n1"))
+
+    # No crash: the write-back was simply skipped.
+    assert ctx.completed_node_outputs is None
