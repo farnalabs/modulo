@@ -35,9 +35,11 @@ index and dropping the sweep back to a full-table scan of ``runs`` every
 ``0294_eval_results_org_fk``, then
 ``0295_decision_record_event_identity``, then
 ``0296_benign_run_outcomes``, then
+``0297_autonomy_gating_s1``, then
 ``0298_accounts_kind``, then
 ``0299_accounts_service_identity``, then
-``0300_benign_facts_repair`` as the single linear head) and the
+``0300_benign_facts_repair``, then
+``0301_oauth_consent_state_preauth_rls`` as the single linear head) and the
 ``ORDER BY id`` / ``LIMIT 200`` access shape
 the ``(id)`` key is chosen to serve.
 
@@ -64,7 +66,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0278_runs_workspace_drift_sweep_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0277_run_daily_facts_trigger_dispatch_phase"
-_CHAIN_HEAD_MIGRATION = "0300_benign_facts_repair"
+_CHAIN_HEAD_MIGRATION = "0301_oauth_consent_state_preauth_rls"
 _INDEX_NAME = "ix_runs_workspace_drift_sweep"
 _KEY_COLUMNS = ("id",)
 

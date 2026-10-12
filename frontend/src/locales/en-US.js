@@ -64,6 +64,13 @@ export default {
       "approve": "Approve",
       "approving": "Approving...",
       "approved_redirecting": "Approved — redirecting to the application...",
+      "team_limited": "This connection is limited to team {name}.",
+      "loading_request": "Loading request details...",
+      "context_load_error": "Could not load this authorization request. It may have expired — return to the application and try again.",
+      "no_scopes_selected": "Select at least one permission to approve, or decline the request.",
+      "decline": "Decline",
+      "declined_title": "Request declined",
+      "declined_description": "You declined this authorization request. You can close this window and return to the application."
     },
     "LibraryView": {
       "title": "Library",
