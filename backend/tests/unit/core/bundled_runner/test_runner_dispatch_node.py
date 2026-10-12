@@ -1550,3 +1550,31 @@ async def test_teardown_one_resource_unbounded_when_timeout_omitted() -> None:
     release.set()
     await asyncio.wait_for(task, timeout=10)
     assert completed.is_set(), "an unbounded step must run to completion once its resource finishes"
+
+
+# ``_teardown_and_clear`` - the loop-intercept bridge-server arm. Pre-split this
+# was an inline ``wait_for(shield(bridge_server.close()), ...)``; the S3776
+# split routes it through the shared guard. This test pins the arm so the
+# added ``_teardown_one_resource`` call site stays covered.
+
+
+async def test_teardown_and_clear_closes_the_loop_intercept_bridge_server() -> None:
+    """A ``_loop_intercept_bridge_server`` parked on ``state`` is closed during
+    teardown — behaviour parity with the pre-split inline
+    ``await asyncio.wait_for(asyncio.shield(bridge_server.close()), ...)``."""
+    closed = asyncio.Event()
+
+    class _BridgeServer:
+        async def close(self) -> None:
+            closed.set()
+
+    await runner_dispatch._teardown_and_clear(
+        route=RunnerDispatchRoute(provider_type="none"),
+        session_factory=None,
+        state={"_loop_intercept_bridge_server": _BridgeServer()},
+        run_id="run-1",
+        org_id="org-1",
+        _attempt_key=None,
+        dispatch_marker_set=False,
+    )
+    assert closed.is_set(), "the loop-intercept bridge server must be closed during teardown"
