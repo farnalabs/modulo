@@ -185,15 +185,22 @@ def build_desired_views(
     return desired, blocked
 
 
-def apply_triggers(
+def _apply_one_trigger(
     executor: ApplyExecutor,
-    entities: dict[str, list[tuple[str, Any]]],
-    current_entities: dict[str, dict[str, dict[str, Any]]],
-    report: dict[str, list[dict[str, Any]]],
+    entity: TriggerEntity,
+    status: str,
+    *,
+    entry_name: str,
+    declared_pipelines: set[str],
+    current_triggers: dict[str, dict[str, Any]],
     pipeline_ids: dict[str, str],
-    resolved_trigger_configs: dict[str, dict[str, Any]],
+    resolved_configs: dict[str, dict[str, Any]],
 ) -> None:
-    """Create/update triggers per the plan report, capturing failures.
+    """Create or update ONE trigger.
+
+    Raises ApplyHttpError / httpx.HTTPError / KeyError / ValueError on
+    failure — the caller isolates each trigger in its own try/except so one
+    bad trigger never aborts the run.
 
     Create: POST /pipelines/{pipeline_id}/triggers (TriggerCreate). Update:
     PUT /triggers/{trigger_id} (TriggerUpdate). Server-side ongoing-config
@@ -205,42 +212,81 @@ def apply_triggers(
     "not found - declare it in this config" text was misleading (the pipeline
     IS declared; its apply failed).
     """
+    pipeline_id = pipeline_ids.get(entity.pipeline)
+    if pipeline_id is None:
+        if entity.pipeline in declared_pipelines:
+            msg = f"pipeline {entity.pipeline!r} apply failed upstream - see the pipeline's failed entry"
+        else:
+            msg = (
+                f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
+                "earlier document) or apply the pipeline first"
+            )
+        raise KeyError(msg)
+    resolved_config = resolved_configs.get(entry_name)
+    if resolved_config is None:
+        resolved_config, failure = _resolve_config_json(entity.config_json, dict(os.environ))
+        if failure is not None:
+            raise ValueError(failure)
+    if status == "created":
+        executor._post(f"/pipelines/{pipeline_id}/triggers", entity.create_payload(resolved_config))
+    else:
+        trigger_row = current_triggers[entry_name]
+        executor._put(f"/triggers/{trigger_row['id']}", entity.update_payload(resolved_config))
+
+
+def _record_trigger_failure(
+    report: dict[str, list[dict[str, Any]]],
+    status: str,
+    entry: dict[str, Any],
+    entity: TriggerEntity | None,
+    exc: Exception,
+) -> None:
+    """Move a failed trigger entry to ``report['failed']`` (isolated per trigger)."""
+    message = _failure_message(exc)
+    displayed_name = entity.display_key() if entity else entry["name"]
+    _log.warning("apply trigger failed: %s: %s", displayed_name, message)
+    report[status].remove(entry)
+    report["failed"].append({"kind": KIND_TRIGGER, "name": entry["name"], "error": message})
+
+
+def apply_triggers(
+    executor: ApplyExecutor,
+    entities: dict[str, list[tuple[str, Any]]],
+    current_entities: dict[str, dict[str, dict[str, Any]]],
+    report: dict[str, list[dict[str, Any]]],
+    pipeline_ids: dict[str, str],
+    resolved_trigger_configs: dict[str, dict[str, Any]],
+) -> None:
+    """Create/update triggers per the plan report, capturing failures.
+
+    Per-trigger semantics (create POST / update PUT payload, client-side
+    env-ref resolution of the config, the upstream-pipeline failure reason)
+    live in :func:`_apply_one_trigger`; failure accumulation lives in
+    :func:`_record_trigger_failure`. This orchestrator owns the two status
+    lanes (created/updated) and per-trigger failure isolation.
+    """
     declared_pipelines = {name for name, _entity in entities[KIND_PIPELINE]}
+    current_triggers = current_entities.get(KIND_TRIGGER) or {}
     for status in ("created", "updated"):
         for entry in list(report[status]):
             if entry["kind"] != KIND_TRIGGER:
                 continue
-            entity = None
+            entity: TriggerEntity | None = None
             try:
                 entity = _find(entities[KIND_TRIGGER], entry["name"])
                 assert isinstance(entity, TriggerEntity)
-                pipeline_id = pipeline_ids.get(entity.pipeline)
-                if pipeline_id is None:
-                    if entity.pipeline in declared_pipelines:
-                        msg = f"pipeline {entity.pipeline!r} apply failed upstream - see the pipeline's failed entry"
-                    else:
-                        msg = (
-                            f"pipeline {entity.pipeline!r} not found - declare it in this config (same or an "
-                            "earlier document) or apply the pipeline first"
-                        )
-                    raise KeyError(msg)
-                resolved_config = resolved_trigger_configs.get(entry["name"])
-                if resolved_config is None:
-                    resolved_config, failure = _resolve_config_json(entity.config_json, dict(os.environ))
-                    if failure is not None:
-                        raise ValueError(failure)
-                if status == "created":
-                    executor._post(f"/pipelines/{pipeline_id}/triggers", entity.create_payload(resolved_config))
-                else:
-                    current = current_entities.get(KIND_TRIGGER) or {}
-                    trigger_row = current[entry["name"]]
-                    executor._put(f"/triggers/{trigger_row['id']}", entity.update_payload(resolved_config))
+                _apply_one_trigger(
+                    executor,
+                    entity,
+                    status,
+                    entry_name=entry["name"],
+                    declared_pipelines=declared_pipelines,
+                    current_triggers=current_triggers,
+                    pipeline_ids=pipeline_ids,
+                    resolved_configs=resolved_trigger_configs,
+                )
             except (ApplyHttpError, httpx.HTTPError, KeyError, ValueError) as exc:
-                message = _failure_message(exc)
-                displayed_name = entity.display_key() if entity else entry["name"]
-                _log.warning("apply trigger failed: %s: %s", displayed_name, message)
-                report[status].remove(entry)
-                report["failed"].append({"kind": KIND_TRIGGER, "name": entry["name"], "error": message})
+                _record_trigger_failure(report, status, entry, entity, exc)
 
 
 __all__ = [

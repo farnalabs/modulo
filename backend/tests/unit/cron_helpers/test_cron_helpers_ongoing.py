@@ -25,17 +25,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core import cron_helpers as ch
+from tests.unit.cron_helpers._helpers import _Begin, _mock_result, _patch_env, _settings
 
 ORG = uuid.uuid4()
 TRIGGER_ID = uuid.uuid4()
 PIPELINE_ID = uuid.uuid4()
-
-
-def _mock_result(**kwargs: Any) -> MagicMock:
-    result = MagicMock()
-    for name, value in kwargs.items():
-        getattr(result, name).return_value = value
-    return result
 
 
 def _make_trigger(**overrides: Any) -> MagicMock:
@@ -59,14 +53,6 @@ def _make_trigger(**overrides: Any) -> MagicMock:
     for key, value in defaults.items():
         setattr(trigger, key, value)
     return trigger
-
-
-class _Begin:
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
 
 
 # Sentinel: resolve the snapshot from the trigger's pinned config_json. Passing
@@ -148,23 +134,6 @@ class _RoutedSession:
         if "total_cost_usd" in s or "coalesce" in s:
             return _mock_result(scalar_one=self._today_cost)
         return MagicMock()
-
-
-def _settings(**overrides: object) -> MagicMock:
-    base: dict[str, object] = {
-        "saq_runs_queue": "runs",
-        "redis_url": "redis://localhost:6379/0",
-        "saq_redis_pool_size": 5,
-        "fernet_key": "b" * 44,
-    }
-    base.update(overrides)
-    return MagicMock(**base)
-
-
-def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-    monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "b" * 44)
 
 
 def _make_run() -> MagicMock:

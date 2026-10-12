@@ -201,6 +201,105 @@ async def list_backends_referencing_fallback(
     return referencing
 
 
+def _parse_agent_ids(nodes: list[dict[str, Any]] | None) -> list[uuid.UUID]:
+    """Extract well-formed agent UUIDs from a pipeline's graph nodes.
+
+    Malformed ``agent_id`` values (non-UUID strings, wrong types) are
+    skipped so legacy graph data cannot break the reference scan.
+    """
+    agent_ids: list[uuid.UUID] = []
+    for node in nodes or []:
+        agent_id_raw = node.get("agent_id")
+        if not agent_id_raw:
+            continue
+        try:
+            agent_ids.append(uuid.UUID(str(agent_id_raw)))
+        except (ValueError, TypeError):
+            continue
+    return agent_ids
+
+
+def _collect_agent_ids_by_pipeline(
+    all_pipelines: list[Pipeline],
+) -> tuple[set[uuid.UUID], dict[uuid.UUID, list[uuid.UUID]]]:
+    """Scan 1: index each pipeline's agent ids plus the union for batch lookup."""
+    all_agent_ids: set[uuid.UUID] = set()
+    pipeline_agent_map: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for pipeline in all_pipelines:
+        agent_ids = _parse_agent_ids(pipeline.graph_nodes_json)
+        if agent_ids:
+            pipeline_agent_map[pipeline.id] = agent_ids
+            all_agent_ids.update(agent_ids)
+    return all_agent_ids, pipeline_agent_map
+
+
+async def _lookup_agent_names_for_backend(
+    session: AsyncSession,
+    *,
+    agent_ids: set[uuid.UUID],
+    backend_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> dict[uuid.UUID, str]:
+    """Batch-resolve which of ``agent_ids`` bind ``backend_id`` (org-scoped)."""
+    if not agent_ids:
+        return {}
+    agents_stmt = select(Agent).where(
+        Agent.id.in_(agent_ids),
+        Agent.model_backend_id == backend_id,
+        Agent.organisation_id == org_id,
+    )
+    return {agent.id: agent.name for agent in (await session.execute(agents_stmt)).scalars()}
+
+
+def _collect_direct_node_refs(pipeline: Pipeline, target: str) -> list[dict[str, Any]]:
+    """Refs for nodes whose ``model_backend_id`` matches ``target`` directly."""
+    refs: list[dict[str, Any]] = []
+    for node in pipeline.graph_nodes_json or []:
+        node_backend_raw = node.get("model_backend_id")
+        if node_backend_raw and str(node_backend_raw) == target:
+            refs.append(
+                {
+                    "pipeline_id": pipeline.id,
+                    "pipeline_name": pipeline.name,
+                    "agent_name": None,
+                    "agent_id": None,
+                    "reference_type": "direct_node",
+                }
+            )
+    return refs
+
+
+def _collect_refs_by_agent_ids(
+    pipeline: Pipeline,
+    agent_ids: list[uuid.UUID],
+    agent_backend_map: dict[uuid.UUID, str],
+    seen_agent_keys: set[tuple[uuid.UUID, uuid.UUID]],
+) -> list[dict[str, Any]]:
+    """Refs for the pipeline's nodes whose agent binds the target backend.
+
+    ``seen_agent_keys`` is mutated in place so a (pipeline, agent) pair is
+    reported at most once even when several nodes reference the same agent.
+    """
+    refs: list[dict[str, Any]] = []
+    for aid in agent_ids:
+        if aid not in agent_backend_map:
+            continue
+        dedup_key = (pipeline.id, aid)
+        if dedup_key in seen_agent_keys:
+            continue
+        seen_agent_keys.add(dedup_key)
+        refs.append(
+            {
+                "pipeline_id": pipeline.id,
+                "pipeline_name": pipeline.name,
+                "agent_name": agent_backend_map[aid],
+                "agent_id": aid,
+                "reference_type": "agent",
+            }
+        )
+    return refs
+
+
 async def list_pipeline_references_for_backend(
     session: AsyncSession,
     *,
@@ -224,69 +323,28 @@ async def list_pipeline_references_for_backend(
     )
     all_pipelines = list((await session.execute(pipelines_stmt)).scalars())
 
-    # Collect agent IDs for batch lookup
-    all_agent_ids: set[uuid.UUID] = set()
-    pipeline_agent_map: dict[uuid.UUID, list[uuid.UUID]] = {}
-    for pipeline in all_pipelines:
-        nodes = pipeline.graph_nodes_json or []
-        agent_ids: list[uuid.UUID] = []
-        for node in nodes:
-            agent_id_raw = node.get("agent_id")
-            if agent_id_raw:
-                try:
-                    agent_ids.append(uuid.UUID(str(agent_id_raw)))
-                except (ValueError, TypeError):
-                    continue
-        if agent_ids:
-            pipeline_agent_map[pipeline.id] = agent_ids
-            all_agent_ids.update(agent_ids)
+    # Scan 1: index agent ids for a single batched backend lookup.
+    all_agent_ids, pipeline_agent_map = _collect_agent_ids_by_pipeline(all_pipelines)
+    agent_backend_map = await _lookup_agent_names_for_backend(
+        session,
+        agent_ids=all_agent_ids,
+        backend_id=backend_id,
+        org_id=org_id,
+    )
 
-    # Batch query agents that reference the target backend
-    agent_backend_map: dict[uuid.UUID, str] = {}
-    if all_agent_ids:
-        agents_stmt = select(Agent).where(
-            Agent.id.in_(all_agent_ids),
-            Agent.model_backend_id == backend_id,
-            Agent.organisation_id == org_id,
-        )
-        for agent in (await session.execute(agents_stmt)).scalars():
-            agent_backend_map[agent.id] = agent.name
-
-    # Build results
+    # Scan 2: build refs per pipeline (direct node refs first, then agent refs).
     all_refs: list[dict[str, Any]] = []
     seen_agent_keys: set[tuple[uuid.UUID, uuid.UUID]] = set()
     for pipeline in all_pipelines:
-        nodes = pipeline.graph_nodes_json or []
-        for node in nodes:
-            # Direct node reference
-            node_backend_raw = node.get("model_backend_id")
-            if node_backend_raw and str(node_backend_raw) == target:
-                all_refs.append(
-                    {
-                        "pipeline_id": pipeline.id,
-                        "pipeline_name": pipeline.name,
-                        "agent_name": None,
-                        "agent_id": None,
-                        "reference_type": "direct_node",
-                    }
-                )
-        # Agent references
-        agent_ids = pipeline_agent_map.get(pipeline.id, [])
-        for aid in agent_ids:
-            if aid in agent_backend_map:
-                dedup_key = (pipeline.id, aid)
-                if dedup_key in seen_agent_keys:
-                    continue
-                seen_agent_keys.add(dedup_key)
-                all_refs.append(
-                    {
-                        "pipeline_id": pipeline.id,
-                        "pipeline_name": pipeline.name,
-                        "agent_name": agent_backend_map[aid],
-                        "agent_id": aid,
-                        "reference_type": "agent",
-                    }
-                )
+        all_refs.extend(_collect_direct_node_refs(pipeline, target))
+        all_refs.extend(
+            _collect_refs_by_agent_ids(
+                pipeline,
+                pipeline_agent_map.get(pipeline.id, []),
+                agent_backend_map,
+                seen_agent_keys,
+            )
+        )
 
     total = len(all_refs)
     start = (page - 1) * page_size
