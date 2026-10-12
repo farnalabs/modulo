@@ -133,10 +133,9 @@ class TestChain:
         # 0295_decision_record_event_identity, then
         # 0296_benign_run_outcomes, then 0297_autonomy_gating_s1, then
         # 0298_accounts_kind, then 0299_accounts_service_identity, then
-        # 0300_benign_facts_repair, then
-        # 0301_oauth_consent_state_preauth_rls now chain onto this migration, so the
-        # single head moved up another revision.
-        assert heads == ["0301_oauth_consent_state_preauth_rls"], f"expected a single head, got {heads}"
+        # 0300_benign_facts_repair, then 0301_runs_run_grouping, now chain
+        # onto this migration, so the single head moved up another revision.
+        assert heads == ["0301_runs_run_grouping"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

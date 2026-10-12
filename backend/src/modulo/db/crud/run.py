@@ -64,6 +64,8 @@ from modulo.db.models.run import (
     EXECUTION_ORIGIN_DISPATCHED,
     HITL_PARKED_STATUS,
     PIPELINE_CAPACITY_STATUSES,
+    RUN_GROUP_KIND_RESUME,
+    RUN_GROUP_KIND_VALUES,
     TERMINAL_STATUSES,
     Run,
 )
@@ -2013,7 +2015,57 @@ async def create_run(
     variant_config_snapshot: dict[str, Any] | None = None,
     feedback_correction: dict[str, Any] | None = None,
     coalesce_key: str | None = None,
+    # FAR-153 / §15.1 — run grouping (retry/resume attempts) + the
+    # resume-as-child thread override:
+    #
+    # * ``run_group_id``   — the ROOT run id of the group this row belongs
+    #   to (stored; NULL for roots / signal / correction / work-item
+    #   children / un-backfilled legacy rows). Required whenever
+    #   ``run_group_kind`` is set: a grouped attempt without its group id is
+    #   invisible to every group query.
+    # * ``run_group_kind`` — 'retry' | 'resume' | NULL, the closed
+    #   vocabulary in ``models.run.RUN_GROUP_KIND_VALUES``.
+    # * ``thread_id``      — langgraph thread OVERRIDE. The resume path
+    #   passes the parent's thread string so the child CONTINUES the
+    #   parent's checkpoint; every other path leaves it unset and gets the
+    #   default fresh ``f"{org}:{run_id}"`` thread (retry runs the graph
+    #   CLEAN on its own thread).
+    run_group_id: uuid.UUID | None = None,
+    run_group_kind: str | None = None,
+    thread_id: str | None = None,
 ) -> Run:
+    # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
+    # BEFORE any DB work (the ``run_idempotency_key`` fail-loud pattern):
+    # these are caller-contract violations, so a typo or a missing field must
+    # raise here rather than silently write a row the group queries and the
+    # two partial unique indexes cannot govern.
+    if run_group_kind is not None:
+        if run_group_kind not in RUN_GROUP_KIND_VALUES:
+            raise ValueError(
+                f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})"
+            )
+        if parent_run_id is None:
+            # Both kinds are CHILD rows per §15.1. Without a parent the
+            # exactly-one-resume partial unique (parent_run_id WHERE
+            # kind='resume') never indexes the row — NULL parents are
+            # distinct in a unique index — so a parentless resume would
+            # silently bypass the double-resume fence.
+            raise ValueError("run_group_kind requires parent_run_id — retry/resume rows are child rows (§15.1)")
+        if run_group_id is None:
+            raise ValueError(
+                f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)"
+            )
+        if run_group_kind == RUN_GROUP_KIND_RESUME and not thread_id:
+            # A resume that does not carry its parent's thread gets a fresh
+            # one and continues NOTHING — the silent failure mode the
+            # override kwarg exists to prevent.
+            raise ValueError(
+                "run_group_kind='resume' requires thread_id=<parent's thread> — "
+                "a resume child must continue its parent's checkpoint (§15.1)"
+            )
+    if thread_id is not None and not thread_id:
+        raise ValueError("thread_id override must be a non-empty string")
+
     # Soft-deleted-org guard — a run must never be created in an org whose
     # deletion flow has set status='deleted' (or in a hard-deleted org).
     await _ensure_org_not_deleted(session, org_id)
@@ -2097,7 +2149,11 @@ async def create_run(
 
     stored_payload = _inject_engine_payload_keys(stored_payload, feedback_correction, coalesce_key)
 
-    thread_id = f"{org_id}:{run_id}"
+    # FAR-153 / §15.1 — thread resolution: the resume path passes its
+    # parent's thread via the ``thread_id`` override so the child CONTINUES
+    # the parent's checkpoint; every other caller leaves the kwarg unset and
+    # gets the default fresh thread (a retry therefore runs its graph CLEAN).
+    resolved_thread_id = thread_id if thread_id is not None else f"{org_id}:{run_id}"
     # Per-org atomic counter (FAR-168) — never MAX(run_number)+1 on Postgres,
     # which races under concurrent trigger dispatches.
     run_number = await _allocate_run_number(session, org_id)
@@ -2187,8 +2243,10 @@ async def create_run(
         account_id=account_id,
         trigger_id=trigger_id,
         owner_team_id=owner_team_id,
-        langgraph_thread_id=thread_id,
+        langgraph_thread_id=resolved_thread_id,
         parent_run_id=parent_run_id,
+        run_group_id=run_group_id,
+        run_group_kind=run_group_kind,
         run_number=run_number,
         rate_limit_key=rate_limit_key,
         idempotency_key=idempotency_key,

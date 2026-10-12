@@ -18,7 +18,7 @@ Lenses:
   ``0298_accounts_kind`` chains onto ``0297_autonomy_gating_s1``, and
   ``0299_accounts_service_identity`` chains onto 0298_accounts_kind, and
   ``0300_benign_facts_repair`` chains onto 0299_accounts_service_identity, and
-  ``0301_oauth_consent_state_preauth_rls`` chains onto 0300_benign_facts_repair as the single
+  ``0301_runs_run_grouping`` chains onto 0300_benign_facts_repair as the single
   linear head; the revision id matches the filename, and neither
   branch_labels nor depends_on is set (the pre-commit check-migration-heads
   hook and every ``test_single_head_*`` pin depend on that shape).
@@ -51,7 +51,7 @@ from modulo.db.models.pipeline import Pipeline
 
 _MIGRATION_REVISION = "0289_pipelines_environment_profile"
 _MIGRATION_DOWN_REVISION = "0288_runs_execution_origin"
-_HEAD_MIGRATION = "0301_oauth_consent_state_preauth_rls"
+_HEAD_MIGRATION = "0301_runs_run_grouping"
 _TABLE = "pipelines"
 _COLUMN = "environment_profile_id"
 _FK_NAME = "fk_pipelines_environment_profile_id"
