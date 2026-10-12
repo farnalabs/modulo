@@ -10,10 +10,13 @@ import it.
 The module also owns the two bounds that keep one slow or hung judge from
 wedging a run:
 
-* :data:`BACKEND_INVOKE_TIMEOUT_SECONDS` bounds each ``backend.invoke``
-  request (``asyncio.wait_for``).  Cancelling the coroutine is what actually
-  frees the worker thread: an un-cancelled hung invoke would occupy the
-  ``max_workers=1`` bridge pool forever and fail-close every later judge call.
+* :data:`BACKEND_INVOKE_TIMEOUT_SECONDS` bounds the whole resolve+invoke
+  sequence - ``hub.get(backend_id)`` AND ``backend.invoke`` - under a single
+  ``asyncio.wait_for``.  Cancelling the coroutine is what actually frees the
+  worker thread: an un-cancelled hung resolve or invoke would occupy the
+  ``max_workers=1`` bridge pool forever, because a caller-side bridge timeout
+  gets ``future.cancel() is False`` on an already-running future, and
+  fail-close every later judge call until the process restarts.
 * :data:`SYNC_BRIDGE_TIMEOUT_SECONDS` bounds the caller-side wait in
   :func:`run_coroutine_sync` (``future.result(timeout=...)``) as a backstop
   for a coroutine that does not honour cancellation.
@@ -49,11 +52,12 @@ __all__ = [
     "run_coroutine_sync",
 ]
 
-# Per-request bound on ``backend.invoke``.  A judge verdict is a single short
-# completion, so 60s sits an order of magnitude above normal latency while
-# staying well under the default pipeline node timeout (300s) - a hung judge
-# fails closed INSIDE the node's own budget instead of tripping the node
-# watchdog.  Read as a module global at call time so tests can monkeypatch it.
+# Per-request bound on the whole ``hub.get`` + ``backend.invoke`` sequence.  A
+# judge verdict is a single short completion, so 60s sits an order of magnitude
+# above normal latency while staying well under the default pipeline node
+# timeout (300s) - a hung judge fails closed INSIDE the node's own budget
+# instead of tripping the node watchdog.  Read as a module global at call time
+# so tests can monkeypatch it.
 BACKEND_INVOKE_TIMEOUT_SECONDS = 60.0
 
 # Caller-side bound on the sync-to-async bridge wait.  The 15s margin over
@@ -80,13 +84,25 @@ async def invoke_backend(
 ) -> Any:
     """Resolve a backend from the hub and invoke it asynchronously.
 
-    The invoke is bounded by :data:`BACKEND_INVOKE_TIMEOUT_SECONDS`: a hung
-    provider call is cancelled (freeing the bridge worker thread) and the
+    The WHOLE sequence - ``hub.get`` resolve then ``backend.invoke`` - sits
+    under one :data:`BACKEND_INVOKE_TIMEOUT_SECONDS` ``asyncio.wait_for``
+    (FAR-1652).  Bounding only the invoke left ``hub.get`` outside the bound:
+    a hung resolve (e.g. a stalled failover-event emit) kept the coroutine
+    running, so the caller-side bridge timeout's ``future.cancel()`` returned
+    ``False`` and the ``max_workers=1`` bridge thread was never freed - every
+    later judge call then blocked for the full bridge bound and failed closed
+    until a process restart.
+
+    Either hang is cancelled (freeing the bridge worker thread) and the
     resulting ``TimeoutError`` propagates to the caller.
     """
-    backend = await hub.get(backend_id)
+
+    async def _resolve_and_invoke() -> Any:
+        backend = await hub.get(backend_id)
+        return await backend.invoke(messages)
+
     return await asyncio.wait_for(
-        backend.invoke(messages),
+        _resolve_and_invoke(),
         timeout=BACKEND_INVOKE_TIMEOUT_SECONDS,
     )
 

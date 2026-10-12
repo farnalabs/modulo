@@ -205,8 +205,26 @@ class _HangingHub:
         return self._backend
 
 
+class _HungResolveHub:
+    """Fake ModelBackendHub whose ``get`` itself never answers (FAR-1652).
+
+    Reproduces the failover-event-emit stall: the hang is in the RESOLVE, not
+    in ``backend.invoke``, so it sits outside an invoke-only bound.
+
+    The sleep is 30s - comfortably past the 0.2s resolve bound and the 2s
+    bridge backstop used by these tests (so the coroutine is genuinely still
+    running when the caller-side bridge timeout would fire), but short enough
+    that a no-fix regression run's stuck ``max_workers=1`` bridge thread drains
+    on its own instead of wedging interpreter exit for an hour.
+    """
+
+    async def get(self, backend_id: uuid.UUID, **kwargs: Any) -> _FakeBackend:
+        await asyncio.sleep(30)
+        return _FakeBackend(_judge_payload(0.9))
+
+
 def _shrink_timeout_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep these tests fast: 0.2s invoke bound, 2s bridge backstop."""
+    """Keep these tests fast: 0.2s resolve+invoke bound, 2s bridge backstop."""
     monkeypatch.setattr(llm_judge, "BACKEND_INVOKE_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(llm_judge, "SYNC_BRIDGE_TIMEOUT_SECONDS", 2.0)
 
@@ -259,6 +277,53 @@ def test_hung_judge_releases_the_bridge_for_the_next_call(monkeypatch: pytest.Mo
     second = healthy_judge({"content": "some agent output"}, eval_def)
 
     assert first["passed"] is False
+    assert second["passed"] is True
+    assert second["score"] == pytest.approx(0.9)
+
+
+def test_hung_hub_get_is_bounded_and_releases_the_bridge_for_the_next_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung ``hub.get`` RESOLVE is bounded too, and frees the bridge thread.
+
+    ``invoke_backend`` used to bound only ``backend.invoke`` with
+    ``asyncio.wait_for`` and left ``await hub.get(backend_id)`` outside it.  A
+    hung resolve (e.g. a stalled failover-event emit) therefore kept the
+    coroutine running: the caller-side bridge timeout fired, but
+    ``future.cancel()`` returns ``False`` on an already-running future, so the
+    ``max_workers=1`` ``_JUDGE_EXECUTOR`` thread was never released and every
+    subsequent judge call blocked for the full bridge bound and failed closed
+    until a process restart.
+
+    Discriminating: without the bound on ``hub.get`` the FIRST call still looks
+    fine (the bridge backstop fail-closes it), but the second - healthy - judge
+    call cannot get the single bridge thread and fails closed too, so
+    ``second["passed"] is True`` fails.
+    """
+    _shrink_timeout_bounds(monkeypatch)
+    eval_def = _make_eval_def(
+        "judge-quality",
+        config={"field": "content", "model_backend_id": str(uuid.uuid4())},
+    )
+    hung_resolve_judge = llm_judge.build_llm_judge_callable(
+        _HungResolveHub(),
+        str(uuid.uuid4()),
+    )
+    healthy_judge = llm_judge.build_llm_judge_callable(
+        _FakeHub(_judge_payload(0.9)),
+        str(uuid.uuid4()),
+    )
+
+    first = hung_resolve_judge({"content": "some agent output"}, eval_def)
+    second = healthy_judge({"content": "some agent output"}, eval_def)
+
+    # Fail closed with the standard timeout detail (an unjudged output must
+    # not pass a gate).
+    assert first["passed"] is False
+    assert first["score"] == 0.0
+    assert "timed out" in first["detail"]
+    # The bridge's single worker thread was released, so this healthy call
+    # actually reached its backend instead of queueing behind the hang.
     assert second["passed"] is True
     assert second["score"] == pytest.approx(0.9)
 
