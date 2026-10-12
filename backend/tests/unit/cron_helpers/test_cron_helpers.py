@@ -35,7 +35,6 @@ from tests.unit.cron_helpers._helpers import (
 from tests.unit.cron_helpers._helpers import (
     _mock_result,
     _org_result,
-    _patch_env,
     _rows_result,
     _settings,
 )
@@ -224,13 +223,12 @@ def _fetchone_execute(session: Any, row: Any) -> None:
 
 @contextmanager
 def _tick_scope(
-    monkeypatch: pytest.MonkeyPatch,
     results: list[MagicMock] | None = None,
     *,
     redis: bool = True,
 ) -> Iterator[tuple[MagicMock, AsyncMock]]:
     """Shared driver scope for the ``fire_due_triggers`` / ``fire_cron_trigger``
-    tick tests: patches the environment (``_patch_env``), the DB session
+    tick tests: patches the DB session
     factory (a ``_MockSession`` replaying *results*), and — for the
     scheduler-level driver — the settings + Redis plumbing the tick builds,
     yielding ``(session, redis_client)``. Site-specific patches (advance
@@ -242,7 +240,6 @@ def _tick_scope(
     ``get_settings``/``AsyncRedis``/``RedisQueue`` are left for the test to
     patch (they mostly patch the org gates directly instead).
     """
-    _patch_env(monkeypatch)
     session = _MockSession(list(results or []))
     factory = MagicMock(return_value=session)
     redis_client = AsyncMock()
@@ -263,10 +260,9 @@ def _tick_scope(
 
 class TestFireDueTriggers:
     @pytest.mark.asyncio
-    async def test_enqueues_once_per_type_for_returned_rows_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_enqueues_once_per_type_for_returned_rows_only(self) -> None:
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -302,13 +298,12 @@ class TestFireDueTriggers:
         redis_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_soft_deleted_triggers_excluded_from_scans(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_soft_deleted_triggers_excluded_from_scans(self) -> None:
         """FAR-166: the cron/polling/catch-up scan SELECTs must filter
         ``Trigger.deleted_at IS NULL`` — a soft-deleted trigger (deleted_at set,
         active still True) must never be selected for firing."""
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -334,10 +329,9 @@ class TestFireDueTriggers:
             assert "deleted_at IS NULL" in str(stmt), f"scan missing deleted_at filter: {stmt}"
 
     @pytest.mark.asyncio
-    async def test_second_machine_epoch_skipped_when_already_advanced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_second_machine_epoch_skipped_when_already_advanced(self) -> None:
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -357,10 +351,9 @@ class TestFireDueTriggers:
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_enqueue_failure_ingests_error_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_enqueue_failure_ingests_error_event(self) -> None:
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -383,12 +376,11 @@ class TestFireDueTriggers:
         assert kwargs["context"]["trigger_type"] == "cron"
 
     @pytest.mark.asyncio
-    async def test_cron_advance_passes_row_cron_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cron_advance_passes_row_cron_timezone(self) -> None:
         """Fix 2 review: fire_due_triggers must fetch cron_timezone from the
         SELECT and pass it through to the atomic advance."""
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -408,7 +400,7 @@ class TestFireDueTriggers:
         assert adv_cron.await_args.args[3] == "America/New_York"
 
     @pytest.mark.asyncio
-    async def test_malformed_poll_interval_seconds_defaults_to_60(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_malformed_poll_interval_seconds_defaults_to_60(self) -> None:
         """A malformed ``poll_interval_seconds`` must not kill the global tick.
 
         Regression test for the ``int()`` guard: a non-numeric value used to
@@ -418,7 +410,6 @@ class TestFireDueTriggers:
         """
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -444,13 +435,12 @@ class TestFireDueTriggers:
 
     @pytest.mark.asyncio
     async def test_paused_org_skips_cron_and_polling_enqueue_with_advance(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """SKIP-not-defer: paused org -> next_fire_at still advanced, fire jobs
         NOT enqueued, skip counters incremented, scheduled reports still enqueued."""
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG, paused=True),
@@ -483,11 +473,10 @@ class TestFireDueTriggers:
         assert enqueue.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_pause_read_programming_error_degrades_to_not_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pause_read_programming_error_degrades_to_not_paused(self) -> None:
         """Pre-migration DB (no triggers_paused column): ProgrammingError on the
         batched pause read -> pause_read='degraded', all orgs treated as
         not-paused (legacy behaviour preserved)."""
-        _patch_env(monkeypatch)
         session = _MockSession(
             [
                 _org_result([ORG]),
@@ -524,11 +513,10 @@ class TestFireDueTriggers:
         assert enqueue.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_pause_read_sqlalchemy_error_reraises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pause_read_sqlalchemy_error_reraises(self) -> None:
         """Other DB error (connection down) on the pause read -> RE-RAISE so the
         tick fails and the SAQ system cron retries. Never fabricate 'paused'
         for every org on a DB blip."""
-        _patch_env(monkeypatch)
         session = _MockSession(
             [
                 _org_result([ORG]),
@@ -563,10 +551,9 @@ class TestFireDueTriggers:
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_orgs_returns_empty_summary_without_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_no_orgs_returns_empty_summary_without_redis(self) -> None:
         """Empty-org environment: no Redis client is ever created and the
         summary is all-zero — the system cron ticks harmlessly."""
-        _patch_env(monkeypatch)
         session = _MockSession([_org_result([])])
         factory = MagicMock(return_value=session)
 
@@ -588,14 +575,13 @@ class TestFireDueTriggers:
         assert summary["report_due"] == 0
 
     @pytest.mark.asyncio
-    async def test_enqueue_failure_rolls_back_advance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_enqueue_failure_rolls_back_advance(self) -> None:
         """2026-08-10 incident (A): when the enqueue fails AFTER the atomic
         advance, the advance is rolled back to the trigger's previous
         ``next_fire_at`` (guarded) so the next tick re-selects the epoch."""
         old = datetime.now(UTC) - timedelta(hours=1)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -624,12 +610,11 @@ class TestFireDueTriggers:
 
     @pytest.mark.asyncio
     async def test_rollback_advance_is_guarded_and_noops_without_previous(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
     ) -> None:
         """2026-08-10 incident (E): the compensating rollback is a guarded
         UPDATE — it can never clobber a concurrent machine's newer advance,
         and with no previous value it is a no-op."""
-        _patch_env(monkeypatch)
         old = datetime.now(UTC) - timedelta(days=1)
         session = _MockSession([])
         await ch._rollback_cron_advance(
@@ -669,7 +654,7 @@ class TestFireDueTriggers:
         assert ch._cron_cadence_seconds("0 4 * * *", "invalid", now) is None
 
     @pytest.mark.asyncio
-    async def test_catchup_refires_consumed_epoch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_catchup_refires_consumed_epoch(self) -> None:
         """2026-08-10 incident (B): a cron trigger whose ``next_fire_at`` is
         already in the FUTURE (epoch consumed) but whose ``last_fired_at`` is
         older than cadence + grace is re-fired exactly once, and its
@@ -679,7 +664,6 @@ class TestFireDueTriggers:
         future = now_val + timedelta(hours=24)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -714,7 +698,7 @@ class TestFireDueTriggers:
         assert advance[0][1]["nf"] > now_val
 
     @pytest.mark.asyncio
-    async def test_catchup_skips_fresh_last_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_catchup_skips_fresh_last_fire(self) -> None:
         """2026-08-10 incident (C): a trigger whose last fire is fresh (normal
         state) is NEVER caught up — no double-fire of a healthy trigger."""
         now_val = datetime.now(UTC)
@@ -722,7 +706,6 @@ class TestFireDueTriggers:
         future = now_val + timedelta(hours=24)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -742,7 +725,7 @@ class TestFireDueTriggers:
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_catchup_skips_ancient_stale_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_catchup_skips_ancient_stale_trigger(self) -> None:
         """2026-08-10 incident (D): an ancient stale trigger (disabled for
         months, then re-enabled) is NOT caught up — the bounded window caps it."""
         now_val = datetime.now(UTC)
@@ -750,7 +733,6 @@ class TestFireDueTriggers:
         future = now_val + timedelta(hours=24)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -770,7 +752,7 @@ class TestFireDueTriggers:
         enqueue.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_catchup_skips_epoch_already_fired_this_tick(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_catchup_skips_epoch_already_fired_this_tick(self) -> None:
         """The catch-up scan must NOT re-fire an epoch the normal due-loop
         already advanced AND enqueued in the same tick (double-fire guard)."""
         now_val = datetime.now(UTC)
@@ -779,7 +761,6 @@ class TestFireDueTriggers:
         future = now_val + timedelta(hours=24)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -801,7 +782,7 @@ class TestFireDueTriggers:
         enqueue.assert_awaited_once()  # ONLY the normal fire, never the catch-up
 
     @pytest.mark.asyncio
-    async def test_catchup_skips_marked_epoch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_catchup_skips_marked_epoch(self) -> None:
         """A missed epoch already caught up (Redis marker present — fire job
         still pending) is NOT re-fired on a later tick."""
         now_val = datetime.now(UTC)
@@ -809,7 +790,6 @@ class TestFireDueTriggers:
         future = now_val + timedelta(hours=24)
         with (
             _tick_scope(
-                monkeypatch,
                 [
                     _org_result([ORG]),
                     _pause_result(ORG),
@@ -853,14 +833,14 @@ class TestFireReportTrigger:
         )
 
     @pytest.mark.asyncio
-    async def test_success_sets_last_sent_at_and_clears_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_success_sets_last_sent_at_and_clears_counter(self) -> None:
         report = self._default_report()
 
         async def _fake_generator(s, org, config):
             return {"rows": 1}
 
         with (
-            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+            _tick_scope([_trigger_result(report)], redis=True) as (
                 session,
                 redis_client,
             ),
@@ -894,14 +874,14 @@ class TestFireReportTrigger:
         assert abs((datetime.now(UTC) - stamped).total_seconds()) < 60
 
     @pytest.mark.asyncio
-    async def test_failure_backs_off_next_send_at_not_reenqueue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_failure_backs_off_next_send_at_not_reenqueue(self) -> None:
         report = self._default_report()
 
         async def _boom_generator(s, org, config):
             raise RuntimeError("delivery boom")
 
         with (
-            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+            _tick_scope([_trigger_result(report)], redis=True) as (
                 _session,
                 redis_client,
             ),
@@ -917,11 +897,11 @@ class TestFireReportTrigger:
         handle_failure.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_skips_when_report_inactive_or_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_report_inactive_or_missing(self) -> None:
         """A deactivated/deleted report is skipped silently — no failure counter,
         no backoff, no re-enqueue loop."""
         with (
-            _tick_scope(monkeypatch, [_trigger_result(None)], redis=True) as (
+            _tick_scope([_trigger_result(None)], redis=True) as (
                 _session,
                 redis_client,
             ),
@@ -935,13 +915,13 @@ class TestFireReportTrigger:
         redis_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_fails_when_no_generator_with_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fails_when_no_generator_with_backoff(self) -> None:
         """No generator registered for the report type -> back off next_send_at
         (never silently loop on a misconfigured report)."""
         report = self._default_report()
 
         with (
-            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+            _tick_scope([_trigger_result(report)], redis=True) as (
                 _session,
                 redis_client,
             ),
@@ -956,7 +936,7 @@ class TestFireReportTrigger:
         handle_failure.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_success_deactivates_one_time_report(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_success_deactivates_one_time_report(self) -> None:
         """A one_time report is deactivated after delivery — never re-fired by
         the scheduler (next_send_at also cleared)."""
         one_time = self._default_report(schedule_type="one_time")
@@ -965,7 +945,7 @@ class TestFireReportTrigger:
             return {"rows": 1}
 
         with (
-            _tick_scope(monkeypatch, [_trigger_result(one_time)], redis=True) as (
+            _tick_scope([_trigger_result(one_time)], redis=True) as (
                 session,
                 redis_client,
             ),
@@ -990,8 +970,7 @@ class TestFireReportTrigger:
         redis_client.aclose.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_handle_report_failure_uses_5min_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_handle_report_failure_uses_5min_backoff(self) -> None:
         session = _MockSession([])
         redis_client = AsyncMock()
         redis_client.incr = AsyncMock(return_value=1)
@@ -1018,9 +997,8 @@ class TestFireReportTrigger:
         )
 
     @pytest.mark.asyncio
-    async def test_backoff_applied_when_redis_counter_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_backoff_applied_when_redis_counter_unavailable(self) -> None:
         """A Redis failure while counting must NOT stop the +5min backoff."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         redis_client = AsyncMock()
         redis_client.incr = AsyncMock(side_effect=RuntimeError("redis down"))
@@ -1039,8 +1017,7 @@ class TestFireReportTrigger:
         assert backoff_param == now + timedelta(seconds=300)
 
     @pytest.mark.asyncio
-    async def test_deactivate_after_5_consecutive_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_deactivate_after_5_consecutive_failures(self) -> None:
         session = _MockSession([])
         redis_client = AsyncMock()
         redis_client.incr = AsyncMock(return_value=5)
@@ -1076,8 +1053,7 @@ class TestAtomicAdvance:
         assert "trigger_type = :ttype" in sql
 
     @pytest.mark.asyncio
-    async def test_cron_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_cron_advance_returns_true_when_row_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, (TRIGGER_A,))
         ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "*/30 * * * * *")
@@ -1087,18 +1063,16 @@ class TestAtomicAdvance:
         assert params["tid"] == str(TRIGGER_A)
 
     @pytest.mark.asyncio
-    async def test_cron_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_cron_advance_returns_false_when_not_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, None)
         ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "*/30 * * * * *")
         assert ok is False
 
     @pytest.mark.asyncio
-    async def test_cron_advance_honors_configured_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cron_advance_honors_configured_timezone(self) -> None:
         """Fix 2 review: a non-UTC trigger must advance next_fire_at in ITS
         timezone (legacy CronFireTask behaviour), never UTC."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         _fetchone_execute(session, (TRIGGER_A,))
         with patch.object(ch, "compute_next_fire") as cnf:
@@ -1109,8 +1083,7 @@ class TestAtomicAdvance:
         assert cnf.call_args.kwargs["timezone"] == "America/New_York"
 
     @pytest.mark.asyncio
-    async def test_cron_advance_defaults_to_utc(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_cron_advance_defaults_to_utc(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, (TRIGGER_A,))
         with patch.object(ch, "compute_next_fire") as cnf:
@@ -1120,8 +1093,7 @@ class TestAtomicAdvance:
         assert cnf.call_args.kwargs["timezone"] == "UTC"
 
     @pytest.mark.asyncio
-    async def test_polling_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_polling_advance_returns_true_when_row_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, (TRIGGER_POLL,))
         before = datetime.now(UTC)
@@ -1135,17 +1107,15 @@ class TestAtomicAdvance:
         assert before + timedelta(seconds=60) <= params["nf"] <= datetime.now(UTC) + timedelta(seconds=60)
 
     @pytest.mark.asyncio
-    async def test_polling_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_polling_advance_returns_false_when_not_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, None)
         ok = await ch._advance_polling_next_fire(session, TRIGGER_POLL, 60)
         assert ok is False
 
     @pytest.mark.asyncio
-    async def test_polling_advance_floors_interval_at_one_second(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_polling_advance_floors_interval_at_one_second(self) -> None:
         """A poll interval <= 0 must never produce a non-advancing (<= now) nf."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         _fetchone_execute(session, (TRIGGER_POLL,))
         await ch._advance_polling_next_fire(session, TRIGGER_POLL, 0)
@@ -1153,8 +1123,7 @@ class TestAtomicAdvance:
         assert params["nf"] > datetime.now(UTC)
 
     @pytest.mark.asyncio
-    async def test_report_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_report_advance_returns_true_when_row_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, (REPORT,))
         ok = await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
@@ -1165,18 +1134,16 @@ class TestAtomicAdvance:
         assert params["ns"] > datetime.now(UTC)
 
     @pytest.mark.asyncio
-    async def test_report_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_report_advance_returns_false_when_not_returned(self) -> None:
         session = _MockSession([])
         _fetchone_execute(session, None)
         ok = await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
         assert ok is False
 
     @pytest.mark.asyncio
-    async def test_report_advance_uses_conditional_sql(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_report_advance_uses_conditional_sql(self) -> None:
         """The report advance must be a conditional UPDATE ... RETURNING id —
         the same multi-machine atomicity guarantee as the trigger advances."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         _fetchone_execute(session, (REPORT,))
         await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
@@ -1189,10 +1156,9 @@ class TestAtomicAdvance:
 
 class TestEnqueueFireJob:
     @pytest.mark.asyncio
-    async def test_returns_job_id_with_bounded_knobs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_job_id_with_bounded_knobs(self) -> None:
         """Per-item fire jobs must carry the bounded SAQ knobs — a bug here
         (e.g. retries=0) silently drops a fire forever."""
-        _patch_env(monkeypatch)
         q = MagicMock()
         q.enqueue = AsyncMock(return_value=SimpleNamespace(id="job-123"))
         job_id = await ch._enqueue_fire_job_async(
@@ -1211,10 +1177,9 @@ class TestEnqueueFireJob:
         assert q.enqueue.await_args.kwargs["key"] == f"fire:{TRIGGER_A}:123"
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_saq_deduped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_none_when_saq_deduped(self) -> None:
         """A concurrent machine already enqueued the epoch -> SAQ returns None
         and the scheduler must count it as NOT enqueued."""
-        _patch_env(monkeypatch)
         q = MagicMock()
         q.enqueue = AsyncMock(return_value=None)
         job_id = await ch._enqueue_fire_job_async(q, "f", "fire:x:1")
@@ -1228,7 +1193,7 @@ class TestEnqueueFireJob:
 
 class TestSuiteRunDispatchRouting:
     @pytest.mark.asyncio
-    async def test_suite_run_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_suite_run_row_enqueues_fire_suite_run_trigger(self) -> None:
         """A ``run_kind == 'suite_run'`` cron row routes to the SuiteRun fire job.
 
         Prove-the-fix: without the FAR-377 discriminator the due-row enqueue
@@ -1237,7 +1202,6 @@ class TestSuiteRunDispatchRouting:
         ``fire_suite_run_trigger`` and NOT pass a ``snapshot_id`` (the suite run
         resolves its own dataset/backend from the trigger config).
         """
-        _patch_env(monkeypatch)
         q = MagicMock()
         redis_client = AsyncMock()
         now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
@@ -1282,10 +1246,9 @@ class TestSuiteRunDispatchRouting:
         assert "cron_expression" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_run_row_enqueues_fire_cron_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_run_row_enqueues_fire_cron_trigger(self) -> None:
         """A plain ``run_kind == 'run'`` row keeps routing to ``fire_cron_trigger``
         with its snapshot — the discriminator is opt-in, never a regression."""
-        _patch_env(monkeypatch)
         q = MagicMock()
         redis_client = AsyncMock()
         now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
@@ -1325,13 +1288,12 @@ class TestSuiteRunDispatchRouting:
         assert "cron_expression" in kwargs
 
     @pytest.mark.asyncio
-    async def test_suite_run_polling_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_suite_run_polling_row_enqueues_fire_suite_run_trigger(self) -> None:
         """A ``run_kind == 'suite_run'`` POLLING row routes to the SuiteRun fire
         job (mirroring the cron scan) — never ``fire_polling_trigger`` (which
         runs a connector poll query + ``create_run`` and would write a pipeline
         ``Run``). The write-surface loop guard depends on this discriminator.
         """
-        _patch_env(monkeypatch)
         q = MagicMock()
         now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
         org_id = ORG
@@ -1359,13 +1321,12 @@ class TestSuiteRunDispatchRouting:
         assert "poll_query" not in kwargs
 
     @pytest.mark.asyncio
-    async def test_suite_run_ongoing_row_enqueues_fire_suite_run_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_suite_run_ongoing_row_enqueues_fire_suite_run_trigger(self) -> None:
         """A ``run_kind == 'suite_run'`` ONGOING row routes to the SuiteRun fire
         job — never ``fire_ongoing_trigger`` (which tops up + dispatches pipeline
         ``Run`` s via ``create_run``). It must not pass a snapshot id; the suite
         run resolves its own dataset/backend from the trigger config.
         """
-        _patch_env(monkeypatch)
         session = MagicMock()
         q = MagicMock()
         now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
@@ -1417,11 +1378,11 @@ class TestSuiteRunDispatchRouting:
 
 class TestFireCronTriggerSkips:
     @pytest.mark.asyncio
-    async def test_skips_when_trigger_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_trigger_inactive(self) -> None:
         trigger = _make_trigger(id=TRIGGER_A, active=False)
 
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(trigger)], redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -1441,7 +1402,7 @@ class TestFireCronTriggerSkips:
         assert result["reason"] == "trigger_inactive_or_missing"
 
     @pytest.mark.asyncio
-    async def test_skips_when_trigger_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_trigger_soft_deleted(self) -> None:
         """FAR-166: a soft-deleted cron trigger (deleted_at set, active still
         True) is not loaded by the fire job — the load SELECT filters
         ``deleted_at``, so the trigger resolves to None and the job skips as
@@ -1449,7 +1410,7 @@ class TestFireCronTriggerSkips:
         trigger = _make_trigger(id=TRIGGER_A, deleted_at=datetime.now(UTC))
 
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(None)], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(None)], redis=False) as (
                 session,
                 _redis_client,
             ),
@@ -1472,15 +1433,14 @@ class TestFireCronTriggerSkips:
         assert "deleted_at IS NULL" in str(load[0][0])
 
     @pytest.mark.asyncio
-    async def test_skips_when_spend_limit_exceeded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_skips_when_spend_limit_exceeded(self) -> None:
         from decimal import Decimal
 
         trigger = _make_trigger(id=TRIGGER_A, daily_spend_limit=Decimal("100.00"))
         cost_result = _mock_result(scalar_one=Decimal("150.00"))
 
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger), cost_result], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(trigger), cost_result], redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -1504,7 +1464,7 @@ class TestFireCronTriggerSkips:
         assert result["reason"] == "spend_limit"
 
     @pytest.mark.asyncio
-    async def test_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_org_triggers_paused(self) -> None:
         """Paused org -> fire_cron_trigger returns skipped/triggers_paused with
         NO event row written."""
 
@@ -1521,7 +1481,7 @@ class TestFireCronTriggerSkips:
         trigger.config_json = {}
 
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(trigger)], redis=False) as (
                 session,
                 _redis_client,
             ),
@@ -1543,7 +1503,7 @@ class TestFireCronTriggerSkips:
         assert not session.added
 
     @pytest.mark.asyncio
-    async def test_cron_fire_degrades_on_pause_read_programming_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cron_fire_degrades_on_pause_read_programming_error(self) -> None:
         """Pre-migration DB: a ProgrammingError from the org pause read degrades
         to NOT paused (inside a savepoint, so the transaction is never poisoned)
         and the job proceeds to fire — mirroring the scheduler's not-paused
@@ -1564,7 +1524,7 @@ class TestFireCronTriggerSkips:
         run_mock = MagicMock()
         run_mock.id = uuid.uuid4()
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(trigger)], redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -1592,7 +1552,7 @@ class TestFireCronTriggerSkips:
         assert log_event.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_cron_fire_propagates_on_pause_read_sqlalchemy_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cron_fire_propagates_on_pause_read_sqlalchemy_error(self) -> None:
         """A plain SQLAlchemyError (DB down / connection error) from the org
         pause read PROPAGATES so the job fails and SAQ retries — never degraded
         to not-paused, never fabricated into paused."""
@@ -1610,7 +1570,7 @@ class TestFireCronTriggerSkips:
         trigger.config_json = {}
 
         with (
-            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+            _tick_scope([_lock_result(True), _trigger_result(trigger)], redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -1627,10 +1587,9 @@ class TestFireCronTriggerSkips:
             )
 
     @pytest.mark.asyncio
-    async def test_polling_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_polling_skips_when_org_triggers_paused(self) -> None:
         """Paused org -> fire_polling_trigger returns skipped/triggers_paused with
         NO event row written."""
-        _patch_env(monkeypatch)
 
         from modulo.db.models.trigger import Trigger
 
@@ -1717,8 +1676,7 @@ class TestComputeNextFire:
 
 class TestSetRlsOrg:
     @pytest.mark.asyncio
-    async def test_postgres_sets_config_via_sql(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_postgres_sets_config_via_sql(self) -> None:
         session = _MockSession([])
         org_id = uuid.uuid4()
 
@@ -1729,8 +1687,7 @@ class TestSetRlsOrg:
         assert params["val"] == str(org_id)
 
     @pytest.mark.asyncio
-    async def test_non_postgres_sets_session_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_non_postgres_sets_session_info(self) -> None:
         session = _MockSession([])
         session.info = {}
         session._get_bind.return_value.dialect.name = "sqlite"
@@ -1747,10 +1704,9 @@ class TestSetOrgStatementTimeout:
     way ``_set_rls_org`` does, and is a fail-safe no-op everywhere else."""
 
     @pytest.mark.asyncio
-    async def test_postgres_sets_transaction_local_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_postgres_sets_transaction_local_bound(self) -> None:
         """The Postgres arm issues the transaction-local ``set_config`` with the
         module constant's value — the bound the reconcile body relies on."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
 
         await ch._set_org_statement_timeout(session)
@@ -1761,11 +1717,10 @@ class TestSetOrgStatementTimeout:
         assert params == {"val": f"{ch._RECONCILE_STATEMENT_TIMEOUT_MS}ms"}
 
     @pytest.mark.asyncio
-    async def test_non_postgres_is_a_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_non_postgres_is_a_noop(self) -> None:
         """SQLite/MySQL have no ``set_config``: the bound is a safety
         improvement, never a correctness requirement, so the non-Postgres arm
         must execute nothing and never raise."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         session._get_bind.return_value.dialect.name = "sqlite"
 
@@ -1776,8 +1731,7 @@ class TestSetOrgStatementTimeout:
 
 class TestCountActiveRuns:
     @pytest.mark.asyncio
-    async def test_counts_active_runs_excluding_cancellation_requested(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_counts_active_runs_excluding_cancellation_requested(self) -> None:
         trigger_id = uuid.uuid4()
         session = _MockSession([_mock_result(scalar_one=4)])
 
@@ -1795,8 +1749,7 @@ class TestCountActiveRuns:
 
 class TestLogEvent:
     @pytest.mark.asyncio
-    async def test_logs_cron_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_logs_cron_event(self) -> None:
         session = _MockSession([])
         trigger = SimpleNamespace(id=uuid.uuid4())
         org_id = uuid.uuid4()
@@ -1819,8 +1772,7 @@ class TestLogEvent:
         assert event.error_detail is None
 
     @pytest.mark.asyncio
-    async def test_logs_poll_event_with_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_logs_poll_event_with_error_detail(self) -> None:
         session = _MockSession([])
         trigger = SimpleNamespace(id=uuid.uuid4())
 
@@ -1838,8 +1790,7 @@ class TestLogEvent:
         assert event.error_detail == "boom"
 
     @pytest.mark.asyncio
-    async def test_logs_poll_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_logs_poll_event_sanitizes_error_detail(self) -> None:
         session = _MockSession([])
         trigger = SimpleNamespace(id=uuid.uuid4())
 
@@ -1855,8 +1806,7 @@ class TestLogEvent:
         assert "<redacted>" in event.error_detail
 
     @pytest.mark.asyncio
-    async def test_logs_cron_event_sanitizes_error_detail(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_logs_cron_event_sanitizes_error_detail(self) -> None:
         session = _MockSession([])
         trigger = SimpleNamespace(id=uuid.uuid4())
 
@@ -1874,8 +1824,7 @@ class TestLogEvent:
 
 class TestIngestSaqError:
     @pytest.mark.asyncio
-    async def test_ingests_via_error_tracking_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_ingests_via_error_tracking_service(self) -> None:
         session = _MockSession([])
         factory = MagicMock(return_value=session)
         service = MagicMock()
@@ -1902,11 +1851,8 @@ class TestIngestSaqError:
         assert payload["context_json"]["trigger_id"] == str(TRIGGER_A)
 
     @pytest.mark.asyncio
-    async def test_ingest_failure_is_swallowed(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_ingest_failure_is_swallowed(self, caplog: pytest.LogCaptureFixture) -> None:
         """Error ingestion must never crash the scheduler tick — but the failure must reach the logs."""
-        _patch_env(monkeypatch)
         session = _MockSession([])
         factory = MagicMock(return_value=session)
         service = MagicMock()
@@ -1923,12 +1869,9 @@ class TestIngestSaqError:
         assert any("cron_helpers.ingest_saq_error_failed" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
-    async def test_system_org_id_skips_db_ingest(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_system_org_id_skips_db_ingest(self, caplog: pytest.LogCaptureFixture) -> None:
         """A system error without tenant context (nil org_id) must NOT hit the
         error_events FK — it is logged and skipped."""
-        _patch_env(monkeypatch)
         with (
             caplog.at_level(logging.ERROR, logger="modulo.core.cron_helpers"),
             patch.object(ch, "_open_factory") as open_factory,
@@ -1974,8 +1917,7 @@ class TestResolveSnapshotId:
 
 class TestFireCronTrigger:
     @pytest.mark.asyncio
-    async def test_fires_run_and_updates_last_fired_at_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_fires_run_and_updates_last_fired_at_only(self) -> None:
         trigger = _make_trigger(config_json={"input_template": {"env": "prod"}})
         session = _MockSession([_lock_result(True), _trigger_result(trigger), MagicMock()])
         factory = MagicMock(return_value=session)
@@ -2011,8 +1953,7 @@ class TestFireCronTrigger:
         assert "next_fire_at" not in compiled
 
     @pytest.mark.asyncio
-    async def test_skips_when_trigger_busy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_skips_when_trigger_busy(self) -> None:
         trigger = _make_trigger()
         session = _MockSession([_lock_result(False)])
         factory = MagicMock(return_value=session)
@@ -2034,8 +1975,7 @@ class TestFireCronTrigger:
         assert result["reason"] == "trigger_busy"
 
     @pytest.mark.asyncio
-    async def test_skips_when_concurrency_limit_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_skips_when_concurrency_limit_reached(self) -> None:
         trigger = _make_trigger(max_concurrent_runs=2)
         session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
@@ -2061,8 +2001,7 @@ class TestFireCronTrigger:
         assert log_event.await_args.kwargs["result"] == "concurrency_limit_reached"
 
     @pytest.mark.asyncio
-    async def test_skips_when_pipeline_missing_for_auto_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_skips_when_pipeline_missing_for_auto_snapshot(self) -> None:
         trigger = _make_trigger()
         session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
@@ -2093,7 +2032,7 @@ class TestFireCronTrigger:
         assert log_event.await_args.kwargs["result"] == "no_pipeline"
 
     @pytest.mark.asyncio
-    async def test_unpinned_fire_runs_the_snapshot_frozen_at_fire_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_unpinned_fire_runs_the_snapshot_frozen_at_fire_time(self) -> None:
         """FAR-1519 item 3: an UNPINNED fire auto-creates the snapshot from the
         live graph and runs that fresh snapshot.
 
@@ -2103,7 +2042,6 @@ class TestFireCronTrigger:
         the run must be pinned to the snapshot minted at fire time, not to a
         pre-resolved "latest existing" snapshot.
         """
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
@@ -2139,9 +2077,8 @@ class TestFireCronTrigger:
         assert create_run.await_args.kwargs["snapshot_id"] == auto_snapshot.id
 
     @pytest.mark.asyncio
-    async def test_advance_next_fire_at_writes_next_fire_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_advance_next_fire_at_writes_next_fire_at(self) -> None:
         """Legacy Celery path: advance_next_fire_at=True recomputes next_fire_at."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger(cron_timezone="UTC")
         session = _MockSession([_lock_result(True), _trigger_result(trigger), MagicMock()])
         factory = MagicMock(return_value=session)
@@ -2206,7 +2143,7 @@ class TestFirePollingTrigger:
         return [_lock_result(True), _trigger_result(trigger), conn_result, MagicMock()]
 
     @pytest.mark.asyncio
-    async def test_skips_when_trigger_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_trigger_soft_deleted(self) -> None:
         """FAR-166: a soft-deleted polling trigger (deleted_at set, active still
         True) is not loaded by the fire job — the load SELECT filters
         ``deleted_at``, so the trigger resolves to None and the job skips; the
@@ -2214,7 +2151,6 @@ class TestFirePollingTrigger:
         trigger = _make_trigger(id=TRIGGER_POLL, deleted_at=datetime.now(UTC))
         with (
             _tick_scope(
-                monkeypatch,
                 [_lock_result(True), _trigger_result(None)],
                 redis=False,
             ) as (
@@ -2241,7 +2177,7 @@ class TestFirePollingTrigger:
         assert "deleted_at IS NULL" in str(load[0][0])
 
     @pytest.mark.asyncio
-    async def test_fires_run_when_condition_met(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fires_run_when_condition_met(self) -> None:
         trigger = _make_trigger(config_json={"snapshot_id": str(uuid.uuid4())})
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2252,7 +2188,7 @@ class TestFirePollingTrigger:
         event = SimpleNamespace(id=uuid.uuid4())
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 session,
                 _redis_client,
             ),
@@ -2286,13 +2222,13 @@ class TestFirePollingTrigger:
         assert "next_fire_at" not in compiled
 
     @pytest.mark.asyncio
-    async def test_skips_when_concurrency_limit_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_concurrency_limit_reached(self) -> None:
         """Polling fire honours max_concurrent_runs — the poll query is never
         run against the external service while the trigger is over budget."""
         trigger = _make_trigger(max_concurrent_runs=2)
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, None), redis=False) as (
+            _tick_scope(self._session_results(trigger, None), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2317,7 +2253,7 @@ class TestFirePollingTrigger:
         assert log_poll.await_args.kwargs["result"] == "concurrency_limit_reached"
 
     @pytest.mark.asyncio
-    async def test_skips_when_spend_limit_exceeded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_skips_when_spend_limit_exceeded(self) -> None:
         """An over-budget polling trigger is skipped BEFORE the connector query —
         it must stop hitting the external service every cycle."""
         from decimal import Decimal
@@ -2329,7 +2265,6 @@ class TestFirePollingTrigger:
 
         with (
             _tick_scope(
-                monkeypatch,
                 [_lock_result(True), _trigger_result(trigger), cost_result, conn_result],
                 redis=False,
             ) as (
@@ -2358,11 +2293,11 @@ class TestFirePollingTrigger:
         assert log_poll.await_args.kwargs["result"] == "spend_limit_reached"
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_connector_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_connector_missing(self) -> None:
         trigger = _make_trigger()
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, None), redis=False) as (
+            _tick_scope(self._session_results(trigger, None), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2388,12 +2323,12 @@ class TestFirePollingTrigger:
         assert log_poll.await_args.kwargs["result"] == "poll_error"
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_connector_init_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_connector_init_fails(self) -> None:
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2418,7 +2353,7 @@ class TestFirePollingTrigger:
         assert "Failed to initialise connector" in log_poll.await_args.kwargs["error_detail"]
 
     @pytest.mark.asyncio
-    async def test_returns_query_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_query_timeout(self) -> None:
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2427,7 +2362,7 @@ class TestFirePollingTrigger:
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2453,7 +2388,7 @@ class TestFirePollingTrigger:
         assert "timed out after 60s" in log_poll.await_args.kwargs["error_detail"]
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_query_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_query_fails(self) -> None:
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2462,7 +2397,7 @@ class TestFirePollingTrigger:
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2487,7 +2422,7 @@ class TestFirePollingTrigger:
         assert result["error"] == "boom"
 
     @pytest.mark.asyncio
-    async def test_returns_no_match_when_condition_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_no_match_when_condition_false(self) -> None:
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2496,7 +2431,7 @@ class TestFirePollingTrigger:
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2522,7 +2457,7 @@ class TestFirePollingTrigger:
         assert log_poll.await_args.kwargs["result"] == "no_match"
 
     @pytest.mark.asyncio
-    async def test_returns_error_when_condition_eval_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_returns_error_when_condition_eval_fails(self) -> None:
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2531,7 +2466,7 @@ class TestFirePollingTrigger:
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2558,7 +2493,7 @@ class TestFirePollingTrigger:
         assert log_poll.await_args.kwargs["result"] == "poll_error"
 
     @pytest.mark.asyncio
-    async def test_invalid_snapshot_id_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_invalid_snapshot_id_falls_back_to_zero(self) -> None:
         trigger = _make_trigger(config_json={"snapshot_id": "not-a-uuid"})
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
         connector = MagicMock()
@@ -2569,7 +2504,7 @@ class TestFirePollingTrigger:
         event = SimpleNamespace(id=uuid.uuid4())
 
         with (
-            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+            _tick_scope(self._session_results(trigger, connector_instance), redis=False) as (
                 _session,
                 _redis_client,
             ),
@@ -2597,8 +2532,7 @@ class TestFirePollingTrigger:
 
 class TestClearReportFailureCounter:
     @pytest.mark.asyncio
-    async def test_deletes_failure_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_deletes_failure_counter(self) -> None:
         redis_client = AsyncMock()
 
         await ch._clear_report_failure_counter(redis_client, REPORT)
@@ -2606,10 +2540,7 @@ class TestClearReportFailureCounter:
         redis_client.delete.assert_awaited_once_with(ch._report_failure_counter_key(REPORT))
 
     @pytest.mark.asyncio
-    async def test_swallows_redis_errors(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        _patch_env(monkeypatch)
+    async def test_swallows_redis_errors(self, caplog: pytest.LogCaptureFixture) -> None:
         redis_client = AsyncMock()
         redis_client.delete = AsyncMock(side_effect=RuntimeError("redis down"))
 
@@ -2640,15 +2571,11 @@ class TestCreateRunPauseClassification:
         ],
     )
     @pytest.mark.asyncio
-    async def test_known_trigger_types_classified(
-        self, monkeypatch: pytest.MonkeyPatch, trigger_type: str, pause_eligible: bool
-    ) -> None:
-        _patch_env(monkeypatch)
+    async def test_known_trigger_types_classified(self, trigger_type: str, pause_eligible: bool) -> None:
         from modulo.core.exceptions import TriggersPausedError
         from modulo.db.crud.run import create_run
 
-        run_number_result = MagicMock()
-        run_number_result.scalar_one.return_value = 0
+        run_number_result = _mock_result(scalar_one=0)
         session = _MockSession([run_number_result])
         with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True):
             if pause_eligible:
@@ -2675,14 +2602,12 @@ class TestCreateRunPauseClassification:
                 assert run.id is not None
 
     @pytest.mark.asyncio
-    async def test_trigger_id_none_bypasses_gate_even_when_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_trigger_id_none_bypasses_gate_even_when_paused(self) -> None:
         """A pause-eligible trigger_type with trigger_id=None (a run created
         without a Trigger row — scheduled reports / variants) bypasses the gate."""
-        _patch_env(monkeypatch)
         from modulo.db.crud.run import create_run
 
-        run_number_result = MagicMock()
-        run_number_result.scalar_one.return_value = 0
+        run_number_result = _mock_result(scalar_one=0)
         session = _MockSession([run_number_result])
         with patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True):
             run = await create_run(
@@ -2807,11 +2732,10 @@ class TestCatchupReviewFindings:
     catch-up design."""
 
     @pytest.mark.asyncio
-    async def test_normal_enqueue_writes_catchup_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_normal_enqueue_writes_catchup_marker(self) -> None:
         """Finding 1: a NORMAL-path successful enqueue writes the catch-up
         marker for the consumed epoch, so the catch-up scan on the NEXT tick
         does not re-fire a legitimately-enqueued fire."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         due = now_val - timedelta(seconds=1)  # normal loop fires this due epoch
         session = _MockSession(
@@ -2880,10 +2804,9 @@ class TestCatchupReviewFindings:
         assert won is True
 
     @pytest.mark.asyncio
-    async def test_concurrency_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_concurrency_skip_records_last_fired_at(self) -> None:
         """Finding 2: a concurrency-limited fire records the attempt
         (last_fired_at) so the catch-up scan never re-fires it forever."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger(max_concurrent_runs=2)
         session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
@@ -2908,16 +2831,14 @@ class TestCatchupReviewFindings:
         assert updates, "concurrency skip must record last_fired_at (attempted state)"
 
     @pytest.mark.asyncio
-    async def test_spend_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_spend_skip_records_last_fired_at(self) -> None:
         """Finding 2: a spend-limited fire records the attempt so the catch-up
         scan never re-fires it forever."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger(daily_spend_limit=10.0)
         # Execution order inside fire_cron_trigger: advisory lock -> trigger
         # select -> daily-cost SUM. The cost result must be the LAST slot so the
         # lock and trigger reads consume their own results first.
-        fake_result = MagicMock()
-        fake_result.scalar_one.return_value = 50.0
+        fake_result = _mock_result(scalar_one=50.0)
         session = _MockSession([_lock_result(True), _trigger_result(trigger), fake_result])
         factory = MagicMock(return_value=session)
 
@@ -2953,10 +2874,9 @@ class TestCatchupReviewFindings:
         assert updates, "spend skip must record last_fired_at (attempted state)"
 
     @pytest.mark.asyncio
-    async def test_pipeline_missing_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_pipeline_missing_skip_records_last_fired_at(self) -> None:
         """Finding 2: a pipeline-missing fire records the attempt so the
         catch-up scan never re-fires it forever."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         session = _MockSession([_lock_result(True), _trigger_result(trigger)])
         factory = MagicMock(return_value=session)
@@ -3149,8 +3069,7 @@ class TestFireSuiteRunTriggerPersists:
     """
 
     @pytest.mark.asyncio
-    async def test_fired_run_extra_is_json_serialisable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_fired_run_extra_is_json_serialisable(self) -> None:
 
         org_id = ORG
         trigger_id = TRIGGER_A
@@ -3202,8 +3121,7 @@ class TestFireSuiteRunTriggerPersists:
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
-        count_res = MagicMock()
-        count_res.scalar_one.return_value = 0
+        count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
 
         class _FireSession(_MockSession):
@@ -3248,10 +3166,9 @@ class TestFireSuiteRunTriggerPersists:
         assert json.loads(json.dumps(captured[0].extra))["cost_per_llm_case"] == "0.005"
 
     @pytest.mark.asyncio
-    async def test_default_cost_is_stored_when_config_omits_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_default_cost_is_stored_when_config_omits_it(self) -> None:
         """When ``cost_per_llm_case`` is absent, the module default is used and
         stored JSON-safely (regression guard for the hard-coded ``0.001``)."""
-        _patch_env(monkeypatch)
 
         org_id = ORG
         trigger_id = TRIGGER_B
@@ -3296,8 +3213,7 @@ class TestFireSuiteRunTriggerPersists:
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
-        count_res = MagicMock()
-        count_res.scalar_one.return_value = 0
+        count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
 
         class _FireSession(_MockSession):
@@ -3335,14 +3251,13 @@ class TestFireSuiteRunTriggerPersists:
         assert captured[0].extra["suite_ceiling"] is None
 
     @pytest.mark.asyncio
-    async def test_llm_judge_suite_is_rejected_at_fire_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_llm_judge_suite_is_rejected_at_fire_boundary(self) -> None:
         """A ``run_kind='suite_run'`` trigger whose suite contains an ``llm_judge``
         definition must be skipped at the fire boundary (never built into a doomed
         ``pending`` run that hard-fails at execution). The scheduled path does not
         wire a judge callable, so such config must not promise a run it cannot
         deliver (FAR-377 reviewer finding).
         """
-        _patch_env(monkeypatch)
 
         org_id = ORG
         trigger_id = TRIGGER_A
@@ -3368,8 +3283,7 @@ class TestFireSuiteRunTriggerPersists:
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
-        count_res = MagicMock()
-        count_res.scalar_one.return_value = 0
+        count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
 
         # EvalDefinitionRow-shaped double carrying an ``llm_judge`` eval_type.
@@ -3432,9 +3346,8 @@ class TestFireSuiteRunTriggerSpendPool:
         return trigger
 
     @pytest.mark.asyncio
-    async def test_fire_passes_trigger_id_to_spend_pool(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_fire_passes_trigger_id_to_spend_pool(self) -> None:
         """The per-trigger spend pool is fed ``trigger_id`` (not the org-wide pool)."""
-        _patch_env(monkeypatch)
         from decimal import Decimal
 
         org_id = ORG
@@ -3445,8 +3358,7 @@ class TestFireSuiteRunTriggerSpendPool:
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
-        count_res = MagicMock()
-        count_res.scalar_one.return_value = 0
+        count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
         session = _MockSession([advisory, trigger_res, count_res, update_res])
         factory = MagicMock(return_value=session)
@@ -3478,9 +3390,8 @@ class TestFireSuiteRunTriggerSpendPool:
         assert spend.call_args.args[2] == trigger_id
 
     @pytest.mark.asyncio
-    async def test_spend_limit_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_spend_limit_skip_records_last_fired_at(self) -> None:
         """A spend-limited fire is skipped AND marks ``last_fired_at`` (skip-not-defer)."""
-        _patch_env(monkeypatch)
         from decimal import Decimal
 
         org_id = ORG
@@ -3491,8 +3402,7 @@ class TestFireSuiteRunTriggerSpendPool:
         advisory.scalar_one.return_value = True
         trigger_res = MagicMock()
         trigger_res.scalar_one_or_none.return_value = trigger
-        count_res = MagicMock()
-        count_res.scalar_one.return_value = 0
+        count_res = _mock_result(scalar_one=0)
         update_res = MagicMock()
         session = _MockSession([advisory, trigger_res, count_res, update_res])
         factory = MagicMock(return_value=session)
@@ -3521,9 +3431,8 @@ class TestFireSuiteRunTriggerSpendPool:
         assert any("last_fired_at" in str(stmt) for stmt, _ in session.executed)
 
     @pytest.mark.asyncio
-    async def test_concurrency_limit_skip_records_last_fired_at(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_concurrency_limit_skip_records_last_fired_at(self) -> None:
         """A concurrency-limited fire is skipped AND marks ``last_fired_at``."""
-        _patch_env(monkeypatch)
         from decimal import Decimal
 
         org_id = ORG

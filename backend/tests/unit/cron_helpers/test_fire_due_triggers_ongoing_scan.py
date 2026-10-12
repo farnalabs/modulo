@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from modulo.core import cron_helpers as ch
-from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result, _settings
+from tests.unit.cron_helpers._helpers import _org_result, _rows_result, _settings
 from tests.unit.cron_helpers.test_cron_helpers import (
     _cron_row,
     _MockSession,
@@ -50,8 +50,7 @@ def _ongoing_row(
 
 class TestFireDueTriggersOngoingScan:
     @pytest.mark.asyncio
-    async def test_ongoing_scan_is_last_and_sums_counters(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
+    async def test_ongoing_scan_is_last_and_sums_counters(self) -> None:
         now = datetime.now(UTC)
         session = _MockSession(
             [
@@ -113,10 +112,9 @@ class TestFireDueTriggersOngoingScan:
         assert report_index < ongoing_index, "ongoing scan must run after the report read"
 
     @pytest.mark.asyncio
-    async def test_ongoing_read_filters_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_ongoing_read_filters_soft_deleted(self) -> None:
         """An ongoing trigger whose deleted_at is set must NOT be selected as
         due — the scan's WHERE carries deleted_at IS NULL."""
-        _patch_env(monkeypatch)
         session = _MockSession(
             [
                 _org_result([ORG]),
@@ -157,11 +155,10 @@ class TestFireDueTriggersOngoingScan:
         assert summary["ongoing_due"] == 0
 
     @pytest.mark.asyncio
-    async def test_ongoing_read_exhausted_mock_is_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_ongoing_read_exhausted_mock_is_empty(self) -> None:
         """Existing fixed-order tests (whose result sequences end at the report
         read) hit an exhausted MagicMock for the ongoing read -> it iterates
         empty and the tick survives with zero ongoing counters."""
-        _patch_env(monkeypatch)
         session = _MockSession(
             [
                 _org_result([ORG]),
@@ -190,10 +187,9 @@ class TestFireDueTriggersOngoingScan:
         assert summary["cron_enqueued"] == 1
 
     @pytest.mark.asyncio
-    async def test_org_paused_skips_ongoing_enqueue_but_advances(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_org_paused_skips_ongoing_enqueue_but_advances(self) -> None:
         """SKIP-not-defer: a paused org consumes the ongoing epoch (advance)
         but enqueues nothing; the summary exposes ongoing_skipped_paused."""
-        _patch_env(monkeypatch)
         session = _MockSession(
             [
                 _org_result([ORG]),
