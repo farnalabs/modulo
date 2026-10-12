@@ -237,6 +237,33 @@ describe('PipelineEditorView — branch coverage sweep', () => {
     wrapper.unmount()
   })
 
+  // -- triggerRun: falsy run response skips navigation (FAR-1717) --
+  it('triggerRun with a null run response skips navigation and reports no error', async () => {
+    router.push('/pipelines/test-pipeline-id/editor')
+    await router.isReady()
+    const wrapper = mountEditor()
+    await flushPromises()
+    const vm = wrapper.vm as any
+    vm.pipeline = { id: 'test-pipeline-id', name: 'Test' }
+    vm.flowNodes = [{ id: 'node-1', type: 'agent', data: { label: 'A', description: '' } }]
+    vm.rawNodes = [{ id: 'node-1', node_type: 'agent', label: 'A', description: '', position: { x: 0, y: 0 } }]
+    vm.showRunDialog = true
+    vm.runPrompt = 'test'
+    vm.confirmEmptyRun = true
+
+    const pushSpy = vi.spyOn(router, 'push')
+    ;(api.POST as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ data: null, error: undefined })
+    await vm.triggerRun()
+    await flushPromises()
+
+    expect(pushSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'run-detail' }),
+    )
+    expect(vm.runError).toBeNull()
+    pushSpy.mockRestore()
+    wrapper.unmount()
+  })
+
   // -- handleRename error path --
   it('handleRename sets renameError on API failure', async () => {
     router.push('/pipelines/test-pipeline-id/editor')
