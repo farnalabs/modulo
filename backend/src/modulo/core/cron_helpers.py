@@ -6605,6 +6605,30 @@ def _org_stage_label(stage: dict[str, str] | None, org_id: uuid.UUID) -> str:
     return stage.get("op") or f"reconcile_org:{org_id}"
 
 
+@dataclass(frozen=True)
+class _ReconcileContext:
+    """Invariant per-tick handles and knobs shared by the reconcile helpers.
+
+    Bundled so ``_reconcile_boxes`` and ``_attempt_reconcile_org`` stay under
+    the S107 parameter ceiling while still sharing the whole tick context.
+    ``summary`` and ``terminalized_run_ids`` are mutated through the shared
+    references, exactly as when they were passed individually.
+    """
+
+    factory: async_sessionmaker[AsyncSession]
+    q: RedisQueue
+    redis_client: AsyncRedis
+    re_dispatch_predicate: Any
+    tuning: ReconcileTuning
+    terminalize_max: int
+    early_detect_minutes: int | None
+    max_rows: int
+    summary: dict[str, Any]
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]]
+    outer_budget_seconds: int
+    org_budget_seconds: int
+
+
 async def _dispatcher_reconcile_body(
     *,
     _settings: Any,
@@ -6670,21 +6694,23 @@ async def _dispatcher_reconcile_body(
         early_detect_minutes=early_detect_minutes,
     )
     await _reconcile_boxes(
+        ctx=_ReconcileContext(
+            factory=factory,
+            q=q,
+            redis_client=redis_client,
+            re_dispatch_predicate=re_dispatch_predicate,
+            tuning=tuning,
+            terminalize_max=terminalize_max,
+            early_detect_minutes=early_detect_minutes,
+            max_rows=max_rows,
+            summary=summary,
+            terminalized_run_ids=terminalized_run_ids,
+            outer_budget_seconds=outer_budget_seconds,
+            org_budget_seconds=org_budget_seconds,
+        ),
         org_ids=org_ids,
-        factory=factory,
-        q=q,
-        redis_client=redis_client,
-        re_dispatch_predicate=re_dispatch_predicate,
-        tuning=tuning,
-        terminalize_max=terminalize_max,
-        early_detect_minutes=early_detect_minutes,
-        max_rows=max_rows,
-        summary=summary,
-        terminalized_run_ids=terminalized_run_ids,
         stage=stage,
         body_started=body_started,
-        outer_budget_seconds=outer_budget_seconds,
-        org_budget_seconds=org_budget_seconds,
     )
     await _terminalize_run_facts(
         terminalized_run_ids=terminalized_run_ids,
@@ -6716,21 +6742,10 @@ async def _dispatcher_reconcile_body(
 
 async def _reconcile_boxes(
     *,
+    ctx: _ReconcileContext,
     org_ids: list[uuid.UUID],
-    factory: async_sessionmaker[AsyncSession],
-    q: RedisQueue,
-    redis_client: AsyncRedis,
-    re_dispatch_predicate: Any,
-    tuning: ReconcileTuning,
-    terminalize_max: int,
-    early_detect_minutes: int | None,
-    max_rows: int,
-    summary: dict[str, Any],
-    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
     stage: dict[str, str] | None,
     body_started: float,
-    outer_budget_seconds: int,
-    org_budget_seconds: int,
 ) -> None:
     """Per-organisation reconcile loop of ``_dispatcher_reconcile_body``.
 
@@ -6773,8 +6788,10 @@ async def _reconcile_boxes(
             # operations; without a cross-org cap the tick can grow unbounded
             # (many orgs * many rows each) and hit the timeout.  Overflow drains
             # on subsequent 60s ticks.
-            if rows_processed >= max_rows:
-                summary["rows_deferred"] = summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+            if rows_processed >= ctx.max_rows:
+                ctx.summary["rows_deferred"] = (
+                    ctx.summary.get("rows_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                )
                 break
             # FAR-1525: per-organisation TIME bound. The row budget above bounds
             # ROWS; a hung await inside ONE org's pass still had the whole inner
@@ -6785,40 +6802,31 @@ async def _reconcile_boxes(
             # compensating sweeps, so a bounded org can never push those stages
             # past the OUTER deadline (whose semantics are unchanged: it still
             # fires only for the tick as a whole).
-            remaining_seconds = outer_budget_seconds - (time.monotonic() - body_started)
-            tail_reserve = min(_RECONCILE_POST_ORGS_RESERVE_SECONDS, max(outer_budget_seconds // 3, 1))
-            org_slice_seconds = min(float(org_budget_seconds), remaining_seconds - tail_reserve)
+            remaining_seconds = ctx.outer_budget_seconds - (time.monotonic() - body_started)
+            tail_reserve = min(_RECONCILE_POST_ORGS_RESERVE_SECONDS, max(ctx.outer_budget_seconds // 3, 1))
+            org_slice_seconds = min(float(ctx.org_budget_seconds), remaining_seconds - tail_reserve)
             if org_slice_seconds < _RECONCILE_ORG_MIN_SECONDS:
                 # Not even the minimum useful slice fits: stop starting org work
                 # (counted, drains on later 60s ticks) and spend the reserved
                 # tail on facts/sweeps instead of racing the deadline. Never a
                 # silent no-op — orgs_deferred makes the skip visible.
-                summary["orgs_deferred"] = summary.get("orgs_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                ctx.summary["orgs_deferred"] = (
+                    ctx.summary.get("orgs_deferred", 0) + len(org_ids) - org_ids.index(org_id)
+                )
                 break
-            rows_before = summary["scanned"]
+            rows_before = ctx.summary["scanned"]
             outcome = await _attempt_reconcile_org(
-                factory=factory,
-                q=q,
-                redis_client=redis_client,
+                ctx=ctx,
                 org_id=org_id,
-                re_dispatch_predicate=re_dispatch_predicate,
-                tuning=tuning,
                 enqueue_failed_redispatched=enqueue_failed_redispatched,
-                summary=summary,
-                terminalized_run_ids=terminalized_run_ids,
-                terminalize_max=terminalize_max,
-                early_detect_minutes=early_detect_minutes,
                 # FAR-1425: hand the ORG the remainder of the tick's row budget,
                 # not just the inter-org gate.  ``rows_processed < max_rows`` is
                 # guaranteed here (the break above), so this is always >= 1.
-                row_budget=max_rows - rows_processed,
+                row_budget=ctx.max_rows - rows_processed,
                 # FAR-1621: the mutable current-stage hint, so a cut names
                 # the exact blocking site instead of only the org.
                 stage=stage,
                 org_slice_seconds=org_slice_seconds,
-                org_budget_seconds=org_budget_seconds,
-                outer_budget_seconds=outer_budget_seconds,
-                max_rows=max_rows,
             )
             if outcome is None:
                 # Bounded per-org failure: the org's transaction rolled back
@@ -6828,28 +6836,17 @@ async def _reconcile_boxes(
                 # former ``continue`` did.
                 continue
             enqueue_failed_redispatched = outcome
-            rows_processed += summary["scanned"] - rows_before
+            rows_processed += ctx.summary["scanned"] - rows_before
 
 
 async def _attempt_reconcile_org(
     *,
-    factory: async_sessionmaker[AsyncSession],
-    q: RedisQueue,
-    redis_client: AsyncRedis,
+    ctx: _ReconcileContext,
     org_id: uuid.UUID,
-    re_dispatch_predicate: Any,
-    tuning: ReconcileTuning,
     enqueue_failed_redispatched: int,
-    summary: dict[str, Any],
-    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
-    terminalize_max: int,
-    early_detect_minutes: int | None,
     row_budget: int,
     stage: dict[str, str] | None,
     org_slice_seconds: float,
-    org_budget_seconds: int,
-    outer_budget_seconds: int,
-    max_rows: int,
 ) -> int | None:
     """One org's bounded reconcile pass, with its four bounded-failure arms.
 
@@ -6867,23 +6864,23 @@ async def _attempt_reconcile_org(
     # terminalizer ids it collected must be unwound to match — a
     # rolled-back org must contribute neither counters nor compensating
     # facts to the tick.
-    summary_before = dict(summary)
-    terminalized_len_before = len(terminalized_run_ids)
+    summary_before = dict(ctx.summary)
+    terminalized_len_before = len(ctx.terminalized_run_ids)
     org_pass_started = time.monotonic()
     try:
         async with asyncio.timeout(org_slice_seconds):
             return await _reconcile_org(
-                factory=factory,
-                q=q,
-                redis_client=redis_client,
+                factory=ctx.factory,
+                q=ctx.q,
+                redis_client=ctx.redis_client,
                 org_id=org_id,
-                re_dispatch_predicate=re_dispatch_predicate,
-                tuning=tuning,
+                re_dispatch_predicate=ctx.re_dispatch_predicate,
+                tuning=ctx.tuning,
                 enqueue_failed_redispatched=enqueue_failed_redispatched,
-                summary=summary,
-                terminalized_run_ids=terminalized_run_ids,
-                terminalize_max=terminalize_max,
-                early_detect_minutes=early_detect_minutes,
+                summary=ctx.summary,
+                terminalized_run_ids=ctx.terminalized_run_ids,
+                terminalize_max=ctx.terminalize_max,
+                early_detect_minutes=ctx.early_detect_minutes,
                 row_budget=row_budget,
                 stage=stage,
             )
@@ -6896,7 +6893,7 @@ async def _attempt_reconcile_org(
         # orgs, record_facts and the compensating sweeps still run this
         # tick.
         org_elapsed = time.monotonic() - org_pass_started
-        _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+        _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
         stage_label = _org_stage_label(stage, org_id)
         # FAR-1621 (qa F2): a builtin TimeoutError here is EITHER the
         # per-org asyncio cut — only once the slice has actually
@@ -6924,7 +6921,7 @@ async def _attempt_reconcile_org(
             if stage_label.endswith(("/session-acquire", "/session-acquired")):
                 # Session never established: the connect bound expired
                 # before the first statement of this transaction ran.
-                summary["org_connect_timeouts"] = summary.get("org_connect_timeouts", 0) + 1
+                ctx.summary["org_connect_timeouts"] = ctx.summary.get("org_connect_timeouts", 0) + 1
                 _log.warning(
                     "dispatcher_reconcile.org_connect_timeout org=%s at stage %s (asyncpg connect "
                     "bound %ss reached after %.1fs — the org's DB session was NEVER established, so "
@@ -6941,12 +6938,12 @@ async def _attempt_reconcile_org(
             # In-pass TimeoutError raised BEFORE the slice ran out:
             # still a bounded per-org failure (counted, tick continues),
             # but the message must not claim the per-org bound fired.
-            summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
-            summary["status"] = "timeout"
-            summary["last_error"] = (
+            ctx.summary["org_timeouts"] = ctx.summary.get("org_timeouts", 0) + 1
+            ctx.summary["status"] = "timeout"
+            ctx.summary["last_error"] = (
                 f"in-pass TimeoutError after {org_elapsed:.1f}s (org slice "
-                f"{org_slice_seconds:.1f}s NOT elapsed, org_budget={org_budget_seconds}s, "
-                f"budget={outer_budget_seconds}s, max_rows={max_rows}) during stage={stage_label}"
+                f"{org_slice_seconds:.1f}s NOT elapsed, org_budget={ctx.org_budget_seconds}s, "
+                f"budget={ctx.outer_budget_seconds}s, max_rows={ctx.max_rows}) during stage={stage_label}"
             )[:400]
             _log.warning(
                 "dispatcher_reconcile: in-pass TimeoutError after %.1fs (org slice %.1fs NOT "
@@ -6954,23 +6951,23 @@ async def _attempt_reconcile_org(
                 "rolled back, tick continues",
                 org_elapsed,
                 org_slice_seconds,
-                org_budget_seconds,
-                outer_budget_seconds,
+                ctx.org_budget_seconds,
+                ctx.outer_budget_seconds,
                 org_id,
                 stage_label,
                 exc_info=True,
             )
             return None
-        summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
-        summary["status"] = "timeout"
+        ctx.summary["org_timeouts"] = ctx.summary.get("org_timeouts", 0) + 1
+        ctx.summary["status"] = "timeout"
         # FAR-1621: the stage is the whole point of this message — it is
         # what turns the next prod occurrence into a diagnosis, so it is
         # carried in BOTH the persisted last_error and the WARNING. The
         # truncation is generous enough that a full stage string
         # (``reconcile_org:<uuid>/terminalizer:<key>``) survives it.
-        summary["last_error"] = (
+        ctx.summary["last_error"] = (
             f"per-org bound after {org_elapsed:.1f}s "
-            f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
+            f"(org_budget={ctx.org_budget_seconds}s, budget={ctx.outer_budget_seconds}s, max_rows={ctx.max_rows}) "
             f"during stage={stage_label}"
         )[:400]
         _log.warning(
@@ -6978,8 +6975,8 @@ async def _attempt_reconcile_org(
             "(org_budget=%ds, budget=%ds) for org %s at stage %s; "
             "org transaction rolled back, tick continues",
             org_elapsed,
-            org_budget_seconds,
-            outer_budget_seconds,
+            ctx.org_budget_seconds,
+            ctx.outer_budget_seconds,
             org_id,
             stage_label,
         )
@@ -6996,8 +6993,8 @@ async def _attempt_reconcile_org(
         # Same bounded-failure contract as the 55P03 skip below: the org
         # transaction rolled back whole, so unwind, count, WARN with the
         # stage, and CONTINUE.
-        _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-        summary["org_pool_timeouts"] = summary.get("org_pool_timeouts", 0) + 1
+        _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+        ctx.summary["org_pool_timeouts"] = ctx.summary.get("org_pool_timeouts", 0) + 1
         _log.warning(
             "dispatcher_reconcile.org_pool_timeout org=%s at stage %s (system-engine pool "
             "checkout timed out after %ss) — org transaction rolled back with NO rows "
@@ -7027,11 +7024,11 @@ async def _attempt_reconcile_org(
             # so the health heartbeat stays untouched. Every OTHER failure
             # keeps its contract and propagates to the outer failure
             # heartbeat above.
-            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+            _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
             # Observability parity with the per-org time bound above: make
             # a contended tick visible in the health summary, not only in
             # the WARNING log.
-            summary["org_lock_timeouts"] = summary.get("org_lock_timeouts", 0) + 1
+            ctx.summary["org_lock_timeouts"] = ctx.summary.get("org_lock_timeouts", 0) + 1
             _log.warning(
                 "dispatcher_reconcile.org_lock_timeout org=%s at stage %s (SQLSTATE 55P03 from "
                 "the bounded mutation_row_lock_timeout_ms wait) — org transaction "
@@ -7052,8 +7049,8 @@ async def _attempt_reconcile_org(
             # back whole, so the SAME bounded-failure contract as the
             # 55P03 skip applies: unwind, count, WARN with the stage,
             # CONTINUE — the rows are re-selected next tick.
-            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-            summary["org_statement_timeouts"] = summary.get("org_statement_timeouts", 0) + 1
+            _unwind_org_counts(ctx.summary, summary_before, ctx.terminalized_run_ids, terminalized_len_before)
+            ctx.summary["org_statement_timeouts"] = ctx.summary.get("org_statement_timeouts", 0) + 1
             _log.warning(
                 "dispatcher_reconcile.org_statement_timeout org=%s at stage %s (SQLSTATE 57014 "
                 "from the transaction-scoped %dms statement bound) — org transaction "
