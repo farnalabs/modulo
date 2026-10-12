@@ -159,7 +159,10 @@ describe('NotificationDropdown (FAR-249)', () => {
   it('renders a dialog with an accessible title', async () => {
     const wrapper = await mountDropdown()
     const dialog = wrapper.find('[data-testid="notification-dropdown"]')
-    expect(dialog.attributes('role')).toBe('dialog')
+    // A native <dialog> (SonarCloud Web:S6819) — the element itself supplies
+    // the dialog role; no redundant role attribute.
+    expect(dialog.element.tagName).toBe('DIALOG')
+    expect(dialog.attributes('open')).toBeDefined()
     expect(dialog.attributes('aria-label')).toBeTruthy()
     expect(dialog.attributes('id')).toBe('notification-dropdown')
   })

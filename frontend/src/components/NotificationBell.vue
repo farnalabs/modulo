@@ -25,14 +25,14 @@
          aria-hidden so the button's accessible name stays "Notifications";
          this sr-only status region announces count *changes* to screen
          readers (WCAG 4.1.3). -->
-    <span
+    <output
       data-testid="notification-unread-live"
-      role="status"
+      :aria-label="$t('components.NotificationBell.notifications')"
       aria-live="polite"
       class="sr-only"
     >
       {{ $t('components.NotificationBell.unread_count_status', { count: store.unreadCount }) }}
-    </span>
+    </output>
     <NotificationDropdown v-if="dropdownOpen" @close="closeDropdown" />
     <!-- FAR-250: classified-reconnect banner — shown when the SSE stream stopped on a 4xx -->
     <div

@@ -272,7 +272,9 @@ describe('NotificationBell (FAR-250)', () => {
     const wrapper = await mountBell()
     const live = wrapper.find('[data-testid="notification-unread-live"]')
     expect(live.exists()).toBe(true)
-    expect(live.attributes('role')).toBe('status')
+    // <output> carries the implicit ARIA status role natively (SonarCloud
+    // Web:S6819) — assert the native element rather than a redundant role.
+    expect(live.element.tagName).toBe('OUTPUT')
     expect(live.attributes('aria-live')).toBe('polite')
     // The visual badge is decorative — the live region carries the announcement.
     expect(wrapper.find('[data-testid="notification-unread-badge"]').attributes('aria-hidden')).toBe('true')

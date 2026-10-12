@@ -1,11 +1,11 @@
 <template>
-  <div
+  <dialog
     id="notification-dropdown"
     ref="dropdownRef"
     data-testid="notification-dropdown"
-    role="dialog"
+    open
     :aria-label="$t('components.NotificationDropdown.title')"
-    class="absolute right-0 top-full z-50 mt-1 w-80 rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+    class="absolute left-auto right-0 top-full z-50 mt-1 block w-80 rounded-md border border-border bg-popover text-popover-foreground shadow-md"
     @keydown.esc.stop.prevent="$emit('close')"
   >
     <div class="flex items-center justify-between border-b border-border px-3 py-2">
@@ -31,15 +31,15 @@
     >
       {{ $t("components.NotificationDropdown.failed_to_mark_all_read") }}
     </p>
-    <p
+    <output
       v-else-if="markedAllRead"
       data-testid="notification-mark-all-read-success"
-      role="status"
+      :aria-label="$t('components.NotificationDropdown.marked_all_read_status')"
       aria-live="polite"
-      class="border-b border-border px-3 py-2 text-xs text-muted-foreground"
+      class="block border-b border-border px-3 py-2 text-xs text-muted-foreground"
     >
       {{ $t("components.NotificationDropdown.marked_all_read_status") }}
-    </p>
+    </output>
 
     <LoadingSpinner v-if="store.loadingRecent" />
     <!-- Fetch failed AND there is nothing previously loaded to fall back to:
@@ -105,7 +105,7 @@
         {{ $t("components.NotificationDropdown.view_all") }}
       </router-link>
     </div>
-  </div>
+  </dialog>
 </template>
 
 <script setup lang="ts">

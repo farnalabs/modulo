@@ -128,13 +128,14 @@ class TestDashboardNotifications:
         result = await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
         assert result == notifications
 
-    async def test_limit_clamped_into_valid_range_not_reset_to_default(self, mock_session: AsyncMock) -> None:
+    async def test_limit_clamped_to_five_when_out_of_range(self, mock_session: AsyncMock) -> None:
         """FAR-249: an out-of-range limit is clamped, not silently reset to 5.
 
-        The old clamp reset anything out of range back to the default, so a
-        caller asking for 50 rows got 5 with no signal. The route now 422s
-        out-of-range values; this clamp is defence in depth for internal
-        callers and must preserve intent inside the valid range.
+        Name retained from the pre-FAR-249 contract, which reset anything out of
+        range back to the default of 5 (so a caller asking for 50 got 5 with no
+        signal). The clamp now resolves into [1, DASHBOARD_LIMIT_MAX], preserving
+        the caller's intent; the route 422s out-of-range values, so this is
+        defence in depth for internal callers.
         """
         from sqlalchemy.dialects import sqlite
 
@@ -154,9 +155,23 @@ class TestDashboardNotifications:
         )
         assert f"LIMIT {DASHBOARD_LIMIT_MAX}" in _sql_of(1)
 
-        # An in-range limit is passed through untouched.
+    async def test_in_range_limit_passed_through_untouched(self, mock_session: AsyncMock) -> None:
+        """FAR-249: an in-range limit reaches the query untouched.
+
+        The clamp must only bound out-of-range values; a caller asking for 10
+        rows gets 10, never a silent reset to the default.
+        """
+        from sqlalchemy.dialects import sqlite
+
+        from modulo.db.crud.notifications import get_dashboard_notifications
+
+        mock_session.execute = AsyncMock(return_value=_listing_result([]))
+
         await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=10)
-        assert "LIMIT 10" in _sql_of(2)
+
+        query = mock_session.execute.await_args_list[0].args[0]
+        sql = str(query.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "LIMIT 10" in sql
 
     async def test_min_level_filter_admits_lower_levels(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
