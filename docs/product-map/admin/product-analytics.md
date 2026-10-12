@@ -6,7 +6,12 @@ code:
   - backend/src/modulo/api/routes/product_analytics.py
   - backend/src/modulo/api/routes/product_analytics_identity.py
   - backend/src/modulo/api/routes/product_analytics_transparency.py
+  - backend/src/modulo/api/routes/metrics_ingest.py
   - backend/src/modulo/core/product_analytics
+  - frontend/src/composables/useProductAnalytics.ts
+  - frontend/src/composables/productAnalyticsEvents.ts
+  - frontend/src/stores/productAnalyticsStore.ts
+  - frontend/src/views/AdminProductAnalyticsView.vue
 unit-tests:
   - backend/tests/unit/product_analytics/test_consent.py
   - backend/tests/unit/product_analytics/test_instance_identity.py
@@ -15,6 +20,10 @@ unit-tests:
   - backend/tests/unit/product_analytics/test_metrics_ingest.py
   - backend/tests/unit/product_analytics/test_routes.py
   - backend/tests/unit/api/routes/test_product_analytics_transparency.py
+  - backend/tests/unit/api/test_product_analytics_identity_hardening.py
+  - backend/tests/integration/test_product_analytics_identity.py
+  - frontend/src/__tests__/composables/useProductAnalytics.spec.ts
+  - frontend/src/__tests__/AdminProductAnalyticsView.spec.ts
 bdd:
   - backend/tests/bdd/features/product_analytics/metrics_ingest.feature
   - backend/tests/bdd/features/personas/marcus-ciso.feature
@@ -96,6 +105,30 @@ an eligible tier.
       transparency surface (`personas/marcus-ciso.feature`,
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
+- [x] The event-ingest endpoint `POST /api/v1/metrics/events` stages consent-gated
+      curated frontend events into `metrics_staging`: an org-scoped insert with
+      `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
+      `api_error` daily cap, and route-template sanitisation so raw paths never
+      reach the table; it is best-effort (always 204) and consent-gated through the
+      shared `consent.is_org_consenting` predicate
+      (`api/routes/metrics_ingest.py`,
+      `tests/unit/product_analytics/test_metrics_ingest.py`,
+      `tests/bdd/features/product_analytics/metrics_ingest.feature`)
+- [ ] `metrics_staging` is never consumed and never purged: the daily dump builds
+      its payload only from aggregate tables (`RunDailyFact`, `ErrorGroup` and the
+      entity counts) and never reads staged events, and no retention/purge path
+      exists. Staged rows therefore accumulate without bound while the
+      transparency surface can still report `egress_allowed`. Both the model
+      docstring (`db/models/metrics_staging.py`) and migration 0121 claim the dump
+      consumes and purges the rows — that contract is unmet. Feature completion,
+      not a QA fix — tracked for a follow-up ticket.
+- [ ] The frontend event-capture composable is unwired: `initProductAnalytics` /
+      `useProductAnalytics.track` (`frontend/src/composables/useProductAnalytics.ts`)
+      has no production call site (no initialiser in `App.vue` / `main.ts`), so no
+      client event is ever buffered or posted. Its docstrings also describe a
+      server-side `page_view` daily counter (Redis INCR, flushed once per dump
+      window) that exists nowhere in the backend. Feature completion, not a QA fix
+      — tracked for a follow-up ticket.
 
 ## Consent scoping (FAR-1635)
 
@@ -130,6 +163,23 @@ intentional, not an open question:
   fields, which now reflect real state. An in-product analytics export/administration
   surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
   remains unshipped (warehouse scope sits under `feat-analytics`).
+- The `metrics_staging` consumer and its retention/purge are missing. The daily
+  dump never reads staged events, so the frontend ingest path
+  (`POST /api/v1/metrics/events` → `metrics_staging`) delivers nothing end to
+  end and the table grows without bound. Documented by the model docstring and
+  migration 0121 as consumed + purged by the dump — a contract that was never
+  implemented. Needs feature work (wire staging into the dump and add the purge);
+  tracked for a follow-up ticket.
+- The frontend capture composable
+  (`frontend/src/composables/useProductAnalytics.ts`) is not initialised anywhere
+  in the app, so client-only events are never captured. Wiring it should land
+  together with the staging consumer above — wiring capture without a consumer
+  would only accumulate unusable rows.
+- The event-capture docstrings (`productAnalyticsEvents.ts`,
+  `useProductAnalytics.ts`) describe a server-side `page_view` daily counter
+  (Redis INCR, flushed once per dump window, consent-gated before increment) that
+  does not exist anywhere in the backend, and `page_view` is not in
+  `metrics_constants.VALID_EVENT_TYPES`.
 
 ## QA History
 - 2026-10-12: **Improve Architecture product-map walk** — wired the partner
@@ -145,6 +195,23 @@ intentional, not an open question:
   circuit). The request-time route half (`resolve_plan_context` /
   `require_feature` degrading the effective plan) is still open and stays
   tracked as the remaining unchecked behaviour.
+- 2026-10-12: **Improve Architecture product-map walk** — documented the
+  event-ingest path and found its two unwired halves (both feature completion, not
+  QA fixes). (1) `POST /api/v1/metrics/events` → `metrics_staging` has no consumer
+  and no purge: `metrics_dump._build_payload` reads only aggregate tables
+  (`RunDailyFact`, `ErrorGroup`, entity counts) and never `MetricsStaging`, while
+  `db/models/metrics_staging.py` and migration 0121 both claim the dump consumes
+  and purges the rows. (2) `initProductAnalytics` / `useProductAnalytics` has no
+  production call site, so the client never captures or posts an event; its
+  `page_view` Redis-counter docstring describes a mechanism that does not exist.
+  Also corrected the entry's frontmatter: added `api/routes/metrics_ingest.py`, the
+  capture composable / event list / store / view to `code:`, and the identity-route
+  hardening tests + the new frontend specs to `unit-tests:`. Verified the linked
+  code read paths and re-ran the product analytics unit suites (all green); the
+  multi-org soft-delete filter audit (Lens 4) was falsified by direct observation
+  (the global `with_loader_criteria` filter DOES apply to the core-style
+  `select(func.count()).select_from(Model)` counts, so the counts exclude
+  soft-deleted rows).
 - 2026-10-10: **FAR-1635 (consent scope)** — replaced the transparency
   endpoint's hardcoded `off` fallback with an instance-level posture. Per-org
   consent remains the primary source; when the caller org cannot be resolved
