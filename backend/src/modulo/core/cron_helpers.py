@@ -6581,7 +6581,7 @@ def _unwind_org_counts(
 ) -> None:
     """Restore the tick summary to *summary_before* and drop the ids collected since *terminalized_len_before*.
 
-    Shared by every bounded per-org failure arm of ``_dispatcher_reconcile_body``
+    Shared by every bounded per-org failure arm of ``_attempt_reconcile_org``
     (FAR-1525 time cut, FAR-1601 SQLSTATE 55P03, FAR-1621 SQLSTATE 57014 and
     pool-checkout cuts): in every case the org's transaction rolled back WHOLE,
     so it must contribute neither counters nor compensating-fact ids to the tick.
@@ -6658,6 +6658,88 @@ async def _dispatcher_reconcile_body(
         await write_dispatcher_reconcile_stats(redis_client, summary)
         return summary
     q = RedisQueue(redis_client, name=queue_name)
+    # qa F3: the composed recovery predicate is the SINGLE composition
+    # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
+    # marker sweep's recoverability check.
+    re_dispatch_predicate = reconciler_recovery_predicate(
+        reenqueue_window=reenqueue_window,
+        stale_window=tuning.stale_window,
+        capacity_redispatch_seconds=tuning.capacity_redispatch_seconds,
+        nodeless_window=tuning.nodeless_window,
+        enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
+        early_detect_minutes=early_detect_minutes,
+    )
+    await _reconcile_boxes(
+        org_ids=org_ids,
+        factory=factory,
+        q=q,
+        redis_client=redis_client,
+        re_dispatch_predicate=re_dispatch_predicate,
+        tuning=tuning,
+        terminalize_max=terminalize_max,
+        early_detect_minutes=early_detect_minutes,
+        max_rows=max_rows,
+        summary=summary,
+        terminalized_run_ids=terminalized_run_ids,
+        stage=stage,
+        body_started=body_started,
+        outer_budget_seconds=outer_budget_seconds,
+        org_budget_seconds=org_budget_seconds,
+    )
+    await _terminalize_run_facts(
+        terminalized_run_ids=terminalized_run_ids,
+        facts_max=facts_max,
+        summary=summary,
+        stage=stage,
+    )
+    # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
+    # dispatched a node are the recurring ~30/week executor_stalled class;
+    # a burst here points at degraded workers/sandboxes, not capacity.
+    if summary["claimed_but_never_dispatched"]:
+        _log.error(
+            "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
+            "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
+            summary["claimed_but_never_dispatched"],
+            tuning.nodeless_window,
+        )
+    if stage is not None:
+        stage["op"] = "compensating_sweeps"
+    await _run_reconcile_sweeps(redis_client, summary)
+    # Record the outcome for /healthz/ready BEFORE the client is closed:
+    # the shared Redis key is what the WEB process reads (the in-process
+    # dict lives only in this worker process).
+    await _update_reconcile_telemetry(summary)
+    set_dispatcher_reconcile_stats(summary)
+    await write_dispatcher_reconcile_stats(redis_client, summary)
+    return summary
+
+
+async def _reconcile_boxes(
+    *,
+    org_ids: list[uuid.UUID],
+    factory: async_sessionmaker[AsyncSession],
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    re_dispatch_predicate: Any,
+    tuning: ReconcileTuning,
+    terminalize_max: int,
+    early_detect_minutes: int | None,
+    max_rows: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    stage: dict[str, str] | None,
+    body_started: float,
+    outer_budget_seconds: int,
+    org_budget_seconds: int,
+) -> None:
+    """Per-organisation reconcile loop of ``_dispatcher_reconcile_body``.
+
+    Each org is one bounded "box": stage-marked, gated by the cumulative
+    FAR-1425 row budget and the FAR-1525 per-org time slice, then handed to
+    ``_attempt_reconcile_org`` for its single transactional pass (whose four
+    bounded-failure arms live there, not here — S3776). Extracted so the body
+    orchestrates tick phases without carrying the per-org nesting.
+    """
     # Per-tick re-dispatch cap counter for the B3 enqueue-failed branch.
     enqueue_failed_redispatched = 0
     # FAR-904: cumulative RECONCILE-SCAN row budget across all orgs — the
@@ -6675,17 +6757,6 @@ async def _dispatcher_reconcile_body(
     # both LIMITs the row select and stops the per-row loop at the budget.
     # Overflow drains on subsequent ticks.
     rows_processed = 0
-    # qa F3: the composed recovery predicate is the SINGLE composition
-    # (re_dispatch OR nodeless zombie) — shared verbatim with the D8
-    # marker sweep's recoverability check.
-    re_dispatch_predicate = reconciler_recovery_predicate(
-        reenqueue_window=reenqueue_window,
-        stale_window=tuning.stale_window,
-        capacity_redispatch_seconds=tuning.capacity_redispatch_seconds,
-        nodeless_window=tuning.nodeless_window,
-        enqueue_failed_redispatch_seconds=ENQUEUE_FAILED_REDISPATCH_SECONDS,
-        early_detect_minutes=early_detect_minutes,
-    )
     for org_id in org_ids:
         # FAR-1501: the whole per-org tick runs with THIS org bound so every
         # ERROR emitted below — ``read failed (org ...)``, terminalizer
@@ -6725,216 +6796,294 @@ async def _dispatcher_reconcile_body(
                 summary["orgs_deferred"] = summary.get("orgs_deferred", 0) + len(org_ids) - org_ids.index(org_id)
                 break
             rows_before = summary["scanned"]
-            # FAR-1525 unwind anchors: if a bounded failure fires, the org's
-            # transaction has rolled back, so its in-memory counts and the
-            # terminalizer ids it collected must be unwound to match — a
-            # rolled-back org must contribute neither counters nor compensating
-            # facts to the tick.
-            summary_before = dict(summary)
-            terminalized_len_before = len(terminalized_run_ids)
-            org_pass_started = time.monotonic()
-            try:
-                async with asyncio.timeout(org_slice_seconds):
-                    enqueue_failed_redispatched = await _reconcile_org(
-                        factory=factory,
-                        q=q,
-                        redis_client=redis_client,
-                        org_id=org_id,
-                        re_dispatch_predicate=re_dispatch_predicate,
-                        tuning=tuning,
-                        enqueue_failed_redispatched=enqueue_failed_redispatched,
-                        summary=summary,
-                        terminalized_run_ids=terminalized_run_ids,
-                        terminalize_max=terminalize_max,
-                        early_detect_minutes=early_detect_minutes,
-                        # FAR-1425: hand the ORG the remainder of the tick's row budget,
-                        # not just the inter-org gate.  ``rows_processed < max_rows`` is
-                        # guaranteed here (the break above), so this is always >= 1.
-                        row_budget=max_rows - rows_processed,
-                        # FAR-1621: the mutable current-stage hint, so a cut names
-                        # the exact blocking site instead of only the org.
-                        stage=stage,
-                    )
-            except TimeoutError:
-                # FAR-1525: the org's pass raised a builtin TimeoutError. The
-                # session context managers inside _reconcile_org rolled back +
-                # closed at the safe boundary (same mechanism as the outer
-                # deadline), so unwind this org's in-memory accounting, record a
-                # TRUTHFUL bounded-failure marker, and CONTINUE — the remaining
-                # orgs, record_facts and the compensating sweeps still run this
-                # tick.
-                org_elapsed = time.monotonic() - org_pass_started
-                _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-                stage_label = _org_stage_label(stage, org_id)
-                # FAR-1621 (qa F2): a builtin TimeoutError here is EITHER the
-                # per-org asyncio cut — only once the slice has actually
-                # elapsed — OR asyncpg's TCP connect bound
-                # (``connect_args={"timeout": 10}``) expiring while the org's
-                # session was still being established, ~10s into a 30s slice.
-                # Reported as "per-org bound after ~10.1s (org_budget=30s)" the
-                # latter points the alert at a slow sweep when the real cause is
-                # a DB session that was never established, so the per-org bound
-                # is claimed ONLY at the slice deadline; before it the real
-                # cause is named from the stage instead.
-                #
-                # FAR-1644 (M2): the discriminator is the slice itself, with NO
-                # slack subtracted. ``asyncio.timeout`` can only fire at or
-                # after its deadline, and ``org_elapsed`` is measured from a
-                # timestamp taken BEFORE the ``async with`` armed it, so a
-                # genuine cut always has ``org_elapsed >= org_slice_seconds`` —
-                # a strict ``<`` therefore cannot misclaim a real cut. The
-                # former 0.5s slack only SHANK the in-pass window, so a connect
-                # bound firing at ~10s inside a clamped (10, 10.5]s slice
-                # landed at or past ``slice - slack`` and was reported as the
-                # per-org cut. Dropping it widens the in-pass window to the
-                # whole slice, which is exactly where a non-cut timeout lives.
-                if org_elapsed < org_slice_seconds:
-                    if stage_label.endswith(("/session-acquire", "/session-acquired")):
-                        # Session never established: the connect bound expired
-                        # before the first statement of this transaction ran.
-                        summary["org_connect_timeouts"] = summary.get("org_connect_timeouts", 0) + 1
-                        _log.warning(
-                            "dispatcher_reconcile.org_connect_timeout org=%s at stage %s (asyncpg connect "
-                            "bound %ss reached after %.1fs — the org's DB session was NEVER established, so "
-                            "this is NOT the per-org time bound) — org transaction rolled back with NO rows "
-                            "terminalized or repaired; the same rows are re-selected by the reconcile "
-                            "predicates on the next 60s tick",
-                            org_id,
-                            stage_label,
-                            _SYSTEM_CONNECT_TIMEOUT_SECONDS,
-                            org_elapsed,
-                            exc_info=True,
-                        )
-                        continue
-                    # In-pass TimeoutError raised BEFORE the slice ran out:
-                    # still a bounded per-org failure (counted, tick continues),
-                    # but the message must not claim the per-org bound fired.
-                    summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
-                    summary["status"] = "timeout"
-                    summary["last_error"] = (
-                        f"in-pass TimeoutError after {org_elapsed:.1f}s (org slice "
-                        f"{org_slice_seconds:.1f}s NOT elapsed, org_budget={org_budget_seconds}s, "
-                        f"budget={outer_budget_seconds}s, max_rows={max_rows}) during stage={stage_label}"
-                    )[:400]
-                    _log.warning(
-                        "dispatcher_reconcile: in-pass TimeoutError after %.1fs (org slice %.1fs NOT "
-                        "elapsed, org_budget=%ds, budget=%ds) for org %s at stage %s; org transaction "
-                        "rolled back, tick continues",
-                        org_elapsed,
-                        org_slice_seconds,
-                        org_budget_seconds,
-                        outer_budget_seconds,
-                        org_id,
-                        stage_label,
-                        exc_info=True,
-                    )
-                    continue
-                summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
-                summary["status"] = "timeout"
-                # FAR-1621: the stage is the whole point of this message — it is
-                # what turns the next prod occurrence into a diagnosis, so it is
-                # carried in BOTH the persisted last_error and the WARNING. The
-                # truncation is generous enough that a full stage string
-                # (``reconcile_org:<uuid>/terminalizer:<key>``) survives it.
-                summary["last_error"] = (
-                    f"per-org bound after {org_elapsed:.1f}s "
-                    f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
-                    f"during stage={stage_label}"
-                )[:400]
-                _log.warning(
-                    "dispatcher_reconcile: per-org time bound fired after %.1fs "
-                    "(org_budget=%ds, budget=%ds) for org %s at stage %s; "
-                    "org transaction rolled back, tick continues",
-                    org_elapsed,
-                    org_budget_seconds,
-                    outer_budget_seconds,
-                    org_id,
-                    stage_label,
-                )
+            outcome = await _attempt_reconcile_org(
+                factory=factory,
+                q=q,
+                redis_client=redis_client,
+                org_id=org_id,
+                re_dispatch_predicate=re_dispatch_predicate,
+                tuning=tuning,
+                enqueue_failed_redispatched=enqueue_failed_redispatched,
+                summary=summary,
+                terminalized_run_ids=terminalized_run_ids,
+                terminalize_max=terminalize_max,
+                early_detect_minutes=early_detect_minutes,
+                # FAR-1425: hand the ORG the remainder of the tick's row budget,
+                # not just the inter-org gate.  ``rows_processed < max_rows`` is
+                # guaranteed here (the break above), so this is always >= 1.
+                row_budget=max_rows - rows_processed,
+                # FAR-1621: the mutable current-stage hint, so a cut names
+                # the exact blocking site instead of only the org.
+                stage=stage,
+                org_slice_seconds=org_slice_seconds,
+                org_budget_seconds=org_budget_seconds,
+                outer_budget_seconds=outer_budget_seconds,
+                max_rows=max_rows,
+            )
+            if outcome is None:
+                # Bounded per-org failure: the org's transaction rolled back
+                # whole (unwound inside ``_attempt_reconcile_org``), so it
+                # contributes neither the scanned-row delta nor an updated cap
+                # counter — continue with the next org, exactly as the arms'
+                # former ``continue`` did.
                 continue
-            except asyncio.CancelledError:
-                raise
-            except SATimeoutError:
-                # FAR-1621: the system-engine pool checkout ran out of
-                # connections (``pool_timeout`` reached). sqlalchemy.exc.
-                # TimeoutError is NOT a subclass of the builtin TimeoutError, so
-                # the arm above never sees it — without this explicit arm it fell
-                # through to ``except Exception`` and either failed the whole tick
-                # or (before the arm existed) surfaced as the generic per-org cut.
-                # Same bounded-failure contract as the 55P03 skip below: the org
-                # transaction rolled back whole, so unwind, count, WARN with the
-                # stage, and CONTINUE.
-                _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-                summary["org_pool_timeouts"] = summary.get("org_pool_timeouts", 0) + 1
+            enqueue_failed_redispatched = outcome
+            rows_processed += summary["scanned"] - rows_before
+
+
+async def _attempt_reconcile_org(
+    *,
+    factory: async_sessionmaker[AsyncSession],
+    q: RedisQueue,
+    redis_client: AsyncRedis,
+    org_id: uuid.UUID,
+    re_dispatch_predicate: Any,
+    tuning: ReconcileTuning,
+    enqueue_failed_redispatched: int,
+    summary: dict[str, Any],
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    terminalize_max: int,
+    early_detect_minutes: int | None,
+    row_budget: int,
+    stage: dict[str, str] | None,
+    org_slice_seconds: float,
+    org_budget_seconds: int,
+    outer_budget_seconds: int,
+    max_rows: int,
+) -> int | None:
+    """One org's bounded reconcile pass, with its four bounded-failure arms.
+
+    Runs ``_reconcile_org`` under the FAR-1525 per-org ``asyncio.timeout``
+    slice. Returns the carried enqueue-failed re-dispatch counter on success,
+    or ``None`` when a bounded failure fired (per-org time cut, asyncpg connect
+    bound, pool checkout, SQLSTATE 55P03 / 57014). In every bounded case the
+    org's transaction rolled back WHOLE, so this helper unwinds its in-memory
+    accounting, records the truthful counter and stage, and the caller
+    continues with the next org. Any OTHER exception keeps its contract and
+    propagates (as does ``asyncio.CancelledError``).
+    """
+    # FAR-1525 unwind anchors: if a bounded failure fires, the org's
+    # transaction has rolled back, so its in-memory counts and the
+    # terminalizer ids it collected must be unwound to match — a
+    # rolled-back org must contribute neither counters nor compensating
+    # facts to the tick.
+    summary_before = dict(summary)
+    terminalized_len_before = len(terminalized_run_ids)
+    org_pass_started = time.monotonic()
+    try:
+        async with asyncio.timeout(org_slice_seconds):
+            return await _reconcile_org(
+                factory=factory,
+                q=q,
+                redis_client=redis_client,
+                org_id=org_id,
+                re_dispatch_predicate=re_dispatch_predicate,
+                tuning=tuning,
+                enqueue_failed_redispatched=enqueue_failed_redispatched,
+                summary=summary,
+                terminalized_run_ids=terminalized_run_ids,
+                terminalize_max=terminalize_max,
+                early_detect_minutes=early_detect_minutes,
+                row_budget=row_budget,
+                stage=stage,
+            )
+    except TimeoutError:
+        # FAR-1525: the org's pass raised a builtin TimeoutError. The
+        # session context managers inside _reconcile_org rolled back +
+        # closed at the safe boundary (same mechanism as the outer
+        # deadline), so unwind this org's in-memory accounting, record a
+        # TRUTHFUL bounded-failure marker, and CONTINUE — the remaining
+        # orgs, record_facts and the compensating sweeps still run this
+        # tick.
+        org_elapsed = time.monotonic() - org_pass_started
+        _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+        stage_label = _org_stage_label(stage, org_id)
+        # FAR-1621 (qa F2): a builtin TimeoutError here is EITHER the
+        # per-org asyncio cut — only once the slice has actually
+        # elapsed — OR asyncpg's TCP connect bound
+        # (``connect_args={"timeout": 10}``) expiring while the org's
+        # session was still being established, ~10s into a 30s slice.
+        # Reported as "per-org bound after ~10.1s (org_budget=30s)" the
+        # latter points the alert at a slow sweep when the real cause is
+        # a DB session that was never established, so the per-org bound
+        # is claimed ONLY at the slice deadline; before it the real
+        # cause is named from the stage instead.
+        #
+        # FAR-1644 (M2): the discriminator is the slice itself, with NO
+        # slack subtracted. ``asyncio.timeout`` can only fire at or
+        # after its deadline, and ``org_elapsed`` is measured from a
+        # timestamp taken BEFORE the ``async with`` armed it, so a
+        # genuine cut always has ``org_elapsed >= org_slice_seconds`` —
+        # a strict ``<`` therefore cannot misclaim a real cut. The
+        # former 0.5s slack only SHANK the in-pass window, so a connect
+        # bound firing at ~10s inside a clamped (10, 10.5]s slice
+        # landed at or past ``slice - slack`` and was reported as the
+        # per-org cut. Dropping it widens the in-pass window to the
+        # whole slice, which is exactly where a non-cut timeout lives.
+        if org_elapsed < org_slice_seconds:
+            if stage_label.endswith(("/session-acquire", "/session-acquired")):
+                # Session never established: the connect bound expired
+                # before the first statement of this transaction ran.
+                summary["org_connect_timeouts"] = summary.get("org_connect_timeouts", 0) + 1
                 _log.warning(
-                    "dispatcher_reconcile.org_pool_timeout org=%s at stage %s (system-engine pool "
-                    "checkout timed out after %ss) — org transaction rolled back with NO rows "
+                    "dispatcher_reconcile.org_connect_timeout org=%s at stage %s (asyncpg connect "
+                    "bound %ss reached after %.1fs — the org's DB session was NEVER established, so "
+                    "this is NOT the per-org time bound) — org transaction rolled back with NO rows "
                     "terminalized or repaired; the same rows are re-selected by the reconcile "
                     "predicates on the next 60s tick",
                     org_id,
-                    _org_stage_label(stage, org_id),
-                    _SYSTEM_POOL_TIMEOUT_SECONDS,
+                    stage_label,
+                    _SYSTEM_CONNECT_TIMEOUT_SECONDS,
+                    org_elapsed,
                     exc_info=True,
                 )
-                continue
-            except Exception as exc:
-                if is_row_lock_timeout(exc):
-                    # FAR-1601: the transaction-scoped bound at the top of
-                    # _reconcile_org fired (SQLSTATE 55P03) — a live writer
-                    # (executor claim/heartbeat/gate decision) holds a ``runs`` row
-                    # this org's sweep needed. The org transaction rolled back
-                    # WHOLE, so NOT ONE of its terminalizations or repairs
-                    # committed: unwind its counts and compensating-fact ids exactly
-                    # like the per-org time bound above (a rolled-back org must
-                    # contribute neither counters nor facts), skip this org with a
-                    # WARNING + full chain, and CONTINUE — the same rows are
-                    # re-selected by the reconcile predicates on the next 60s tick.
-                    # Idempotent sweep: never a silent no-op, never a lost
-                    # recovery. The TICK itself is not a failure (the remaining
-                    # orgs, record_facts and the compensating sweeps all still run),
-                    # so the health heartbeat stays untouched. Every OTHER failure
-                    # keeps its contract and propagates to the outer failure
-                    # heartbeat above.
-                    _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-                    # Observability parity with the per-org time bound above: make
-                    # a contended tick visible in the health summary, not only in
-                    # the WARNING log.
-                    summary["org_lock_timeouts"] = summary.get("org_lock_timeouts", 0) + 1
-                    _log.warning(
-                        "dispatcher_reconcile.org_lock_timeout org=%s at stage %s (SQLSTATE 55P03 from "
-                        "the bounded mutation_row_lock_timeout_ms wait) — org transaction "
-                        "rolled back with NO rows terminalized or repaired; the same rows "
-                        "are re-selected by the reconcile predicates on the next 60s tick",
-                        org_id,
-                        _org_stage_label(stage, org_id),
-                        exc_info=True,
-                    )
-                    continue
-                if is_statement_timeout(exc):
-                    # FAR-1621: the transaction-scoped statement bound fired
-                    # (SQLSTATE 57014 query_canceled) — one statement in this
-                    # org's pass ran longer than _RECONCILE_STATEMENT_TIMEOUT_MS
-                    # and was cancelled by Postgres, rather than silently burning
-                    # the rest of the org slice and being cut by the generic
-                    # asyncio bound with no evidence. The org transaction rolled
-                    # back whole, so the SAME bounded-failure contract as the
-                    # 55P03 skip applies: unwind, count, WARN with the stage,
-                    # CONTINUE — the rows are re-selected next tick.
-                    _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
-                    summary["org_statement_timeouts"] = summary.get("org_statement_timeouts", 0) + 1
-                    _log.warning(
-                        "dispatcher_reconcile.org_statement_timeout org=%s at stage %s (SQLSTATE 57014 "
-                        "from the transaction-scoped %dms statement bound) — org transaction "
-                        "rolled back with NO rows terminalized or repaired; the same rows "
-                        "are re-selected by the reconcile predicates on the next 60s tick",
-                        org_id,
-                        _org_stage_label(stage, org_id),
-                        _RECONCILE_STATEMENT_TIMEOUT_MS,
-                        exc_info=True,
-                    )
-                    continue
-                raise
-            rows_processed += summary["scanned"] - rows_before
+                return None
+            # In-pass TimeoutError raised BEFORE the slice ran out:
+            # still a bounded per-org failure (counted, tick continues),
+            # but the message must not claim the per-org bound fired.
+            summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
+            summary["status"] = "timeout"
+            summary["last_error"] = (
+                f"in-pass TimeoutError after {org_elapsed:.1f}s (org slice "
+                f"{org_slice_seconds:.1f}s NOT elapsed, org_budget={org_budget_seconds}s, "
+                f"budget={outer_budget_seconds}s, max_rows={max_rows}) during stage={stage_label}"
+            )[:400]
+            _log.warning(
+                "dispatcher_reconcile: in-pass TimeoutError after %.1fs (org slice %.1fs NOT "
+                "elapsed, org_budget=%ds, budget=%ds) for org %s at stage %s; org transaction "
+                "rolled back, tick continues",
+                org_elapsed,
+                org_slice_seconds,
+                org_budget_seconds,
+                outer_budget_seconds,
+                org_id,
+                stage_label,
+                exc_info=True,
+            )
+            return None
+        summary["org_timeouts"] = summary.get("org_timeouts", 0) + 1
+        summary["status"] = "timeout"
+        # FAR-1621: the stage is the whole point of this message — it is
+        # what turns the next prod occurrence into a diagnosis, so it is
+        # carried in BOTH the persisted last_error and the WARNING. The
+        # truncation is generous enough that a full stage string
+        # (``reconcile_org:<uuid>/terminalizer:<key>``) survives it.
+        summary["last_error"] = (
+            f"per-org bound after {org_elapsed:.1f}s "
+            f"(org_budget={org_budget_seconds}s, budget={outer_budget_seconds}s, max_rows={max_rows}) "
+            f"during stage={stage_label}"
+        )[:400]
+        _log.warning(
+            "dispatcher_reconcile: per-org time bound fired after %.1fs "
+            "(org_budget=%ds, budget=%ds) for org %s at stage %s; "
+            "org transaction rolled back, tick continues",
+            org_elapsed,
+            org_budget_seconds,
+            outer_budget_seconds,
+            org_id,
+            stage_label,
+        )
+        return None
+    except asyncio.CancelledError:
+        raise
+    except SATimeoutError:
+        # FAR-1621: the system-engine pool checkout ran out of
+        # connections (``pool_timeout`` reached). sqlalchemy.exc.
+        # TimeoutError is NOT a subclass of the builtin TimeoutError, so
+        # the arm above never sees it — without this explicit arm it fell
+        # through to ``except Exception`` and either failed the whole tick
+        # or (before the arm existed) surfaced as the generic per-org cut.
+        # Same bounded-failure contract as the 55P03 skip below: the org
+        # transaction rolled back whole, so unwind, count, WARN with the
+        # stage, and CONTINUE.
+        _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+        summary["org_pool_timeouts"] = summary.get("org_pool_timeouts", 0) + 1
+        _log.warning(
+            "dispatcher_reconcile.org_pool_timeout org=%s at stage %s (system-engine pool "
+            "checkout timed out after %ss) — org transaction rolled back with NO rows "
+            "terminalized or repaired; the same rows are re-selected by the reconcile "
+            "predicates on the next 60s tick",
+            org_id,
+            _org_stage_label(stage, org_id),
+            _SYSTEM_POOL_TIMEOUT_SECONDS,
+            exc_info=True,
+        )
+        return None
+    except Exception as exc:
+        if is_row_lock_timeout(exc):
+            # FAR-1601: the transaction-scoped bound at the top of
+            # _reconcile_org fired (SQLSTATE 55P03) — a live writer
+            # (executor claim/heartbeat/gate decision) holds a ``runs`` row
+            # this org's sweep needed. The org transaction rolled back
+            # WHOLE, so NOT ONE of its terminalizations or repairs
+            # committed: unwind its counts and compensating-fact ids exactly
+            # like the per-org time bound above (a rolled-back org must
+            # contribute neither counters nor facts), skip this org with a
+            # WARNING + full chain, and CONTINUE — the same rows are
+            # re-selected by the reconcile predicates on the next 60s tick.
+            # Idempotent sweep: never a silent no-op, never a lost
+            # recovery. The TICK itself is not a failure (the remaining
+            # orgs, record_facts and the compensating sweeps all still run),
+            # so the health heartbeat stays untouched. Every OTHER failure
+            # keeps its contract and propagates to the outer failure
+            # heartbeat above.
+            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+            # Observability parity with the per-org time bound above: make
+            # a contended tick visible in the health summary, not only in
+            # the WARNING log.
+            summary["org_lock_timeouts"] = summary.get("org_lock_timeouts", 0) + 1
+            _log.warning(
+                "dispatcher_reconcile.org_lock_timeout org=%s at stage %s (SQLSTATE 55P03 from "
+                "the bounded mutation_row_lock_timeout_ms wait) — org transaction "
+                "rolled back with NO rows terminalized or repaired; the same rows "
+                "are re-selected by the reconcile predicates on the next 60s tick",
+                org_id,
+                _org_stage_label(stage, org_id),
+                exc_info=True,
+            )
+            return None
+        if is_statement_timeout(exc):
+            # FAR-1621: the transaction-scoped statement bound fired
+            # (SQLSTATE 57014 query_canceled) — one statement in this
+            # org's pass ran longer than _RECONCILE_STATEMENT_TIMEOUT_MS
+            # and was cancelled by Postgres, rather than silently burning
+            # the rest of the org slice and being cut by the generic
+            # asyncio bound with no evidence. The org transaction rolled
+            # back whole, so the SAME bounded-failure contract as the
+            # 55P03 skip applies: unwind, count, WARN with the stage,
+            # CONTINUE — the rows are re-selected next tick.
+            _unwind_org_counts(summary, summary_before, terminalized_run_ids, terminalized_len_before)
+            summary["org_statement_timeouts"] = summary.get("org_statement_timeouts", 0) + 1
+            _log.warning(
+                "dispatcher_reconcile.org_statement_timeout org=%s at stage %s (SQLSTATE 57014 "
+                "from the transaction-scoped %dms statement bound) — org transaction "
+                "rolled back with NO rows terminalized or repaired; the same rows "
+                "are re-selected by the reconcile predicates on the next 60s tick",
+                org_id,
+                _org_stage_label(stage, org_id),
+                _RECONCILE_STATEMENT_TIMEOUT_MS,
+                exc_info=True,
+            )
+            return None
+        raise
+
+
+async def _terminalize_run_facts(
+    *,
+    terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]],
+    facts_max: int,
+    summary: dict[str, Any],
+    stage: dict[str, str] | None,
+) -> None:
+    """Post-org fact and audit writes of ``_dispatcher_reconcile_body``.
+
+    FAR-162 (P6') + FAR-746: record a capped daily fact for every run
+    terminalised this tick; FAR-1549: record every such run on its org's
+    uncapped audit chain. All per-org terminalizer transactions have
+    committed by the time this runs — each facts write opens its own
+    RLS-scoped session. Extracted for S3776; ordering (facts, then audits)
+    is unchanged.
+    """
     # FAR-162 (P6') — record a daily fact for every run terminalised this
     # tick (executor_stalled / no_progress / claim_cap_exhausted /
     # dispatch_failed / hitl_review_expired): the terminalizers write raw UPDATEs and never
@@ -6961,26 +7110,6 @@ async def _dispatcher_reconcile_body(
     # ONE session per ORG (not one per run) so a terminalizer backlog cannot
     # blow the tick budget the way per-run sessions would.
     await _record_terminalisation_audits(terminalized_run_ids)
-    # FAR-714: alert-grade tick summary — runs claimed by SAQ but never
-    # dispatched a node are the recurring ~30/week executor_stalled class;
-    # a burst here points at degraded workers/sandboxes, not capacity.
-    if summary["claimed_but_never_dispatched"]:
-        _log.error(
-            "dispatcher_reconcile.claimed_but_never_dispatched_summary: %d run(s) claimed by SAQ but never "
-            "dispatched a node were repaired this tick (nodeless_window=%dm) — investigate worker/sandbox health",
-            summary["claimed_but_never_dispatched"],
-            tuning.nodeless_window,
-        )
-    if stage is not None:
-        stage["op"] = "compensating_sweeps"
-    await _run_reconcile_sweeps(redis_client, summary)
-    # Record the outcome for /healthz/ready BEFORE the client is closed:
-    # the shared Redis key is what the WEB process reads (the in-process
-    # dict lives only in this worker process).
-    await _update_reconcile_telemetry(summary)
-    set_dispatcher_reconcile_stats(summary)
-    await write_dispatcher_reconcile_stats(redis_client, summary)
-    return summary
 
 
 def _dispatcher_summary() -> dict[str, Any]:
