@@ -161,6 +161,8 @@ async def test_best_effort_sweeps_swallow_drift_runner_enforcement_failures(
         await ch._run_reconcile_sweeps(redis_client, summary)
 
     assert summary["runner_markers_scanned"] == 0
+    assert summary["runner_markers_cleared"] == 0
+    assert summary["runner_markers_transitioned"] == 0
     assert summary["enforcement_sweep_scanned"] == 0
     assert any(_DRIFT_FAILED_TOKEN in message for message in caplog.messages)
     assert any(_RUNNER_MARKER_FAILED_TOKEN in message for message in caplog.messages)

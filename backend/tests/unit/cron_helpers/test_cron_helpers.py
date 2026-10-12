@@ -950,11 +950,15 @@ class TestFireReportTrigger:
         redis_client.aclose.assert_awaited_once()
         # The success branch must also stamp ``last_sent_at`` (the behaviour the
         # test name claims); assert on the recorded UPDATE statement itself.
+        # Pin the VALUE to a recency bound, not merely its type, so a wrong-but-
+        # datetime stamp (e.g. a stale or mis-set clock) fails.
         sent_stmts = [
             s for s, _ in session.executed if "UPDATE scheduled_reports" in str(s) and "last_sent_at" in str(s)
         ]
         assert sent_stmts, "a successful send must stamp last_sent_at"
-        assert isinstance(sent_stmts[0].compile().params.get("last_sent_at"), datetime)
+        stamped = sent_stmts[0].compile().params.get("last_sent_at")
+        assert isinstance(stamped, datetime)
+        assert abs((datetime.now(UTC) - stamped).total_seconds()) < 60
 
     @pytest.mark.asyncio
     async def test_failure_backs_off_next_send_at_not_reenqueue(self, monkeypatch: pytest.MonkeyPatch) -> None:

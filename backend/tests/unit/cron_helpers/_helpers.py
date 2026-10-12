@@ -1,9 +1,11 @@
 """Shared test doubles for the ``cron_helpers`` test package.
 
 These primitives were byte-identical copies across several modules in this
-package; they live here once so the duplicates can be removed and so
-``test_fire_due_triggers_ongoing_scan`` no longer has to import private helpers
-from another test MODULE (``test_cron_helpers``).
+package; they live here once as the SHARED primitives, which removes the
+DUPLICATED copies. This does not fully decouple the test modules:
+``test_fire_due_triggers_ongoing_scan`` still imports ``_cron_row``,
+``_MockSession``, ``_pause_result``, ``_polling_row`` and ``_report_row`` from
+``test_cron_helpers``.
 
 This is a helper module, not a test module — it deliberately contains no tests.
 File-specific doubles stay local: the two ``_MockSession`` classes differ (the
