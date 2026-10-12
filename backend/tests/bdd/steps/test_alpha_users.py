@@ -410,7 +410,7 @@ def completed_run_exists(request):
 def runner_gets_run(run_id, request):
     c = _get_client(request)
     resolved = getattr(request.node, "_run_id", uuid.uuid4())
-    run = make_mock_run(id=resolved, status="completed")
+    run = make_mock_run(id=resolved, status="complete")
     with (
         patch(
             "modulo.api.routes.runs._do_get_run_with_gate",

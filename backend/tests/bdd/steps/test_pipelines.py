@@ -1338,8 +1338,10 @@ def running_pipeline_injection_filter(request: pytest.FixtureRequest) -> None:
 def node_produces_suspicious_output(output: str, request: pytest.FixtureRequest) -> None:
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
-        mock_run.status = "output_rejected"
-    request.node._run_status = "output_rejected"
+        mock_run.status = "failed"
+        mock_run.error_detail = "output_rejected"
+    request.node._run_status = "failed"
+    request.node._error_code = "output_rejected"
 
 
 @given(parsers.parse("a run that checkpointed after node {node:d} of {total:d}"))
