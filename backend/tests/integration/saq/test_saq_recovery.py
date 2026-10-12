@@ -102,6 +102,12 @@ class TestNoSaqEvictionRedispatch:
             started_at=None,
             dispatcher="saq",
             enqueue_failed_at=None,
+            # FAR-1649 qa iteration 3: the real reconcile SELECT always carries
+            # ``dispatch_phase``; the row belt fails CLOSED on a row source that
+            # omits the column, so this fixture must simulate the product's
+            # actual row shape — a genuine pre-node NULL phase (re-dispatchable),
+            # not a missing attribute (held back).
+            dispatch_phase=None,
         )
 
         redis = MagicMock()

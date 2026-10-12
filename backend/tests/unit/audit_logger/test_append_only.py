@@ -302,6 +302,26 @@ class TestAppendOnlyGuardListenerLogic:
 
         captured = _capture_guard_listeners(monkeypatch)
 
+        event = AuditEvent(
+            organisation_id=uuid.uuid4(),
+            event_type="test.event",
+            payload_json={"key": "value"},
+        )
+        event.id = uuid.uuid4()
+
+        registered_fn = captured[(AuditEvent, "delete")]
+        assert sa_event.contains(AuditEvent, "before_delete", registered_fn)
+        with pytest.raises(AppendOnlyViolationError, match="append-only"):
+            registered_fn(None, None, event)
+
+    def test_registered_error_event_delete_listener_blocks(self, monkeypatch):
+        """The listener actually registered on ErrorEvent blocks a delete."""
+        from sqlalchemy import event as sa_event
+
+        from modulo.core.audit_logger.append_only import AppendOnlyViolationError
+
+        captured = _capture_guard_listeners(monkeypatch)
+
         event = ErrorEvent(
             organisation_id=uuid.uuid4(),
             fingerprint="fp-1",
@@ -311,8 +331,8 @@ class TestAppendOnlyGuardListenerLogic:
         )
         event.id = uuid.uuid4()
 
-        registered_fn = captured[(AuditEvent, "delete")]
-        assert sa_event.contains(AuditEvent, "before_delete", registered_fn)
+        registered_fn = captured[(ErrorEvent, "delete")]
+        assert sa_event.contains(ErrorEvent, "before_delete", registered_fn)
         with pytest.raises(AppendOnlyViolationError, match="append-only"):
             registered_fn(None, None, event)
 
@@ -387,30 +407,39 @@ class TestAppendOnlyGuardListenerLogic:
 class TestAppendOnlyGuardWithMockSession:
     """Tests that append_audit_event still works with guard registered."""
 
-    @pytest.mark.asyncio
-    async def test_append_event_still_works(self):
-        """Appending new events works without triggering the guard."""
-        register_append_only_guard()
-
+    @staticmethod
+    async def _append_test_event(mock_session, org_id):
+        """Append one event with the chain head stubbed to None (fresh chain)."""
         from modulo.core.audit_logger import append_audit_event
-
-        mock_session = MagicMock()
-        mock_session.flush = AsyncMock()
-        mock_session.add = MagicMock()
-        mock_session.execute = AsyncMock()
-        mock_session.begin = MagicMock()
-
-        org_id = uuid.uuid4()
 
         with patch(
             "modulo.core.audit_logger._get_chain_head_locked",
             return_value=None,
         ):
-            event = await append_audit_event(
+            return await append_audit_event(
                 mock_session,
                 org_id=org_id,
                 event_type="test.event",
             )
+
+    @staticmethod
+    def _mock_session():
+        mock_session = MagicMock()
+        mock_session.flush = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.execute = AsyncMock()
+        mock_session.begin = MagicMock()
+        return mock_session
+
+    @pytest.mark.asyncio
+    async def test_append_event_still_works(self):
+        """Appending new events works without triggering the guard."""
+        register_append_only_guard()
+
+        mock_session = self._mock_session()
+        org_id = uuid.uuid4()
+
+        event = await self._append_test_event(mock_session, org_id)
 
         assert event is not None
         assert event.event_type == "test.event"
@@ -421,24 +450,9 @@ class TestAppendOnlyGuardWithMockSession:
         """Append-only guard should NOT fire during event creation (INSERT)."""
         register_append_only_guard()
 
-        from modulo.core.audit_logger import append_audit_event
-
-        mock_session = MagicMock()
-        mock_session.flush = AsyncMock()
-        mock_session.add = MagicMock()
-        mock_session.execute = AsyncMock()
-        mock_session.begin = MagicMock()
-
+        mock_session = self._mock_session()
         org_id = uuid.uuid4()
 
-        with patch(
-            "modulo.core.audit_logger._get_chain_head_locked",
-            return_value=None,
-        ):
-            # This should complete without RuntimeError
-            event = await append_audit_event(
-                mock_session,
-                org_id=org_id,
-                event_type="test.event",
-            )
-            assert event.organisation_id == org_id
+        # This should complete without RuntimeError
+        event = await self._append_test_event(mock_session, org_id)
+        assert event.organisation_id == org_id

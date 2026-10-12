@@ -52,7 +52,8 @@ def _progressing_row(
 ) -> SimpleNamespace:
     """A running SAQ row in the shape the reconcile scan hands to the
     row-level re-check (``outputs_absent`` / ``checkpoints_absent`` are the
-    scan's NOT EXISTS flags)."""
+    scan's NOT EXISTS flags; ``dispatch_phase`` is carried by the real SELECT
+    and the recheck fails closed when a row source omits it — FAR-1649)."""
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=uuid.uuid4(),
@@ -62,6 +63,7 @@ def _progressing_row(
         node_token_usage=node_token_usage,
         outputs_absent=outputs_absent,
         checkpoints_absent=checkpoints_absent,
+        dispatch_phase=None,
         started_at=now - timedelta(minutes=started_minutes_ago),
         heartbeat_at=now - timedelta(minutes=heartbeat_minutes_ago),
         dispatched_at=now - timedelta(minutes=5),
