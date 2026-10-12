@@ -73,11 +73,29 @@ describe('useCompositeStore', () => {
 
     await store.loadComposites()
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/composites', expect.objectContaining({ method: 'GET' }))
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/composite-templates?page=1&page_size=100',
+      expect.objectContaining({ method: 'GET' }),
+    )
     expect(store.composites).toHaveLength(1)
     expect(store.composites[0].name).toBe('Report Builder')
     expect(store.loading).toBe(false)
     expect(store.error).toBeNull()
+  })
+
+  it('loadComposites walks every page of the paginated composite-templates list', async () => {
+    const page1 = composite({ id: 'comp-1', name: 'First' })
+    const page2 = composite({ id: 'comp-2', name: 'Second' })
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('page=2')) return Promise.resolve(okJsonResponse({ items: [page2], total: 2, page: 2, page_size: 100 }))
+      return Promise.resolve(okJsonResponse({ items: [page1], total: 2, page: 1, page_size: 100 }))
+    })
+    const store = useCompositeStore()
+
+    await store.loadComposites()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(store.composites.map((c) => c.name)).toEqual(['First', 'Second'])
   })
 
   it('loadComposites treats an empty payload as an empty list', async () => {
