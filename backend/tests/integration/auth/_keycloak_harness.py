@@ -169,7 +169,14 @@ def generate_tls_certs(cert_dir: Path) -> Path:
     )
     (cert_dir / "server-key.pem").write_bytes(key_pem)
     (cert_dir / "ca.pem").write_bytes(root_pem)
-    (cert_dir / "server-key.pem").chmod(0o600)
+    # The container user (Keycloak runs as UID 1000) must be able to READ this
+    # key: a bind mount preserves host ownership, and any non-UID-1000 owner
+    # (e.g. a standard CI runner running as UID 1001) makes a 0600 key
+    # unreadable inside the container -> Keycloak exits 2 with
+    # "AccessDeniedException: https-key-" and the tier silently skips. These
+    # are throwaway, per-run, self-signed files in a temp dir, so 0644 (world
+    # readable) is safe. This is a FILE-ownership issue, not a mount mode.
+    (cert_dir / "server-key.pem").chmod(0o644)
     return cert_dir
 
 
@@ -567,27 +574,34 @@ class IdpBrowserDriver:
         credentials were submitted.
         """
         client = httpx.Client(verify=keycloak_ssl_context(self.ca_file), follow_redirects=False, timeout=30.0)
-        response = client.get(start_url)
-        login_action: str | None = None
-        for _ in range(_MAX_REDIRECT_HOPS):
-            if response.status_code in _REDIRECT_STATUS:
-                response = client.get(response.headers["location"])
-                continue
-            if response.status_code == 200:
-                _assert_is_keycloak_login_form(response, "login form resolve")
-                action = _parse_form_action(response.text)
-                login_action = urljoin(str(response.url), action)
-                break
-            raise Tier1bFixtureError(
-                f"Keycloak drive: unexpected response to {start_url}: status {response.status_code}; "
-                f"body: {response.text[:400]}"
+        # Close the client before re-raising a drive failure: callers only close
+        # it in a `finally` around the call, which never runs when the call
+        # itself raises, so an unclosed Client would leak its connection pool.
+        try:
+            response = client.get(start_url)
+            login_action: str | None = None
+            for _ in range(_MAX_REDIRECT_HOPS):
+                if response.status_code in _REDIRECT_STATUS:
+                    response = client.get(response.headers["location"])
+                    continue
+                if response.status_code == 200:
+                    _assert_is_keycloak_login_form(response, "login form resolve")
+                    action = _parse_form_action(response.text)
+                    login_action = urljoin(str(response.url), action)
+                    break
+                raise Tier1bFixtureError(
+                    f"Keycloak drive: unexpected response to {start_url}: status {response.status_code}; "
+                    f"body: {response.text[:400]}"
+                )
+            else:
+                raise Tier1bFixtureError(f"Keycloak drive: redirect chain exceeded {_MAX_REDIRECT_HOPS} hops")
+            submitted = client.post(
+                login_action,
+                data={"username": username, "password": password},
             )
-        else:
-            raise Tier1bFixtureError(f"Keycloak drive: redirect chain exceeded {_MAX_REDIRECT_HOPS} hops")
-        submitted = client.post(
-            login_action,
-            data={"username": username, "password": password},
-        )
+        except Exception:
+            client.close()
+            raise
         return client, submitted
 
 

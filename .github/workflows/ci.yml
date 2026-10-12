@@ -415,7 +415,7 @@ jobs:
             [ -z "$f" ] && continue
             base="${f##*/}"
             case "$base" in
-              test_tier1b_*.py)
+              test_tier1b_*.py|test_keycloak_oidc_real_http_flow.py|test_keycloak_saml_real_http_flow.py)
                 # The Tier 1b testcontainers suites own dedicated CI jobs with
                 # boot budgets sized for their real readiness windows: the light
                 # set runs in tier1b-light (--timeout=900) and the heavy set
@@ -424,7 +424,10 @@ jobs:
                 # turns their real boot (sonarqube 600s, gitlab 1800s) into
                 # pytest-timeout ERRORs (PR #773). Light coverage is unaffected:
                 # tier1b-light runs on every PR regardless of changed paths.
-                echo "  (skip) Tier 1b suite has a dedicated CI job: ${f}"
+                # The FAR-1126 real-IdP auth modules ride the same list: their
+                # harness needs up to 600s to boot Keycloak, so tier1b-light
+                # runs them at --timeout=900, not this job's --timeout=300.
+                echo "  (skip) suite has a dedicated CI job: ${f}"
                 continue
                 ;;
               test_*.py|*_test.py) ;;

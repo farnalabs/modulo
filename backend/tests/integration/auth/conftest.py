@@ -28,6 +28,7 @@ Follows the Tier 1b harness pattern (FAR-934):
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,12 @@ def keycloak_world(keycloak_cert_dir: Path) -> Iterator[KeycloakWorld]:
     try:
         handle, idp_base = start_keycloak(keycloak_cert_dir)
     except Tier1bFixtureError as exc:
+        if os.environ.get("CI"):
+            # In CI a provisioned-but-broken container must FAIL the job rather
+            # than degrade to a green zero-coverage skip: this tier's coverage
+            # IS the deliverable (FAR-1126). Local runs keep the loud skip —
+            # Docker is genuinely absent on some workstations.
+            raise
         pytest.skip(f"Keycloak container fixture unavailable: {exc}")
 
     world = KeycloakWorld(
