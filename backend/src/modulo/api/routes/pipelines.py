@@ -3623,6 +3623,220 @@ def _raise_active_runs_conflict(exc: PipelineHasActiveRunsError) -> None:
     ) from None
 
 
+def _assert_threshold_change_allowed(
+    current: Pipeline,
+    principal: TenantPrincipal,
+    *,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> None:
+    """FAR-1184: raising or clearing the spend limit requires ``cost.manage``.
+
+    Lowering or setting where none exists keeps ``pipeline.update``. Raised
+    BEFORE any mutation; the denial audits + 403s via the route's
+    ``CircuitBreakerThresholdChangeDenied`` except clause.
+    """
+    if threshold_change and not circuit_breaker_threshold_change_allowed(
+        current.circuit_breaker_threshold,
+        new_threshold,
+        may_manage_cost=_may_manage_cost(principal),
+    ):
+        raise CircuitBreakerThresholdChangeDenied(
+            previous=current.circuit_breaker_threshold,
+            new=new_threshold,
+        )
+
+
+async def _assert_environment_profile_binding_valid(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    locked: Pipeline,
+    updates: dict[str, Any],
+) -> None:
+    """FAR-1558: validate the candidate environment-profile binding fail-closed.
+
+    The candidate is the payload's value, or the STORED one when a scope
+    change could strand it — the same fail-closed re-validation the
+    accountability-owner block in ``crud.pipeline.update_pipeline`` applies.
+    Both run against the EFFECTIVE post-update owner team, computed the same
+    way the ceiling/default merge computes its effective values.
+    """
+    binding_in_payload = "environment_profile_id" in updates
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    # Read the STORED binding defensively: a partial stand-in row (test
+    # doubles, MagicMock rows) exposes a non-column attribute child, so
+    # anything that is not a UUID is treated as "unbound" rather than
+    # fed into the profile query — the same treatment
+    # crud.pipeline.update_pipeline gives stored accountability owners.
+    stored = getattr(locked, "environment_profile_id", None)
+    stored_binding = stored if isinstance(stored, uuid.UUID) else None
+    if binding_in_payload:
+        candidate_binding = updates["environment_profile_id"]
+    elif scope_changed:
+        candidate_binding = stored_binding
+    else:
+        candidate_binding = None
+    if candidate_binding is not None:
+        await _assert_environment_profile_bindable(
+            session,
+            org_id=principal.organisation_id,
+            profile_id=candidate_binding,
+            # .get is correct: an explicit owner_team_id=None (clear) is in
+            # the dict, so .get returns it rather than the row's stale team.
+            pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
+        )
+
+
+def _assert_autonomy_ceiling_valid(locked: Pipeline, updates: dict[str, Any]) -> None:
+    """FAR-1163: a PATCH may set only one of default/max — validate the MERGED effective values.
+
+    Ceiling NULL = effective ceiling is the default, so it never violates on
+    its own. ``locked`` is the FOR UPDATE row from the in-transaction team
+    gate.
+    """
+    if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
+        merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
+        # ``dict.get`` returns the stored value whenever the key is
+        # present (even an explicit null), which is exactly
+        # "updates[k] if k in updates else the row's value".
+        # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
+        # has existed since migration 0256, so read it directly —
+        # its NULL arm (no ceiling configured) is the only fallback.
+        merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
+        try:
+            # Lenient: a stored non-string/unparseable ceiling does not
+            # constrain resolution either (it falls back to default).
+            validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from None
+
+
+async def _enforce_stored_bindings_on_team_change(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    current: Pipeline,
+    updates: dict[str, Any],
+    *,
+    ownership_changed: bool,
+    graph_replaced: bool,
+) -> None:
+    """FAR-1515 MAJOR 2: gate the STORED connector bindings on a team-boundary change.
+
+    An ownership/visibility-only PATCH used to re-validate MEMBERSHIP only,
+    while the advisory ``connector_rebind_required`` flag (set on the
+    response) was consumed by nothing — so moving a pipeline to a new team
+    re-created the forbidden state (its STORED graph still pinning a
+    connector the new owner team may not use) without ever running the
+    connector-team gate. When the team boundary changes and the payload does
+    NOT also replace the graph (that case is gated by ``_apply_graph_update``
+    against the EFFECTIVE owner), the pipeline's stored bindings are gated
+    here, in the same transaction, against the effective NEW owner team.
+    """
+    visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
+    if (ownership_changed or visibility_changed) and not graph_replaced:
+        stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
+        if stored_bindings:
+            await _enforce_connector_team_bindings(
+                session,
+                principal.organisation_id,
+                updates.get("owner_team_id", current.owner_team_id),
+                stored_bindings,
+            )
+
+
+async def _apply_pipeline_update_payload(
+    *,
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    pipeline_id: uuid.UUID,
+    req: PipelineUpdate,
+    updates: dict[str, Any],
+    has_graph: bool,
+    threshold_change: bool,
+    new_threshold: Decimal | None,
+) -> tuple[Pipeline | None, bool]:
+    """Apply a PATCH update payload inside one mutation transaction.
+
+    Pre-validators, then the persist ladder: RLS context, unlocked 404 read,
+    threshold permission gate, the FOR UPDATE team gate, transition /
+    environment-profile / autonomy-ceiling validation, the stored-connector
+    binding gate on a team change, optional graph replacement, the crud
+    update, and the in-transaction refresh.
+
+    Returns ``(pipeline, ownership_changed)`` — ``pipeline`` is None when the
+    row is gone mid-flight (the route 404s). Every typed exception raised
+    here propagates AFTER the transaction rolls back; the
+    exception-to-status ladder stays in ``update_pipeline_endpoint``.
+    """
+    async with session.begin():
+        await _set_rls_context(session, principal)
+        current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
+        _assert_threshold_change_allowed(
+            current,
+            principal,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
+        # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
+        # THIS transaction — that locked row, not the earlier unlocked read
+        # above, is what the ceiling/default merge below must validate
+        # against. Two concurrent PATCHes each validating against their own
+        # stale unlocked read can otherwise both commit and store
+        # ceiling < default. The helper keeps the 404 (gone row) and 403
+        # (team-private row, non-member) semantics of the unlocked read.
+        # NOTE: the unlocked read above and this locked re-select resolve to
+        # the SAME identity-mapped instance; the helper's
+        # populate_existing=True refreshes its attributes from the locked
+        # row, so both names below read post-lock values.
+        locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
+        await _assert_team_transition_allowed(session, principal, current, updates)
+        await _assert_environment_profile_binding_valid(session, principal, locked, updates)
+        _assert_autonomy_ceiling_valid(locked, updates)
+        ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
+        graph_replaced = has_graph and req.graph_json is not None
+        await _enforce_stored_bindings_on_team_change(
+            session,
+            principal,
+            current,
+            updates,
+            ownership_changed=ownership_changed,
+            graph_replaced=graph_replaced,
+        )
+        await _maybe_audit_autonomy_change(
+            session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            updates=updates,
+        )
+        if has_graph and req.graph_json is not None:
+            await _apply_graph_update(
+                session,
+                pipeline_id=pipeline_id,
+                org_id=principal.organisation_id,
+                principal=principal,
+                graph_json=req.graph_json,
+                updates=updates,
+            )
+        pipeline = await update_pipeline(
+            session,
+            pipeline_id,
+            updates,
+            org_id=principal.organisation_id,
+            account_id=principal.account_id,
+            request_id=getattr(principal, "request_id", None),
+        )
+        # Refresh the ORM row inside the transaction so the DB-computed
+        # `updated_at` (onupdate=func.current_timestamp()) is loaded while
+        # the transaction is active. Accessing it after commit with
+        # autobegin=False raises InvalidRequestError -> 422 silent-success.
+        if pipeline is not None:
+            await session.refresh(pipeline)
+    return pipeline, ownership_changed
+
+
 @router.patch(
     "/{pipeline_id}",
     dependencies=[Depends(audited("pipeline_updated", "pipeline", principal_dep=get_current_tenant_user_or_api_key))],
@@ -3644,147 +3858,24 @@ async def update_pipeline_endpoint(
     updates.pop("graph_json", None)
     # FAR-1184: normalise FIRST (Pydantic already validated the value; this
     # canonicalises to the column's Decimal scale) so the permission
-    # comparison below never sees an unexpected value type — a bad value
-    # raises here, BEFORE any denial/permission logic, and never reaches
+    # comparison never sees an unexpected value type — a bad value raises
+    # here, BEFORE any denial/permission logic, and never reaches
     # `new <= previous`.
     threshold_change = "circuit_breaker_threshold" in updates
     new_threshold: Decimal | None = (
         normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]) if threshold_change else None
     )
     try:
-        async with session.begin():
-            await _set_rls_context(session, principal)
-            current = await _get_pipeline_or_404(session, pipeline_id, organisation_id=principal.organisation_id)
-            # FAR-1184: raising or clearing the spend limit requires
-            # cost.manage (the same permission as the breaker reset). Lowering
-            # or setting where none exists keeps pipeline.update. Raised
-            # BEFORE any mutation; the denial audits + 403s via the except
-            # clause below.
-            if threshold_change and not circuit_breaker_threshold_change_allowed(
-                current.circuit_breaker_threshold,
-                new_threshold,
-                may_manage_cost=_may_manage_cost(principal),
-            ):
-                raise CircuitBreakerThresholdChangeDenied(
-                    previous=current.circuit_breaker_threshold,
-                    new=new_threshold,
-                )
-            # FAR-1222: the in-txn team gate SELECTs the row FOR UPDATE inside
-            # THIS transaction — that locked row, not the earlier unlocked read
-            # above, is what the ceiling/default merge below must validate
-            # against. Two concurrent PATCHes each validating against their own
-            # stale unlocked read can otherwise both commit and store
-            # ceiling < default. The helper keeps the 404 (gone row) and 403
-            # (team-private row, non-member) semantics of the unlocked read.
-            # NOTE: the unlocked read above and this locked re-select resolve to
-            # the SAME identity-mapped instance; the helper's
-            # populate_existing=True refreshes its attributes from the locked
-            # row, so both names below read post-lock values.
-            locked = await _reapply_team_gate_inside_mutation_txn(session, principal, pipeline_id)
-            await _assert_team_transition_allowed(session, principal, current, updates)
-            # FAR-1558: environment-profile binding validation (the payload's
-            # value, or the STORED one when a scope change could strand it —
-            # the same fail-closed re-validation the accountability-owner block
-            # in crud.pipeline.update_pipeline applies). Both run against the
-            # EFFECTIVE post-update owner team, computed the same way the
-            # ceiling/default merge below computes its effective values.
-            _binding_in_payload = "environment_profile_id" in updates
-            _scope_changed = "visibility" in updates or "owner_team_id" in updates
-            # Read the STORED binding defensively: a partial stand-in row (test
-            # doubles, MagicMock rows) exposes a non-column attribute child, so
-            # anything that is not a UUID is treated as "unbound" rather than
-            # fed into the profile query — the same treatment
-            # crud.pipeline.update_pipeline gives stored accountability owners.
-            _stored = getattr(locked, "environment_profile_id", None)
-            _stored_binding = _stored if isinstance(_stored, uuid.UUID) else None
-            if _binding_in_payload:
-                _candidate_binding = updates["environment_profile_id"]
-            elif _scope_changed:
-                _candidate_binding = _stored_binding
-            else:
-                _candidate_binding = None
-            if _candidate_binding is not None:
-                await _assert_environment_profile_bindable(
-                    session,
-                    org_id=principal.organisation_id,
-                    profile_id=_candidate_binding,
-                    # .get is correct: an explicit owner_team_id=None (clear) is in
-                    # the dict, so .get returns it rather than the row's stale team.
-                    pipeline_owner_team_id=updates.get("owner_team_id", locked.owner_team_id),
-                )
-            # FAR-1163: a PATCH may set only one of default/max — validate the
-            # MERGED effective values (ceiling NULL = effective ceiling is the
-            # default, so it never violates on its own).
-            if "default_autonomy_level" in updates or "max_autonomy_level" in updates:
-                merged_default = updates.get("default_autonomy_level", locked.default_autonomy_level)
-                # ``dict.get`` returns the stored value whenever the key is
-                # present (even an explicit null), which is exactly
-                # "updates[k] if k in updates else the row's value".
-                # ``locked`` is the FOR UPDATE row: ``max_autonomy_level``
-                # has existed since migration 0256, so read it directly —
-                # its NULL arm (no ceiling configured) is the only fallback.
-                merged_ceiling = updates.get("max_autonomy_level", locked.max_autonomy_level)
-                try:
-                    # Lenient: a stored non-string/unparseable ceiling does not
-                    # constrain resolution either (it falls back to default).
-                    validate_autonomy_ceiling(merged_default, merged_ceiling, lenient=True)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                        detail=str(exc),
-                    ) from None
-            ownership_changed = "owner_team_id" in updates and updates["owner_team_id"] != current.owner_team_id
-            # FAR-1515 MAJOR 2: an ownership/visibility-only PATCH used to
-            # re-validate MEMBERSHIP only, while the advisory
-            # ``connector_rebind_required`` flag (set on the response below)
-            # was consumed by nothing - so moving a pipeline to a new team
-            # re-created the forbidden state (its STORED graph still pinning a
-            # connector the new owner team may not use) without ever running
-            # the connector-team gate. When the team boundary changes and the
-            # payload does NOT also replace the graph (that case is gated by
-            # ``_apply_graph_update`` against the EFFECTIVE owner below), the
-            # pipeline's stored bindings are gated here, in the same
-            # transaction, against the effective NEW owner team.
-            visibility_changed = "visibility" in updates and updates["visibility"] != current.visibility
-            graph_replaced = has_graph and req.graph_json is not None
-            if (ownership_changed or visibility_changed) and not graph_replaced:
-                stored_bindings = extract_connector_bindings(list(current.graph_nodes_json or []))
-                if stored_bindings:
-                    await _enforce_connector_team_bindings(
-                        session,
-                        principal.organisation_id,
-                        updates.get("owner_team_id", current.owner_team_id),
-                        stored_bindings,
-                    )
-            await _maybe_audit_autonomy_change(
-                session,
-                principal=principal,
-                pipeline_id=pipeline_id,
-                updates=updates,
-            )
-            if has_graph and req.graph_json is not None:
-                await _apply_graph_update(
-                    session,
-                    pipeline_id=pipeline_id,
-                    org_id=principal.organisation_id,
-                    principal=principal,
-                    graph_json=req.graph_json,
-                    updates=updates,
-                )
-            pipeline = await update_pipeline(
-                session,
-                pipeline_id,
-                updates,
-                org_id=principal.organisation_id,
-                account_id=principal.account_id,
-                request_id=getattr(principal, "request_id", None),
-            )
-            # Refresh the ORM row inside the transaction so the DB-computed
-            # `updated_at` (onupdate=func.current_timestamp()) is loaded while
-            # the transaction is active. Accessing it after commit with
-            # autobegin=False raises InvalidRequestError -> 422 silent-success.
-            if pipeline is not None:
-                await session.refresh(pipeline)
+        pipeline, ownership_changed = await _apply_pipeline_update_payload(
+            session=session,
+            principal=principal,
+            pipeline_id=pipeline_id,
+            req=req,
+            updates=updates,
+            has_graph=has_graph,
+            threshold_change=threshold_change,
+            new_threshold=new_threshold,
+        )
     except (HitlReviewWeakeningDenied, GuardrailBindingStripDenied) as exc:
         await _handle_graph_write_denials(
             session,
