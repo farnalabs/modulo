@@ -47,7 +47,6 @@ def get_run(run_id, client, request):
                     id=run_id,
                     status="failed",
                     error_detail="Node 2: Connection timeout",
-                    final_state={"node-1": {"output": "ok"}},
                 ),
                 False,
             ),
@@ -101,9 +100,18 @@ def node_no_output(node: int, request):
 
 
 @then("the response contains final_state")
-def check_final_state(request):
+def check_response_terminal_status(request):
+    """Assert the run-detail payload carries a real terminal run status.
+
+    A Run has a terminal ``status`` (and, on failure, an ``error_detail``) —
+    there is no ``final_state`` field on a Run (modulo/db/models/run.py). This
+    asserts the real payload the ``GET /runs/{id}`` route produced rather than
+    a value the step itself set.
+    """
+    from modulo.db.models.run import TERMINAL_STATUSES
+
     data = request.node._resp.json()
-    assert data.get("status") is not None
+    assert data.get("status") in TERMINAL_STATUSES, f"Expected a terminal run status, got {data.get('status')!r}"
 
 
 @then("the response contains error_detail")

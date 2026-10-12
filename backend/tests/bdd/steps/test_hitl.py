@@ -62,7 +62,9 @@ def pipeline_has_approval_gate(pipeline_name: str, node_id: str, ctx):
 
 @when(parsers.parse('the run reaches the "{node_id}" node'))
 def run_reaches_approval_gate(node_id: str, ctx):
-    ctx["run_status"] = "waiting_for_approval"
+    """A HITL gate parks the run on ``awaiting_human`` — the real paused status
+    (modulo/db/models/run.py). There is no ``waiting_for_approval`` status."""
+    ctx["run_status"] = "awaiting_human"
     ctx["current_node"] = node_id
 
     # Patch the HITL manager so it appears there's a pending gate
@@ -73,9 +75,9 @@ def run_reaches_approval_gate(node_id: str, ctx):
     ctx["_mock_hitl_mgr"] = mock_mgr
 
 
-@then('the run status becomes "waiting_for_approval"')
-def run_status_waiting_for_approval(ctx):
-    assert ctx["run_status"] == "waiting_for_approval", f"Expected waiting_for_approval, got {ctx['run_status']}"
+@then('the run status becomes "awaiting_human"')
+def run_status_awaiting_human(ctx):
+    assert ctx["run_status"] == "awaiting_human", f"Expected awaiting_human, got {ctx['run_status']}"
 
 
 @then("the approver is notified via WebSocket")
@@ -212,10 +214,12 @@ def response_status_403(request):
 
 @then("the run status remains unchanged")
 def run_status_unchanged(ctx):
-    """Verify the run stayed in its previous state after a failed action."""
-    assert ctx.get("run_status") in ("awaiting_human", "waiting_for_approval"), (
-        f"Status unexpectedly changed to {ctx.get('run_status')}"
-    )
+    """Verify the run stayed parked at the HITL gate after a failed action.
+
+    A gate waiting on a human leaves the run on ``awaiting_human`` — there is no
+    ``waiting_for_approval`` status (modulo/db/models/run.py).
+    """
+    assert ctx.get("run_status") == "awaiting_human", f"Status unexpectedly changed to {ctx.get('run_status')}"
 
 
 # ============================================================================

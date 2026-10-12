@@ -55,8 +55,10 @@ def run_reaches_node(node_id: str, ctx, client, request):
 
 @when(parsers.parse('the run reaches the "{node_id}" gate'))
 def run_reaches_gate(node_id: str, ctx, client, request):
+    """A HITL gate parks the run on ``awaiting_human`` — the real paused status
+    (modulo/db/models/run.py). There is no ``waiting_for_approval`` status."""
     ctx["reached_node_id"] = node_id
-    ctx["run_status"] = "waiting_for_approval"
+    ctx["run_status"] = "awaiting_human"
     request.node._run_paused = True
 
 
