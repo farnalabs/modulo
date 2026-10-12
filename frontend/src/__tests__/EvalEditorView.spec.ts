@@ -208,7 +208,9 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     apiGET.mockResolvedValue({ data: { nodes: [] } })
     await (nodesAlert!.props('onRetry') as () => Promise<void>)()
     await flush()
-    expect(apiGET).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/graph', expect.anything())
+    expect(apiGET).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: 'p1' } },
+    })
   })
 
   it('evals load failure shows the evals error', async () => {
@@ -231,7 +233,9 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     apiGET.mockResolvedValue({ data: { items: [] } })
     await (evalsAlert!.props('onRetry') as () => Promise<void>)()
     await flush()
-    expect(apiGET).toHaveBeenCalledWith('/api/v1/evals', expect.anything())
+    expect(apiGET).toHaveBeenCalledWith('/api/v1/evals', {
+      params: { query: { pipeline_id: 'p1' } },
+    })
   })
 
   it('save (create): POST body carries the parsed config, threshold; success message shown', async () => {
