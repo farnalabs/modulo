@@ -6,17 +6,24 @@ code:
   - backend/src/modulo/core/license.py
   - backend/src/modulo/core/license_signing.py
   - backend/src/modulo/core/feature_flags.py
+  - backend/src/modulo/core/stripe_fulfilment.py
+  - backend/src/modulo/core/product_analytics/license_enforcement.py
   - backend/src/modulo/api/routes/admin_license.py
   - backend/src/modulo/api/routes/admin_tiers.py
   - backend/src/modulo/api/routes/admin_feature_flags.py
+  - backend/src/modulo/api/routes/admin_orgs.py
   - backend/src/modulo/api/routes/stripe_webhook.py
+  - backend/src/modulo/api/routes/viewmodel.py
 unit-tests:
   - backend/tests/unit/core/test_license_key.py
   - backend/tests/unit/core/test_license_signing.py
+  - backend/tests/unit/core/test_stripe_fulfilment.py
   - backend/tests/unit/api/test_admin_license.py
   - backend/tests/unit/api/test_admin_feature_flags.py
   - backend/tests/unit/api/test_admin_tiers_endpoint.py
   - backend/tests/unit/api/test_stripe_webhook.py
+  - backend/tests/unit/api/test_viewmodel_license.py
+  - backend/tests/unit/api/test_admin_orgs_coverage_gaps.py
   - backend/tests/unit/test_license_adversarial.py
   - backend/tests/unit/test_team_license_activation.py
 bdd:
@@ -40,8 +47,10 @@ status: partial
 Licensing manages Ed25519-signed license keys and the Community / Team tier gates on
 `/settings/license`. An uploaded key is verified (validity period + signature), expands to
 the feature set for its tier, gates Team-scoped surfaces (SSO, team RBAC, audit viewer,
-admin spend limits) with a 402 when absent or expired, and feeds the public `/api/v1/license`
-and feature-flag inspection endpoints.
+admin spend limits) with a 402 when absent or expired, and backs the admin license-status,
+tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticated
+`/api/v1/license` surface reports the deployment-level env-var tier only — it does not read the
+signed/org licence; see Known Gaps.)
 
 ## Behaviours
 
@@ -80,8 +89,16 @@ and feature-flag inspection endpoints.
       `checkout.session.completed` is acknowledged but NEVER fulfils (the FAR-180
       single-fulfilment guard against a double-issued licence), an event without a
       customer email or of an unrelated type is acknowledged without dispatch, and the
-      webhook is 404 when Stripe is not configured (`licensing/stripe_billing.feature`,
+      webhook is 404 when Stripe is not configured (      `licensing/stripe_billing.feature`,
       `test_stripe_billing.py`, `test_stripe_webhook.py`)
+- [x] Stripe fulfilment fails CLOSED on an unverifiable generated key: if the key
+      signed during `fulfil_team_purchase` does not verify against the
+      deployment's own configured public key (a misconfigured keypair), the key
+      is NOT emailed and the Stripe event is left UNCLAIMED so a corrected
+      deployment plus Stripe's retry can still fulfil the purchase — mirroring
+      `admin_license.issue_license`, which answers 500 for the same condition
+      instead of returning a bad key (`test_stripe_fulfilment.py`,
+      `test_unverifiable_generated_key_is_not_emailed_or_claimed`)
 
 ## Known Gaps
 
@@ -95,8 +112,48 @@ and feature-flag inspection endpoints.
   coverage (`admin/tier_catalog.feature`) and the Stripe purchase webhook ships
   a dedicated executing BDD surface (`licensing/stripe_billing.feature`), both
   cited above.
+- **The admin license-status Redis cache is not invalidated on a licence
+  mutation** — `GET /api/v1/admin/license` caches its resolved status under
+  `license:{org_id}` with a 60s TTL (`_read_license_cache` / `_write_license_cache`
+  in `admin_license.py`), but neither `POST /api/v1/admin/license` (system-level
+  upload) nor `PUT/DELETE /api/v1/admin/orgs/{org_id}/license` (org-level
+  rotate/clear in `admin_orgs.py`) deletes that key. An operator who uploads or
+  rotates a licence can therefore still see the previous (community / expired)
+  status for up to 60s. Tests do not exercise this path — every licence unit/BDD
+  test sets `redis_url=""` so the cache is disabled. A correct fix needs a
+  deliberate invalidation strategy (bust every `license:*` key on a
+  system-licence change, or stop caching system-sourced resolutions under an
+  org key), so it is recorded here rather than patched ad hoc.
+- **The public `/api/v1/license` surface does not read the signed licence** —
+  `viewmodel.license_info` reports `tier = "team"` iff `settings.modulo_license_key`
+  is non-empty, returns a hardcoded `features: ["notifications"]`, and always
+  reports `is_valid: True`; it never consults `get_license()` or the org-level key.
+  The admin and feature-flag endpoints resolve the real licence, so the public
+  surface can disagree with them. `admin_feature_flags.list_feature_flags` likewise
+  hardcodes `license.is_valid = True` regardless of whether a key exists or has
+  expired. Unifying these is a product decision, not a mechanical fix.
 
 ## QA History
+
+- 2026-10-12: **Improve Architecture product-map walk** — Stripe fulfilment
+  error-path hardening. `core/stripe_fulfilment.py::fulfil_team_purchase`
+  logged a warning and then STILL emailed the generated licence key when the key
+  failed verification against the deployment's own public key (a misconfigured
+  keypair), and then claimed the event — so the customer received a licence the
+  product rejects on upload and Stripe was told the purchase was fulfilled, with
+  no retry. The path now fails CLOSED: no email, no claim, `return None`, so a
+  corrected deployment plus Stripe's retry can still fulfil (mirroring
+  `admin_license.issue_license`, which already answers 500 for the same
+  condition). Added the regression test
+  `test_unverifiable_generated_key_is_not_emailed_or_claimed` (fails without the
+  fix, passes with it). Also completed the entry's stale citations: `code:` now
+  names `core/stripe_fulfilment.py`, `core/product_analytics/license_enforcement.py`,
+  `api/routes/admin_orgs.py` and `api/routes/viewmodel.py`; `unit-tests:` now
+  names `test_stripe_fulfilment.py`, `test_viewmodel_license.py` and
+  `test_admin_orgs_coverage_gaps.py`. Refreshed Known Gaps with the
+  license-status cache-invalidation gap and the public-`/api/v1/license`
+  resolution gap. Status stays `partial` (the manifest's universal-gating
+  deferral is unchanged).
 
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-license` registry: the

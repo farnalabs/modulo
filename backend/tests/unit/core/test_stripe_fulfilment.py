@@ -170,6 +170,38 @@ class TestFulfilTeamPurchase:
         # Event NOT claimed — a Stripe retry can still fulfil it later.
         assert "evt_3" not in _processed_event_ids
 
+    async def test_unverifiable_generated_key_is_not_emailed_or_claimed(self) -> None:
+        """A generated key that fails verification against our own public key
+        must NOT be emailed, and must leave the event unclaimed.
+
+        Reproduces the misconfigured-keypair deployment state: the licence is
+        signed with the configured private key while the effective public key
+        is a different authority, so ``parse_and_verify`` rejects it. Emailing
+        such a key would deliver a licence the product rejects on upload, and
+        claiming the event would tell Stripe the purchase was fulfilled — so the
+        failure path must fail CLOSED (return None, no email, no claim) and let
+        Stripe re-attempt once the deployment is corrected.
+        """
+        settings = _make_settings()
+        other = generate_keypair()
+        set_public_key(other["public_key"])
+        try:
+            with patch(
+                "modulo.core.stripe_fulfilment.send_email",
+                new=MagicMock(return_value=True),
+            ) as mock_send:
+                result = await fulfil_team_purchase(
+                    settings,
+                    event_id="evt_unverifiable",
+                    customer_email="bob@acme.com",
+                    org_name="Acme",
+                )
+        finally:
+            set_public_key(_TEST_PUB)
+        assert result is None
+        mock_send.assert_not_called()
+        assert "evt_unverifiable" not in _processed_event_ids
+
     async def test_fulfilment_without_email(self) -> None:
         settings = _make_settings()
         with patch("modulo.core.stripe_fulfilment.send_email", new=MagicMock()) as mock_send:
