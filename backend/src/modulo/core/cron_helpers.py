@@ -5241,14 +5241,42 @@ def _build_re_dispatch_predicate(
             Run.status == "pending",
             Run.dispatcher == "saq",
             Run.dispatched_at < func_now_minus(reenqueue_window),
-            # FAR-1649 qa iteration 2 (finding 1): a durably node-STARTED run
-            # reset to ``pending`` — the fenced pending-reset
-            # (``executor._fenced_pending_reset``) sets status='pending' but
-            # does NOT clear ``dispatcher``/``dispatched_at`` — must not be
-            # selected here either: this leg re-dispatches as ``execute_run``,
-            # re-executing the started node. A NULL phase = no durable
-            # node-start evidence (legacy rows) and stays recoverable.
-            or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
+            # FAR-1649 qa iteration 3: NO phase exclusion here, DELIBERATELY
+            # (iteration 2 added one and stranded rows — see below). The row
+            # shape ``pending`` + ``dispatcher='saq'`` + a SET
+            # ``dispatched_at`` + ``dispatch_phase='first_node_dispatched'``
+            # has exactly one producer: ``executor._fenced_pending_reset``,
+            # the ONLY writer that flips a row to ``pending`` while keeping
+            # ``dispatcher``/``dispatched_at`` (run creation is pre-node with
+            # a NULL phase; the guardrail-override requeue is stamped at the
+            # ingestion edge BEFORE any dispatch, so also pre-node; the slot
+            # sweep's heartbeat-stale reset clears ``dispatched_at``/
+            # ``dispatcher`` AND excludes node-started rows — see
+            # ``run_admission.reconcile_pipeline_slots``). All THREE reset
+            # call sites are gated on ``_graph_is_idempotent``:
+            # ``_can_fenced_requeue`` (in-execute transient retry),
+            # ``_retry_policy_applies`` (retry_policy re-dispatch), and
+            # watchdog_retry's ``not graph_idempotent`` stand-down. So such a
+            # row is a graph already vetted safe to re-run (FAR-295: every
+            # node idempotent, no job-firing dispatch binding) and
+            # re-dispatching it as ``execute_run`` satisfies the FAR-1649
+            # guarantee, which is "never re-EXECUTE a node-started
+            # NON-idempotent run" — a non-idempotent run can never reach this
+            # row shape.
+            #
+            # This leg is also the DURABLE BACKSTOP the reset depends on
+            # (``pipeline_engine.watchdog_retry``'s module contract): it fires
+            # only after ``reenqueue_window``, and
+            # ``_reconcile_one_row``'s per-row ``q.job()`` gate skips the row
+            # while its SAQ retry job still exists — so it recovers exactly
+            # the lost-job case. Without it nothing does: the stale sweep's
+            # ``never_dispatched`` arm is scoped to ``dispatcher != 'saq'`` +
+            # ``claim_count = 0`` + ``dispatched_at IS NULL``, its capacity
+            # arms need a capacity ``error_code`` (the reset NULLs it), its
+            # age gates require ``status='running'``, and ``resume_run``'s
+            # claim SQL only accepts awaiting_human/claimed/hitl_parked — the
+            # row would sit ``pending`` forever: never re-executed (good) but
+            # never resumed or terminalised either (bad).
         ),
         and_(
             Run.status == "running",
@@ -5257,24 +5285,28 @@ def _build_re_dispatch_predicate(
             # FAR-1649 qa finding 1: the generic stale-heartbeat leg must NOT
             # select a durably node-STARTED run (``first_node_dispatched``) —
             # re-dispatching it re-executes the started node (the zero-node
-            # "nothing can double-execute" premise is false for it). Such rows
+            # "nothing can double-execute" premise is false for it, and unlike
+            # a fenced-reset row this leg is NOT idempotency-gated). Such rows
             # are left for the in-process attempt's own watchdogs and, once
             # dead, for the age gate's truthful ``run.no_progress`` (whose
             # detail now carries the phase). A NULL phase = no durable
             # node-start evidence (legacy rows) and stays recoverable.
             #
-            # Finding 2 (fleet cap): with this exclusion (and the pending-leg
-            # exclusion above) the node-started class is out of EVERY
-            # ``execute_run`` re-dispatch leg — it enqueues ZERO re-execution
-            # jobs per tick (the mass-wedge flood the old nodeless-cap of
-            # 50/tick used to bound), so no per-tick cap is needed for it; its
+            # Finding 2 (fleet cap): with this exclusion a node-STARTED
+            # ``running`` row is out of EVERY ``execute_run`` re-dispatch leg,
+            # so the mass-wedge burst (the 2026-10-10 shape: dozens of stale
+            # RUNNING rows in one tick) enqueues ZERO re-execution jobs — the
+            # flood the old nodeless-cap of 50/tick used to bound; its
             # terminalisation drains through the age gate's own per-tick
-            # ``max_rows`` cap. The ONE remaining leg that can enqueue such a
-            # row is the F6a gated-recovery leg below — and that enqueues
-            # ``resume_run`` only (checkpoint resume, no re-execution; see its
-            # comment). The D8 marker sweep composes this SAME predicate
-            # (parity by construction), so its recoverability verdict moves in
-            # lockstep.
+            # ``max_rows`` cap. The only ``execute_run`` leg that can still
+            # enqueue a node-started row is the pending reenqueue-window leg
+            # ABOVE — but that matches only the fenced pending-reset shape
+            # (one row per confirmed reset, and only once its SAQ job is
+            # genuinely lost), never the RUNNING burst. The F6a leg below
+            # enqueues ``resume_run`` only (checkpoint resume, no
+            # re-execution; see its comment). The D8 marker sweep composes
+            # this SAME predicate (parity by construction), so its
+            # recoverability verdict moves in lockstep.
             or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
         ),
         # F6a gated recovery: awaiting_human/claimed/hitl_parked +
@@ -5295,8 +5327,10 @@ def _build_re_dispatch_predicate(
         # checkpoint — completed super-steps are NOT re-executed — and only
         # after the per-row committed-decision guard
         # (``_resolve_hitl_resume_or_skip``) proves a human decision exists.
-        # The class is therefore out of every re-EXECUTION (execute_run) leg;
-        # this leg can enqueue it but never re-executes it.
+        # This leg therefore never RE-EXECUTES the class; the one
+        # ``execute_run`` leg that can enqueue a node-started row is the
+        # pending reenqueue-window leg above (fenced-reset signature,
+        # idempotency-gated).
         and_(
             Run.status.in_(("awaiting_human", "claimed", "hitl_parked")),
             Run.dispatcher == "saq",
@@ -6426,7 +6460,14 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         loop; ``dispatch_run`` re-checks capacity atomically so a still-blocked
         run is re-deferred (counted ``capacity_deferred``, never alerted).
       * pending + dispatched_at set + ``dispatcher='saq'``: stale by the
-        re-enqueue window.
+        re-enqueue window. A durably node-STARTED row (``dispatch_phase=
+        'first_node_dispatched'``) with this shape — the fenced
+        pending-reset signature — is deliberately ADMITTED (FAR-1649 qa
+        iteration 3): the reset is idempotency-gated at all three call
+        sites, so re-dispatching it as ``execute_run`` re-runs a graph
+        already vetted safe to re-run, and this leg is the durable backstop
+        that keeps a reset row recoverable when its SAQ retry job is lost
+        (nothing else can reach a pending+saq row — see the leg's comment).
       * pending + dispatched_at set + dispatcher IS NULL + NO
         ``enqueue_failed_at``: zombie from a fail-fast SAQ enqueue failure
         BEFORE the durable-dispatch marker existed. NO staleness gate
@@ -8437,26 +8478,37 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
-    # FAR-1649 qa iteration 2 — row-level belt for the SQL exclusions (the
-    # scan's predicate can only reach this row via another branch, or via a
-    # phase that transitioned between SELECT and now). A durably node-STARTED
-    # ``running``/``pending`` row is never re-dispatched here as
-    # ``execute_run``: re-execution could duplicate the started node's side
-    # effects. ``running`` rows stay running so the age gate collects them
-    # truthfully (``run.no_progress`` + the phase in its detail); ``pending``
-    # rows (e.g. a fenced pending-reset that kept dispatcher/dispatched_at)
-    # are held for the same reason.
+    # FAR-1649 qa iteration 3 — row-level belt for the RUNNING SQL exclusions
+    # (the scan's predicate can only reach such a row via another branch, or
+    # via a phase that transitioned between SELECT and now). RUNNING-ONLY by
+    # design: a ``pending`` node-started row is the fenced pending-reset
+    # signature and is DELIBERATELY re-dispatched by the reenqueue-window leg
+    # (idempotency-gated producer — see ``_build_re_dispatch_predicate``), so
+    # widening this belt back to ``pending`` would strand it again (iteration
+    # 2's regression). A pending row also has no phase race for this belt to
+    # close: the only transition out of ``pending`` is a claim, which
+    # atomically stamps ``dispatch_phase='claimed'`` in the same UPDATE.
     #
-    # Truthfulness note (qa iteration 2, finding 4): in production this belt
-    # should never fire — every selection leg that dispatches ``execute_run``
-    # now excludes the class in SQL, so the scan never returns such a row.
-    # It is a defence-in-depth row guard (race window + future-leg
-    # regression), NOT a production-observed signal; ``node_started_deferred``
-    # counts belt hits only, so a non-zero production value is itself a
-    # regression alarm. The production-visible signal for the started-but-
-    # dying class remains the age gate's ``run.no_progress`` detail, which
-    # carries ``dispatch_phase=``.
-    if row.status in ("running", "pending") and getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED:
+    # FAILS CLOSED (mirrors ``_is_nodeless_zombie_row``): a row source that
+    # does not expose ``dispatch_phase`` at all carries no evidence that NO
+    # node started, so it is held back exactly like a node-started row —
+    # missing evidence is never "safe to re-execute" evidence. The two guards
+    # must not disagree on the same input.
+    #
+    # Truthfulness note: in production this belt should never fire — the
+    # RUNNING selection legs exclude the class in SQL, so the scan never
+    # returns such a row. It is a defence-in-depth row guard (race window +
+    # future-leg regression), NOT a production-observed signal;
+    # ``node_started_deferred`` counts belt hits only, so a non-zero
+    # production value is itself a regression alarm. A held-back RUNNING row
+    # is NOT stranded: the in-process watchdogs own it while the executor is
+    # alive and, once dead, the mid-graph age gate's truthful
+    # ``run.no_progress`` (whose detail carries ``dispatch_phase=``)
+    # terminalises it at the age bound.
+    node_started_running = row.status == "running" and (
+        not hasattr(row, "dispatch_phase") or getattr(row, "dispatch_phase", None) == PHASE_FIRST_NODE_DISPATCHED
+    )
+    if node_started_running:
         summary["node_started_deferred"] += 1
         _log.warning(
             "dispatcher_reconcile.node_started_not_redispatched run=%s org=%s "
@@ -8464,7 +8516,7 @@ async def _reconcile_one_row(
             "re-dispatch (re-execution unsafe); left for the watchdogs / age gate",
             row.id,
             org_id,
-            PHASE_FIRST_NODE_DISPATCHED,
+            getattr(row, "dispatch_phase", "missing"),
             getattr(row, "claim_count", None),
         )
         return enqueue_failed_redispatched

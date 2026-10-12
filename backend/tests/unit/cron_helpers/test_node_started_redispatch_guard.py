@@ -1,16 +1,28 @@
-"""FAR-1649 qa iteration 1+2: a node-STARTED run is never re-EXECUTED.
+"""FAR-1649 qa iterations 1+2+3: a node-STARTED run is never re-EXECUTED
+UNLESS the graph is already vetted safe to re-run — and is never stranded.
 
 The durable ``first_node_dispatched`` phase (FAR-1422) proves a node STARTED
-even though no super-step ever completed — so re-dispatching such a row as
-``execute_run`` can duplicate side effects. Iteration 1 excluded the class from
-the nodeless branches and the generic stale-heartbeat re-dispatch branch. This
-file (iteration 2) additionally covers:
+even though no super-step ever completed. Iteration 1 excluded the class from
+the nodeless branches and the generic stale-heartbeat re-dispatch branch (the
+2026-10-10 production storm). Iteration 2 ALSO excluded it from the
+``pending`` re-enqueue leg and widened the row belt to ``pending`` — and
+REGRESSED: the fenced pending-reset row (``dispatcher``/``dispatched_at``/
+phase all kept) then became invisible to every recovery path and was
+permanently stranded ``pending`` when its SAQ retry job was lost. Iteration 3
+(the finding under this change) RESTORES the pending leg for that row shape,
+because its only producer is idempotency-gated at all three reset call sites.
 
-* the ``pending`` re-dispatch leg (a fenced pending-reset keeps
-  ``dispatcher``/``dispatched_at`` — the row must not be re-selected) and the
-  widened row belt (``running``+``pending``);
+This file covers:
+
+* the RUNNING legs still exclude the class (nodeless branches, generic
+  stale-heartbeat, row belt) — the storm does not come back;
+* the ``pending`` re-dispatch leg DELIBERATELY ADMITS the fenced-reset row
+  (idempotency-gated producer, durable backstop — never stranded) and the row
+  belt is RUNNING-only + fail-closed;
 * the F6a gated-recovery leg, which deliberately ADMITS the class but only as
   ``resume_run`` (checkpoint resume, never re-execution);
+* ``_fenced_pending_reset`` being reachable only through an idempotency gate,
+  so a NON-idempotent node-started run can never become a reset row;
 * the executor write site binding the shared ``PHASE_FIRST_NODE_DISPATCHED``
   constant instead of a bare literal;
 * the slot-sweep UPDATE carrying the node-started exclusion on the RETRY arm
@@ -349,22 +361,35 @@ class TestNodelessChokepointTruthfulForNodeStartedRow:
         assert "no node was ever dispatched" not in event_message
 
 
-class TestPendingRedispatchLegExcludesNodeStarted:
-    """FAR-1649 qa iteration 2 (finding 1): the ``pending`` re-dispatch leg.
+class TestPendingLegRedispatchesTheFencedResetRow:
+    """FAR-1649 qa iteration 3 (REGRESSION of iteration 2's finding 1).
 
     ``executor._fenced_pending_reset`` resets a running row to ``pending``
-    WITHOUT clearing ``dispatcher``/``dispatched_at``. A node-STARTED row so
-    reset used to match the ``pending + dispatcher='saq' + dispatched_at
-    < reenqueue_window`` leg and be re-dispatched as ``execute_run`` —
-    re-executing the started node. The leg now carries the same phase
-    exclusion the stale-heartbeat leg has, and the row belt covers
-    ``pending`` too.
+    WITHOUT clearing ``dispatcher``/``dispatched_at``/``dispatch_phase``.
+    Iteration 2 excluded that shape from the ``pending`` re-enqueue leg and
+    widened the row belt to ``pending`` — which made the row invisible to
+    EVERY recovery path (the stale sweep's never-dispatched arm requires
+    ``dispatcher != 'saq'`` + ``claim_count = 0`` + ``dispatched_at IS NULL``;
+    its capacity arms need a capacity ``error_code`` the reset NULLs; its age
+    gates require ``status='running'``; ``resume_run``'s claim SQL accepts
+    only awaiting_human/claimed/hitl_parked). If the SAQ retry job was lost
+    between the reset and the re-claim, the run was permanently stranded
+    ``pending``: never re-executed (good) but never resumed or terminalised
+    either (bad).
+
+    Iteration 3 RESTORES the pending leg and narrows the belt back to
+    ``running``. Safe because the row's ONLY producer is idempotency-gated at
+    all three reset call sites (see ``TestFencedResetIsIdempotencyGated``),
+    so re-dispatching it re-executes a graph already vetted safe to re-run
+    (FAR-295) — the FAR-1649 guarantee is "never re-EXECUTE a node-started
+    NON-idempotent run", and a non-idempotent run can never reach this shape.
     """
 
-    def test_pending_leg_predicate_excludes_node_started_phase(self) -> None:
-        """The SQL pending leg binds the shared phase constant (selection
-        half): a node-STARTED pending row is never even selected by the
-        reenqueue-window leg."""
+    def test_pending_leg_carries_no_phase_exclusion(self) -> None:
+        """The SQL pending leg has NO phase leg (selection half of the
+        no-strand fix): exactly ONE phase-exclusion leg remains in the whole
+        predicate — the RUNNING stale-heartbeat leg, whose re-dispatch is NOT
+        idempotency-gated and is the shape behind the 2026-10-10 storm."""
         import sqlalchemy as sa
 
         from modulo.db.models.run import Run
@@ -376,28 +401,31 @@ class TestPendingRedispatchLegExcludesNodeStarted:
         )
         compiled = sa.select(Run.id).where(predicate).compile()
         sql = str(compiled)
-        # Two legs now exclude the class (pending reenqueue + running stale
-        # heartbeat); F6a deliberately adds none (resume-only leg).
-        assert sql.count("dispatch_phase IS NULL") == 2
+        assert sql.count("dispatch_phase IS NULL") == 1
         phase_params = [v for v in dict(compiled.params).values() if v == PHASE_FIRST_NODE_DISPATCHED]
-        assert len(phase_params) == 2
+        assert len(phase_params) == 1
 
-    async def test_pending_node_started_row_is_not_redispatched(self, monkeypatch: Any) -> None:
-        """A pending + dispatcher='saq' + old-dispatched_at row whose phase
-        proves a node STARTED is held back by the row belt (execute_run would
-        re-execute the started node) — no enqueue, counted deferred."""
+    async def test_pending_node_started_reset_row_is_redispatched(self, monkeypatch: Any) -> None:
+        """The REGRESSION test: a pending + dispatcher='saq' + old-
+        dispatched_at row whose phase proves a node STARTED — the fenced
+        pending-reset signature — IS re-dispatched as ``execute_run`` when no
+        SAQ job exists. Without this leg the row is PERMANENTLY stranded
+        (no other recovery path reaches a pending+saq row); with it, the lost
+        SAQ retry job is recovered on the next reconcile tick."""
         run_id = uuid.uuid4()
         row = _run_row(run_id, status="pending", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
 
-        reenqueue.assert_not_awaited()
-        assert summary["repaired"] == 0
-        assert summary["node_started_deferred"] == 1
+        reenqueue.assert_awaited_once()
+        assert reenqueue.await_args.args[3] == "execute_run"
+        assert summary["repaired"] == 1
+        # The belt is RUNNING-only now — it must NOT hold a pending row back.
+        assert summary["node_started_deferred"] == 0
 
     async def test_control_null_phase_pending_row_is_redispatched(self, monkeypatch: Any) -> None:
         """The control: the SAME pending row with no durable phase still takes
-        the reenqueue-window re-dispatch as ``execute_run`` — the guard
-        discriminates on the phase."""
+        the reenqueue-window re-dispatch as ``execute_run`` — recovery of the
+        pending class does not discriminate on the phase."""
         row = _run_row(uuid.uuid4(), status="pending", dispatch_phase=None)
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
 
@@ -405,6 +433,73 @@ class TestPendingRedispatchLegExcludesNodeStarted:
         assert reenqueue.await_args.args[3] == "execute_run"
         assert summary["repaired"] == 1
         assert summary["node_started_deferred"] == 0
+
+    async def test_belt_fails_closed_on_missing_phase_attribute(self, monkeypatch: Any) -> None:
+        """FAR-1649 qa iteration 3: the row belt fails CLOSED on a row source
+        that does not expose ``dispatch_phase`` at all — exactly like
+        ``_is_nodeless_zombie_row`` does on the same input. Missing evidence
+        is never "safe to re-execute" evidence, so a RUNNING row without the
+        column is held back (counted deferred, never enqueued), not
+        fail-opened through to an ``execute_run`` re-dispatch."""
+        row = _run_row(uuid.uuid4(), status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        delattr(row, "dispatch_phase")
+        assert not hasattr(row, "dispatch_phase")
+
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_not_awaited()
+        assert summary["repaired"] == 0
+        assert summary["node_started_deferred"] == 1
+
+    async def test_belt_holds_back_running_node_started_row(self, monkeypatch: Any) -> None:
+        """The belt's surviving scope (RUNNING only): a running node-started
+        row that reaches the re-dispatch path (race window / future-leg
+        regression) is still held back — the storm does not come back."""
+        row = _run_row(uuid.uuid4(), status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+        summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
+
+        reenqueue.assert_not_awaited()
+        assert summary["repaired"] == 0
+        assert summary["node_started_deferred"] == 1
+
+
+class TestFencedResetIsIdempotencyGated:
+    """The safety premise the restored pending leg rests on.
+
+    A ``pending`` node-started row can only be produced by
+    ``executor._fenced_pending_reset``, and every production call site of
+    that method is gated on ``_graph_is_idempotent`` — so the row the
+    restored pending leg re-dispatches always carries a graph already vetted
+    safe to re-run (FAR-295). If a future call site drops its gate, a
+    NON-idempotent node-started run becomes re-dispatchable and these tests
+    must fail first.
+    """
+
+    def test_every_fenced_reset_call_site_is_behind_an_idempotency_gate(self) -> None:
+        """Pin the three production call sites AND their gates.
+
+        ``_fenced_pending_reset`` is awaited exactly three times: twice in
+        the executor (the in-execute transient requeue behind
+        ``_can_fenced_requeue``; the retry_policy re-dispatch behind
+        ``_retry_policy_applies``) and once in ``watchdog_retry`` behind its
+        ``not graph_idempotent`` stand-down. A fourth, ungated call site — or
+        a removed gate — breaks the count / snippet assertions, and the
+        functional watchdog test below breaks when its own gate stops
+        working.
+        """
+        from modulo.core.pipeline_engine import executor, watchdog_retry
+
+        exec_src = Path(executor.__file__).read_text(encoding="utf-8")
+        wr_src = Path(watchdog_retry.__file__).read_text(encoding="utf-8")
+
+        assert exec_src.count("await self._fenced_pending_reset(") == 2
+        assert wr_src.count("await executor._fenced_pending_reset(") == 1
+        # Gate 1 — in-execute transient requeue (the call sits inside this if).
+        assert "if _can_fenced_requeue(" in exec_src
+        # Gate 2 — the retry_policy re-dispatch path.
+        assert "if not _retry_policy_applies(" in exec_src
+        # Gate 3 — the watchdog hook's stand-down.
+        assert "if is_correction_run or not graph_idempotent:" in wr_src
 
 
 class TestF6aGatedRecoveryResumesNodeStartedNeverReexecutes:
@@ -459,10 +554,13 @@ class TestF6aGatedRecoveryResumesNodeStartedNeverReexecutes:
         )
         compiled = sa.select(Run.id).where(predicate).compile()
         sql = str(compiled)
-        # Exactly two phase-exclusion legs (pending + running), never three.
-        assert sql.count("dispatch_phase IS NULL") == 2
+        # Exactly ONE phase-exclusion leg (the running stale-heartbeat leg):
+        # the F6a leg must not add a second one (it would strand every gated
+        # run), and the pending leg deliberately has none either (it would
+        # strand every fenced-reset row — iteration 2's regression).
+        assert sql.count("dispatch_phase IS NULL") == 1
         # The F6a statuses are bound as one list param (awaiting_human among
-        # them), proving the leg is present while carrying no third phase
+        # them), proving the leg is present while carrying no second phase
         # exclusion.
         bound_groups = [v for v in dict(compiled.params).values() if isinstance(v, list)]
         assert any("awaiting_human" in group for group in bound_groups)

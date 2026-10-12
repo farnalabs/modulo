@@ -5689,6 +5689,17 @@ class PipelineExecutor:
         cannot resurrect a run the watchdog just failed, and a cancellation
         cannot be reversed.
 
+        The row keeps ``dispatcher='saq'``/``dispatched_at``/``dispatch_phase``,
+        so the resulting ``pending`` row's ONLY durable recovery is
+        ``dispatcher_reconcile``'s pending re-enqueue leg (FAR-1649 qa
+        iteration 3) — and that leg re-dispatches it as ``execute_run``,
+        i.e. re-executes the run. Safe ONLY because every call site of THIS
+        method is gated on ``_graph_is_idempotent`` (``_can_fenced_requeue``,
+        ``_retry_policy_applies``, watchdog_retry's ``not graph_idempotent``
+        stand-down): the reset is never performed on a graph whose re-run is
+        unsafe (FAR-295). A new call site MUST keep that gate or a
+        non-idempotent node-started run becomes re-dispatchable.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).

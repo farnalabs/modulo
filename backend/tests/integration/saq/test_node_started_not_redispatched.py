@@ -1,15 +1,21 @@
-"""FAR-1649 qa iteration 1+2 — integration: node-STARTED rows are never re-EXECUTED.
+"""FAR-1649 qa iterations 1+2+3 — integration: node-STARTED rows are never
+re-EXECUTED unless the reset that made them ``pending`` gated it, and are
+never stranded.
 
 Drives the REAL ``dispatcher_reconcile`` tick (real Postgres + real Redis)
 with a ``dispatch_phase='first_node_dispatched'`` run. Iteration 1 covered the
 running + stale-heartbeat shape (the 2026-10-10 outage, where the generic
 stale-heartbeat branch used to re-dispatch the run as ``execute_run`` and
-re-execute the started node). Iteration 2 additionally covers the ``pending``
-re-dispatch leg: a fenced pending-reset keeps ``dispatcher``/``dispatched_at``,
-so a node-STARTED row reset to pending used to be re-selected and
-re-dispatched as ``execute_run`` too. In every case the run must NOT be
-re-dispatched; the NULL-phase controls with the identical shapes MUST be,
-proving the exclusions discriminate on the phase.
+re-execute the started node) — that exclusion STAYS. Iteration 2 additionally
+excluded the ``pending`` re-dispatch leg; iteration 3 (this change) RESTORES
+it: a fenced pending-reset keeps ``dispatcher``/``dispatched_at`` and the
+phase, and with the pending leg excluded nothing else can reach a
+``pending``+``saq`` row (stale sweep arms are dispatcher/capacity/running-
+scoped, ``resume_run``'s claim SQL rejects ``pending``) — so a lost SAQ retry
+job stranded the run ``pending`` forever. The leg is safe to restore because
+the reset's only producer is idempotency-gated. The NULL-phase controls with
+the identical shapes MUST still be re-dispatched, proving the RUNNING
+exclusion discriminates on the phase alone.
 """
 
 from __future__ import annotations
@@ -152,13 +158,21 @@ async def test_control_null_phase_stale_run_is_redispatched(
     assert status == "running"
 
 
-async def test_pending_node_started_run_is_not_redispatched(
+async def test_pending_node_started_reset_run_is_redispatched(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
-    """FAR-1649 qa iteration 2 (finding 1): a node-STARTED run RESET to
-    pending (the fenced pending-reset keeps ``dispatcher``/``dispatched_at``)
-    is NOT re-dispatched as ``execute_run`` by the reenqueue-window leg —
-    no job appears, the row stays pending."""
+    """FAR-1649 qa iteration 3 (no-strand regression): a node-STARTED run
+    RESET to pending (the fenced pending-reset keeps
+    ``dispatcher``/``dispatched_at``/the phase) and whose SAQ job is GONE is
+    re-dispatched as ``execute_run`` by the reenqueue-window leg.
+
+    Iteration 2 excluded this shape, which made it invisible to EVERY
+    recovery path and permanently stranded it ``pending`` when the retry job
+    was lost. The restore is safe because the reset's only producer is
+    idempotency-gated at all three call sites — so the re-execution this
+    enqueues runs a graph already vetted safe to re-run (FAR-295). The
+    RUNNING node-started row (test above) still must NOT be re-dispatched:
+    that exclusion is what fixes the 2026-10-10 storm."""
     run_id, _ = await _seed_node_phase_run(
         db_engine,
         test_org,
@@ -169,8 +183,9 @@ async def test_pending_node_started_run_is_not_redispatched(
 
     await ch.dispatcher_reconcile()
 
-    assert not await _job_exists(saq_settings_env, run_id)
+    assert await _job_exists(saq_settings_env, run_id)
     status, claim_token = await _run_row_state(db_engine, run_id)
+    # Re-enqueued only — the reconcile tick never claims the row itself.
     assert status == "pending"
     assert claim_token == "token-a"
 
@@ -179,8 +194,9 @@ async def test_control_pending_null_phase_run_is_redispatched(
     saq_settings_env: str, db_engine: Any, test_org: uuid.UUID, test_user: uuid.UUID
 ) -> None:
     """The control: the IDENTICAL pending row with no durable phase IS
-    re-dispatched (as ``execute_run``) by the reenqueue-window leg — the
-    pending-leg exclusion discriminates on the phase alone."""
+    re-dispatched (as ``execute_run``) by the reenqueue-window leg — pending
+    recovery does not discriminate on the phase (iteration 3); the phase
+    discrimination lives on the RUNNING legs above."""
     run_id, _ = await _seed_node_phase_run(db_engine, test_org, test_user, dispatch_phase=None, status="pending")
 
     await ch.dispatcher_reconcile()
