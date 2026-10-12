@@ -19,8 +19,10 @@ metadata — i.e. the two partial unique indexes from
 * **grouping kwargs contract** — ``run_group_kind`` is the closed
   vocabulary ``{'retry','resume'}``, both kinds are child rows (parent
   required) that must carry the group's root id, a resume must carry its
-  parent's thread (otherwise it continues nothing), and every violation
-  raises ``ValueError`` at the persist boundary BEFORE any DB work.
+  parent's thread AND that thread must actually BE the parent's (a
+  wrong-thread resume — even a thread owned by a run in another org — is
+  rejected at the persist boundary), and every violation raises
+  ``ValueError`` at the persist boundary BEFORE any DB write.
 
 The DB fixture mirrors ``test_run_execution_origin.py``: real
 ``create_run`` against in-memory SQLite — no hand-rolled session double.
@@ -316,6 +318,51 @@ class TestGroupingKwargsValidation:
                 run_group_id=root.id,
                 run_group_kind=RUN_GROUP_KIND_RESUME,
             )
+
+    async def test_resume_thread_must_be_the_parents(self, session: AsyncSession) -> None:
+        """A resume child may pass only its PARENT's thread: both partial
+        unique indexes exclude resume rows, so without this persist-boundary
+        read a wrong-thread resume — even a thread owned by a run in another
+        org — would pass validation and every DB fence silently. Wrong
+        thread rejected BEFORE any write; the correct thread still accepted.
+        """
+        root = await _seed_root(session)
+        with pytest.raises(ValueError, match="must equal the parent run's langgraph_thread_id"):
+            await _create_run(
+                session,
+                parent_run_id=root.id,
+                run_group_id=root.id,
+                run_group_kind=RUN_GROUP_KIND_RESUME,
+                thread_id="00000000-0000-0000-0000-0000000000ee:some-other-run",
+            )
+        # The rejection happened before any write: no resume row landed.
+        assert await _count(session, Run.run_group_kind == RUN_GROUP_KIND_RESUME) == 0
+        # The CORRECT thread is still accepted — the child continues the
+        # parent's checkpoint.
+        child = await _create_run(
+            session,
+            parent_run_id=root.id,
+            run_group_id=root.id,
+            run_group_kind=RUN_GROUP_KIND_RESUME,
+            thread_id=root.langgraph_thread_id,
+        )
+        assert child.langgraph_thread_id == root.langgraph_thread_id
+
+    async def test_resume_parent_must_exist_in_this_org(self, session: AsyncSession) -> None:
+        """The parent read is org-scoped: a resume whose parent_run_id does
+        not resolve to a run of THIS org (missing row, or a row owned by
+        another org) is rejected before any write — a resume never crosses
+        orgs."""
+        root = await _seed_root(session)
+        with pytest.raises(ValueError, match="not found in this org"):
+            await _create_run(
+                session,
+                parent_run_id=uuid.uuid4(),
+                run_group_id=root.id,
+                run_group_kind=RUN_GROUP_KIND_RESUME,
+                thread_id=root.langgraph_thread_id,
+            )
+        assert await _count(session, Run.run_group_kind == RUN_GROUP_KIND_RESUME) == 0
 
     async def test_empty_thread_override_is_rejected(self, session: AsyncSession) -> None:
         await _seed_org(session)

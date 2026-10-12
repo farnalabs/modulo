@@ -2035,10 +2035,11 @@ async def create_run(
     thread_id: str | None = None,
 ) -> Run:
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
-    # BEFORE any DB work (the ``run_idempotency_key`` fail-loud pattern):
+    # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern):
     # these are caller-contract violations, so a typo or a missing field must
     # raise here rather than silently write a row the group queries and the
-    # two partial unique indexes cannot govern.
+    # two partial unique indexes cannot govern. The resume thread check needs
+    # ONE read (the parent row) — still before any write.
     if run_group_kind is not None:
         if run_group_kind not in RUN_GROUP_KIND_VALUES:
             raise ValueError(
@@ -2063,6 +2064,35 @@ async def create_run(
                 "run_group_kind='resume' requires thread_id=<parent's thread> — "
                 "a resume child must continue its parent's checkpoint (§15.1)"
             )
+        if run_group_kind == RUN_GROUP_KIND_RESUME:
+            # §15.1 — the thread override must be the PARENT's thread, not
+            # just any non-empty string. Both partial unique indexes EXCLUDE
+            # resume rows (that is the whole point of dropping the global
+            # thread unique), so without this read a wrong-thread resume —
+            # even a thread owned by a run in ANOTHER org — would pass
+            # validation and every DB fence silently, landing a child on
+            # someone else's checkpoint (or a foreign-org thread). One
+            # org-scoped read of the parent, before any write; the parent
+            # must exist in THIS org (a resume never crosses orgs).
+            parent = (
+                await session.execute(
+                    select(Run.id, Run.langgraph_thread_id).where(
+                        Run.id == parent_run_id,
+                        Run.organisation_id == org_id,
+                    )
+                )
+            ).one_or_none()
+            if parent is None:
+                raise ValueError(
+                    "run_group_kind='resume' parent_run_id not found in this org — "
+                    "the resume child's parent must be a run of the same organisation (§15.1)"
+                )
+            if thread_id != parent.langgraph_thread_id:
+                raise ValueError(
+                    "run_group_kind='resume' thread_id must equal the parent run's "
+                    f"langgraph_thread_id — got {thread_id!r}, parent is on "
+                    f"{parent.langgraph_thread_id!r} (§15.1)"
+                )
     if thread_id is not None and not thread_id:
         raise ValueError("thread_id override must be a non-empty string")
 

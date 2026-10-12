@@ -1,12 +1,12 @@
-"""Integration test for migration 0301_runs_run_grouping (FAR-153 / §15.1).
+"""Integration test for migration 0302_runs_run_grouping (FAR-153 / §15.1).
 
 Against REAL Postgres (testcontainers, private database per test — the
 ``test_migration_0215`` / ``test_migration_0283`` harness):
 
-* NEGATIVE CONTROL — at ``0300_benign_facts_repair`` the global
+* NEGATIVE CONTROL — at ``0301_oauth_consent_state_preauth_rls`` the global
   ``UNIQUE(langgraph_thread_id)`` (``runs_langgraph_thread_id_key``) EXISTS
   and the ``run_group`` columns do NOT;
-* the REAL alembic upgrade of ``0301_runs_run_grouping`` over an already
+* the REAL alembic upgrade of ``0302_runs_run_grouping`` over an already
   POPULATED ``runs`` table:
   - both columns land nullable with no server default (metadata-only — the
     seeded rows keep their exact threads and parent link),
@@ -53,8 +53,8 @@ pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[3]  # backend/
 
-MIGRATION_REV = "0301_runs_run_grouping"
-PREV_REV = "0300_benign_facts_repair"
+MIGRATION_REV = "0302_runs_run_grouping"
+PREV_REV = "0301_oauth_consent_state_preauth_rls"
 
 _THREAD_CONSTRAINT = "runs_langgraph_thread_id_key"
 _NEW_INDEXES = ("ix_runs_run_group_id", "uq_runs_resume_parent", "uq_runs_thread_non_resume")
@@ -125,7 +125,7 @@ def _downgrade(iso_url: str, target: str) -> None:
 async def pre_upgrade_db_url(db_url: str) -> AsyncGenerator[str, None]:
     """A private Postgres database migrated to ``PREV_REV`` — the deployed
     shape where the global thread unique still exists."""
-    db_name, iso_url = await _fresh_db(db_url, "m0301_pre")
+    db_name, iso_url = await _fresh_db(db_url, "m0302_pre")
     try:
         _migrate(iso_url, PREV_REV)
         yield iso_url
@@ -296,7 +296,7 @@ async def test_negative_control_global_thread_unique_exists_before_upgrade(pre_u
     engine = await _engine(pre_upgrade_db_url)
     try:
         assert await _constraint_names(engine) == {_THREAD_CONSTRAINT}, "pre-state must carry the global unique"
-        assert not await _column_names(engine), "run_group columns must not exist before 0301"
+        assert not await _column_names(engine), "run_group columns must not exist before 0302"
     finally:
         await engine.dispose()
 

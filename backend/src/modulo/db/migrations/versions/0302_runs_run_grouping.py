@@ -1,7 +1,7 @@
 """FAR-153 / §15.1: run grouping + resume-as-child thread model.
 
-Revision ID: 0301_runs_run_grouping
-Revises: 0300_benign_facts_repair
+Revision ID: 0302_runs_run_grouping
+Revises: 0301_oauth_consent_state_preauth_rls
 Create Date: 2026-10-12
 
 The agent-failure UX design (§15.1, v6) replaces the single global
@@ -54,8 +54,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0301_runs_run_grouping"
-down_revision: str | None = "0300_benign_facts_repair"
+revision: str = "0302_runs_run_grouping"
+down_revision: str | None = "0301_oauth_consent_state_preauth_rls"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

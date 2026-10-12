@@ -333,7 +333,8 @@ class Run(OrgScoped):
             ),
         ),
         # FAR-153 / §15.1 — the two partial unique indexes that REPLACE the
-        # former global UNIQUE(langgraph_thread_id) (migration 0300):
+        # former global UNIQUE(langgraph_thread_id) (dropped by migration
+        # 0302_runs_run_grouping):
         #
         # 1. Exactly ONE resume child per parent: a second resume of the same
         #    stalled parent is rejected at the DB (409 at the API), while a
@@ -349,7 +350,12 @@ class Run(OrgScoped):
         # 2. Global thread uniqueness for every NON-resume row (roots,
         #    retries, signal/correction/work-item children, legacy rows):
         #    only a resume child may share its parent's thread, and only to
-        #    continue that parent's checkpoint. ``IS NOT`` on SQLite has the
+        #    continue that parent's checkpoint — the "only their parent's"
+        #    half is enforced by ``crud.run.create_run``, which reads the
+        #    parent and rejects a resume whose thread_id is not the
+        #    parent's langgraph_thread_id (the indexes below exclude resume
+        #    rows, so they cannot make that check themselves).
+        #    ``IS NOT`` on SQLite has the
         #    same null-safe semantics as ``IS DISTINCT FROM`` on Postgres
         #    (NULL kind IS NOT 'resume' -> true), so both dialects index
         #    exactly the rows the spec names.

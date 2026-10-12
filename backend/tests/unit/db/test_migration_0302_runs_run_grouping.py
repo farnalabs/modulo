@@ -1,12 +1,12 @@
-"""Unit tests for migration 0301_runs_run_grouping (FAR-153 / §15.1).
+"""Unit tests for migration 0302_runs_run_grouping (FAR-153 / §15.1).
 
 Structural — load the migration module and pin its contract without a
 database, plus ORM parity for the two new columns and the two partial
 unique indexes that replace the global thread unique:
 
-1. the chain: 0301 revises 0300_benign_facts_repair, the migrations
-   directory has exactly one head (0301_runs_run_grouping), the revision id
-   matches the filename, and there are no branch labels;
+1. the chain: 0302 revises 0301_oauth_consent_state_preauth_rls, the
+   migrations directory has exactly one head (0302_runs_run_grouping), the
+   revision id matches the filename, and there are no branch labels;
 2. the upgrade adds EXACTLY two nullable columns with NO server default
    (metadata-only on the hot ``runs`` table), creates the ``run_group_id``
    index, DROPS ``runs_langgraph_thread_id_key``, and creates the two
@@ -40,10 +40,10 @@ from sqlalchemy import String, UniqueConstraint, Uuid
 from modulo.db.models.run import RUN_GROUP_KIND_RESUME, RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_VALUES, Run
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0301_runs_run_grouping"
+_MIGRATION_NAME = "0302_runs_run_grouping"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0300_benign_facts_repair"
-_CHAIN_HEAD_MIGRATION = "0301_runs_run_grouping"
+_DOWN_REVISION = "0301_oauth_consent_state_preauth_rls"
+_CHAIN_HEAD_MIGRATION = "0302_runs_run_grouping"
 
 #: The constraint 0003/0110 put on the global thread id — dropped by the upgrade.
 _THREAD_CONSTRAINT = "runs_langgraph_thread_id_key"
@@ -105,11 +105,11 @@ def _where_text(clause: Any) -> str:
 
 
 class TestChain:
-    def test_single_head_is_0301_runs_run_grouping(self) -> None:
+    def test_single_head_is_0302_runs_run_grouping(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0300_benign_facts_repair(self) -> None:
+    def test_down_revision_is_0301_oauth_consent_state_preauth_rls(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
