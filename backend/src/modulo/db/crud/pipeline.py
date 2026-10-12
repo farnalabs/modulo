@@ -914,6 +914,18 @@ async def _clone_pipeline_config(
         _sanitise_log_value(pipeline_id),
         _sanitise_log_value(name),
     )
+    # FAR-1666: a clone cannot carry the source's declared policy gates. Evals
+    # are not cloned and a gate row is eval-keyed with a hard cross-pipeline
+    # binding check, so a copied declaration could never converge (reconcile
+    # would 422). Strip the blocks through the shared helper and disclose what
+    # was dropped — never a silent drop.
+    cloned_nodes, dropped_policy_gates = strip_declared_policy_gates(snapshot.graph_nodes_json)
+    if dropped_policy_gates:
+        _log.warning(
+            "policy_gate declaration(s) dropped on clone of pipeline %s (evals/gates are not cloned): %s",
+            _sanitise_log_value(pipeline_id),
+            "; ".join(dropped_policy_gates),
+        )
     cloned = Pipeline(
         organisation_id=org_id,
         name=name,
@@ -930,7 +942,7 @@ async def _clone_pipeline_config(
         # snapshot predating the guard may contain schema-less manual nodes, so
         # this duplicate path tolerates them (FAR-874) rather than running
         # enforce_manual_node_output_schemas; new graphs are guarded on write.
-        graph_nodes_json=copy.deepcopy(snapshot.graph_nodes_json),
+        graph_nodes_json=copy.deepcopy(cloned_nodes),
         default_autonomy_level=snapshot.default_autonomy_level,
         max_autonomy_level=snapshot.max_autonomy_level,
         stale_run_timeout_minutes=snapshot.stale_run_timeout_minutes,
@@ -1426,11 +1438,18 @@ def graph_update_audit_payload(
 # REST, and a removal soft-deletes its row on both surfaces.
 #
 # A few writers persist ``graph_nodes_json`` DIRECTLY on a pipeline they are
-# CREATING rather than replacing (workflow import, library/template install and
-# the demo seed's initial row) and so do NOT run this translation. Those
-# surfaces call ``reject_declared_policy_gates`` instead: a graph that declares
-# a ``policy_gate`` block fails loudly rather than being stored with no
-# governing row (silent, plan-hash-invisible non-enforcement).
+# CREATING rather than replacing (the demo seed's initial row) and so do NOT run
+# this translation. That surface calls ``reject_declared_policy_gates`` instead:
+# a graph that declares a ``policy_gate`` block fails loudly rather than being
+# stored with no governing row (silent, plan-hash-invisible non-enforcement).
+#
+# FAR-1666: the writers that can legitimately carry a declaration they cannot
+# materialise — workflow import, library/template install and clone — do NOT
+# reject; a bundle/template/clone may contain a gate the destination cannot
+# reference (evals/gates are not copied), so they STRIP the declared blocks
+# through ``strip_declared_policy_gates`` and record what was dropped. Snapshot
+# rollback, which is a graph write, translates through
+# ``reconcile_graph_policy_gates`` directly.
 #
 # The per-eval advisory lock key MUST stay identical to the FAR-1106 authoring
 # routes' ``modulo.api.routes.evals._with_gate_advisory_lock``
@@ -1518,14 +1537,18 @@ def reject_declared_policy_gates(nodes: list[dict[str, Any]], *, surface: str) -
     """Fail closed when a direct graph writer is handed a declared policy gate.
 
     ``replace_pipeline_graph`` is the ONLY graph-write surface that translates a
-    node ``policy_gate`` block into its ``PolicyGate`` row. A handful of writers
-    (workflow import, library/template install, the demo-seed row creation)
-    persist ``graph_nodes_json`` DIRECTLY and do not run that translation, so a
-    declared block reaching one of them would be stored with no governing row —
+    node ``policy_gate`` block into its ``PolicyGate`` row. A writer that
+    persists ``graph_nodes_json`` DIRECTLY and does not run that translation (the
+    demo-seed row creation) would store a declared block with no governing row —
     silent non-enforcement the run-time plan hash cannot see (both plan sides
-    hash the block equally, so the graph reads unchanged). Those surfaces call
+    hash the block equally, so the graph reads unchanged). That surface calls
     this guard instead: a declared block fails loudly rather than being
     persisted unenforced.
+
+    FAR-1666: writers that can legitimately carry a declaration they cannot
+    materialise (workflow import, library/template install, clone) do NOT use
+    this guard — they strip declared blocks through
+    ``strip_declared_policy_gates`` and record what was dropped.
 
     ``surface`` names the caller for the error message.
     """
@@ -1816,6 +1839,41 @@ async def reconcile_graph_policy_gates(
         await session.execute(text("RESET statement_timeout"))
 
 
+def strip_declared_policy_gates(
+    nodes: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Remove every node-attached ``policy_gate`` block from a graph (FAR-1666).
+
+    Clone, workflow-import and template-install writers cannot carry the
+    source's ``PolicyGate`` rows: evals are not copied, and a gate row is
+    eval-keyed with a hard cross-pipeline binding check, so a copied
+    declaration would either fail reconciliation (422) or persist as an INERT
+    block that governs nothing (``PipelineExecutor`` resolves gating from
+    ``policy_gates`` rows only). Those writers therefore STRIP the declaration
+    through this ONE helper — so every strip site behaves identically — and
+    disclose exactly what was removed rather than leave silent drift.
+
+    Returns ``(stripped_nodes, dropped)`` where ``dropped`` holds one
+    ``"node <id> (eval <id>)"`` label per removed block, in graph order. The
+    caller's ``nodes`` are never mutated: a gate-bearing node is shallow-copied
+    without its ``policy_gate`` key; every other node passes through untouched.
+    """
+    stripped: list[dict[str, Any]] = []
+    dropped: list[str] = []
+    for node in nodes or []:
+        if not isinstance(node, dict) or "policy_gate" not in node:
+            stripped.append(node)
+            continue
+        cleaned = dict(node)
+        gate = cleaned.pop("policy_gate", None)
+        stripped.append(cleaned)
+        eval_id = gate.get("eval_id") if isinstance(gate, dict) else None
+        node_label = _sanitise_log_value(str(node.get("id")))
+        eval_label = _sanitise_log_value(str(eval_id))
+        dropped.append(f"node {node_label} (eval {eval_label})")
+    return stripped, dropped
+
+
 async def replace_pipeline_graph(
     session: AsyncSession,
     *,
@@ -1979,13 +2037,15 @@ async def replace_pipeline_graph(
 
     # FAR-1109: translate the new graph's declared ``policy_gate`` blocks into
     # the PolicyGate row lifecycle IN THE SAME TRANSACTION. Every surface that
-    # REPLACES a graph (REST, MCP, node conversion, snapshot rollback,
-    # onboarding, demo-seed edge convergence) funnels through here, so a
-    # declarative gate can never be stored in ``graph_nodes_json`` without a
-    # governing row and a removal can never leave a live row behind. Writers
-    # that persist a CREATED pipeline's graph directly (workflow import,
-    # library/template install, demo-seed row creation) do not translate; they
-    # reject a declared block via ``reject_declared_policy_gates`` instead.
+    # REPLACES a graph (REST, MCP, node conversion, onboarding, demo-seed edge
+    # convergence) funnels through here, so a declarative gate can never be
+    # stored in ``graph_nodes_json`` without a governing row and a removal can
+    # never leave a live row behind. FAR-1666: snapshot rollback is a graph
+    # write too — it calls ``reconcile_graph_policy_gates`` directly — while the
+    # writers that persist a CREATED pipeline's graph directly (workflow import,
+    # library/template install, clone) strip declared blocks rather than
+    # translating them; the demo-seed row creation still rejects via
+    # ``reject_declared_policy_gates``.
     await reconcile_graph_policy_gates(
         session,
         org_id=org_id,
