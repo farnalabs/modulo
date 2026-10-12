@@ -1199,9 +1199,15 @@ _HEALTHZ_READY_TIMEOUT_SECONDS = 15
 app.add_middleware(
     RequestTimeoutMiddleware,
     timeout_seconds=_DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    # Order matters: RequestTimeoutMiddleware._timeout_for returns the FIRST
+    # matching prefix, so the MOST SPECIFIC prefix must come first. With
+    # "/healthz" ahead of "/healthz/ready", the broader 5s deadline shadowed
+    # the readiness endpoint's intended 15s and /healthz/ready intermittently
+    # 504'd under load (the readiness probe runs 15 sub-checks), which the
+    # /healthz/ready tests surfaced as a KeyError on the 504 ProblemDetail.
     overrides={
-        "/healthz": _HEALTHZ_TIMEOUT_SECONDS,
         "/healthz/ready": _HEALTHZ_READY_TIMEOUT_SECONDS,
+        "/healthz": _HEALTHZ_TIMEOUT_SECONDS,
     },
 )
 

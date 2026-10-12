@@ -195,7 +195,17 @@ class PluginRegistry:
 
         try:
             builder = ep.load()
-        except (ImportError, TypeError, AttributeError, SyntaxError):
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A plugin whose import raises ANYTHING — a missing optional
+            # dependency that is not an ImportError, a module-scope config or
+            # attribute error, an OSError, ... — must never abort discovery.
+            # ``discover_plugins`` runs on the startup critical path (see
+            # ``api/main.py::_discover_plugins``), so an escaping raise here
+            # would make the whole instance unbootable because of one broken
+            # third-party plugin. Record it unhealthy under the same
+            # "Failed to load entry point …" surface and keep scanning.
             logger.exception("Failed to load entry point %s from package %s", ep.name, plugin_id)
             detail = f"Failed to load entry point {ep.name}"
             with self._lock:

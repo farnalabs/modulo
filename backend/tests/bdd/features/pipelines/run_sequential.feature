@@ -22,16 +22,17 @@ Feature: Sequential Pipeline Run
     Given a running pipeline with 3 nodes
     When the pipeline engine picks up the run
     And all nodes complete without error
-    Then the run status becomes "completed"
-    And the run has a final_state
+    Then the run status becomes "complete"
+    And the run has reached a terminal state
 
   Scenario: Run context is passed between nodes
     Given pipeline "my-pipeline" has default run_context branch="main"
     When I trigger a run with run_context branch="feature-x"
     Then the effective run context branch is "feature-x"
 
-  Scenario: Run respects max concurrent runs
+  Scenario: Over-capacity run is accepted then parked on pipeline capacity
     Given org "acme" has pipeline "my-pipeline" with max_concurrent_runs 1
-    And a pending run exists for pipeline "my-pipeline"
+    And a running pipeline "my-pipeline"
     When I POST /api/pipelines/my-pipeline/runs with empty run_context
-    Then the response status is 429
+    Then the response status is 202
+    And the run is parked with the capacity marker "pipeline_capacity"

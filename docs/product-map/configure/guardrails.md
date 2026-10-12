@@ -4,6 +4,8 @@ prd: N/A
 adr: []
 code:
   - backend/src/modulo/core/guardrails/__init__.py
+  - backend/src/modulo/core/guardrails/output_intercept.py
+  - backend/src/modulo/core/guardrails/redaction_mode.py
   - backend/src/modulo/core/guardrails/config.py
   - backend/src/modulo/core/guardrails/loop_intercept.py
   - backend/src/modulo/core/guardrails/compensation.py
@@ -12,6 +14,7 @@ code:
   - frontend/src/views/SettingsGuardrailsView.vue
 unit-tests:
   - backend/tests/unit/core/test_guardrails.py
+  - backend/tests/unit/core/test_guardrails_output_intercept.py
   - backend/tests/unit/core/test_guardrails_contract.py
   - backend/tests/unit/test_guardrail_loop_intercept.py
   - backend/tests/unit/pipeline_engine/test_node_runner_residual.py
@@ -136,6 +139,35 @@ compensation, and single-node self-correction. Built on the eval engine
       refresh; non-admins never see the control
       (`frontend/src/views/SettingsGuardrailsView.vue`,
       `frontend/src/__tests__/SettingsGuardrailsView.spec.ts`)
+
+- [x] Output-side interception (FAR-209 Track B): a guardrail may declare
+      `interception_point: "output"` in its config to intercept a completed
+      node's output envelope at the executor's chain-end seam instead of the
+      run-creation ingestion edge — the output-point defs are split out of the
+      node-scoped eval loop (`GuardrailMisroutedError` can never fire), a
+      block/redact outcome is evaluated against the envelope, a block raises
+      ``GuardrailBlockedError`` (terminal ``eval_failed`` semantics unchanged),
+      and the REDACTED envelope overwrites ``completed_node_outputs``; node
+      markers (stall / agent-failure / session-lost evidence) are extracted
+      from the RAW output before interception so redaction never blanks the
+      failure-evidence path; input-point defs and unknown
+      ``interception_point`` values are KEPT at the input pass (unknown values
+      fail closed in strict validation)
+      (`backend/src/modulo/core/guardrails/output_intercept.py`,
+      `backend/src/modulo/core/pipeline_engine/executor.py`,
+      `backend/src/modulo/db/crud/run.py`)
+- [x] Destroy redaction mode (FAR-209 Track B): `mode: destroy` replaces each
+      candidate — the detection regex's matches inside a string leaf (the
+      untouched surroundings of a match stay readable), else the whole leaf —
+      with a keyed HMAC token (`hmac-sha256:<digest>`) computed over the
+      candidate plus a deployment-wide `guardrail_destroy_pepper` setting
+      (keyed so tokens are deterministic and cross-referenceable but never
+      reversible); a non-string leaf becomes one token over its compact JSON.
+      Setting the pepper is mandatory: absent/empty yields a
+      ``GuardrailRedactionMechanismError`` which the executor converts to a
+      terminal block (fail closed) — never a masks-only fallback and never an
+      unredacted persist
+      (`backend/src/modulo/core/guardrails/redaction_mode.py`)
 
 ## Known Gaps
 

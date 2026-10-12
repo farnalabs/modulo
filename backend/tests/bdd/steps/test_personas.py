@@ -1488,7 +1488,7 @@ def elena_dashboard_shows_quality_dip(ctx):
     ctx["pipeline_name"] = "ticket-writer"
     runs = []
     for i in range(5):
-        run = make_mock_run(status="completed")
+        run = make_mock_run(status="complete")
         run.eval_scores = [
             {"case_id": str(uuid.uuid4()), "score": 0.45 + i * 0.1},
             {"case_id": str(uuid.uuid4()), "score": 0.50 + i * 0.1},
@@ -1529,7 +1529,7 @@ def elena_click_specific_run(ctx):
     ctx["selected_run_id"] = target_id
     ctx["run_detail"] = {
         "run_id": target_id,
-        "status": "completed",
+        "status": "complete",
         "nodes": [
             {
                 "node_id": "node-ingest",
@@ -2600,18 +2600,17 @@ def run_completes_successfully(request, client):
     assert prior is not None, "No run was triggered"
     run = make_mock_run(
         id=prior.id,
-        status="completed",
+        status="complete",
         pipeline_id=prior.pipeline_id,
         started_at=prior.started_at,
         heartbeat_at=prior.heartbeat_at,
         created_at=prior.created_at,
-        final_state="completed",
         completed_at=datetime.now(UTC),
     )
     request.node._resp = resp = _fetch_run_detail(client, request, _harden_run_scalars(run), otel_endpoint="")
     assert resp.status_code == 200, resp.text
     body = request.node._resp_body = resp.json()
-    assert body.get("status") == "completed", f"Run did not complete: {body}"
+    assert body.get("status") == "complete", f"Run did not complete: {body}"
 
 
 @then("tickets are created in my issue tracker")
@@ -2769,7 +2768,7 @@ def eval_engine_finishes(ctx, request):
     score = ctx.get("eval_score", 0.0)
     passed = score >= threshold
     ctx["eval_passed"] = passed
-    ctx["run_status"] = "completed" if passed else "failed"
+    ctx["run_status"] = "complete" if passed else "failed"
     ctx["deploy_proceeded"] = passed
 
 
@@ -2797,7 +2796,7 @@ def completed_run_for_pipeline(name: str, ctx, request):
     mock_run = MagicMock()
     mock_run.id = uuid.uuid4()
     mock_run.pipeline_id = mock_pipeline.id
-    mock_run.status = "completed"
+    mock_run.status = "complete"
     mock_run.token_consumption = {
         "planner": {"input_tokens": 150, "output_tokens": 450},
         "coder": {"input_tokens": 1200, "output_tokens": 3200},

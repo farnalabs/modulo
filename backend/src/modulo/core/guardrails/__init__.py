@@ -12,14 +12,23 @@ Actions
 observe   compute + validate + discard + log would-block (shadow).
 warn      log the violation; the run continues.
 block     the run transitions to ``eval_failed`` (TERMINAL).
-redact    masks-only field-scoped redaction at the ingestion edge.
+redact    field-scoped redaction at the ingestion edge.
 
 Redaction
 ---------
-Masks-only transform. The mask token is fixed and never derived from payload
-content. Field paths are STATIC author config (never payload-derived) and
+Field paths are STATIC author config (never payload-derived) and
 resolved with EXACT/ANCHOR key matching — substring matching is FORBIDDEN.
 A built-in allowlist of never-touch system fields is always honoured.
+
+The transform/drop modes are masks-only: the transform token is fixed and
+never derived from payload content. The ``destroy`` mode (FAR-209 Track B)
+replaces each detected candidate with a deterministic key-derived HMAC token
+(:mod:`modulo.core.guardrails.redaction_mode`) — it is keyed by the
+deployment's destroy pepper and is the ONLY non-masks-only redaction mode.
+A destroy policy that cannot run (unset pepper, unusable pattern) fails
+closed: :class:`GuardrailRedactionMechanismError` escapes the redaction phase
+and the calling seam turns it into a terminal block — never a silent
+masks-only fallback and never an unredacted persist.
 
 Interception
 ------------
@@ -60,6 +69,12 @@ from modulo.core.eval_engine import (
     EvalType,
     GuardrailMisroutedError,
 )
+from modulo.core.guardrails.redaction_mode import (
+    GuardrailRedactionMechanismError,
+    destroy_candidates,
+    destroy_token,
+    resolve_guardrail_destroy_pepper,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -74,11 +89,19 @@ class GuardrailAction(StrEnum):
 
 
 class FieldRedactionMode(StrEnum):
-    """Per-field redaction policy mode. All are masks-only — never destroy."""
+    """Per-field redaction policy mode.
+
+    ``transform``/``drop`` are masks-only. ``destroy`` (FAR-209 Track B)
+    replaces each detected candidate with a keyed HMAC token derived from the
+    deployment's destroy pepper — see
+    :mod:`modulo.core.guardrails.redaction_mode`. ``block`` fires as a
+    detection-style verdict when the guarded field is present.
+    """
 
     TRANSFORM = "transform"
     DROP = "drop"
     BLOCK = "block"
+    DESTROY = "destroy"
 
 
 # Fixed mask token — never derived from payload content, never reversible.
@@ -130,6 +153,13 @@ GUARDRAIL_DETECTION_TYPES: frozenset[str] = frozenset({EvalType.REGEX, EvalType.
 # guardrail block is terminal and retries are excluded by design (item 5).
 GUARDRAIL_FORBIDDEN_FAILURE_BEHAVIOURS: frozenset[str] = frozenset({"retry"})
 
+# Seam labels carried in a mechanism-error block message so the operator can
+# tell WHERE the pass failed closed. The shared async pass is driven by both
+# seams (FAR-209 Track B added the executor's node-output seam), so a
+# hardcoded "ingestion edge" would mislabel the output seam's failures.
+SEAM_INGESTION_EDGE = "ingestion edge"
+SEAM_NODE_OUTPUT_EDGE = "node-output edge"
+
 
 class GuardrailConfigError(ValueError):
     """Raised when a guardrail definition is malformed."""
@@ -164,7 +194,7 @@ class GuardrailConfig(BaseModel):
     conformance claim.
     """
 
-    interception_point: Literal["input"] = "input"
+    interception_point: Literal["input", "output"] = "input"
     action: GuardrailAction = GuardrailAction.OBSERVE
     redaction: list[FieldRedactionPolicy] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
@@ -320,6 +350,44 @@ def _apply_transform_policy(redacted: dict[str, Any], policy: FieldRedactionPoli
     return RedactionEntry(path=path, mode=policy.mode.value, applied=True, reason="masked")
 
 
+def _apply_destroy_policy(
+    redacted: dict[str, Any],
+    policy: FieldRedactionPolicy,
+    path: str,
+    value: Any,
+    detection_pattern: str | None,
+) -> RedactionEntry:
+    """Handle the ``destroy`` policy: HMAC-token replacement (FAR-209 Track B).
+
+    Fails closed: a missing deployment pepper or an unusable candidate pattern
+    raises :class:`GuardrailRedactionMechanismError`, which escapes the
+    redaction phase and the calling seam converts into a terminal block —
+    never a masks-only fallback and never an unredacted persist.
+    """
+    pepper = resolve_guardrail_destroy_pepper()
+    if not pepper:
+        raise GuardrailRedactionMechanismError(
+            "guardrail destroy redaction requires a configured guardrail_destroy_pepper"
+        )
+    candidates = destroy_candidates(value, detection_pattern)
+    if isinstance(value, str) and candidates:
+        replacement = value
+        seen: set[str] = set()
+        for candidate in candidates:
+            if candidate in seen or candidate not in replacement:
+                seen.add(candidate)
+                continue
+            seen.add(candidate)
+            replacement = replacement.replace(candidate, destroy_token(candidate, pepper))
+        set_static_path(redacted, path, replacement)
+    else:
+        # Non-string leaf (or a no-match fallback): the whole value is one
+        # candidate — the leaf becomes its destroy token outright.
+        token = destroy_token(candidates[0], pepper)
+        set_static_path(redacted, path, token)
+    return RedactionEntry(path=path, mode=policy.mode.value, applied=True, reason="destroyed")
+
+
 def _apply_one_redaction_policy(
     redacted: dict[str, Any],
     policy: FieldRedactionPolicy,
@@ -327,6 +395,7 @@ def _apply_one_redaction_policy(
     *,
     raise_on_block: bool,
     guardrail_name: str,
+    detection_pattern: str | None = None,
 ) -> RedactionEntry:
     """Apply one redaction policy to the working copy, returning its entry record."""
     path = policy.path
@@ -341,6 +410,8 @@ def _apply_one_redaction_policy(
         return _apply_block_policy(value, policy, path, raise_on_block=raise_on_block, guardrail_name=guardrail_name)
     if policy.mode == FieldRedactionMode.DROP:
         return _apply_drop_policy(redacted, policy, path)
+    if policy.mode == FieldRedactionMode.DESTROY:
+        return _apply_destroy_policy(redacted, policy, path, value, detection_pattern)
     # transform (default): masks-only
     return _apply_transform_policy(redacted, policy, path)
 
@@ -352,8 +423,9 @@ def apply_redaction_masks(
     allowlist: Iterable[str] = GUARDRAIL_NEVER_TOUCH_FIELDS,
     raise_on_block: bool = False,
     guardrail_name: str = "guardrail",
+    detection_pattern: str | None = None,
 ) -> tuple[dict[str, Any], list[RedactionEntry]]:
-    """Apply *policies* to a deep copy of *payload* (masks-only).
+    """Apply *policies* to a deep copy of *payload* (masks-only + destroy).
 
     Returns ``(redacted_payload, entries)``. Deterministic order: policies are
     applied in the order given (authors control ordering). Exact/anchor path
@@ -362,22 +434,35 @@ def apply_redaction_masks(
     A ``drop`` policy removes the key; a ``block`` policy raises
     :class:`GuardrailBlockedError` when the path resolves to a non-empty value
     (the field is evidence of the guarded condition) and *raise_on_block* is
-    True.
+    True. A ``destroy`` policy replaces each candidate (the detection
+    *detection_pattern*'s matches inside a string leaf, else the whole leaf)
+    with a keyed HMAC token; it raises
+    :class:`~modulo.core.guardrails.redaction_mode.GuardrailRedactionMechanismError`
+    when the deployment pepper is unset.
+
+    *detection_pattern* feeds destroy candidate generation; it is ignored by
+    the masks-only modes.
     """
     if not payload:
         return copy.deepcopy(payload), []
     redacted: dict[str, Any] = copy.deepcopy(payload)
     allow = frozenset(allowlist)
-    entries: list[RedactionEntry] = [
-        _apply_one_redaction_policy(
-            redacted,
-            policy,
-            allow,
-            raise_on_block=raise_on_block,
-            guardrail_name=guardrail_name,
+    entries: list[RedactionEntry] = []
+    for item in policies:
+        policy = item
+        if not isinstance(policy, FieldRedactionPolicy):
+            # Raw author dicts are coerced; an unreadable policy fails through.
+            policy = FieldRedactionPolicy.model_validate(policy)
+        entries.append(
+            _apply_one_redaction_policy(
+                redacted,
+                policy,
+                allow,
+                raise_on_block=raise_on_block,
+                guardrail_name=guardrail_name,
+                detection_pattern=detection_pattern,
+            )
         )
-        for policy in policies
-    ]
     return redacted, entries
 
 
@@ -765,7 +850,11 @@ def _apply_redaction_phase(
 ) -> RedactionPhaseOutcome:
     """Phase two — apply redaction masks to redact-action guardrails.
 
-    A block-mode redaction policy firing records a block (never raises).
+    A block-mode redaction policy firing records a block (never raises). A
+    ``destroy`` policy applies keyed HMAC-token replacement and raises
+    :class:`GuardrailRedactionMechanismError` (which escapes — see below)
+    when the deployment pepper is unset. The detection pattern feeds
+    destroy-candidate generation.
     """
     entries: list[RedactionEntry] = []
     decision = BlockDecision()
@@ -789,17 +878,25 @@ def _apply_redaction_phase(
             continue
         if cfg.action != GuardrailAction.REDACT or not cfg.redaction:
             continue
+        detection_type, effective_config = _resolve_detection(eval_def)
+        detection_pattern = effective_config.get("pattern") if detection_type == str(EvalType.REGEX) else None
         try:
             redacted, batch_entries = apply_redaction_masks(
                 redacted,
                 cfg.redaction,
                 raise_on_block=True,
                 guardrail_name=eval_def.name,
+                detection_pattern=detection_pattern,
             )
             entries.extend(batch_entries)
         except GuardrailBlockedError as exc:
             if not decision.blocked:
                 decision = BlockDecision(blocked=True, block_message=str(exc), blocking_eval_name=eval_def.name)
+        # NOTE: GuardrailRedactionMechanismError (destroy redaction failing
+        # closed — unset pepper / unusable pattern) is deliberately NOT caught
+        # here: it escapes the pass so the calling seam's mechanism-error
+        # handler turns it into a terminal fail-closed block, exactly like
+        # any other redaction/destroy mechanism failure.
     return RedactionPhaseOutcome(redacted=redacted, entries=entries, decision=decision)
 
 
@@ -1110,16 +1207,17 @@ def _over_budget_enforcement_outcome(
     payload: dict[str, Any],
     reason: str,
     skipped: Sequence[GuardrailSkip],
+    seam: str,
 ) -> GuardrailInterceptionOutcome:
     """Fail-closed outcome for an over-budget payload under enforcement guardrails."""
     any_guarding = any(_resolve_action(d) in (GuardrailAction.BLOCK, GuardrailAction.REDACT) for d in definitions)
     if any_guarding:
-        _log.warning("guardrails.payload_over_budget", extra={"reason": reason})
+        _log.warning("guardrails.payload_over_budget", extra={"reason": reason, "seam": seam})
         return GuardrailInterceptionOutcome(
             payload=copy.deepcopy(payload),
             skipped=list(skipped),
             blocked=True,
-            block_message="guardrail mechanism error at ingestion edge",
+            block_message=f"guardrail mechanism error at {seam}",
             blocking_eval_name="<payload-budget>",
         )
     _log.warning("guardrails.payload_over_budget_observe", extra={"reason": reason})
@@ -1137,6 +1235,7 @@ def _payload_budget_outcome(
     detection_only: bool,
     max_payload_bytes: int,
     skipped: Sequence[GuardrailSkip],
+    seam: str,
 ) -> GuardrailInterceptionOutcome | None:
     """Return the outcome for an over-budget payload, else ``None`` when within budget.
 
@@ -1148,7 +1247,7 @@ def _payload_budget_outcome(
     reason = f"payload exceeds {max_payload_bytes}-byte guardrail budget"
     if detection_only:
         return _over_budget_replay_outcome(definitions, payload, reason, skipped)
-    return _over_budget_enforcement_outcome(definitions, payload, reason, skipped)
+    return _over_budget_enforcement_outcome(definitions, payload, reason, skipped, seam)
 
 
 def _mechanism_error_reason(exc: Exception, timeout: float) -> str:
@@ -1188,6 +1287,7 @@ async def _run_detection_loop(
     *,
     detection_only: bool,
     timeout_seconds: float,
+    seam: str,
 ) -> DetectionLoopOutcome:
     """Run every guardrail detection under its budget.
 
@@ -1224,7 +1324,7 @@ async def _run_detection_loop(
             if guarding and not detection_only:
                 decision = BlockDecision(
                     blocked=True,
-                    block_message="guardrail mechanism error at ingestion edge",
+                    block_message=f"guardrail mechanism error at {seam}",
                     blocking_eval_name=eval_def.name,
                 )
             else:
@@ -1246,6 +1346,7 @@ async def run_interception_pass_async(
     timeout_seconds: float | None = None,
     max_payload_bytes: int = DEFAULT_MAX_GUARDRAIL_PAYLOAD_BYTES,
     skipped: Sequence[GuardrailSkip] = (),
+    seam: str = SEAM_INGESTION_EDGE,
 ) -> GuardrailInterceptionOutcome:
     """Async two-phase guardrail pass with per-guardrail hard timeouts (item 7).
 
@@ -1272,6 +1373,13 @@ async def run_interception_pass_async(
     way as a timeout: fail-closed for block/redact, log-and-continue for
     observe/warn — except in detection-only mode, where a guarding guardrail's
     mechanism error is recorded (not dropped) so the replay keeps the evidence.
+
+    *seam* names the caller's interception point and is carried verbatim in a
+    mechanism-error ``block_message`` (``f"guardrail mechanism error at
+    {seam}"``). The default (:data:`SEAM_INGESTION_EDGE`) matches every
+    pre-FAR-209 call site; the executor's node-output seam passes
+    :data:`SEAM_NODE_OUTPUT_EDGE` so its failures are never mislabelled as
+    ingestion-edge failures.
     """
     if not definitions:
         return GuardrailInterceptionOutcome(payload=dict(payload), skipped=list(skipped))
@@ -1282,6 +1390,7 @@ async def run_interception_pass_async(
         detection_only=detection_only,
         max_payload_bytes=max_payload_bytes,
         skipped=skipped,
+        seam=seam,
     )
     if budget_outcome is not None:
         return budget_outcome
@@ -1294,6 +1403,7 @@ async def run_interception_pass_async(
         pre_act,
         detection_only=detection_only,
         timeout_seconds=timeout,
+        seam=seam,
     )
 
     decision = detection_outcome.decision
@@ -1785,6 +1895,8 @@ __all__ = [
     "GUARDRAIL_NEVER_TOUCH_FIELDS",
     "GUARDRAIL_SKIP_EXPECTED_REASONS",
     "REDACTION_MASK",
+    "SEAM_INGESTION_EDGE",
+    "SEAM_NODE_OUTPUT_EDGE",
     "ConformanceDerivation",
     "ConformanceState",
     "FieldRedactionMode",
@@ -1796,6 +1908,7 @@ __all__ = [
     "GuardrailInterceptionOutcome",
     "GuardrailMisroutedError",
     "GuardrailPassResult",
+    "GuardrailRedactionMechanismError",
     "GuardrailSkip",
     "GuardrailSummary",
     "RedactionEntry",

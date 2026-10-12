@@ -31,6 +31,10 @@ from modulo.core.product_analytics.constants import (
     DUMP_WATERMARK_KEY,
     coerce_dump_count,
 )
+from modulo.core.product_analytics.license_enforcement import (
+    is_enforcement_active,
+    should_degrade_to_community,
+)
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
@@ -162,9 +166,12 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
         _log.info("product_analytics.instance_switch_off")
         return {"skipped": "instance_switch_off"}
 
-    # Find consenting orgs.
+    # Check license enforcement status (partner carve-out) and find consenting
+    # orgs in ONE session: the enforcement flag feeds the org filter, so they
+    # share a transaction instead of opening two back-to-back sessions.
     async with factory() as session, session.begin():
-        orgs = await _get_consenting_orgs(session)
+        enforcement_active = await is_enforcement_active(session)
+        orgs = await _get_consenting_orgs(session, enforcement_active)
     if not orgs:
         _log.info("product_analytics.no_consenting_orgs")
         return {"skipped": "no_consenting_orgs"}
@@ -298,7 +305,7 @@ async def _check_instance_switch(factory: Any) -> bool:
         return await is_instance_analytics_enabled(session)
 
 
-async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
+async def _get_consenting_orgs(session: AsyncSession, enforcement_active: bool) -> list[dict[str, Any]]:
     from modulo.db.models.organisation import Organisation
 
     result = await session.execute(
@@ -310,6 +317,14 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
         # consent set and the transparency endpoint's reported posture cannot
         # drift (both call ``consent.is_org_consenting``).
         if not is_org_consenting(row.settings_json):
+            continue
+        # Apply license enforcement: partner licenses with product_analytics_required
+        # claim degrade orgs that haven't opted in to "all" (FAR-1636 / design §6).
+        if enforcement_active and should_degrade_to_community(row, enforcement_active):
+            _log.debug(
+                "product_analytics.license_degrade_skip",
+                extra={"org_id": str(row.id)},
+            )
             continue
         pa = (row.settings_json or {}).get("product_analytics", {})
         level_changed_at = pa.get("level_changed_at")

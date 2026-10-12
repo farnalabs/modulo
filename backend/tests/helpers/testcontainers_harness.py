@@ -215,9 +215,18 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
                     break
                 time.sleep(spec.poll_interval_seconds)
             else:
+                # Include the container's own log tail in the failure: a fixture
+                # that starts but whose process exits immediately (e.g. Keycloak
+                # refusing an unreadable cert and exiting 2) is otherwise
+                # indistinguishable from a hung/slow boot — the probe only ever
+                # reports ConnectError. Best-effort: log capture must never turn
+                # one failure into a different one.
+                logs_tail = ""
+                with contextlib.suppress(Exception):
+                    logs_tail = f"\n--- {spec.image!r} container logs (tail) ---\n{handle.logs(tail=40)}"
                 raise Tier1bFixtureError(
                     f"Fixture {spec.image!r} did not become ready within "
-                    f"{spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}"
+                    f"{spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}{logs_tail}"
                 )
         return handle
     except Exception:  # teardown must fire on ANY failure above (pytest.skip's Skipped is an Exception subclass)

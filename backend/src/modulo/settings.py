@@ -1038,6 +1038,15 @@ class Settings(BaseSettings):
     # settings can override this per-organisation via the admin email-settings API.
     smtp_timeout: int = Field(30, ge=1, le=120)
 
+    # Guardrail destroy-redaction pepper (FAR-209 Track B). The keyed secret
+    # the ``destroy`` redaction mode HMACs its replacement tokens with. Empty
+    # (default) means unset: a guardrail with a destroy-mode redaction rule
+    # then fails CLOSED at the edge (GuardrailRedactionMechanismError ->
+    # terminal block) — never an unredacted persist, never a masks-only
+    # fallback. Rotate via env (GUARDRAIL_DESTROY_PEPPER); rotation breaks
+    # cross-run linkage of previously destroyed tokens by design.
+    guardrail_destroy_pepper: str = Field(default="", repr=False)
+
     # populate_by_name (FAR-1500): constructor kwargs may use a field's NAME as
     # well as its alias. Without it, a name-keyed kwarg for an aliased field is
     # silently dropped by ``extra="ignore"`` — ``Settings(environment="prod")``

@@ -34,6 +34,12 @@ Proven here:
 What is NOT covered: the full SAML ACS HTTP flow (a signed IdP Response) —
 same documented gap as ``test_sso_invite_consume``; signature round-trips
 cannot be produced on Windows (see ``test_saml_audience_containment``).
+
+FAR-1126 note: the sibling ``conftest.py`` session-scoped autouse
+``keycloak_tls_trust_env`` fixture sets ``SSRF_TRUST_PROXY=1`` process-wide for
+every test in this directory, deliberately relaxing the pinned transport's
+fail-closed default. It is inert without a proxy env var, but a test here that
+asserts the proxy-ignore guard must clear ``SSRF_TRUST_PROXY`` explicitly.
 """
 
 import os

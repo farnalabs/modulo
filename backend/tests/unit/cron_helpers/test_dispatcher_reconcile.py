@@ -166,6 +166,10 @@ def _run_row(
         node_token_usage=None if nodeless else {},
         outputs_absent=nodeless,
         checkpoints_absent=nodeless,
+        # FAR-1649: the real reconcile SELECT carries ``dispatch_phase``; the
+        # row recheck fails closed on a row source that omits the column, so
+        # this fixture simulates the product's actual row shape.
+        dispatch_phase=None,
         started_at=datetime.now(UTC) - timedelta(minutes=60) if nodeless else datetime.now(UTC) - timedelta(minutes=1),
         error_code=error_code,
         dispatcher=dispatcher,

@@ -202,15 +202,21 @@ async def fulfil_team_purchase(
         return None
 
     validation = parse_and_verify(license_key)
-    expires_at = ""
-    if validation.valid and validation.license_data is not None:
-        expires_at = validation.license_data.expires_at
-    else:
-        _log.warning(
-            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s",
+    if not validation.valid or validation.license_data is None:
+        # A key we just signed that does not verify against our OWN configured
+        # public key is unusable — the customer would receive a licence the
+        # product rejects on upload. Fail CLOSED: never email it and never claim
+        # the event, so a corrected deployment plus Stripe's retry can still
+        # fulfil the purchase. Mirrors ``admin_license.issue_license``, which
+        # answers 500 for the same condition instead of returning a bad key.
+        _log.error(
+            "stripe.fulfilment.generated_license_failed_verification event_id=%s error=%s — "
+            "unverifiable key not emailed; event left unclaimed so Stripe's retries re-attempt",
             event_id,
             validation.error,
         )
+        return None
+    expires_at = validation.license_data.expires_at
 
     if send_key_email and not await email_team_license(settings, customer_email, license_key, expires_at):
         _log.error(

@@ -5,6 +5,8 @@ adr: []
 code:
   - backend/src/modulo/api/routes/lifecycle_maps.py
   - backend/src/modulo/core/lifecycle_map
+  - frontend/src/stores/lifecycleMaps.ts
+  - frontend/src/views/lifecycle-map/LifecycleMapView.vue
 unit-tests:
   - backend/tests/unit/core/test_lifecycle_map.py
   - backend/tests/unit/core/test_lifecycle_map_versions.py
@@ -14,6 +16,7 @@ unit-tests:
   - backend/tests/integration/test_lifecycle_map_import_export.py
   - backend/tests/integration/test_lifecycle_map_concurrency.py
   - frontend/src/__tests__/LifecycleMapView.spec.ts
+  - frontend/src/__tests__/lifecycleMapLayout.spec.ts
 bdd:
   - backend/tests/bdd/features/lifecycle_maps/crud.feature
   - backend/tests/bdd/features/lifecycle_maps/versioning.feature

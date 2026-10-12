@@ -55,8 +55,18 @@ otherwise no-longer-running run never matches (rowcount 0 → the hook stands
 down and the watchdog's token/status-guarded ``fail_run_terminal`` is a
 no-op), so there is never a double-fail and never a retry of a finished
 run. A run reset to ``pending`` whose job then dies without re-raising is
-recovered by ``dispatcher_reconcile`` / ``stale_run_recovery_sweep`` (the
-durable backstop).
+recovered by ``dispatcher_reconcile``'s pending re-enqueue leg (the durable
+backstop, FAR-1649 qa iteration 3): it re-dispatches the
+``pending + dispatcher='saq' + dispatched_at < reenqueue_window`` row once
+its SAQ job is genuinely gone (the per-row ``q.job()`` gate skips the row
+while a retry job still exists). That recovery is safe precisely because
+EVERY fenced-reset call site — including this module's — is gated on
+``_graph_is_idempotent``, so the row it re-claims carries a graph already
+vetted safe to re-run (FAR-295). ``stale_run_recovery_sweep`` does NOT
+cover this row shape — its branches are scoped to legacy dispatchers
+(``dispatcher != 'saq'``), to a capacity ``error_code`` the reset NULLs, or
+to ``status='running'`` — so it is not a backstop for a fenced-reset row
+and must not be named as one.
 """
 
 from __future__ import annotations
