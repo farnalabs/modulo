@@ -1,10 +1,15 @@
 """Shared JMESPath condition evaluation for the pipeline engine.
 
-Centralises the one truthiness rule (``bool(...)``) used across every JMESPath
-guard site in the engine (conditional edges, loop counters, HITL gate
-conditions, polling triggers, and the new Router node). Previously each site
-compiled + searched inline; consolidating here keeps the semantics identical
-and gives the Router a single evaluator to lower onto.
+Centralises the one truthiness rule (``bool(...)``) used across the
+pipeline-engine JMESPath guard sites (conditional edges, loop counters, HITL
+gate conditions, and the Router node). Previously each site compiled +
+searched inline; consolidating here keeps the semantics identical and gives
+the Router a single evaluator to lower onto.
+
+Polling-trigger conditions are NOT evaluated here: ``trigger_engine/polling.py``
+uses its own type-aware ``jmespath.compile`` path (truthy bool/number/list/dict/
+str handling) because trigger conditions evaluate a connector result's
+``records`` rather than pipeline state.
 
 The truthiness rule is deliberately ``bool(result)`` — NOT a richer
 list/dict/number-aware check — to preserve the exact behaviour of the original
