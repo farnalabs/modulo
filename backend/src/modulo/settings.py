@@ -411,6 +411,22 @@ class Settings(BaseSettings):
     # Per-run execution ceiling for SAQ execute_run (dispatch.py): the job must
     # reach a terminal state within this budget or the worker fails it.
     saq_run_timeout: int = Field(default=7200, alias="SAQ_RUN_TIMEOUT", ge=300, le=86400)
+    # FAR-1715: age bound (minutes) past ``runs.started_at`` at which a
+    # ``dispatcher='saq'`` run with ZERO node progress is terminalised — the
+    # dispatcher_reconcile nodeless router / mid-graph age gate AND the
+    # independent stale_run_recovery zero-progress branch, which share this
+    # ONE knob. UNSET (the default) keeps the pre-FAR-1715 bound exactly:
+    # cron_helpers derives ``max(SAQ_RUN_TIMEOUT // 60, 120) + 15`` (135 min at
+    # the shipped 7200s) when the field is None, so the default behaviour is
+    # unchanged. An EXPLICIT pin is validated by
+    # ``_saq_zero_progress_max_age_invariant`` below: it must cover the
+    # worst-case legitimate pre-node window (``saq_setup_grace_seconds`` +
+    # ``MAX_NODE_TIMEOUT_SECONDS``, converted to minutes), so the bound can
+    # never be pinned low enough to kill a legitimately slow-starting run
+    # (run 32420's first node started at 1h43m — FAR-1680 P0 measurement).
+    saq_zero_progress_max_age_minutes: int | None = Field(
+        default=None, alias="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES", ge=1, le=10080
+    )
     # Per-claim cap on SAQ claim attempts for dispatcher='saq' runs (F3a).
     # Single source of truth (retro item 9): execute and resume claims in
     # pipeline_execution resolve this value via _resolve_claim_cap; cron_helpers
@@ -1252,6 +1268,42 @@ class Settings(BaseSettings):
                 f"({MAX_NODE_TIMEOUT_SECONDS}) = {required}s: the FAR-1088 in-flight shield would expire "
                 "before the node deadline, letting the nodeless backstop claim a live attempt. "
                 f"Raise it to >= {required}, or unset it to derive from the grace."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _saq_zero_progress_max_age_invariant(self) -> "Settings":
+        """FAIL (never warn): an explicit zero-progress age bound must cover the
+        worst-case legitimate pre-node window.
+
+        FAR-1715: ``saq_zero_progress_max_age_minutes`` is the age bound at
+        which a zero-progress ``dispatcher='saq'`` run is terminalised
+        (dispatcher_reconcile's nodeless router / mid-graph gate, and the
+        stale_run_recovery zero-progress branch). The bound must never sit
+        below the longest window in which a legitimate run may still be making
+        its way to its first node: ``saq_setup_grace_seconds`` (time to first
+        dispatch) + ``MAX_NODE_TIMEOUT_SECONDS`` (the GraphValidator cap on one
+        node's ``timeout_seconds``). The requirement is expressed in MINUTES —
+        the knob's unit — via ceiling division: ceil((grace + cap) / 60) = 65
+        min at the shipped defaults (600s + 3300s = 3900s). Unset (None) is
+        left for cron_helpers to derive the historical default (135 min at the
+        shipped SAQ_RUN_TIMEOUT), so only an EXPLICIT pin is validated here —
+        mirroring ``_nodeless_in_flight_floor_invariant`` above.
+        """
+        if self.saq_zero_progress_max_age_minutes is None:
+            return self
+        pre_node_seconds = self.saq_setup_grace_seconds + MAX_NODE_TIMEOUT_SECONDS
+        # Ceiling division: minutes granularity must never round the
+        # requirement DOWN (a grace+cap that is not a whole number of minutes
+        # still requires the next whole minute of coverage).
+        required_minutes = (pre_node_seconds + 59) // 60
+        if self.saq_zero_progress_max_age_minutes < required_minutes:
+            raise ValueError(
+                f"SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES={self.saq_zero_progress_max_age_minutes} does not cover "
+                f"the worst-case pre-node window: SAQ_SETUP_GRACE_SECONDS ({self.saq_setup_grace_seconds}) + "
+                f"max node timeout ({MAX_NODE_TIMEOUT_SECONDS}) = {pre_node_seconds}s = {required_minutes} min. "
+                "A lower bound would terminalise a legitimately slow-starting run before its first node. "
+                f"Raise it to >= {required_minutes}, or unset it to keep the historical default."
             )
         return self
 

@@ -119,6 +119,68 @@ def test_nodeless_in_flight_floor_equal_to_the_requirement_is_accepted() -> None
 
 
 # ---------------------------------------------------------------------------
+# saq_zero_progress_max_age_minutes — DERIVED-unset knob with a load-time
+# floor at the worst-case pre-node window (FAR-1715)
+# ---------------------------------------------------------------------------
+
+
+def _zero_progress_required_minutes(grace_seconds: int) -> int:
+    """ceil((grace + MAX_NODE_TIMEOUT_SECONDS) / 60) — the knob's floor."""
+    return (grace_seconds + MAX_NODE_TIMEOUT_SECONDS + 59) // 60
+
+
+def test_saq_zero_progress_max_age_default_is_none() -> None:
+    """Unset -> None. cron_helpers derives the historical ~135m bound from
+    the module constant at call time; Settings leaves the field None so
+    behaviour is unchanged at the default."""
+    assert _make().saq_zero_progress_max_age_minutes is None
+
+
+def test_saq_zero_progress_max_age_env_alias() -> None:
+    assert _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="200").saq_zero_progress_max_age_minutes == 200
+
+
+def test_saq_zero_progress_max_age_default_covers_the_pre_node_window() -> None:
+    """The derived default (~135m) must sit above the default requirement
+    (65m) — the bound can never kill a legitimately slow-starting run."""
+    from modulo.core.cron_helpers import _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+
+    assert _zero_progress_required_minutes(600) <= _MID_GRAPH_WEDGE_MAX_AGE_MINUTES
+
+
+def test_saq_zero_progress_max_age_equal_to_the_requirement_is_accepted() -> None:
+    """Equality is the boundary — the guard is ``>=``, matching the shield's
+    own boundary semantics (mirrors the nodeless floor test above)."""
+    required = _zero_progress_required_minutes(600)
+    settings = _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required))
+
+    assert settings.saq_zero_progress_max_age_minutes == required
+
+
+def test_saq_zero_progress_max_age_below_the_requirement_refuses_to_load() -> None:
+    """FAIL (never warn): a pin below the worst-case pre-node window would
+    terminalise a legitimately slow-starting run before its first node."""
+    required = _zero_progress_required_minutes(600)
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required - 1))
+
+
+def test_raising_the_setup_grace_raises_the_zero_progress_requirement() -> None:
+    """The requirement tracks the grace — a 900s-grace deployment needs a
+    wider floor than the shipped 600s one."""
+    required_900 = _zero_progress_required_minutes(900)
+    with pytest.raises(ValidationError, match="SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES"):
+        _make(SAQ_SETUP_GRACE_SECONDS="900", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required_900 - 1))
+    settings = _make(SAQ_SETUP_GRACE_SECONDS="900", SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES=str(required_900))
+    assert settings.saq_zero_progress_max_age_minutes == required_900
+
+
+def test_saq_zero_progress_max_age_rejects_below_min() -> None:
+    with pytest.raises(ValidationError):
+        _make(SAQ_ZERO_PROGRESS_MAX_AGE_MINUTES="0")
+
+
+# ---------------------------------------------------------------------------
 # saq_nodeless_early_detect_minutes vs saq_claimed_nodeless_minutes — WARN only
 # ---------------------------------------------------------------------------
 
