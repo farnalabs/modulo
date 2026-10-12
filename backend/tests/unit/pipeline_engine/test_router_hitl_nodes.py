@@ -317,13 +317,13 @@ def test_router_rule_targets_excluded_from_entry_point():
     assert entry_nodes == ["S"]
 
 
-def test_register_router_rule_targets_registers_targets_and_skips_missing():
+def test_register_router_rule_targets_registers_targets_and_skips_missing() -> None:
     # FAR-415: every router rule target is registered so entry-point selection
     # cannot pick one; both the modern `target` and the legacy `target_port`
     # keys are honoured, and a rule carrying neither contributes nothing (it
     # must never register the string "None" as a graph target).
     target_ids: set[str] = set()
-    nodes = [
+    nodes: list[dict[str, Any]] = [
         {
             "id": "R",
             "node_type": "router",
