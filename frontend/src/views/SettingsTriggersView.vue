@@ -517,6 +517,8 @@ import Button from 'primevue/button'
 import { api } from '../lib/api/client'
 import { useCurrentUser } from '../composables/useCurrentUser'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
@@ -531,6 +533,7 @@ import Select from '../components/shared/AppSelect.vue'
 const planStore = usePlanStore()
 const { t } = useI18n()
 const { jwtPayload, isOperator } = useCurrentUser()
+const { track } = useProductAnalytics()
 
 // Single source of truth for the triggers table shape. The loading skeleton
 // iterates this exactly like the real table's <th> row, so adding or removing a
@@ -1137,6 +1140,7 @@ async function saveTrigger() {
         formError.value = t('views.SettingsTriggersView.failed_to_create_trigger', { detail: formatApiError(err) })
         return
       }
+      track(ANALYTICS_EVENTS.TRIGGER_CREATED)
     }
 
     dialogOpen.value = false

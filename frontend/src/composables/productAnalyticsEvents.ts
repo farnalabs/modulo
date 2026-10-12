@@ -4,9 +4,9 @@
  * These are the only frontend events captured by useProductAnalytics.
  * The list is intentionally small (~12 events) and low-volume.
  *
- * NOTE: `page_view` is NOT an event — it is a server-side daily counter
- * (Redis INCR, flushed once per dump window), consent-gated server-side
- * before increment. No per-route data is captured.
+ * NOTE: no `page_view` event exists — per-route data is not captured, client
+ * or server side. Every event here is a discrete curated action, consent-gated
+ * client-side before buffering and server-side at the ingest endpoint.
  */
 export const ANALYTICS_EVENTS = {
   PIPELINE_RUN_STARTED: 'pipeline_run_started',

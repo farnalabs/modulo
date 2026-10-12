@@ -15,7 +15,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.api.constants import MSG_INTERNAL_SERVER_ERROR
@@ -34,7 +34,8 @@ from modulo.core.product_analytics.consent import (
     merge_product_analytics_block,
     set_level,
 )
-from modulo.core.product_analytics.constants import DEFAULT_LEVEL
+from modulo.core.product_analytics.constants import DEFAULT_LEVEL, LEVEL_OFF
+from modulo.db.models.metrics_staging import MetricsStaging
 from modulo.db.models.organisation import Organisation
 from modulo.db.rls import set_rls_org
 from modulo.db.soft_delete import include_soft_deleted
@@ -105,6 +106,19 @@ async def _get_org_or_404(
     return org
 
 
+async def _purge_staged_events(session: AsyncSession, org_id: uuid.UUID) -> None:
+    """Delete the org's staged product-analytics events on consent withdrawal.
+
+    Called whenever the level lands on ``off`` (admin toggle or prompt decline):
+    events staged while the org was consenting are dropped immediately rather
+    than held until the daily dump/retention purge (FAR-1717). The session
+    already carries ``set_rls_org``, and the ``rls_org_isolation`` policy scopes
+    the DELETE to this org. Idempotent — re-running on an already-off level is
+    a no-op delete.
+    """
+    await session.execute(delete(MetricsStaging).where(MetricsStaging.organisation_id == org_id))
+
+
 def _build_consent_response(
     consent: dict[str, object],
     instance_enabled: bool,
@@ -165,6 +179,11 @@ async def post_consent(
             updated_consent = apply_consent_action(consent, req.action)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
+
+            # Consent withdrawn -> drop staged events immediately (FAR-1717);
+            # they can never be dumped for a non-consenting org anyway.
+            if updated_consent.get("level") == LEVEL_OFF:
+                await _purge_staged_events(session, current_user.organisation_id)
 
             await append_audit_event(
                 session,
@@ -235,7 +254,9 @@ async def update_product_analytics_level(
 ) -> LevelUpdateResponse:
     """Update the analytics level (admin toggle).
 
-    Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+    Turning off sets level=off and purges the org's ``metrics_staging`` rows in
+    the same transaction (FAR-1717): staged events are dropped immediately on
+    withdrawal instead of waiting for the daily dump's consumed/expired purge.
     """
     try:
         async with session.begin():
@@ -246,6 +267,11 @@ async def update_product_analytics_level(
             updated_consent = set_level(consent, req.level)
             new_settings = merge_product_analytics_block(org.settings_json, updated_consent)
             org.settings_json = new_settings
+
+            # Turning analytics OFF withdraws consent: drop staged events now
+            # (FAR-1717), in the same transaction as the level write.
+            if updated_consent["level"] == LEVEL_OFF:
+                await _purge_staged_events(session, current_user.organisation_id)
 
             await append_audit_event(
                 session,

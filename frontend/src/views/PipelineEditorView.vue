@@ -1501,6 +1501,8 @@ import { CANVAS_EDGE_STROKE } from '../constants/canvas'
 import { api } from '../lib/api/client'
 import { useApi } from '../composables/useApi'
 import { useCurrentUser } from '../composables/useCurrentUser'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import { useEnvironmentProfilesStore } from '../stores/environmentProfiles'
 import { runnerTierLabelKeyForProvider } from '../lib/runnerTiers'
 import Button from 'primevue/button'
@@ -1519,6 +1521,7 @@ function withTimeout<T>(factory: (signal: AbortSignal) => Promise<T>, ms = 15000
 const TOGGLE_REQUEST_TIMEOUT_MS = 30000
 
 const { t } = useI18n()
+const { track } = useProductAnalytics()
 
 function nodeTypeBadgeClass(nodeType: string): string {
   if (nodeType === 'manual') return 'badge badge-status-warning'
@@ -3246,7 +3249,10 @@ async function triggerRun() {
     // RunResponse's id field is run_id (POST /api/v1/runs) — reading `.id`
     // navigated to /runs/undefined (FAR-1246). Typed off the generated schema
     // so a field rename fails vue-tsc instead of silently breaking the nav.
-    if (data) router.push({ name: 'run-detail', params: { id: data.run_id } })
+    if (data) {
+      track(ANALYTICS_EVENTS.PIPELINE_RUN_STARTED, { run_id: data.run_id })
+      router.push({ name: 'run-detail', params: { id: data.run_id } })
+    }
   } catch (e: unknown) {
     runError.value = formatApiError(e)
   } finally {

@@ -450,6 +450,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import EmptyState from '../components/shared/EmptyState.vue'
 import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -463,6 +465,7 @@ import { api } from '../lib/api/client'
 const { t } = useI18n()
 
 const planStore = usePlanStore()
+const { track } = useProductAnalytics()
 
 interface PipelineItem {
   id: string
@@ -773,6 +776,9 @@ async function saveEval() {
     } else {
       const { data: created } = await api.POST('/api/v1/evals', { body })
       savedEvalId = (created as any)?.id ?? null
+      if (savedEvalId) {
+        track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: savedEvalId })
+      }
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)
