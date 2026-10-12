@@ -133,8 +133,18 @@ async def _seed_eval(
 
 
 async def _live_gates(session: AsyncSession) -> list[PolicyGate]:
-    result = await session.execute(select(PolicyGate))
-    return list(result.scalars())
+    # State the soft-delete predicate EXPLICITLY instead of depending on the
+    # app-wide soft-delete filter, which is an ORM event listener registered
+    # only by ``modulo.db.session`` — a module this test's import chain never
+    # loads, so a bare ``select(PolicyGate)`` would return soft-deleted rows
+    # whenever this file runs in isolation. ``populate_existing`` re-reads the
+    # returned rows against the server's view (a gate mutated in-session is
+    # stale otherwise); it is scoped to this select's PolicyGate rows, unlike
+    # the blanket ``expire_all`` the FAR-1666 sibling helper uses, because
+    # these tests hold Eval fixture objects across calls and must not expire
+    # them.
+    stmt = select(PolicyGate).where(PolicyGate.deleted_at.is_(None))
+    return list((await session.execute(stmt.execution_options(populate_existing=True))).scalars())
 
 
 class TestIterDeclaredPolicyGates:
