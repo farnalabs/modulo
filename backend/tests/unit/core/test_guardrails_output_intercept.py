@@ -1029,7 +1029,7 @@ async def test_chain_end_without_output_guardrail_runs_eval_path(
 
     await harness.executor._handle_chain_end_event(state=state, ctx=ctx, lg_event=_event("n1"))
 
-    assert harness.guard_calls == []
+    assert not harness.guard_calls
     assert len(harness.post_eval_calls) == 1
     assert [d.name for d in harness.post_eval_calls[0]] == ["eval-check"]
 
