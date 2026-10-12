@@ -559,6 +559,8 @@ jobs:
           uv run --no-build --no-sync pytest \
             tests/integration/test_tier1b_connectors_light.py \
             tests/integration/test_tier1b_models_light.py \
+            tests/integration/auth/test_keycloak_oidc_real_http_flow.py \
+            tests/integration/auth/test_keycloak_saml_real_http_flow.py \
             -q --tb=short --timeout=900 -p no:warnings
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
