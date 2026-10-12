@@ -333,6 +333,35 @@ class TestCloneSnapshotsStripDeclaredPolicyGates:
 
         assert "policy_gate declaration(s) dropped on clone of snapshot" not in caplog.text
 
+    async def test_non_dict_graph_json_is_copied_unchanged_without_warning(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A malformed (non-dict) graph_json is a JSON value the column permits,
+        # so the defensive ``isinstance(graph_json, dict)`` guard must fall
+        # through: the value is deep-copied and stored as-is, and the strip
+        # path (and its warning) is never reached.
+        row = _clone_source_snapshot_row([_plain_node(_NODE_A)])
+        row["graph_json"] = ["not-a-dict"]
+        cloned_id = uuid.uuid4()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+            count = await _clone_snapshots(
+                session,
+                [row],
+                source_id=_PIPELINE_ID,
+                cloned_id=cloned_id,
+                org_id=_ORG_ID,
+            )
+
+        assert count == 1
+        stored = (
+            await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))
+        ).scalar_one()
+        assert stored.graph_json == ["not-a-dict"]
+        assert "policy_gate declaration(s) dropped on clone of snapshot" not in caplog.text
+
 
 class TestRollbackReconcilesDeclaredPolicyGates:
     async def _seed_rollback_scene(
