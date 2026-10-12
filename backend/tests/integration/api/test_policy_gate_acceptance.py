@@ -603,7 +603,7 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
     async def _bypass(_eval_id: uuid.UUID, _session: AsyncSession, fn: object) -> object:
         return await fn()
 
-    monkeypatch.setattr(evals_module, "_with_gate_advisory_lock", _bypass)
+    monkeypatch.setattr(evals_module, "with_gate_advisory_lock", _bypass)
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
 

@@ -31,6 +31,7 @@ from modulo.api.dependencies import deny_break_glass_mint, get_db_session, get_p
 from modulo.api.main import app
 from modulo.auth.dependencies import get_current_tenant_user, get_current_user
 from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
+from modulo.db.crud._gate_advisory_lock import with_gate_advisory_lock
 from modulo.settings import Settings, get_settings
 
 _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -247,7 +248,7 @@ async def test_with_gate_advisory_lock_runs_fn_under_lock() -> None:
     async def _fn() -> str:
         return "gate"
 
-    result = await evals_routes._with_gate_advisory_lock(_EVAL_ID, session, _fn)  # type: ignore[arg-type]
+    result = await with_gate_advisory_lock(_EVAL_ID, session, _fn)  # type: ignore[arg-type]
 
     assert result == "gate"
     # statement_timeout + advisory lock
