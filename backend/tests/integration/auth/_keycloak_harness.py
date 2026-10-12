@@ -169,14 +169,20 @@ def generate_tls_certs(cert_dir: Path) -> Path:
     )
     (cert_dir / "server-key.pem").write_bytes(key_pem)
     (cert_dir / "ca.pem").write_bytes(root_pem)
-    # The container user (Keycloak runs as UID 1000) must be able to READ this
-    # key: a bind mount preserves host ownership, and any non-UID-1000 owner
-    # (e.g. a standard CI runner running as UID 1001) makes a 0600 key
-    # unreadable inside the container -> Keycloak exits 2 with
-    # "AccessDeniedException: https-key-" and the tier silently skips. These
-    # are throwaway, per-run, self-signed files in a temp dir, so 0644 (world
-    # readable) is safe. This is a FILE-ownership issue, not a mount mode.
+    # This dir is bind-mounted at /certs and read by Keycloak, which runs as
+    # UID 1000 inside the container. A bind mount preserves the host inode's
+    # ownership AND mode, and pytest's tmp_path_factory.mktemp() creates the
+    # dir mode 0700 owned by the CI runner (UID 1001 on GitHub Actions). UID
+    # 1000 cannot traverse a 0700 dir it does not own, so it cannot open
+    # server.pem / server-key.pem, Keycloak exits 2 with "AccessDeniedException:
+    # https-...", and the readiness probe sees ConnectError until it times out
+    # (observed on PR #1703). Make the dir world-traversable and every file
+    # world-readable; these are throwaway, per-run, self-signed files in a temp
+    # dir. This is a FILE- and DIR-ownership issue, not a mount mode.
+    (cert_dir / "server.pem").chmod(0o644)
     (cert_dir / "server-key.pem").chmod(0o644)
+    (cert_dir / "ca.pem").chmod(0o644)
+    cert_dir.chmod(0o755)
     return cert_dir
 
 
@@ -186,14 +192,21 @@ def keycloak_ssl_context(ca_file: str | Path) -> ssl.SSLContext:
 
 
 def _kc_probe(ca_file: str) -> Callable[[int | None], str | None]:
-    """HTTPS readiness probe: master realm's discovery doc must answer 200."""
+    """HTTPS readiness probe: master realm's discovery doc must answer 200.
+
+    Probes ``127.0.0.1`` (the literal loopback Docker publishes the mapped
+    port on, and a SAN on the harness leaf) rather than ``localhost`` — the
+    same host the other Tier 1b fixtures probe, so readiness never depends on
+    how the runner resolves ``localhost`` (IPv6-first would otherwise add a
+    spurious connection-failure surface).
+    """
 
     def _probe(port: int | None) -> str | None:
         if port is None:
             return "Keycloak container started without a mapped 8443 port"
         try:
             resp = httpx.get(
-                f"https://localhost:{port}/realms/master/.well-known/openid-configuration",
+                f"https://127.0.0.1:{port}/realms/master/.well-known/openid-configuration",
                 verify=keycloak_ssl_context(ca_file),
                 timeout=10.0,
             )
@@ -269,7 +282,11 @@ class KeycloakAdminApi:
             data={
                 "grant_type": "password",
                 "client_id": "admin-cli",
-                "username": KC_ADMIN_USERNAME,
+                # Keycloak's admin token endpoint is its own form, not the
+                # FastAPI app login: `username` is the correct field name here
+                # (the value is the Keycloak admin user). Not an app-login
+                # payload, so `test-login-field-username` does not apply.
+                "username": KC_ADMIN_USERNAME,  # nosemgrep: test-login-field-username
                 "password": KC_ADMIN_PASSWORD,
             },
         )

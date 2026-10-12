@@ -32,6 +32,13 @@ EXCLUDE_PATTERNS = ("connector", "bitbucket", "gitlab", "discord", "scanner", "c
 # login request's `email` field (frontend/src/App.vue). Bounded so an
 # `autoLogin` in an unrelated earlier dict cannot leak across a `}`.
 AUTO_LOGIN_CONFIG = re.compile(r"""['"]autoLogin['"]\s*:\s*\{[^{}]*$""")
+# Inline suppression marker shared with the semgrep rule of the same id, so a
+# single marker silences both this scanner and semgrep for a payload that is
+# NOT a FastAPI app-login request (e.g. a direct IdP call such as Keycloak's
+# own admin token grant or login-form POST, where `username` is the real field
+# name). Placed on the line the match STARTS on, mirroring how semgrep's
+# `nosemgrep` applies to the finding's line.
+SUPPRESSION_MARKER = "nosemgrep: test-login-field-username"
 
 
 def _collect_violations(content: str, pattern: re.Pattern, rel: Path, violations: list[str]) -> None:
@@ -39,7 +46,10 @@ def _collect_violations(content: str, pattern: re.Pattern, rel: Path, violations
         if AUTO_LOGIN_CONFIG.search(content[max(0, match.start() - 200) : match.start()]):
             continue
         line_no = content.count("\n", 0, match.start()) + 1
-        line = content.splitlines()[line_no - 1].strip()[:120]
+        raw_line = content.splitlines()[line_no - 1]
+        if SUPPRESSION_MARKER in raw_line:
+            continue
+        line = raw_line.strip()[:120]
         violations.append(f"  {rel}:{line_no}  {line}")
 
 
