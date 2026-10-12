@@ -413,3 +413,228 @@ async def test_cancellation_from_an_organisation_pass_propagates() -> None:
             log_key=_LOG_KEY,
             summary_prefix="Run terminalised by background sweep:",
         )
+
+
+# ---------------------------------------------------------------------------
+# record_suite_run_audit (FAR-1561)
+# ---------------------------------------------------------------------------
+
+_SUITE_ID = uuid.UUID("00000000-0000-0000-0000-0000000000c1")
+_DATASET_ID = uuid.UUID("00000000-0000-0000-0000-0000000000d1")
+
+
+def _suite_run(run_id: uuid.UUID = _RUN_ONE, org_id: uuid.UUID = _ORG_A, state: str = "completed") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=run_id,
+        organisation_id=org_id,
+        suite_id=_SUITE_ID,
+        dataset_id=_DATASET_ID,
+        state=state,
+        total_cases=10,
+        passed_cases=7,
+        failed_cases=2,
+        excluded_case_count=1,
+        error_detail="case t-3 failed assertion",
+    )
+
+
+def _suite_session(run: SimpleNamespace | None) -> MagicMock:
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = run
+    session.execute = AsyncMock(return_value=result)
+    return session
+
+
+async def test_suite_blank_inputs_are_rejected_before_any_write() -> None:
+    factory = _factory()
+
+    with pytest.raises(ValueError, match="non-empty event_type"):
+        await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="  ",
+            expected_states={"completed"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    with pytest.raises(ValueError, match="non-empty actor_source"):
+        await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed"},
+            actor_source=" ",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    with pytest.raises(ValueError, match="at least one expected state"):
+        await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states=set(),
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    factory.assert_not_called()
+
+
+async def test_suite_missing_run_is_skipped() -> None:
+    factory = _factory(_suite_session(None))
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+    ):
+        recorded = await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    assert recorded is False
+    append.assert_not_awaited()
+
+
+async def test_suite_unexpected_state_is_skipped() -> None:
+    """Phantom-event guard: the row is re-selected and must be in a claimed state."""
+    factory = _factory(_suite_session(_suite_run(state="running")))
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+    ):
+        recorded = await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed", "partial", "failed", "cancelled"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    assert recorded is False
+    append.assert_not_awaited()
+
+
+async def test_suite_matching_run_is_recorded_with_system_actor() -> None:
+    session = _suite_session(_suite_run())
+    factory = _factory(session)
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()) as set_org,
+        patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+    ):
+        recorded = await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed", "partial", "failed", "cancelled"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    assert recorded is True
+    set_org.assert_awaited_once_with(session, _ORG_A)
+    kwargs = append.await_args.kwargs
+    assert kwargs["event_type"] == "suite_run_completed"
+    assert kwargs["actor_user_id"] is None
+    assert kwargs["resource_type"] == "suite_run"
+    assert kwargs["resource_id"] == _RUN_ONE
+    payload = kwargs["payload_json"]
+    assert payload["actor"] == SYSTEM_ACTOR
+    assert payload["actor_source"] == "execute_suite_run"
+    assert payload["summary"] == "SuiteRun terminalised by execute_suite_run"
+    assert payload["suite_run_id"] == str(_RUN_ONE)
+    assert payload["suite_id"] == str(_SUITE_ID)
+    assert payload["dataset_id"] == str(_DATASET_ID)
+    assert payload["state"] == "completed"
+    assert payload["total_cases"] == 10
+    assert payload["passed_cases"] == 7
+    assert payload["failed_cases"] == 2
+    assert payload["excluded_case_count"] == 1
+
+
+async def test_suite_error_detail_is_truncated_to_500_chars() -> None:
+    run = _suite_run()
+    run.error_detail = "x" * 600
+    factory = _factory(_suite_session(run))
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=AsyncMock()) as append,
+    ):
+        recorded = await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    assert recorded is True
+    assert append.await_args.kwargs["payload_json"]["error_detail"] == "x" * 500
+
+
+async def test_suite_append_failure_logs_and_returns_false(caplog: pytest.LogCaptureFixture) -> None:
+    factory = _factory(_suite_session(_suite_run()))
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("db down"))),
+        caplog.at_level("WARNING"),
+    ):
+        recorded = await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
+
+    assert recorded is False
+    assert any(_LOG_KEY in record.message for record in caplog.records)
+
+
+async def test_suite_cancellation_is_never_swallowed() -> None:
+    factory = _factory(_suite_session(_suite_run()))
+
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=AsyncMock(side_effect=asyncio.CancelledError())),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await background.record_suite_run_audit(
+            factory,
+            suite_run_id=_RUN_ONE,
+            org_id=_ORG_A,
+            event_type="suite_run_completed",
+            expected_states={"completed"},
+            actor_source="execute_suite_run",
+            log_key=_LOG_KEY,
+            summary_prefix="SuiteRun terminalised by",
+        )
