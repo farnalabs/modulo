@@ -121,10 +121,13 @@ def org_has_pipeline(org: str, name: str, request: pytest.FixtureRequest) -> Non
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" with max_concurrent_runs {limit:d}'))
 def org_has_pipeline_with_max_concurrent(org: str, name: str, limit: int, request: pytest.FixtureRequest) -> None:
-    """Declare a concurrency-capped pipeline for trigger-admission scenarios.
+    """Declare a concurrency-capped pipeline for trigger-capacity scenarios.
 
-    The trigger step reads ``_max_concurrent`` (plus a declared active run) and
-    refuses the extra trigger with 429 when the cap is reached.
+    The trigger step reads ``_max_concurrent`` plus a declared *active* run and,
+    when the cap is already reached, models the real dispatch-time outcome: the
+    manual trigger is ACCEPTED (202) and the run is parked with the
+    ``pipeline_capacity`` marker. The cap is enforced at dispatch, not at the
+    trigger route, so it is never a 429.
     """
     from tests.bdd.conftest import make_mock_pipeline
 
@@ -193,7 +196,15 @@ def running_pipeline_with_stub(pipeline_name: str, request: pytest.FixtureReques
 def running_pipeline(pipeline_name: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
-    request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    # When a scenario already declared a concurrency cap for this pipeline, the
+    # mock must carry that same cap — otherwise this step overwrites the declared
+    # fixture with the factory default (5), leaving ``_max_concurrent`` and
+    # ``_mock_pipeline.max_concurrent_runs`` disagreeing.
+    max_concurrent = getattr(request.node, "_max_concurrent", None)
+    if max_concurrent is None:
+        request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    else:
+        request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name, max_concurrent_runs=max_concurrent)
     mock_run = make_mock_run(status="running", pipeline_id=request.node._mock_pipeline.id)
     request.node._mock_run = mock_run
     request.node._run_status = "running"
@@ -423,38 +434,50 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     patcher.start()
     patches.append(patcher)
 
-    # Admission control: when the pipeline declares max_concurrent_runs and a
-    # pending/active run for it already exists, the extra manual trigger is
-    # refused. The real route maps the CRUD create_run rate-limit conflict to
-    # 429, so we simulate the refusal through that same typed path
-    # (RateLimitConflictError -> 429) instead of stubbing the HTTP code.
+    # max_concurrent_runs is enforced at DISPATCH, not at the manual-trigger
+    # route: the trigger ACCEPTS the run (202) and the executor's capacity gate
+    # then parks it back to ``pending`` carrying the ``pipeline_capacity`` marker
+    # (modulo/core/pipeline_engine/executor.py::_capacity_decline; the marker
+    # constant is ERROR_CODE_PIPELINE_CAPACITY in modulo/db/crud/run.py). It is
+    # NOT the rate-limit constraint, so ``create_run`` never raises
+    # ``RateLimitConflictError`` for an over-capacity trigger and the route never
+    # returns 429. We model the post-dispatch observable state (a pending run
+    # carrying the capacity marker) so the scenario asserts what production
+    # actually produces.
+    from modulo.core.pipeline_engine.executor import PipelineExecutor
+    from modulo.db.models.run import PIPELINE_CAPACITY_STATUSES
+
     max_concurrent = getattr(request.node, "_max_concurrent", None)
-    pending_run = getattr(request.node, "_mock_run", None)
-    refused = max_concurrent is not None and pending_run is not None and pending_run.status in ("pending", "running")
+    active_run = getattr(request.node, "_mock_run", None)
+    capacity_deferred = (
+        max_concurrent is not None and active_run is not None and active_run.status in PIPELINE_CAPACITY_STATUSES
+    )
 
-    # create_run in the runs module
+    # create_run in the runs module. The run is created exactly as production
+    # does — ``pending``, with no capacity marker (``create_run`` never parks).
+    # When the declared active run has filled the cap, the DISPATCH-time gate is
+    # what stamps the reason marker; we resolve that marker through the REAL
+    # decision function instead of hand-typing a constant, so this scenario fails
+    # if the park-decision logic regresses (e.g. the reason ordering changes).
     mock_run = make_mock_run(pipeline_id=mock_pipeline.id, status="pending")
-    if refused:
-        from modulo.core.exceptions import RateLimitConflictError
-
-        async def _refuse_create_run(*args: Any, **kwargs: Any) -> None:
-            raise RateLimitConflictError(
-                pipeline_id=mock_pipeline.id,
-                rate_limit_key="manual",
-            )
-
-        patcher = patch(
-            "modulo.api.routes.runs.create_run",
-            new_callable=AsyncMock,
-            side_effect=_refuse_create_run,
+    if capacity_deferred:
+        assert max_concurrent is not None
+        park_code, park_detail = PipelineExecutor._capacity_decline(
+            max_concurrent=max_concurrent,
+            active_count=1,  # the declared active run occupies the single slot
+            _pipeline_capacity_ok=False,
+            org_sandbox_cap=None,
+            org_count=0,
+            org_capacity_ok=True,
         )
-    else:
-        request.node._mock_run = mock_run
-        patcher = patch(
-            "modulo.api.routes.runs.create_run",
-            new_callable=AsyncMock,
-            return_value=mock_run,
-        )
+        mock_run.error_code = park_code
+        mock_run.error_detail = park_detail
+    request.node._mock_run = mock_run
+    patcher = patch(
+        "modulo.api.routes.runs.create_run",
+        new_callable=AsyncMock,
+        return_value=mock_run,
+    )
     patcher.start()
     patches.append(patcher)
 
@@ -494,12 +517,16 @@ def engine_picks_up_run(request: pytest.FixtureRequest) -> None:
 
 @when(parsers.parse("all nodes complete without error"))
 def all_nodes_complete(request: pytest.FixtureRequest) -> None:
-    """Simulate every node completing successfully."""
+    """Simulate every node completing successfully.
+
+    A fully-successful run terminalizes on ``complete`` (the success member of
+    ``modulo.db.models.run.TERMINAL_STATUSES``) — not ``completed``, and there is
+    no ``final_state`` field on a Run.
+    """
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
-        mock_run.status = "completed"
-        mock_run.final_state = {"result": "ok"}
-    request.node._run_status = "completed"
+        mock_run.status = "complete"
+    request.node._run_status = "complete"
 
 
 @when(parsers.parse("a node raises an unhandled exception"))
@@ -846,15 +873,54 @@ def check_run_status_becomes(request: pytest.FixtureRequest, status: str) -> Non
     check_run_status(request, status)
 
 
-@then("the run has a final_state")
-def check_run_has_final_state(request: pytest.FixtureRequest) -> None:
+@then("the run has reached a terminal state")
+def check_run_reached_terminal_state(request: pytest.FixtureRequest) -> None:
+    """Assert the run carries a real terminal status.
+
+    A Run has a terminal ``status`` — there is no ``final_state`` field
+    (modulo/db/models/run.py). Reads the real produced payload: the API
+    response body when the scenario drove a route, otherwise the run object the
+    transition step holds.
+    """
+    from modulo.db.models.run import TERMINAL_STATUSES
+
     body = getattr(request.node, "_resp_body", None)
-    if isinstance(body, dict) and "final_state" in body:
-        assert body["final_state"] is not None
+    if isinstance(body, dict) and "status" in body:
+        status = body["status"]
     else:
         mock_run = getattr(request.node, "_mock_run", None)
         assert mock_run is not None, "Expected a mock run"
-        assert mock_run.final_state is not None, "Expected run to have a final_state"
+        status = mock_run.status
+    assert status in TERMINAL_STATUSES, f"Expected a terminal run status, got {status!r}"
+
+
+@then(parsers.parse('the run is parked with the capacity marker "{marker}"'))
+def check_run_parked_for_capacity(request: pytest.FixtureRequest, marker: str) -> None:
+    """An over-capacity manual run is ACCEPTED then parked on pipeline capacity.
+
+    The ``max_concurrent_runs`` cap is enforced in the executor's dispatch-time
+    capacity gate (modulo/core/pipeline_engine/executor.py::_capacity_decline),
+    which demotes the run back to ``pending`` carrying the ``pipeline_capacity``
+    marker (ERROR_CODE_PIPELINE_CAPACITY in modulo/db/crud/run.py). It is not a
+    rate-limit refusal, so the manual-trigger route returns 202, never 429.
+
+    The observation is the CALLER-OBSERVABLE HTTP payload the trigger route
+    serialized (``_build_run_response`` -> ``response.json()``), never the run
+    fixture the WHEN step stamped — a regression that stops the route surfacing
+    the created run's park state fails here, rather than echoing back a value the
+    scenario itself wrote. The read surface canonicalizes the raw DB marker via
+    ``map_legacy_code`` (``pipeline_capacity`` -> ``capacity.pipeline``), so the
+    assertion checks that caller-facing code.
+    """
+    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+    body = getattr(request.node, "_resp_body", None)
+    assert isinstance(body, dict), f"Expected the trigger route to return a run payload, got {type(body).__name__}"
+    assert body.get("status") == "pending", f"Expected a parked (pending) run, got status {body.get('status')!r}"
+    expected_code = map_legacy_code(marker)
+    assert body.get("error_code") == expected_code, (
+        f"Expected capacity marker {expected_code!r}, got {body.get('error_code')!r}"
+    )
 
 
 @then("the run has an error_detail")
@@ -1131,10 +1197,15 @@ def pipeline_with_hitl_review(review_id: str, request: pytest.FixtureRequest) ->
 
 @when(parsers.parse('the run reaches the "{review_id}" gate'))
 def run_reaches_gate(review_id: str, request: pytest.FixtureRequest) -> None:
+    """A HITL gate interrupts the run, parking it on ``awaiting_human``.
+
+    ``awaiting_human`` is the real paused status (modulo/db/models/run.py);
+    there is no ``waiting_for_approval`` status.
+    """
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
-        mock_run.status = "waiting_for_approval"
-    request.node._run_status = "waiting_for_approval"
+        mock_run.status = "awaiting_human"
+    request.node._run_status = "awaiting_human"
     request.node._current_node = review_id
 
 
@@ -1189,12 +1260,17 @@ def run_continues(request: pytest.FixtureRequest) -> None:
     assert request.node._run_status == "running", f"Expected running, got {request.node._run_status}"
 
 
-@then('the run status becomes "waiting_for_approval"')
-def run_status_waiting_for_approval(request: pytest.FixtureRequest) -> None:
-    request.node._run_status = "waiting_for_approval"
-    assert request.node._run_status == "waiting_for_approval", (
-        f"Expected waiting_for_approval, got {request.node._run_status}"
-    )
+@then('the run status becomes "awaiting_human"')
+def run_status_awaiting_human(request: pytest.FixtureRequest) -> None:
+    """A HITL gate parks the run on ``awaiting_human`` — the real paused status
+    (modulo/db/models/run.py). There is no ``waiting_for_approval`` status.
+
+    Asserts the run object the gate step produced, rather than restating a value
+    this step set itself.
+    """
+    mock_run = getattr(request.node, "_mock_run", None)
+    status = mock_run.status if mock_run is not None else getattr(request.node, "_run_status", None)
+    assert status == "awaiting_human", f"Expected awaiting_human, got {status!r}"
 
 
 # ---------------------------------------------------------------------------
