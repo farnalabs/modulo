@@ -237,6 +237,20 @@ class TestReDoSBoundedMasking:
         assert "ss@host" not in masked
         assert MASK in masked
 
+    def test_masks_two_connection_strings_in_long_text_without_double_masking(self) -> None:
+        # Two credentials in one long string: each secret's bounded window can
+        # span the other, so the scan emits overlapping candidate spans and the
+        # assembly must skip the already-covered one — masking each secret
+        # exactly once, leaking neither password and leaving the tail intact.
+        first = "postgresql://alice:s3cr3tpass@db1.internal:5432/app"
+        second = "mysql://bob:an0therpw@db2.internal:3306/other"
+        text = ("x" * 100) + first + " " + second + ("y" * 6000)
+        masked = mask_secret_values_in_text(text)
+        assert "s3cr3tpass" not in masked
+        assert "an0therpw" not in masked
+        assert masked.count(MASK) == 2
+        assert masked.endswith("y" * 6000)
+
     def test_conn_anchor_without_close_at_is_skipped(self) -> None:
         # A ``://`` with no ``@`` after it carries no inline credential, so the
         # bounded window scan must skip the anchor and leave the text intact
