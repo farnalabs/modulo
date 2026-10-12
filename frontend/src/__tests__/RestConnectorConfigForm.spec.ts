@@ -326,6 +326,20 @@ describe('RestConnectorConfigForm', () => {
     expect(await validateAndFlush(wrapper)).toBe(false)
   })
 
+  it('rejects the empty-string, null and NaN timeout edges', async () => {
+    // The timeout `||` chain must reject every non-numeric shape the input can
+    // surface: the empty string, a null model value, and a NaN coercion — not
+    // only the zero / fractional cases above.
+    const { wrapper, config, credentials } = mountForm()
+    credentials.value.token = 'abc'
+    for (const bad of ['', null as unknown as string, Number.NaN]) {
+      config.value.timeout_seconds = bad
+      await wrapper.vm.$nextTick()
+      expect(await validateAndFlush(wrapper)).toBe(false)
+      expect(wrapper.text()).toContain('Timeout must be a positive integer')
+    }
+  })
+
   it('rejects an unknown HTTP method with a loud inline error', async () => {
     const { wrapper, config, credentials } = mountForm()
     credentials.value.token = 'abc'
@@ -389,6 +403,18 @@ describe('RestConnectorConfigForm', () => {
     credentials.value.api_key = 'sk-test'
     await wrapper.vm.$nextTick()
     expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
+  it('rejects an unknown auth_mode with a loud inline error', async () => {
+    // validateChoice is shared by on_unknown and auth_mode; this pins the
+    // auth_mode call site (a value the <select> cannot offer) so a future
+    // narrowing of the shared helper is caught here.
+    const { wrapper, credentials } = mountForm()
+    credentials.value.token = 'abc'
+    credentials.value.auth_mode = 'oauth'
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Invalid auth_mode oauth')
   })
 
   it('keeps the form field lists in parity with the connector config_schema (no drift)', () => {
