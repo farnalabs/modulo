@@ -36,8 +36,9 @@ _log = logging.getLogger(__name__)
 
 # Thresholds — would have fired before the 2026-09-09 worker near-miss
 # (Committed_AS ~1.25 GB > CommitLimit 0.96 GB, no swap, ~755 MB available).
+# Only the ratio is tunable: the overcommit rule (Committed_AS > CommitLimit)
+# is unconditional and evaluated inline in evaluate_memory_alarm.
 MEMORY_AVAILABLE_LOW_RATIO = 0.20  # MemAvailable < 20% of MemTotal
-COMMIT_OVERCOMMIT = True  # Committed_AS > CommitLimit
 
 # Paths — injectable for testing; production reads the real FS
 _PROC_MEMINFO_PATH = "/proc/meminfo"
