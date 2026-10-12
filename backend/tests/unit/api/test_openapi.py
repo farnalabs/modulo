@@ -80,6 +80,20 @@ class TestApplyErrorResponseSchemas:
 
         assert repr(document) == first
 
+    def test_document_without_validation_responses_needs_no_problem_detail(self) -> None:
+        """``swaps == 0`` with no existing component is a true no-op.
+
+        A document that declares no request-validation response has nothing to
+        rewrite and nothing to advertise, so the ``ProblemDetail`` component is
+        not synthesised.
+        """
+        document = {"paths": _one_path({"200": {"description": "ok"}})}
+
+        apply_error_response_schemas(document)
+
+        assert PROBLEM_DETAIL_NAME not in document["components"]["schemas"]
+        assert document["paths"]["/things"]["get"]["responses"] == {"200": {"description": "ok"}}
+
     def test_keeps_components_that_are_still_referenced(self) -> None:
         document = {
             "paths": _one_path({"422": {"schema": {"$ref": VALIDATION_ERROR_REF}}}),
