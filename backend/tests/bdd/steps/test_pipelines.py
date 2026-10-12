@@ -436,7 +436,7 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
     # returns 429. We model the post-dispatch observable state (a pending run
     # carrying the capacity marker) so the scenario asserts what production
     # actually produces.
-    from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
+    from modulo.core.pipeline_engine.executor import PipelineExecutor
     from modulo.db.models.run import PIPELINE_CAPACITY_STATUSES
 
     max_concurrent = getattr(request.node, "_max_concurrent", None)
@@ -445,10 +445,25 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
         max_concurrent is not None and active_run is not None and active_run.status in PIPELINE_CAPACITY_STATUSES
     )
 
-    # create_run in the runs module
+    # create_run in the runs module. The run is created exactly as production
+    # does — ``pending``, with no capacity marker (``create_run`` never parks).
+    # When the declared active run has filled the cap, the DISPATCH-time gate is
+    # what stamps the reason marker; we resolve that marker through the REAL
+    # decision function instead of hand-typing a constant, so this scenario fails
+    # if the park-decision logic regresses (e.g. the reason ordering changes).
     mock_run = make_mock_run(pipeline_id=mock_pipeline.id, status="pending")
     if capacity_deferred:
-        mock_run.error_code = ERROR_CODE_PIPELINE_CAPACITY
+        assert max_concurrent is not None
+        park_code, park_detail = PipelineExecutor._capacity_decline(
+            max_concurrent=max_concurrent,
+            active_count=1,  # the declared active run occupies the single slot
+            _pipeline_capacity_ok=False,
+            org_sandbox_cap=None,
+            org_count=0,
+            org_capacity_ok=True,
+        )
+        mock_run.error_code = park_code
+        mock_run.error_detail = park_detail
     request.node._mock_run = mock_run
     patcher = patch(
         "modulo.api.routes.runs.create_run",
@@ -880,11 +895,24 @@ def check_run_parked_for_capacity(request: pytest.FixtureRequest, marker: str) -
     which demotes the run back to ``pending`` carrying the ``pipeline_capacity``
     marker (ERROR_CODE_PIPELINE_CAPACITY in modulo/db/crud/run.py). It is not a
     rate-limit refusal, so the manual-trigger route returns 202, never 429.
+
+    The observation is the CALLER-OBSERVABLE HTTP payload the trigger route
+    serialized (``_build_run_response`` -> ``response.json()``), never the run
+    fixture the WHEN step stamped — a regression that stops the route surfacing
+    the created run's park state fails here, rather than echoing back a value the
+    scenario itself wrote. The read surface canonicalizes the raw DB marker via
+    ``map_legacy_code`` (``pipeline_capacity`` -> ``capacity.pipeline``), so the
+    assertion checks that caller-facing code.
     """
-    mock_run = getattr(request.node, "_mock_run", None)
-    assert mock_run is not None, "The trigger step must capture the created run"
-    assert mock_run.status == "pending", f"Expected a parked (pending) run, got status {mock_run.status!r}"
-    assert mock_run.error_code == marker, f"Expected capacity marker {marker!r}, got {mock_run.error_code!r}"
+    from modulo.core.pipeline_engine.error_codes import map_legacy_code
+
+    body = getattr(request.node, "_resp_body", None)
+    assert isinstance(body, dict), f"Expected the trigger route to return a run payload, got {type(body).__name__}"
+    assert body.get("status") == "pending", f"Expected a parked (pending) run, got status {body.get('status')!r}"
+    expected_code = map_legacy_code(marker)
+    assert body.get("error_code") == expected_code, (
+        f"Expected capacity marker {expected_code!r}, got {body.get('error_code')!r}"
+    )
 
 
 @then("the run has an error_detail")
