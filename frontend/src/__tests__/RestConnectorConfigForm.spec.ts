@@ -326,6 +326,71 @@ describe('RestConnectorConfigForm', () => {
     expect(await validateAndFlush(wrapper)).toBe(false)
   })
 
+  it('rejects an unknown HTTP method with a loud inline error', async () => {
+    const { wrapper, config, credentials } = mountForm()
+    credentials.value.token = 'abc'
+    config.value.method = 'TRACE'
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Invalid method TRACE')
+  })
+
+  it('accepts an empty method (the method field is optional)', async () => {
+    const { wrapper, config, credentials } = mountForm()
+    credentials.value.token = 'abc'
+    config.value.method = ''
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
+  it('requires both username and password for basic auth', async () => {
+    const { wrapper, credentials } = mountForm()
+    credentials.value.auth_mode = 'basic'
+    credentials.value.username = ''
+    credentials.value.password = ''
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Username is required')
+    expect(wrapper.text()).toContain('Password is required')
+  })
+
+  it('requires only the password when a basic-auth username is present', async () => {
+    const { wrapper, credentials } = mountForm()
+    credentials.value.auth_mode = 'basic'
+    credentials.value.username = 'alice'
+    credentials.value.password = ''
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('Password is required')
+    expect(wrapper.text()).not.toContain('Username is required')
+  })
+
+  it('passes when both basic-auth credentials are present', async () => {
+    const { wrapper, credentials } = mountForm()
+    credentials.value.auth_mode = 'basic'
+    credentials.value.username = 'alice'
+    credentials.value.password = 's3cret'
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
+  it('requires an api_key for api_key auth', async () => {
+    const { wrapper, credentials } = mountForm()
+    credentials.value.auth_mode = 'api_key'
+    credentials.value.api_key = ''
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(false)
+    expect(wrapper.text()).toContain('API key is required')
+  })
+
+  it('passes when the api_key is present', async () => {
+    const { wrapper, credentials } = mountForm()
+    credentials.value.auth_mode = 'api_key'
+    credentials.value.api_key = 'sk-test'
+    await wrapper.vm.$nextTick()
+    expect(await validateAndFlush(wrapper)).toBe(true)
+  })
+
   it('keeps the form field lists in parity with the connector config_schema (no drift)', () => {
     const { fields, advanced } = readRestConfigSchemaFields()
     expect(new Set(REST_FLAT_FIELDS)).toEqual(new Set(fields))
