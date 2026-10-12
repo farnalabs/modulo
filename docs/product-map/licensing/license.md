@@ -89,7 +89,7 @@ signed/org licence; see Known Gaps.)
       `checkout.session.completed` is acknowledged but NEVER fulfils (the FAR-180
       single-fulfilment guard against a double-issued licence), an event without a
       customer email or of an unrelated type is acknowledged without dispatch, and the
-      webhook is 404 when Stripe is not configured (      `licensing/stripe_billing.feature`,
+      webhook is 404 when Stripe is not configured (`licensing/stripe_billing.feature`,
       `test_stripe_billing.py`, `test_stripe_webhook.py`)
 - [x] Stripe fulfilment fails CLOSED on an unverifiable generated key: if the key
       signed during `fulfil_team_purchase` does not verify against the
