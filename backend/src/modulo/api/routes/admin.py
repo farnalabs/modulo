@@ -108,7 +108,7 @@ from modulo.db.crud.team import (
 from modulo.db.crud.team import update_team as crud_update_team
 from modulo.db.crud.team_membership import list_team_memberships_for_account, remove_team_member
 from modulo.db.crud.token_family import blacklist_family, list_families_for_account
-from modulo.db.models.account import Account
+from modulo.db.models.account import KIND_HUMAN, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
 from modulo.db.models.eval_definition import EvalDefinition
@@ -1148,7 +1148,7 @@ async def _list_org_accounts(
     search: str | None = None,
     role_filter: str | None = None,
 ) -> tuple[list[tuple[Account, OrgMembership]], int]:
-    conditions = [OrgMembership.organisation_id == org_id]
+    conditions = [OrgMembership.organisation_id == org_id, Account.kind == KIND_HUMAN]
     if search:
         conditions.append(Account.email.ilike(f"%{search}%"))
     if role_filter:

@@ -132,8 +132,9 @@ class TestChain:
         # 0294_eval_results_org_fk, then
         # 0295_decision_record_event_identity, then
         # 0296_benign_run_outcomes, then 0297_autonomy_gating_s1,
+        # 0299_accounts_service_identity,
         # now chain onto this migration, so the single head moved up another revision.
-        assert heads == ["0297_autonomy_gating_s1"], f"expected a single head, got {heads}"
+        assert heads == ["0299_accounts_service_identity"], f"expected a single head, got {heads}"
 
     def test_down_revision_is_0271_org_api_keys_revocation_sweep_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION

@@ -132,6 +132,7 @@ def _apply_filters(
     resource_type: str | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    principal_kind: str | None = None,
 ) -> Any:
     query = query.where(AuditEvent.organisation_id == org_id)
     if event_type:
@@ -144,6 +145,11 @@ def _apply_filters(
         query = query.where(AuditEvent.created_at >= from_date)
     if to_date:
         query = query.where(AuditEvent.created_at <= to_date)
+    if principal_kind:
+        # FAR-1385: filter by the acting principal's kind, stamped into the
+        # payload by the audit wrapper (ADR 058). JSON index access renders
+        # portably (``->>`` on PostgreSQL, ``json_extract`` on SQLite).
+        query = query.where(AuditEvent.payload_json["principal_kind"].as_string() == principal_kind)
     return query
 
 
@@ -551,6 +557,7 @@ async def export_chain(
     resource_type: str | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    principal_kind: str | None = None,
 ) -> dict[str, Any]:
     """Export audit events as paginated JSON lines with optional filters."""
     safe_page = max(1, page)
@@ -564,6 +571,7 @@ async def export_chain(
         resource_type=resource_type,
         from_date=from_date,
         to_date=to_date,
+        principal_kind=principal_kind,
     )
 
     offset = (safe_page - 1) * safe_page_size
@@ -579,6 +587,7 @@ async def export_chain(
         resource_type=resource_type,
         from_date=from_date,
         to_date=to_date,
+        principal_kind=principal_kind,
     )
     total_result = await session.execute(count_query)
     total = total_result.scalar() or 0
@@ -602,6 +611,7 @@ async def stream_export_chain(
     resource_type: str | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    principal_kind: str | None = None,
     page_size: int = SCAN_KEYSET_PAGE_SIZE,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield the WHOLE org audit chain as event dicts in one scan.
@@ -627,6 +637,7 @@ async def stream_export_chain(
         resource_type=resource_type,
         from_date=from_date,
         to_date=to_date,
+        principal_kind=principal_kind,
     )
 
     async with factory() as session, session.begin():
@@ -661,6 +672,7 @@ async def list_audit_events(
     resource_type: str | None = None,
     from_date: datetime | None = None,
     to_date: datetime | None = None,
+    principal_kind: str | None = None,
 ) -> dict[str, Any]:
     """List audit events with cursor-based pagination and filtering.
 
@@ -682,6 +694,7 @@ async def list_audit_events(
         resource_type=resource_type,
         from_date=from_date,
         to_date=to_date,
+        principal_kind=principal_kind,
     )
 
     # Total count (before pagination)
