@@ -83,7 +83,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -355,7 +358,10 @@ jobs:
             if [ -n "${REQUESTED}" ]; then
               tag="${REQUESTED}"
             else
-              tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')"
+              if ! tag="$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name' 2>/tmp/latest-err)"; then
+                echo "::error::cannot canary ${{ github.repository }}: releases/latest failed ($(tr -d '\n' </tmp/latest-err)). No bundle-v* release is published to verify - publish one, or dispatch with canary_version."
+                exit 1
+              fi
             fi
             if ! gh api "repos/${{ github.repository }}/releases/tags/${tag}" > /dev/null; then
               echo "::error::canary release ${tag} does not exist"; exit 1
@@ -627,6 +633,7 @@ jobs:
         if: needs.canary.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           CANARY_TAG: ${{ env.TAG }}
         run: |
           set -euo pipefail
@@ -646,6 +653,7 @@ jobs:
         if: needs.canary.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"
