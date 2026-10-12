@@ -172,28 +172,22 @@ def compute_port_topology_hash(graph_json: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def validate_port_topology(graph_json: dict[str, Any], result: Any) -> None:
-    """Compile-time port rules. Mutates *result* with typed issues.
+def _validate_edge_topology(
+    edges: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    result: Any,
+) -> None:
+    """Fan-in safety: a non-join target port accepts AT MOST ONE incoming edge.
 
-    Rules:
-      * Fan-in safety: a non-join target port accepts AT MOST ONE incoming
-        edge. Enforced only when the target node declares ports OR the incoming
-        edge carries non-default port metadata (an explicitly-set default
-        value is backfill-equivalent — see :func:`_edge_declares_ports`) —
-        fully-legacy graphs keep their backward-compatible last-write-wins
-        fan-in behaviour (zero-break).
-      * Port-type validation: when BOTH the source output port and the target
-        input port declare a ``schema_ref``, the refs must match. This is the
-        typed ``PortMismatchError``. When either is absent (the common P2 case)
-        the check is lenient and skipped.
+    Enforced only when the target node declares ports OR the incoming edge
+    carries non-default port metadata (an explicitly-set default value is
+    backfill-equivalent — see :func:`_edge_declares_ports`) — fully-legacy
+    graphs keep their backward-compatible last-write-wins fan-in behaviour
+    (zero-break). Mutates *result* with typed ``PORT_FAN_IN_ERROR`` issues.
     """
-    nodes = graph_json.get("nodes", []) or []
-    edges = graph_json.get("edges", []) or []
-
     node_type_by_id = {str(n.get("id")): node_type_of(n) for n in nodes}
     declares_ports_by_id = {str(n.get("id")): is_port_declared(n) for n in nodes}
 
-    # --- Fan-in safety ----------------------------------------------------
     incoming: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for e in edges:
         tgt = _edge_target(e)
@@ -218,21 +212,45 @@ def validate_port_topology(graph_json: dict[str, Any], result: Any) -> None:
             node_id=tgt,
         )
 
+
+def _port_refs(node: dict[str, Any], ports: Any) -> dict[tuple[str, str], Any]:
+    """Map a node's *ports* (inputs or outputs) to their ``schema_ref`` values.
+
+    Keyed by ``(node id, state key)``. The port->state-key adapter maps each
+    declared port to the flat-state key it writes (P2 is identity; later
+    phases may remap). Ports without a ``schema_ref`` are skipped (lenient).
+    """
+    refs: dict[tuple[str, str], Any] = {}
+    nid = str(node.get("id"))
+    for p in ports or []:
+        state_key = resolve_port_state_key(node, str(p["port"]))
+        if p.get("schema_ref") is not None:
+            refs[(nid, state_key)] = p["schema_ref"]
+    return refs
+
+
+def validate_port_topology(graph_json: dict[str, Any], result: Any) -> None:
+    """Compile-time port rules. Mutates *result* with typed issues.
+
+    Rules:
+      * Fan-in safety: a non-join target port accepts AT MOST ONE incoming
+        edge — see :func:`_validate_edge_topology`.
+      * Port-type validation: when BOTH the source output port and the target
+        input port declare a ``schema_ref``, the refs must match. This is the
+        typed ``PortMismatchError``. When either is absent (the common P2 case)
+        the check is lenient and skipped.
+    """
+    nodes = graph_json.get("nodes", []) or []
+    edges = graph_json.get("edges", []) or []
+
+    _validate_edge_topology(edges, nodes, result)
+
     # --- Port-type validation (lenient when schema_refs absent) -------------
     out_refs: dict[tuple[str, str], Any] = {}
     in_refs: dict[tuple[str, str], Any] = {}
     for n in nodes:
-        nid = str(n.get("id"))
-        for p in n.get("outputs") or []:
-            # The port->state-key adapter maps each declared output port to the
-            # flat-state key it writes. P2 is identity; later phases may remap.
-            state_key = resolve_port_state_key(n, str(p["port"]))
-            if p.get("schema_ref") is not None:
-                out_refs[(nid, state_key)] = p["schema_ref"]
-        for p in n.get("inputs") or []:
-            state_key = resolve_port_state_key(n, str(p["port"]))
-            if p.get("schema_ref") is not None:
-                in_refs[(nid, state_key)] = p["schema_ref"]
+        out_refs.update(_port_refs(n, n.get("outputs")))
+        in_refs.update(_port_refs(n, n.get("inputs")))
 
     for e in edges:
         etype = str(e.get("type") or e.get("edge_type") or "")
