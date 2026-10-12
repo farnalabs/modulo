@@ -485,6 +485,32 @@ async def test_resolve_saml_config_metadata_url_fetch_error() -> None:
         await _resolve_saml_config(None, session, settings)
 
 
+async def test_resolve_saml_config_metadata_url_fetch_success() -> None:
+    settings = _override()
+    session = _mock_session()
+    db_saml = SimpleNamespace(
+        metadata_xml=None,
+        metadata_url="https://idp.example/meta",
+        entity_id="idp",
+        provider_type="saml",
+        enabled=True,
+    )
+    client = AsyncMock()
+    client.get.return_value = MagicMock(text="<metadata/>")
+    pacer = AsyncMock()
+    pacer.return_value.__aenter__.return_value = client
+    with (
+        patch("modulo.auth.sso.get_enabled_saml_provider", new_callable=AsyncMock, return_value=db_saml),
+        patch("modulo.auth.sso.validate_outbound_url_async", new_callable=AsyncMock),
+        patch("modulo.auth.sso.pinned_async_client", pacer),
+    ):
+        idp_metadata, entity_id, _key, _cert, db = await _resolve_saml_config(None, session, settings)
+
+    assert idp_metadata == "<metadata/>"
+    assert entity_id == "idp"
+    assert db is db_saml
+
+
 async def test_resolve_saml_config_missing_metadata() -> None:
     settings = _override()
     session = _mock_session()

@@ -260,6 +260,193 @@ async def _persist_decision_row(
 SessionFactory = Callable[[], Any]
 
 
+# ---------------------------------------------------------------------------
+# Per-phase helpers for run_evals_persist_before_decide (S3776 structural
+# extraction).  The phases are extracted WITHOUT changing the per-eval
+# interleaving: each loop iteration still runs compute → persist → decision
+# record → decide, and a block on eval N still prevents eval N+1 from being
+# computed at all.
+# ---------------------------------------------------------------------------
+
+
+def _compute_eval_result(
+    eval_def: EvalDefDTO,
+    *,
+    engine: EvalEngine,
+    compute_run_id: uuid.UUID,
+    resolve_eval_target: Callable[[EvalDefDTO], Any],
+    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None],
+    on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None,
+) -> EngineEvalResult:
+    """Phase 1 — compute the eval result (never raises ``EvalBlockedError``)."""
+    judge = resolve_llm_judge(eval_def)
+    eval_target = resolve_eval_target(eval_def)
+    eval_result = engine.evaluate_result(
+        eval_target,
+        eval_def,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
+        run_id=compute_run_id,
+        llm_judge_callable=judge,
+    )
+    # Per-eval structured log callback (Defect 3 fix).
+    if on_eval_result is not None:
+        on_eval_result(eval_def, eval_result)
+    return eval_result
+
+
+async def _persist_eval_outcome(
+    eval_def: EvalDefDTO,
+    eval_result: EngineEvalResult,
+    *,
+    session_factory: SessionFactory,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+    node_id: str | None,
+) -> tuple[bool, uuid.UUID | None]:
+    """Phase 2 — persist one ``EvalResult`` row in its own transaction.
+
+    Returns ``(True, row_id)`` on success.  On persistence failure
+    (spec §4.1): a ``block`` eval raises ``EvalBlockedError`` carrying the
+    machine-parseable persistence-failure marker; a ``warn`` eval returns
+    ``(False, None)`` (fail-open — the caller skips the decision record and
+    decide steps for this eval).  ``CancelledError`` propagates untouched.
+
+    ``row_id`` may be ``None`` on success when the backend has not
+    populated the row's ``id`` yet (e.g. mock sessions in tests) — a
+    successful persist must NOT be mistaken for the warn-fail-open
+    outcome, which is why the boolean is returned alongside.
+    """
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            await set_rls_execution_context(session)
+            node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
+            eval_result_row = EvalResultModel(
+                organisation_id=org_id,
+                run_id=run_id,
+                node_id=node_uuid,
+                eval_id=eval_def.id,
+                eval_definition_version=eval_def.version,
+                passed=eval_result.passed,
+                score=eval_result.score,
+                detail=eval_result.detail,
+            )
+            session.add(eval_result_row)
+            await session.flush()
+            # Capture the id for decision-record construction.
+            return True, eval_result_row.id
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # --- Persistence failure (spec §4.1) -------------------
+        failure_behaviour = eval_def.failure_behaviour
+        _log.exception(
+            "eval_persist_order.persist_failed",
+            extra={
+                "node_id": node_id,
+                "eval_name": eval_def.name,
+                "eval_id": str(eval_def.id),
+                "failure_behaviour": failure_behaviour,
+                "outcome": "persistence_failure",
+            },
+        )
+        _record_persist_failure(failure_behaviour=failure_behaviour)
+
+        if failure_behaviour == "block":
+            # Halt with the EXISTING block control-flow identity
+            # (eval_blocked).  The distinction lives in the detail
+            # channel: a machine-parseable persistence-failure marker.
+            marker = json.dumps(
+                {
+                    "persistence_failure": True,
+                    "eval_id": str(eval_def.id),
+                    "failure_behaviour": failure_behaviour,
+                }
+            )
+            raise EvalBlockedError(eval_def.name, marker) from None
+        # warn → log and continue (fail-open); the next eval is
+        # still processed.
+        return False, None
+
+
+async def _persist_policy_gate_decision(
+    eval_def: EvalDefDTO,
+    eval_result: EngineEvalResult,
+    eval_result_id: uuid.UUID | None,
+    *,
+    session_factory: SessionFactory,
+    org_id: uuid.UUID,
+    run_id: uuid.UUID,
+) -> None:
+    """Phase 2.5 — persist the PolicyGateDecision audit record (fail-OPEN).
+
+    A no-op when no PolicyGate exists for this eval.  The decision is
+    resolved by ``resolve_policy_gate``; the row is persisted via
+    ``_persist_decision_row`` whose fail-OPEN wrapper is the opposite of
+    EvalResult persistence (fail-CLOSED for block gates).
+    """
+    if eval_def.policy_gate_id is None:
+        return
+    if eval_def.policy_gate_node_id is None:
+        _log.warning(
+            "eval_persist_order.policy_gate_node_id_missing",
+            extra={
+                "eval_id": str(eval_def.id),
+                "policy_gate_id": str(eval_def.policy_gate_id),
+                "eval_name": eval_def.name,
+            },
+        )
+    snapshot = EvalPolicySnapshot(
+        policy_gate=PolicyGateView(
+            id=eval_def.policy_gate_id,
+            organisation_id=eval_def.org_id,
+            version=eval_def.policy_gate_version or 1,
+            node_id=eval_def.policy_gate_node_id or uuid.uuid4(),
+            action=eval_def.failure_behaviour,
+        ),
+        eval=EvalView(
+            id=eval_def.id,
+            organisation_id=eval_def.org_id,
+            node_id=uuid.UUID(eval_def.node_id) if eval_def.node_id else None,
+            eval_type=eval_def.eval_type,
+            deleted_at=None,
+        ),
+        eval_result=EvalResultView(
+            id=eval_result_id,
+            passed=eval_result.passed,
+        )
+        if eval_result_id is not None
+        else None,
+    )
+    outcome = resolve_policy_gate(snapshot)
+    await _persist_decision_row(
+        snapshot,
+        outcome,
+        run_id,
+        session_factory=session_factory,
+        org_id=org_id,
+    )
+
+
+def _decide_after_persist(
+    eval_def: EvalDefDTO,
+    eval_result: EngineEvalResult,
+    *,
+    node_id: str | None,
+) -> None:
+    """Phase 3 — decide (after successful persistence)."""
+    _log.debug(
+        "eval_persist_order.persisted",
+        extra={
+            "eval_name": eval_def.name,
+            "eval_id": str(eval_def.id),
+            "node_id": node_id,
+            "passed": eval_result.passed,
+        },
+    )
+    if not eval_result.passed and eval_def.failure_behaviour == "block":
+        raise EvalBlockedError(eval_def.name, eval_result.detail)
+
+
 async def run_evals_persist_before_decide(
     *,
     eval_defs: Sequence[EvalDefDTO],
@@ -346,140 +533,50 @@ async def run_evals_persist_before_decide(
 
     for eval_def in eval_defs:
         # --- 1. Compute (never raises EvalBlockedError) ----------------
-        judge = resolve_llm_judge(eval_def)
-        eval_target = resolve_eval_target(eval_def)
-        eval_result = engine.evaluate_result(
-            eval_target,
-            eval_def,  # type: ignore[arg-type]  # EvalDefDTO duck-types EvalDefinition
-            run_id=compute_run_id,
-            llm_judge_callable=judge,
+        eval_result = _compute_eval_result(
+            eval_def,
+            engine=engine,
+            compute_run_id=compute_run_id,
+            resolve_eval_target=resolve_eval_target,
+            resolve_llm_judge=resolve_llm_judge,
+            on_eval_result=on_eval_result,
         )
         results[eval_def.name] = eval_result
-
-        # Per-eval structured log callback (Defect 3 fix).
-        if on_eval_result is not None:
-            on_eval_result(eval_def, eval_result)
-
-        # Track the persisted EvalResult id for decision-record construction.
-        eval_result_id: uuid.UUID | None = None
 
         # --- 2. Persist (own transaction, per-eval commit) -------------
         if can_persist:
             assert session_factory is not None
             assert org_id is not None
             assert run_id is not None
-            try:
-                async with session_factory() as session, session.begin():
-                    await set_rls_org(session, org_id)
-                    await set_rls_execution_context(session)
-                    node_uuid: uuid.UUID | None = uuid.UUID(eval_def.node_id) if eval_def.node_id else None
-                    eval_result_row = EvalResultModel(
-                        organisation_id=org_id,
-                        run_id=run_id,
-                        node_id=node_uuid,
-                        eval_id=eval_def.id,
-                        eval_definition_version=eval_def.version,
-                        passed=eval_result.passed,
-                        score=eval_result.score,
-                        detail=eval_result.detail,
-                    )
-                    session.add(eval_result_row)
-                    await session.flush()
-                    # Capture the id for decision-record construction.
-                    eval_result_id = eval_result_row.id
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                # --- Persistence failure (spec §4.1) -------------------
-                failure_behaviour = eval_def.failure_behaviour
-                _log.exception(
-                    "eval_persist_order.persist_failed",
-                    extra={
-                        "node_id": node_id,
-                        "eval_name": eval_def.name,
-                        "eval_id": str(eval_def.id),
-                        "failure_behaviour": failure_behaviour,
-                        "outcome": "persistence_failure",
-                    },
-                )
-                _record_persist_failure(failure_behaviour=failure_behaviour)
-
-                if failure_behaviour == "block":
-                    # Halt with the EXISTING block control-flow identity
-                    # (eval_blocked).  The distinction lives in the detail
-                    # channel: a machine-parseable persistence-failure marker.
-                    marker = json.dumps(
-                        {
-                            "persistence_failure": True,
-                            "eval_id": str(eval_def.id),
-                            "failure_behaviour": failure_behaviour,
-                        }
-                    )
-                    raise EvalBlockedError(eval_def.name, marker) from None
-                # warn → log and continue (fail-open); the next eval is
-                # still processed.
-                continue
-
-        # --- 2.5. Persist decision record (FAR-1102 chunk 4) -----------
-        # Only when a PolicyGate exists for this eval.  The decision is
-        # resolved by resolve_policy_gate(); the row is an audit trace
-        # persisted with a fail-OPEN wrapper (opposite of EvalResult's
-        # fail-CLOSED for block gates).
-        if can_persist and eval_def.policy_gate_id is not None:
-            assert session_factory is not None
-            assert org_id is not None
-            assert run_id is not None
-            if eval_def.policy_gate_node_id is None:
-                _log.warning(
-                    "eval_persist_order.policy_gate_node_id_missing",
-                    extra={
-                        "eval_id": str(eval_def.id),
-                        "policy_gate_id": str(eval_def.policy_gate_id),
-                        "eval_name": eval_def.name,
-                    },
-                )
-            snapshot = EvalPolicySnapshot(
-                policy_gate=PolicyGateView(
-                    id=eval_def.policy_gate_id,
-                    organisation_id=eval_def.org_id,
-                    version=eval_def.policy_gate_version or 1,
-                    node_id=eval_def.policy_gate_node_id or uuid.uuid4(),
-                    action=eval_def.failure_behaviour,
-                ),
-                eval=EvalView(
-                    id=eval_def.id,
-                    organisation_id=eval_def.org_id,
-                    node_id=uuid.UUID(eval_def.node_id) if eval_def.node_id else None,
-                    eval_type=eval_def.eval_type,
-                    deleted_at=None,
-                ),
-                eval_result=EvalResultView(
-                    id=eval_result_id,
-                    passed=eval_result.passed,
-                )
-                if eval_result_id is not None
-                else None,
-            )
-            outcome = resolve_policy_gate(snapshot)
-            await _persist_decision_row(
-                snapshot,
-                outcome,
-                run_id,
+            persisted, eval_result_id = await _persist_eval_outcome(
+                eval_def,
+                eval_result,
                 session_factory=session_factory,
                 org_id=org_id,
+                run_id=run_id,
+                node_id=node_id,
+            )
+            if not persisted:
+                # Warn fail-open: the persist helper already logged and
+                # recorded the failure — skip decision record + decide.
+                continue
+
+            # --- 2.5. Persist decision record (FAR-1102 chunk 4) -------
+            # The helper is a no-op unless a PolicyGate exists for this
+            # eval.  The decision is resolved by resolve_policy_gate();
+            # the row is an audit trace persisted with a fail-OPEN
+            # wrapper (opposite of EvalResult's fail-CLOSED for block
+            # gates).
+            await _persist_policy_gate_decision(
+                eval_def,
+                eval_result,
+                eval_result_id,
+                session_factory=session_factory,
+                org_id=org_id,
+                run_id=run_id,
             )
 
         # --- 3. Decide (after successful persistence) ------------------
-        _log.debug(
-            "eval_persist_order.persisted",
-            extra={
-                "eval_name": eval_def.name,
-                "eval_id": str(eval_def.id),
-                "node_id": node_id,
-                "passed": eval_result.passed,
-            },
-        )
-        if not eval_result.passed and eval_def.failure_behaviour == "block":
-            raise EvalBlockedError(eval_def.name, eval_result.detail)
+        _decide_after_persist(eval_def, eval_result, node_id=node_id)
 
     return results

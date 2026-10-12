@@ -92,7 +92,9 @@ def test_machine_log_capture_wired_per_leg() -> None:
         upload_name = _upload_step_name(suffix)
         assert upload_name in names, f"{job_id}: artifact upload step missing"
         upload_step = steps[names.index(upload_name)]
-        assert upload_step["uses"] == "actions/upload-artifact@v4"
+        assert upload_step["uses"].startswith("actions/upload-artifact@"), (
+            f"{job_id}: log upload must use the official upload-artifact action"
+        )
         assert upload_step["with"]["retention-days"] == 3
         assert upload_step["if"] == "always()"
         assert f"pre-migrate-machine-logs-{suffix}" == upload_step["with"]["name"]
