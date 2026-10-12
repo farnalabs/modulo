@@ -1339,6 +1339,10 @@ def node_produces_suspicious_output(output: str, request: pytest.FixtureRequest)
     mock_run = getattr(request.node, "_mock_run", None)
     if mock_run is not None:
         mock_run.status = "failed"
+        # Mock surface: the machine code is stored on ``error_detail`` for
+        # ``check_error_code`` to assert. The real Run keeps the identifier in
+        # ``error_code`` (String) and prose in ``error_detail`` (Text) - see
+        # backend/src/modulo/db/models/run.py.
         mock_run.error_detail = "output_rejected"
     request.node._run_status = "failed"
     request.node._error_code = "output_rejected"
