@@ -90,9 +90,15 @@ def run_pauses_for_human_input(ctx, request):
 
 
 @then(parsers.parse('the run status becomes "{status}"'))
-def run_status_becomes(status: str, ctx, request):
-    ctx["run_status"] = status
-    assert ctx["run_status"] == status, f"Expected run status {status}, got {ctx.get('run_status')}"
+def run_status_becomes(status: str, ctx):
+    """Assert the status the preceding Given/When step produced.
+
+    A Then step must OBSERVE produced state, never write it: asserting a value
+    this step just assigned cannot fail and proves nothing. Every scenario that
+    uses this step sets ``ctx["run_status"]`` in an earlier Given/When step
+    (``the run reaches ...`` / ``the run pauses for human input``).
+    """
+    assert ctx.get("run_status") == status, f"Expected run status {status}, got {ctx.get('run_status')}"
 
 
 @then("the run continues")

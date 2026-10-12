@@ -99,14 +99,14 @@ def node_no_output(node: int, request):
     pass
 
 
-@then("the response contains final_state")
+@then("the response reports a terminal run status")
 def check_response_terminal_status(request):
     """Assert the run-detail payload carries a real terminal run status.
 
     A Run has a terminal ``status`` (and, on failure, an ``error_detail``) —
-    there is no ``final_state`` field on a Run (modulo/db/models/run.py). This
-    asserts the real payload the ``GET /runs/{id}`` route produced rather than
-    a value the step itself set.
+    this asserts the real payload the ``GET /runs/{id}`` route produced, read
+    against ``TERMINAL_STATUSES`` from the Run model
+    (modulo/db/models/run.py), rather than a value the step itself set.
     """
     from modulo.db.models.run import TERMINAL_STATUSES
 
