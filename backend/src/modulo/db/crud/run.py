@@ -1287,12 +1287,18 @@ def _select_guardrail_definitions(
     A snapshot with a NON-EMPTY pinned set evaluates exactly that set, even when
     EVERY pin fails to rebuild. Only a snapshot with NO pins (pre-migration /
     read failure) falls back to the live rows.
-    """
-    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
-        return pinned_defs
-    from modulo.core.guardrails import to_engine_definition
 
-    return [to_engine_definition(row) for row in guardrail_rows]
+    FAR-209 Track B (D5): output-point guardrails are EXCLUDED from the input
+    pass — they intercept at the executor's node-output seam instead. Unknown
+    ``interception_point`` values are KEPT here (they still run this pass and
+    its strict validation fails closed on them).
+    """
+    from modulo.core.guardrails import to_engine_definition
+    from modulo.core.guardrails.output_intercept import exclude_output_interception_definitions
+
+    if _has_pinned_guardrail_set(snap_pins, saved_fingerprint):
+        return exclude_output_interception_definitions(pinned_defs)
+    return exclude_output_interception_definitions([to_engine_definition(row) for row in guardrail_rows])
 
 
 def _downgrade_guardrails_to_observe(guardrail_defs: list[Any]) -> list[Any]:

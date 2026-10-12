@@ -42,12 +42,16 @@ def validate_guardrail_request(
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    Three config-vocabulary checks.  The ``failure_behaviour`` parameter was
+    Four config-vocabulary checks.  The ``failure_behaviour`` parameter was
     retired from the public surface in FAR-1103 chunk 5a.
 
     1. ``config_json.action`` not in ``("observe", "warn", "block", "redact")`` → reject.
     2. Top-level ``config_json.type`` not in ``("regex", "json_schema")`` → reject.
     3. Nested ``config_json.detection.type`` not in ``("regex", "json_schema")`` → reject.
+    4. ``config_json.interception_point`` (FAR-209 Track B) not in
+       ``("input", "output")`` → reject (an unknown seam value must never
+       silently bind — the engine's input-passthrough/output-strict split
+       would strand it).
 
     Raises :class:`fastapi.HTTPException` (422) on violation.
     """
@@ -63,6 +67,14 @@ def validate_guardrail_request(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Guardrail action must be one of observe|warn|block|redact (got {action!r}).",
+        )
+
+    # FAR-209 Track B — interception point vocabulary check
+    interception_point = config_json.get("interception_point")
+    if interception_point is not None and interception_point not in ("input", "output"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(f"Guardrail interception_point must be one of input|output (got {interception_point!r})."),
         )
 
     # 2. Top-level detection type check

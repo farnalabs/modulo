@@ -53,6 +53,7 @@ from modulo.core.guardrails import (
     resolve_guardrail_cap,
     resolve_guardrail_timeout,
 )
+from modulo.core.guardrails.redaction_mode import resolve_guardrail_destroy_pepper
 
 GuardrailPinStatus = Literal["clean", "proposed", "drift"]
 ConfigChangeAction = Literal["add", "update", "remove"]
@@ -105,6 +106,9 @@ class GuardrailConfigItem(BaseModel):
     detection: GuardrailDetection
     redaction: list[RedactionRule] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
+    # FAR-209 Track B: where the guardrail intercepts. ``input`` = run-creation
+    # ingestion edge (T1 default); ``output`` = post-node chain-end seam.
+    interception_point: Literal["input", "output"] = "input"
 
 
 class GuardrailConfigSet(BaseModel):
@@ -294,6 +298,15 @@ def validate_config_set(config_set: GuardrailConfigSet) -> None:
         for rule in item.redaction:
             if not rule.path.strip():
                 raise GuardrailConfigError(f"Guardrail {item.id!r} has an empty redaction path.")
+            if rule.mode == FieldRedactionMode.DESTROY and not resolve_guardrail_destroy_pepper():
+                # Fail closed at PROPOSE time: a destroy-mode rule cannot run
+                # without the deployment pepper. Authoring it without one must
+                # fail here — never at the runtime edge, and never as a silent
+                # masks-only downgrade.
+                raise GuardrailConfigError(
+                    f"Guardrail {item.id!r} uses destroy redaction mode, which requires the "
+                    "guardrail_destroy_pepper setting to be configured."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +454,7 @@ def to_eval_config(
     rows hashes identically (drift stays ``clean``).
     """
     config: dict[str, Any] = {
-        "interception_point": "input",
+        "interception_point": item.interception_point,
         "action": item.action.value,
         "redaction": [{"path": rule.path, "mode": rule.mode.value} for rule in item.redaction],
         "required_capabilities": list(item.required_capabilities),
@@ -515,6 +528,10 @@ def config_item_from_engine_definition(engine_def: EvalDefinition) -> GuardrailC
             detection=detection,
             redaction=redaction,
             required_capabilities=[str(c) for c in config.get("required_capabilities") or []],
+            # FAR-209 Track B: an unusual value fails closed through the DTO's
+            # Literal — a malformed interception_point must never silently
+            # rebuild as "input" and hide the drift from the rebuild hash.
+            interception_point=config.get("interception_point", "input"),
         )
     except pydantic.ValidationError as exc:
         # The shipped T1 engine allows org-level guardrail names the config id

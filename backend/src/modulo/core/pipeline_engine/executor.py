@@ -220,6 +220,24 @@ def _is_finalize_lock_retryable(exc: BaseException) -> bool:
 
 _log = logging.getLogger(__name__)
 
+# FAR-209 Track B: the guardrail eval_type value the executor splits out of
+# the node-scoped eval defs (interception-owned, never eval-engine-owned —
+# the eval engine raises GuardrailMisroutedError on a guardrail-typed def).
+GUARDRAIL_EVAL_TYPE = "guardrail"
+
+
+def is_output_interception(eval_def: Any) -> bool:
+    """FAR-209 Track B: True when a guardrail-typed def declares an output point.
+
+    Strictly the literal ``"output"`` — an unknown ``interception_point`` value
+    stays with the input seam, where strict validation fails closed. Local
+    re-implementation of the helper (importing the sibling module at module
+    import time cycles through guardrails -> eval_engine -> executor).
+    """
+    point = eval_def.config.get("interception_point", "input")
+    return bool(point == "output")
+
+
 # Pipeline retry_policy events (must stay in sync with the API schema in
 # api/routes/pipelines.py and the graph validator). A policy can retry on:
 #   - "stall":    run ended "stalled" / error_code "executor_stalled"
@@ -2941,6 +2959,69 @@ class PipelineExecutor:
             resolve_llm_judge=resolve_llm_judge_callable,
             on_eval_result=_on_post_node_eval_result,
         )
+
+    async def _run_output_guardrails(
+        self,
+        *,
+        node_id: str,
+        envelope: dict[str, Any],
+        guardrail_defs: list[EvalDefDTO],
+        run_id: uuid.UUID,
+        org_id: uuid.UUID | None,
+    ) -> dict[str, Any]:
+        """FAR-209 Track B: intercept a completed node's output envelope.
+
+        Runs ONLY the output-point guardrails (filtered here — the input-point
+        ones are excluded upstream, before this seam). Orders per the design:
+        interception runs BEFORE `_run_post_node_evals` in
+        `_handle_chain_end_event`, the redacted envelope is OVERWRITTEN into
+        ``ctx.completed_node_outputs`` there, and downstream LangGraph state
+        propagation is intentionally NOT in scope (documented known gap).
+
+        A block outcome raises ``GuardrailBlockedError`` — the stream loop's
+        existing ``except EvalBlockedError`` handler terminalizes the run
+        (``eval_failed``) unchanged. A destroy-mode mechanism error (fail
+        closed) becomes the same terminal block. Detection-only (replay /
+        kill switch) never acts and returns the envelope untouched.
+        """
+        from modulo.core.guardrails import GuardrailBlockedError, GuardrailRedactionMechanismError
+        from modulo.core.guardrails.output_intercept import run_output_interception_async
+
+        if not org_id:
+            _log.warning("guardrails.output_no_org", extra={"node_id": node_id})
+            return envelope
+        try:
+            outcome = await run_output_interception_async(
+                guardrail_defs,
+                envelope,
+                session_factory=self._session_factory,
+                run_id=run_id,
+                org_id=org_id,
+            )
+        except GuardrailRedactionMechanismError as exc:
+            _log.exception("guardrails.output_destroy_mechanism_error")
+            raise GuardrailBlockedError(
+                node_id, f"guardrail output mechanism error (destroy redaction failed closed): {exc}"
+            ) from exc
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Defect path guard: any unexpected pass failure with a guarding
+            # guardrail must not pass through unredacted — block. The shared
+            # pass already fail-closes internally for detection mechanism
+            # errors; this covers anything IT failed to convert.
+            guarding = any((d.config.get("action") in ("block", "redact")) for d in guardrail_defs)
+            if guarding:
+                _log.exception("guardrails.output_pass_failed_closed")
+                raise GuardrailBlockedError(node_id, "guardrail output mechanism error at node-output edge") from exc
+            _log.warning("guardrails.output_pass_failed_open", extra={"node_id": node_id})
+            return envelope
+        # Typed round-trip: the seam returns the pass's redacted envelope
+        # by reference (outcome is dynamically typed from the async helper).
+        redacted: dict[str, Any] = outcome.payload
+        if outcome.blocked:
+            raise GuardrailBlockedError(outcome.blocking_eval_name or node_id, outcome.block_message)
+        return redacted
 
     async def _init_model_backend_hub(self, org_id: uuid.UUID) -> ModelBackendHub | None:
         """Load active model backends for the org and initialise ModelBackendHub.
@@ -6526,6 +6607,16 @@ class PipelineExecutor:
         )
         if output is None:
             return
+        # Markers are extracted from the RAW output BEFORE interception — a
+        # FAR-209 Track B redaction (transform/policy) must never blank the
+        # stall / agent-failure / session-lost evidence path (these publish to
+        # the event broker on the surviving detail; the raw payload itself is
+        # only ever framed here).
+        stall_reason, agent_failure, session_lost = _record_node_markers(
+            output,
+            ctx.broker,
+            name,
+        )
         # FAR-305: standalone post-node eval path — run any node-scoped evals
         # for this node against its inner output dict. This is independent of
         # HITL gates: a plain node (no gate) now gets its node-scoped evals
@@ -6535,20 +6626,52 @@ class PipelineExecutor:
         # If this node ALSO feeds a HITL gate with eval-before-interrupt,
         # the evals run twice (once here post-node, once in the gate) —
         # acceptable for now, the gate's eval is a separate node.
+        #
+        # FAR-209 Track B: guardrail-typed defs bound to a node are SPLIT out
+        # here — they are interception-owned, not eval-owned. Output-point
+        # ones intercept THIS envelope (see below); anything else would raise
+        # GuardrailMisroutedError inside the eval engine and crash the run.
         if ctx.eval_definitions_by_node:
-            await self._run_post_node_evals(
-                name,
-                output,
-                ctx.eval_definitions_by_node,
-                ctx.run_id,
-                ctx.org_id,
-                node_type_map=ctx.node_type_map,
-            )
-        stall_reason, agent_failure, session_lost = _record_node_markers(
-            output,
-            ctx.broker,
-            name,
-        )
+            node_defs = ctx.eval_definitions_by_node.get(name) or []
+            # Only the OUTPUT-point guardrail defs intercept THIS envelope
+            # (strictly the "output" literal -- an unknown value stays with
+            # the eval-shape list below, where strict validation fails
+            # closed). Input-point ones are owned by their upstream seam, so
+            # they keep flowing in the eval-shaped path here.
+            guardrail_defs = [
+                d for d in node_defs if str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d)
+            ]
+            if guardrail_defs:
+                try:
+                    redacted = await self._run_output_guardrails(
+                        node_id=name,
+                        envelope=output,
+                        guardrail_defs=guardrail_defs,
+                        run_id=ctx.run_id,
+                        org_id=ctx.org_id,
+                    )
+                    output = redacted
+                    if ctx.completed_node_outputs is not None:
+                        ctx.completed_node_outputs[name] = redacted
+                except asyncio.CancelledError:
+                    raise
+                # EvalBlockedError (GuardrailBlockedError is a subclass) MUST
+                # propagate — the stream loop's handler terminalizes the run.
+            # Non-output defs (other eval types AND input-point guardrails)
+            # keep flowing in the eval-shaped path — an output-point one is
+            # the only def owned by THIS seam.
+            eval_defs = [
+                d for d in node_defs if not (str(d.eval_type) == GUARDRAIL_EVAL_TYPE and is_output_interception(d))
+            ]
+            if eval_defs:
+                await self._run_post_node_evals(
+                    name,
+                    output,
+                    {name: eval_defs},
+                    ctx.run_id,
+                    ctx.org_id,
+                    node_type_map=ctx.node_type_map,
+                )
         if stall_reason:
             state.stall_reason = stall_reason
         if agent_failure:
