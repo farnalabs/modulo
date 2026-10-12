@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from modulo.core.eval_engine import EvalDefinition, EvalType
 from modulo.db.crud.run import (
     COALESCE_KEY_FIELD,
     WorkItemRefsRequiredError,
@@ -36,6 +37,8 @@ from modulo.db.crud.run import (
     run_idempotency_key,
     run_idempotency_ref,
 )
+
+_ORG_ID = uuid.uuid4()
 
 # ---------------------------------------------------------------------------
 # run_idempotency_ref / run_idempotency_key
@@ -490,17 +493,60 @@ def test_work_item_refs_required_error_message() -> None:
 
 
 def test_select_guardrail_definitions_no_pins_uses_live_rows() -> None:
+    """FAR-209 Track B: live-row conversion keeps the returned defs, excluding
+    only the output-point interception defs (an input-point def survives)."""
     from modulo.db.crud.run import _select_guardrail_definitions
 
+    # Input-point default: survives the seam filter.
+    input_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="gr-in",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "interception_point": "input", "type": "regex"},
+        failure_behaviour="block",
+    )
+    output_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="gr-out",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "interception_point": "output", "type": "regex"},
+        failure_behaviour="block",
+    )
     mock_row = MagicMock()
-    with patch("modulo.core.guardrails.to_engine_definition", return_value="defn") as mock_ted:
+    with patch("modulo.core.guardrails.to_engine_definition", side_effect=[input_def]):
         result = _select_guardrail_definitions([mock_row], [], None, None)
-    mock_ted.assert_called_once_with(mock_row)
-    assert result == ["defn"]
+    assert result == [input_def]
+    # Output-point: excluded from the guarded eval-loop selection.
+    with patch("modulo.core.guardrails.to_engine_definition", side_effect=[output_def]):
+        result_output = _select_guardrail_definitions([mock_row], [], None, None)
+    assert result_output == []
 
 
 def test_select_guardrail_definitions_with_pins_returns_pinned() -> None:
+    """Pinned defs are returned verbatim (FAR-209 Track B: the seam excludes
+    only output-point interception defs — an input-point pinned def survives)."""
     from modulo.db.crud.run import _select_guardrail_definitions
 
-    result = _select_guardrail_definitions([], ["pinned-def"], [{"name": "x"}], None)
-    assert result == ["pinned-def"]
+    input_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="gr-pin",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "interception_point": "input", "type": "regex"},
+        failure_behaviour="block",
+    )
+    result = _select_guardrail_definitions([], [input_def], [{"name": "x"}], None)
+    assert result == [input_def]
+
+    output_def = EvalDefinition(
+        id=uuid.uuid4(),
+        org_id=_ORG_ID,
+        name="gr-pin-out",
+        eval_type=EvalType.GUARDRAIL,
+        config={"action": "block", "interception_point": "output", "type": "regex"},
+        failure_behaviour="block",
+    )
+    result_out = _select_guardrail_definitions([], [output_def], [{"name": "x"}], None)
+    assert result_out == []

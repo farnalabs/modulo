@@ -428,7 +428,9 @@ async def guardrail_override(
         GuardrailOverrideError — run is not a guardrail-blocked terminal run,
             or it was blocked by a policy-gate pin fingerprint mismatch
             (FAR-967 F1: a mechanism failure no input can remediate).
-        GuardrailOverrideRejectedError — supplied input still violates a guardrail.
+        GuardrailOverrideRejectedError — supplied input still violates a guardrail,
+            or the re-run pass fail-closed on a destroy-redaction mechanism error
+            (FAR-209 Track B: unset/unusable pepper).
         ConcurrentRecoveryError — another override won the race.
     """
     run = await get_run(session, run_id)
@@ -473,6 +475,7 @@ async def guardrail_override(
     from modulo.core.eval_engine import EvalEngine
     from modulo.core.guardrails import (
         GuardrailInterceptionOutcome,
+        GuardrailRedactionMechanismError,
         run_interception_pass_async,
         to_engine_definition,
     )
@@ -484,12 +487,24 @@ async def guardrail_override(
         organisation_id=org_id,
     )
     guardrail_defs = [to_engine_definition(row) for row in guardrail_rows]
-    outcome: GuardrailInterceptionOutcome = await run_interception_pass_async(
-        EvalEngine(),
-        guardrail_defs,
-        input_data,
-        detection_only=False,
-    )
+    try:
+        outcome: GuardrailInterceptionOutcome = await run_interception_pass_async(
+            EvalEngine(),
+            guardrail_defs,
+            input_data,
+            detection_only=False,
+        )
+    except GuardrailRedactionMechanismError as exc:
+        # FAR-209 Track B: a destroy-mode mechanism failure (pepper unset or
+        # unusable) escapes the pass (see ``_apply_redaction_phase``). The
+        # override is re-block-safe, so fail CLOSED — reject the override and
+        # leave the run terminal, exactly like a still-violating input, rather
+        # than letting the mechanism error surface as an unhandled 500.
+        raise GuardrailOverrideRejectedError(
+            run_id,
+            "<guardrail>",
+            f"guardrail mechanism error: {exc}",
+        ) from exc
     if outcome.blocked:
         raise GuardrailOverrideRejectedError(
             run_id,
