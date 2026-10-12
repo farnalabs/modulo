@@ -240,8 +240,8 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   - `pipelines/concurrency.feature` (deleted) – five scenarios targeted the dead
     per-pipeline runs endpoint `POST /api/pipelines/{id}/runs` (removed when run
     triggering moved to `POST /api/v1/runs`); concurrency admission is shipped
-    inside `create_run`/dispatch and is covered by the `max_concurrent_runs` 429
-    path in `run_sequential.feature` plus the `tests/unit/pipeline_engine`
+    inside `create_run`/dispatch and is covered by the `run_sequential.feature`
+    `max_concurrent_runs` refusal scenario plus the `tests/unit/pipeline_engine`
     admission suite.
   - `pipelines/run_variants.feature` – the "Coverage gaps are reported for a
     variant group" scenario duplicated the real `get_coverage_gaps` seam already
@@ -334,9 +334,11 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
   step definitions are written (`a running pipeline with a node that returns None
   output` / `the node completes` / `no error is raised for the None output` /
   `cancellation is requested` / `no further nodes execute` / `node N completes
-  before node M starts`). The manual-trigger step now models `max_concurrent_runs`
-  admission (a capped pipeline with a pending run refuses the extra trigger with
-  a typed `RateLimitConflictError` → 429). 12 scenarios collect and pass. The
+  before node M starts`). The manual-trigger step now models the manual-trigger
+  refusal via the typed `RateLimitConflictError` → 429 path (the pipeline
+  `max_concurrent_runs` cap itself is enforced engine-side at dispatch, parking an
+  over-capacity run with the `pipeline_capacity` marker rather than 429 at trigger
+  time). 12 scenarios collect and pass. The
   graph/config-validation BDD gap remains for `validation.feature` /
   `pipeline_config_validation.feature` – their steps are awaiting a dedicated
   graph-validation create/edit surface.

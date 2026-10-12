@@ -100,8 +100,8 @@ registry (`feat-router`).
 - 2026-09-25: **Improve Architecture product-map walk** — closed the stale
   `feat-router` "partial" in the manifest feature registry: complex / nested
   conditional routing ships through the full standard JMESPath engine — router
-  guards, conditional edges, loop counters, HITL gate conditions and polling
-  triggers all evaluate via the single consolidated `compile_jmespath` /
+  guards, conditional edges, loop counters and HITL gate conditions all evaluate
+  via the single consolidated `compile_jmespath` /
   `evaluate_jmespath_condition` (truthiness `bool(...)`) in
   `core/pipeline_engine/jmespath_eval.py`, so nested filters/projections /
   `contains` / multi-level access are first-class while an invalid expression
