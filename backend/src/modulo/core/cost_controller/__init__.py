@@ -37,6 +37,7 @@ from modulo.db.models.run import Run
 from modulo.db.models.team import Team
 from modulo.db.models.trigger import Trigger
 from modulo.db.rls import set_rls_execution_context
+from modulo.db.soft_delete import include_soft_deleted
 
 _log = logging.getLogger(__name__)
 
@@ -810,7 +811,9 @@ async def get_cost_report(
         team_ids = [row.team_id for row in rows if row.team_id is not None]
         teams_map: dict[uuid.UUID, Team] = {}
         if team_ids:
-            teams_result = await session.execute(select(Team).where(Team.id.in_(team_ids)))
+            # FAR-1653: historical cost rows for a soft-deleted team must keep
+            # resolving the team's name (not degrade to "Unknown").
+            teams_result = await session.execute(include_soft_deleted(select(Team).where(Team.id.in_(team_ids))))
             teams_map = {t.id: t for t in teams_result.scalars().all()}
 
         return [

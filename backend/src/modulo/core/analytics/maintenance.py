@@ -387,6 +387,12 @@ async def backfill_facts(session: Any, day: date) -> int:
             Run.execution_origin.label("execution_origin"),
         )
         .select_from(Run)
+        # FAR-1653: this INSERT...FROM SELECT is NOT scoped by the global
+        # soft-delete filter (the do_orm_execute listener acts on SELECTs
+        # only), so soft-deleted team/pipeline names already resolve here —
+        # no include_soft_deleted opt-out is needed or effective on the
+        # INSERT. Locked by TestSoftDeletedTeamNamePreservation in
+        # tests/integration/test_run_daily_facts.py.
         .outerjoin(Team, Team.id == Run.owner_team_id)
         .outerjoin(Pipeline, Pipeline.id == Run.pipeline_id)
         .outerjoin(PipelineSnapshot, PipelineSnapshot.id == Run.snapshot_id)
