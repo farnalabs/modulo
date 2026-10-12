@@ -340,6 +340,14 @@ jobs:
       matrix:
         attempt: [1, 2, 3]
       fail-fast: false
+    # Expose the resolved canary tag to canary-housekeeping (needs.canary):
+    # GITHUB_ENV written inside this job is job-scoped and never reaches a
+    # needs-dependent job, so `${{ env.TAG }}` there is always empty. Every
+    # matrix leg resolves the same tag, so the merged output is stable; a leg
+    # that fails BEFORE resolving (e.g. the no-releases 404 path) simply
+    # contributes no value, leaving the `:-unknown` fallback intact.
+    outputs:
+      tag: ${{ steps.fetch.outputs.tag }}
     env:
       CANARY: "1"
     steps:
@@ -347,6 +355,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
+        id: fetch
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED: ${{ inputs.canary_version }}
@@ -369,6 +378,10 @@ jobs:
             version="${tag#bundle-v}"
             echo "TAG=${tag}" >> "$GITHUB_ENV"
             echo "TARBALL=canary.tar.gz" >> "$GITHUB_ENV"
+            # Also surface the resolved tag as a job output so
+            # canary-housekeeping can name it in the tracking issue body
+            # (GITHUB_ENV above does not cross the job boundary).
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
             # Resolve N-1 (the previous bundle-v release) so the N-1 upgrade leg
             # below is not permanently dead code. Best-effort: a resolution
             # failure must WARN, never abort the smoke.
@@ -634,7 +647,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          CANARY_TAG: ${{ env.TAG }}
+          CANARY_TAG: ${{ needs.canary.outputs.tag }}
         run: |
           set -euo pipefail
           issue_key="[canary] $(date -u +%F)"
