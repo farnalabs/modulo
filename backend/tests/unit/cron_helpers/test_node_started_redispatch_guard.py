@@ -643,3 +643,55 @@ class TestSlotSweepExcludesNodeStartedFromRetryOnly:
         # whole WHERE: over-budget rows are terminal-failed regardless of phase.
         assert "claim_count > :retry_budget" in sql
         assert "dispatch_phase <> :first_node_phase" in sql
+
+
+class TestNodeStartedTerminalizedTickAlert:
+    """FAR-1649 qa finding 4: a tick that terminal-fails a node-STARTED row
+    through the zero-node chokepoint is alert-grade. ``_dispatcher_reconcile_body``
+    must emit its own ERROR (a distinct log event) rather than folding the
+    count into the zero-node class, so a selection-leg race that reaches the
+    chokepoint is visible on its own terms instead of passing silently.
+    """
+
+    async def test_body_emits_node_started_alert_when_counter_nonzero(self, caplog: Any) -> None:
+        import logging
+
+        summary = ch._dispatcher_summary()
+        summary["node_started_terminalized"] = 2
+        org_id = uuid.uuid4()
+
+        async def fake_reconcile_org(*, org_id: uuid.UUID, **_kwargs: Any) -> int:
+            return 0
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(ch, "_collect_org_ids", new_callable=AsyncMock, return_value=[org_id]))
+            stack.enter_context(patch.object(ch, "_reconcile_org", side_effect=fake_reconcile_org))
+            stack.enter_context(patch.object(ch, "reconciler_recovery_predicate"))
+            stack.enter_context(patch.object(ch, "_open_system_factory"))
+            stack.enter_context(patch.object(ch, "_run_reconcile_sweeps", new_callable=AsyncMock))
+            stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
+            stack.enter_context(patch("modulo.core.cron_helpers.AsyncRedis"))
+            with caplog.at_level(logging.ERROR, logger=ch.__name__):
+                await ch._dispatcher_reconcile_body(
+                    _settings=_settings(),
+                    factory=MagicMock(),
+                    queue_name="runs",
+                    reenqueue_window=600,
+                    tuning=ch.ReconcileTuning(
+                        nodeless_window=15,
+                        max_age_minutes=135,
+                        claim_cap=3,
+                        stale_window=90,
+                        capacity_redispatch_seconds=60,
+                        hitl_review_cancel_grace_seconds=3600,
+                    ),
+                    terminalize_max=25,
+                    facts_max=25,
+                    max_rows=500,
+                    redis_client=MagicMock(),
+                    summary=summary,
+                    terminalized_run_ids=[],
+                )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("node_started_terminalized_summary" in message for message in messages)
