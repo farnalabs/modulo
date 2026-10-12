@@ -6528,10 +6528,11 @@ export interface paths {
          * @description Approve a pending OAuth consent (ADR 047 DECISION 1 — the approve POST IS the consent).
          *
          *     The authenticated approve POST is the human approval: the Bearer principal
-         *     IS the consenting account. There is deliberately NO consent page / deny
-         *     affordance (deferred until an interactive customer exists). ``state`` is a
-         *     client-chosen correlation/replay-binding nonce — the Bearer requirement is
-         *     the consent-CSRF control (a cross-origin auto-POST cannot attach a
+         *     IS the consenting account. The browser consent page (FAR-1476 slice 3)
+         *     renders the pending grant set from ``GET /consent/context`` and lets the
+         *     human deny individual scopes; ``state`` is a client-chosen
+         *     correlation/replay-binding nonce — the Bearer requirement is the
+         *     consent-CSRF control (a cross-origin auto-POST cannot attach a
          *     localStorage Bearer).
          *
          *     Security properties:
@@ -6540,10 +6541,48 @@ export interface paths {
          *       and it is re-validated before it is used to build the redirect.
          *     - The code is minted from the state row's scopes + code_challenge ONLY, so
          *       a tampered display can never escalate the granted scope (display is
-         *       never authoritative).
+         *       never authoritative). ``granted_scopes`` can only NARROW that set: it is
+         *       canonicalised, must be a non-empty subset of the stored scopes (anything
+         *       outside fails closed with 400, never widens), and the live-role check
+         *       re-runs against the granted subset so a demotion still degrades.
          *     - The returned ``redirect_url`` is server-derived: ``redirect_uri?code=..&state=..``.
          */
         post: operations["approve_consent_api_v1_mcp_oauth_consent_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/oauth/consent/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Consent Context
+         * @description GET /api/v1/mcp/oauth/consent/context?state=... — display context for the
+         *     browser consent page (FAR-1476 slice 3).
+         *
+         *     ANONYMOUS / pre-auth by contract: the caller is the not-yet-signed-in
+         *     browser that just landed on the SPA consent route from the authorize 302,
+         *     so this route must NOT use ``require_feature`` / ``get_current_tenant_user``
+         *     (their plan resolution composes the authenticated ``get_current_user``
+         *     chain and would 401 before the handler ran). The org is resolved from the
+         *     pending consent row itself and ``mcp_server`` is enforced against it —
+         *     the ``_oauth_authorize`` pattern.
+         *
+         *     Returns the canonical scope keys stored by the authorize leg (already
+         *     canonicalised + ceiling-intersected), the client's display name, and its
+         *     team boundary when set. Unknown / expired / consumed states are a single
+         *     404 that does not leak whether a client exists. Nothing beyond the display
+         *     context is returned — never the redirect_uri, secrets, or org internals.
+         */
+        get: operations["consent_context_api_v1_mcp_oauth_consent_context_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8146,6 +8185,31 @@ export interface paths {
         get: operations["get_unread_api_v1_notifications_in_app_unread_count_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/notifications/in-app/mark-all-read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark All Read Endpoint
+         * @description Mark every live notification in the caller's view as read (FAR-249).
+         *
+         *     Authz parity with the list/read routes: ``require_permission('notification.self')``
+         *     plus the same RLS org/user context. The write is strictly per-user — the
+         *     CRUD files ``dismiss_scope='self'`` rows for the calling account only, so
+         *     one user's mark-all-read never touches a sibling's unread state.
+         */
+        post: operations["mark_all_read_endpoint_api_v1_notifications_in_app_mark_all_read_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11841,6 +11905,8 @@ export interface components {
         ConsentApproveRequest: {
             /** State */
             state: string;
+            /** Granted Scopes */
+            granted_scopes?: string[] | null;
         };
         /** ConsentApproveResponse */
         ConsentApproveResponse: {
@@ -14838,6 +14904,13 @@ export interface components {
         ManualPurgeRequest: {
             /** Older Than */
             older_than: string;
+        };
+        /** MarkAllReadResponse */
+        MarkAllReadResponse: {
+            /** Status */
+            status: string;
+            /** Marked */
+            marked: number;
         };
         /** McpConfigResponse */
         McpConfigResponse: {
@@ -34700,6 +34773,38 @@ export interface operations {
             };
         };
     };
+    consent_context_api_v1_mcp_oauth_consent_context_get: {
+        parameters: {
+            query: {
+                state: string;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     complete_model_backend_setup_api_v1_model_backends__backend_id__complete_setup_post: {
         parameters: {
             query?: {
@@ -38698,6 +38803,7 @@ export interface operations {
     get_dashboard_api_v1_notifications_in_app_dashboard_get: {
         parameters: {
             query?: {
+                limit?: number;
                 _fresh?: boolean;
             };
             header?: never;
@@ -38755,6 +38861,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    mark_all_read_endpoint_api_v1_notifications_in_app_mark_all_read_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

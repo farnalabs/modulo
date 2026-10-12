@@ -39,7 +39,7 @@ from modulo.db.crud.pipeline import (
     ManualNodeOutputSchemaError,
     create_pipeline,
     enforce_manual_node_output_schemas,
-    reject_declared_policy_gates,
+    strip_declared_policy_gates,
 )
 from modulo.db.crud.pipeline_owner import validate_accountability_owner
 from modulo.db.crud.schema import create_schema, create_schema_version
@@ -1438,11 +1438,20 @@ async def _materialize_pipeline_and_edges(
         schema_id_map,
         ctx.overrides.connector_instances,
     )
-    # FAR-1109: import writes ``graph_nodes_json`` directly and does NOT run the
-    # graph-write policy-gate translation, so a bundle declaring a
-    # ``policy_gate`` block must fail loudly rather than import silently
-    # unenforced.
-    reject_declared_policy_gates(graph_nodes, surface="Pipeline import")
+
+    # FAR-1666: an imported pipeline cannot carry gate rows — the bundle
+    # exports no ``policy_gates`` section and evals are not imported, so a
+    # declared block would persist INERT (governing nothing) or reference a
+    # foreign eval. Strip the blocks through the shared helper, consistent with
+    # the module's credential-stripping, and disclose it in the import warnings.
+    graph_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_nodes)
+    if dropped_policy_gates:
+        warning = (
+            f"{len(dropped_policy_gates)} policy_gate declaration(s) were removed on import "
+            f"(evals and gates are not part of a bundle): {'; '.join(dropped_policy_gates)}."
+        )
+        ctx.warnings.append(warning)
+        logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
 
     pipeline = await _create_imported_pipeline(
         ctx,
@@ -1962,42 +1971,17 @@ def _apply_agent_references(
         agent_args["model_backend_id"] = _safe_uuid(resolved_mb_id, "agent.model_backend_id")
 
 
-async def _apply_agent_bindings(
+async def _resolve_agent_ids(
     ctx: _ImportContext,
-    agent: Agent,
-    ad: dict[str, Any],
-    backends_by_name: dict[str, ModelBackend],
-    warnings: list[str],
-    *,
-    bundle_model_backends: list[dict[str, Any]] | None = None,
-) -> None:
-    """Rebind the bundle's runner bindings onto the freshly imported agent.
+    binding_payloads: list[Any],
+    export_id_by_name: dict[str, str],
+) -> dict[uuid.UUID, ModelBackend]:
+    """Load org model backends for every id-resolvable binding candidate.
 
-    Backend resolution order per binding (FAR-592 qa F9):
-    ``ctx.overrides.model_backends`` (the operator's per-backend override,
-    keyed by the BUNDLE's model-backend export id looked up by the binding's
-    backend name) -> a stamped ``_resolved_model_backend_id`` on the payload
-    (honoured when an upstream resolver set it) -> the org backend by NAME.
-    Unresolvable, malformed, or validator-rejected bindings are OMITTED with
-    a warning — never raised as an import-crashing error.
+    One RLS-scoped query for every id-resolved candidate (overrides + stamped
+    ids) so the resolution chain can consult org rows directly.
     """
-    export_id_by_name = {
-        str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)
-    }
-
-    def _id_backend(candidate: Any) -> ModelBackend | None:
-        if candidate is None:
-            return None
-        try:
-            cand_uuid = uuid.UUID(str(candidate))
-        except ValueError:
-            return None
-        return org_backends_by_id.get(cand_uuid)
-
-    # One RLS-scoped query for every id-resolved candidate (overrides +
-    # stamped ids) so the chain above can consult org rows directly.
     resolved_ids: set[uuid.UUID] = set()
-    binding_payloads = list(ad.get("model_backend_bindings", []))
     for binding_payload in binding_payloads:
         if not isinstance(binding_payload, dict):
             continue
@@ -2007,87 +1991,173 @@ async def _apply_agent_bindings(
         for candidate in (override_id, binding_payload.get("_resolved_model_backend_id")):
             with contextlib.suppress(ValueError):
                 resolved_ids.add(uuid.UUID(str(candidate)))
-    org_backends_by_id: dict[uuid.UUID, ModelBackend] = {}
-    if resolved_ids:
-        id_rows = await ctx.session.execute(
-            select(ModelBackend).where(
-                ModelBackend.organisation_id == ctx.org_id,
-                ModelBackend.id.in_(resolved_ids),
-            )
+    if not resolved_ids:
+        return {}
+    id_rows = await ctx.session.execute(
+        select(ModelBackend).where(
+            ModelBackend.organisation_id == ctx.org_id,
+            ModelBackend.id.in_(resolved_ids),
         )
-        org_backends_by_id = {row.id: row for row in id_rows.scalars()}
+    )
+    return {row.id: row for row in id_rows.scalars()}
 
+
+def _id_backend(
+    candidate: Any,
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+) -> ModelBackend | None:
+    """Resolve a candidate value to an org backend by id, or None."""
+    if candidate is None:
+        return None
+    try:
+        cand_uuid = uuid.UUID(str(candidate))
+    except ValueError:
+        return None
+    return org_backends_by_id.get(cand_uuid)
+
+
+def _resolve_binding_spec(
+    ctx: _ImportContext,
+    agent_name: str,
+    binding_payload: Any,
+    export_id_by_name: dict[str, str],
+    backends_by_name: dict[str, ModelBackend],
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+    warnings: list[str],
+) -> dict[str, Any] | None:
+    """Resolve one binding payload to a validated persistence spec, or None.
+
+    Backend resolution order per binding (FAR-592 qa F9):
+    ``ctx.overrides.model_backends`` (the operator's per-backend override,
+    keyed by the BUNDLE's model-backend export id looked up by the binding's
+    backend name) -> a stamped ``_resolved_model_backend_id`` on the payload
+    (honoured when an upstream resolver set it) -> the org backend by NAME.
+    Unresolvable, malformed, or validator-rejected bindings are OMITTED with
+    a warning — never raised as an import-crashing error.
+    """
+    if not isinstance(binding_payload, dict):
+        warnings.append(f"Agent '{agent_name}' has a malformed runner-binding spec (not an object); omitted.")
+        return None
+    # Malformed bundle specs (missing keys) warn + omit — a bare KeyError
+    # would crash the whole import with a 500.
+    try:
+        bname = str(binding_payload["model_backend_name"])
+        raw_target = str(binding_payload["target_env_var"])
+        raw_source = str(binding_payload["source_field"])
+    except KeyError as exc:
+        warnings.append(f"Agent '{agent_name}' runner binding is missing key '{exc}'; the binding will be omitted.")
+        return None
+
+    try:
+        export_id = export_id_by_name.get(bname, "")
+        override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
+        backend = (
+            _id_backend(override_id, org_backends_by_id)
+            or _id_backend(binding_payload.get("_resolved_model_backend_id"), org_backends_by_id)
+            or backends_by_name.get(bname)
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        warnings.append(
+            f"Agent '{agent_name}' binding to model backend '{bname}' "
+            f"could not be resolved ({exc}); the binding will be omitted."
+        )
+        return None
+    if backend is None:
+        warnings.append(
+            f"Agent '{agent_name}' binding to model backend "
+            f"'{bname}' did not resolve "
+            "(overrides, stamped id, or name all missed); the binding will be omitted."
+        )
+        return None
+    try:
+        target, source = validate_binding_pair(
+            target_env_var=raw_target,
+            source_field=raw_source,
+            provider=backend.provider,
+        )
+    except BindingValidationError as exc:
+        warnings.append(f"Agent '{agent_name}' runner binding rejected at import ({exc}); the binding will be omitted.")
+        return None
+    # The CANONICAL pair from the validator is what persists — the raw
+    # payload spelling is never written through untouched.
+    return {
+        "_backend_id": backend.id,
+        "_account_id": ctx.created_by,
+        "target_env_var": target,
+        "source_field": source,
+    }
+
+
+def _build_binding_specs(
+    ctx: _ImportContext,
+    agent_name: str,
+    binding_payloads: list[Any],
+    export_id_by_name: dict[str, str],
+    backends_by_name: dict[str, ModelBackend],
+    org_backends_by_id: dict[uuid.UUID, ModelBackend],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    """Resolve every binding payload to a validated persistence spec."""
     specs: list[dict[str, Any]] = []
     for binding_payload in binding_payloads:
-        if not isinstance(binding_payload, dict):
-            warnings.append(f"Agent '{agent.name}' has a malformed runner-binding spec (not an object); omitted.")
-            continue
-        # Malformed bundle specs (missing keys) warn + omit — a bare KeyError
-        # would crash the whole import with a 500.
-        try:
-            bname = str(binding_payload["model_backend_name"])
-            raw_target = str(binding_payload["target_env_var"])
-            raw_source = str(binding_payload["source_field"])
-        except KeyError as exc:
-            warnings.append(f"Agent '{agent.name}' runner binding is missing key '{exc}'; the binding will be omitted.")
-            continue
-
-        try:
-            export_id = export_id_by_name.get(bname, "")
-            override_id = ctx.overrides.model_backends.get(export_id) if export_id else None
-            backend = (
-                _id_backend(override_id)
-                or _id_backend(binding_payload.get("_resolved_model_backend_id"))
-                or backends_by_name.get(bname)
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            warnings.append(
-                f"Agent '{agent.name}' binding to model backend '{bname}' "
-                f"could not be resolved ({exc}); the binding will be omitted."
-            )
-            continue
-        if backend is None:
-            warnings.append(
-                f"Agent '{agent.name}' binding to model backend "
-                f"'{bname}' did not resolve "
-                "(overrides, stamped id, or name all missed); the binding will be omitted."
-            )
-            continue
-        try:
-            target, source = validate_binding_pair(
-                target_env_var=raw_target,
-                source_field=raw_source,
-                provider=backend.provider,
-            )
-        except BindingValidationError as exc:
-            warnings.append(
-                f"Agent '{agent.name}' runner binding rejected at import ({exc}); the binding will be omitted."
-            )
-            continue
-        # The CANONICAL pair from the validator is what persists — the raw
-        # payload spelling is never written through untouched.
-        specs.append(
-            {
-                "_backend_id": backend.id,
-                "_account_id": ctx.created_by,
-                "target_env_var": target,
-                "source_field": source,
-            }
+        spec = _resolve_binding_spec(
+            ctx,
+            agent_name,
+            binding_payload,
+            export_id_by_name,
+            backends_by_name,
+            org_backends_by_id,
+            warnings,
         )
-    if specs:
-        try:
-            await replace_agent_bindings(
-                ctx.session,
-                org_id=ctx.org_id,
-                agent_id=agent.id,
-                bindings_specs=specs,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            warnings.append(f"Agent '{agent.name}' runner bindings were not imported: {exc}.")
+        if spec is not None:
+            specs.append(spec)
+    return specs
+
+
+async def _persist_bindings(
+    ctx: _ImportContext,
+    agent_name: str,
+    agent_id: uuid.UUID,
+    specs: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    """Replace the agent's runner bindings with the resolved specs."""
+    if not specs:
+        return
+    try:
+        await replace_agent_bindings(
+            ctx.session,
+            org_id=ctx.org_id,
+            agent_id=agent_id,
+            bindings_specs=specs,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        warnings.append(f"Agent '{agent_name}' runner bindings were not imported: {exc}.")
+
+
+async def _apply_agent_bindings(
+    ctx: _ImportContext,
+    agent: Agent,
+    ad: dict[str, Any],
+    backends_by_name: dict[str, ModelBackend],
+    warnings: list[str],
+    *,
+    bundle_model_backends: list[dict[str, Any]] | None = None,
+) -> None:
+    """Rebind the bundle's runner bindings onto the freshly imported agent."""
+    export_id_by_name = {
+        str(mb.get("name", "")): str(mb.get("id", "")) for mb in (bundle_model_backends or []) if isinstance(mb, dict)
+    }
+    binding_payloads = list(ad.get("model_backend_bindings", []))
+    org_backends_by_id = await _resolve_agent_ids(ctx, binding_payloads, export_id_by_name)
+    specs = _build_binding_specs(
+        ctx, agent.name, binding_payloads, export_id_by_name, backends_by_name, org_backends_by_id, warnings
+    )
+    await _persist_bindings(ctx, agent.name, agent.id, specs, warnings)
 
 
 async def _create_agent_with_retry(

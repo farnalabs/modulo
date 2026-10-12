@@ -25,6 +25,7 @@ from modulo.core.events.event_bus import get_event_bus
 from modulo.core.notifier.event_mapper import notification_categories
 from modulo.db.crud.account import AccountNotFoundError, get_account_by_id, update_account_preferences
 from modulo.db.crud.notifications import (
+    DASHBOARD_LIMIT_MAX,
     LinkedRunState,
     count_notifications_for_user,
     dismiss_notification,
@@ -34,6 +35,7 @@ from modulo.db.crud.notifications import (
     get_notifications_for_user,
     get_opted_out_categories,
     get_unread_count,
+    mark_all_read_for_user,
     review_later,
     set_notification_preferences,
 )
@@ -45,6 +47,7 @@ _CODE_APP_NOTIFICATIONS_GET_DASHBOARD = "in_app_notifications.get_dashboard"
 _MSG_DATA_CONFLICT_OCCURRED = "A data conflict occurred."
 _MSG_DATABASE_ERROR_OCCURRED = "A database error occurred."
 _CODE_APP_NOTIFICATIONS_GET_UNREAD = "in_app_notifications.get_unread"
+_CODE_APP_NOTIFICATIONS_MARK_ALL_READ = "in_app_notifications.mark_all_read"
 _CODE_APP_NOTIFICATIONS_LIST_NOTIFICATIONS = "in_app_notifications.list_notifications"
 _CODE_APP_NOTIFICATIONS_GET_NOTIFICATION = "in_app_notifications.get_notification_detail"
 _CODE_APP_NOTIFICATIONS_REVIEW_LATER = "in_app_notifications.review_later_endpoint"
@@ -109,6 +112,11 @@ class PaginatedNotificationsResponse(BaseModel):
     page_size: int
 
 
+class MarkAllReadResponse(BaseModel):
+    status: str
+    marked: int
+
+
 SCOPE_LABELS: dict[str, str] = {
     "user": "Personal",
     "org": "Org-wide",
@@ -171,6 +179,7 @@ def _responses(
 async def get_dashboard(
     session: AsyncSession = Depends(get_db_session),
     principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+    limit: int = Query(5, ge=1, le=DASHBOARD_LIMIT_MAX),
 ) -> DashboardNotificationResponse:
     try:
         async with session.begin():
@@ -182,7 +191,7 @@ async def get_dashboard(
                 org_id=principal.organisation_id,
                 user_id=principal.account_id,
                 min_level=min_level,
-                limit=5,
+                limit=limit,
             )
             run_states = await get_linked_run_states(
                 session=session,
@@ -252,6 +261,73 @@ async def get_unread(
             detail=_MSG_DATABASE_ERROR_OCCURRED,
         ) from None
     return {"count": count}
+
+
+@router.post(
+    "/mark-all-read",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(
+            audited("in_app_notifications_marked_read", "in_app_notification", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
+@handle_db_errors(_CODE_APP_NOTIFICATIONS_MARK_ALL_READ)
+async def mark_all_read_endpoint(
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_NOTIFICATION_SELF),
+) -> MarkAllReadResponse:
+    """Mark every live notification in the caller's view as read (FAR-249).
+
+    Authz parity with the list/read routes: ``require_permission('notification.self')``
+    plus the same RLS org/user context. The write is strictly per-user — the
+    CRUD files ``dismiss_scope='self'`` rows for the calling account only, so
+    one user's mark-all-read never touches a sibling's unread state.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            await set_rls_user_context(session, principal.account_id, principal.org_role)
+            try:
+                marked = await mark_all_read_for_user(
+                    session=session,
+                    org_id=principal.organisation_id,
+                    user_id=principal.account_id,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ProgrammingError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_MARK_ALL_READ)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except IntegrityError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_MARK_ALL_READ)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=_MSG_DATA_CONFLICT_OCCURRED,
+        ) from None
+    except SQLAlchemyError:
+        _log.exception(_CODE_APP_NOTIFICATIONS_MARK_ALL_READ)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=_MSG_DATABASE_ERROR_OCCURRED,
+        ) from None
+
+    try:
+        event_bus = get_event_bus()
+        await event_bus.publish(
+            org_id=str(principal.organisation_id),
+            resource_type="notification",
+            resource_id=str(principal.account_id),
+            action="marked_read_all",
+            version=1,
+        )
+    except Exception:
+        _log.warning("mark_all_read_endpoint.publish_failed", exc_info=True)
+
+    return MarkAllReadResponse(status="marked_read", marked=marked)
 
 
 @router.get("")

@@ -64,6 +64,13 @@ export default {
       "approve": "Approve",
       "approving": "Approving...",
       "approved_redirecting": "Approved — redirecting to the application...",
+      "team_limited": "This connection is limited to team {name}.",
+      "loading_request": "Loading request details...",
+      "context_load_error": "Could not load this authorization request. It may have expired — return to the application and try again.",
+      "no_scopes_selected": "Select at least one permission to approve, or decline the request.",
+      "decline": "Decline",
+      "declined_title": "Request declined",
+      "declined_description": "You declined this authorization request. You can close this window and return to the application."
     },
     "LibraryView": {
       "title": "Library",
@@ -4251,7 +4258,19 @@ export default {
     "NotificationBell": {
       "notifications": "Notifications",
       "reconnect_banner": "Live updates stopped. Reconnect with a fresh sign-in to resume them.",
-      "reconnect_action": "Reconnect"
+      "reconnect_action": "Reconnect",
+      "unread_count_status": "{count} unread notifications"
+    },
+    "NotificationDropdown": {
+      "title": "Notifications",
+      "mark_all_read": "Mark all as read",
+      "marking_all_read": "Marking…",
+      "marked_all_read_status": "All notifications marked as read",
+      "failed_to_mark_all_read": "Failed to mark all as read",
+      "failed_to_load": "Couldn't load notifications",
+      "retry": "Retry",
+      "no_notifications": "No notifications",
+      "view_all": "View all notifications"
     },
     "PageTabs": {
       "section_navigation": "Section navigation"

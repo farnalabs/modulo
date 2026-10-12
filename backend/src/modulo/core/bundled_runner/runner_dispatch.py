@@ -64,7 +64,7 @@ from modulo.core.runtime_provider.hub import RuntimeProviderHub
 from modulo.util import validate_workspace_network
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 
 _log = logging.getLogger(__name__)
@@ -2035,6 +2035,30 @@ async def _maybe_start_loop_bridge(
         return None
 
 
+async def _teardown_one_resource(
+    res: Awaitable[Any],
+    *,
+    log_event: str,
+    timeout_seconds: float | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Run one best-effort teardown step: log-and-continue on failure.
+
+    ``asyncio.CancelledError`` is re-raised — a teardown ladder must never
+    swallow a cancellation. Any other failure is logged under ``log_event``
+    (with ``extra`` merged into the record) and swallowed, so the remaining
+    steps still run. ``timeout_seconds`` bounds the step via
+    ``asyncio.wait_for``; ``None`` awaits unbounded (matching a plain
+    ``await``).
+    """
+    try:
+        await asyncio.wait_for(res, timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(log_event, extra=extra)
+
+
 async def _teardown_and_clear(
     *,
     route: RunnerDispatchRoute,
@@ -2051,48 +2075,40 @@ async def _teardown_and_clear(
     if provider is not None:
         refs = list(getattr(provider, "_workspaces", {}).keys())
         for ref in refs:
-            try:
-                await asyncio.wait_for(provider.destroy_workspace(ref), timeout=_DESTROY_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("runner_dispatch.workspace_destroy_failed", extra={"ref": ref})
+            await _teardown_one_resource(
+                provider.destroy_workspace(ref),
+                log_event="runner_dispatch.workspace_destroy_failed",
+                timeout_seconds=_DESTROY_TIMEOUT,
+                extra={"ref": ref},
+            )
         if refs:
-            try:
-                await asyncio.wait_for(provider.close(), timeout=_PROVIDER_ACLOSE_TIMEOUT)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                _log.exception("runner_dispatch.provider_close_failed")
+            await _teardown_one_resource(
+                provider.close(),
+                log_event="runner_dispatch.provider_close_failed",
+                timeout_seconds=_PROVIDER_ACLOSE_TIMEOUT,
+            )
     if hub is not None:
-        try:
-            await asyncio.wait_for(hub.aclose(), timeout=_PROVIDER_ACLOSE_TIMEOUT)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("runner_dispatch.hub_aclose_failed")
+        await _teardown_one_resource(
+            hub.aclose(),
+            log_event="runner_dispatch.hub_aclose_failed",
+            timeout_seconds=_PROVIDER_ACLOSE_TIMEOUT,
+        )
     bridge_server = state.get("_loop_intercept_bridge_server")
     if bridge_server is not None:
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(bridge_server.close()),
-                timeout=_LOOP_BRIDGE_CLOSE_TIMEOUT,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("runner_dispatch.loop_intercept_teardown_failed")
+        await _teardown_one_resource(
+            asyncio.shield(bridge_server.close()),
+            log_event="runner_dispatch.loop_intercept_teardown_failed",
+            timeout_seconds=_LOOP_BRIDGE_CLOSE_TIMEOUT,
+        )
     if dispatch_marker_set:
         from modulo.core.pipeline_engine.node_runner import _sandbox_clear_dispatch_marker
 
-        try:
-            await _sandbox_clear_dispatch_marker(
+        await _teardown_one_resource(
+            _sandbox_clear_dispatch_marker(
                 session_factory=session_factory,
                 claim_lease=state.get("_claim_lease"),
                 org_id=org_id,
                 run_id=run_id,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception("runner_dispatch.dispatch_marker_clear_failed")
+            ),
+            log_event="runner_dispatch.dispatch_marker_clear_failed",
+        )

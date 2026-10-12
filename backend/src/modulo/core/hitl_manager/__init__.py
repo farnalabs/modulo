@@ -31,7 +31,7 @@ import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from jwt import ExpiredSignatureError
 from jwt import InvalidTokenError as JWTError
@@ -356,69 +356,31 @@ class HITLManager:
         gate_check = await self._get(session, run_id=run_id, review_id=review_id, org_id=org_id)
         if gate_check is None:
             raise GateNotFoundError(run_id, review_id)
-        if gate_check.decision is not None:
-            raise GateAlreadyDecidedError(run_id, review_id)
         # Same-account re-claim (FAR-686): a reviewer who reloaded the page
         # lost their claim token (it lives only in frontend state). Allow the
         # SAME account to re-claim (re-issuing a fresh token); raise only when
         # ANOTHER account holds the claim.
-        if gate_check.account_id is not None and gate_check.account_id != claimant_id:
-            raise AlreadyClaimedError(run_id, review_id)
+        same_account_reclaim = self._validate_claimable(gate_check, claimant_id)
         # FAR-612: the run itself must be waiting for a human (or parked on a
-        # human decision). An undecided gate on any other status is data rot
-        # (e.g. orphaned rows left by the since-fixed auto-approve bug) --
-        # claiming it would flip a terminal run to "claimed" via the route's
-        # update_run_status. ``hitl_parked`` is deliberately INCLUDED: per
-        # FAR-604 D2 a parked run's gate stays OPEN AND CLAIMABLE (park !=
-        # decide) until a decision un-parks it, so a parked run must remain
-        # claimable. Org-scoped so a foreign run id can never be probed
-        # through this check.
-        # FAR-686: a same-account re-claim targets a run the claim itself
-        # flipped to "claimed" (the claim route's update_run_status), so the
-        # strict awaiting_human/hitl_parked guard would make token recovery
-        # impossible during the claimed-but-undecided window. ``claimed`` is
-        # accepted ONLY for the SAME-account re-claim arm; fresh and
-        # cross-account claims keep the FAR-612 data-rot guard as shipped.
-        run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
-        run = run_result.scalar_one_or_none()
-        if run is None:
-            raise GateNotFoundError(run_id, review_id)
-        # FAR-645: the fresh/cross-account set is single-sourced on
-        # HITL_CLAIMABLE_RUN_STATUSES -- the same set the atomic UPDATE's
-        # EXISTS predicate below enforces, so the pre-check cannot drift from
-        # the atomic guard.
-        allowed_statuses: frozenset[str] = HITL_CLAIMABLE_RUN_STATUSES
-        if gate_check.account_id == claimant_id:
-            allowed_statuses = HITL_CLAIMABLE_RUN_STATUSES | {"claimed"}
-        if run.status not in allowed_statuses:
-            raise RunNotAwaitingError(run_id, run.status)
-        if gate_check.required_team_id is not None:
-            # Lock the gate row so the team check is serialised with the UPDATE.
-            locked_result = await session.execute(
-                select(HitlClaim).where(HitlClaim.id == gate_check.id).with_for_update()
-            )
-            locked_gate = locked_result.scalar_one_or_none()
-            if locked_gate is None:
-                raise GateNotFoundError(run_id, review_id)
-            if locked_gate.decision is not None:
-                raise GateAlreadyDecidedError(run_id, review_id)
-            if locked_gate.account_id is not None and locked_gate.account_id != claimant_id:
-                raise AlreadyClaimedError(run_id, review_id)
-            tm_result = await session.execute(
-                select(TeamMembership).where(
-                    TeamMembership.team_id == gate_check.required_team_id,
-                    TeamMembership.account_id == claimant_id,
-                    TeamMembership.organisation_id == org_id,
-                    TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
-                )
-            )
-            if tm_result.scalar_one_or_none() is None:
-                raise NotTeamMemberError(
-                    run_id=run_id,
-                    review_id=review_id,
-                    team_id=gate_check.required_team_id,
-                    user_id=claimant_id,
-                )
+        # human decision); the status guard and its FAR-645/FAR-686 arms live
+        # in _load_run_for_gate.
+        await self._load_run_for_gate(
+            session,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=org_id,
+            same_account_reclaim=same_account_reclaim,
+        )
+        # FAR-612/FAR-602 team-scope: lock the gate row, re-check its
+        # decision/claim state under the lock, then verify team membership.
+        await self._assert_team_member_for_claim(
+            session,
+            gate_check=gate_check,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=org_id,
+            claimant_id=claimant_id,
+        )
 
         # Generate token — JWT if we have a secret_key, else opaque
         if self._secret_key:
@@ -478,39 +440,10 @@ class HITLManager:
         result = await session.execute(stmt)
         claimed_id = result.scalar_one_or_none()
         if claimed_id is None:
-            # The UPDATE matched no row. Either another operator claimed the
-            # gate between our pre-check and this write (AlreadyClaimedError),
-            # the gate was DECIDED in the same window
-            # (GateAlreadyDecidedError), or the run went terminal in the same
-            # window and the run-status EXISTS predicate refused the claim
-            # (RunNotAwaitingError, FAR-645). Re-read the run and the gate so
-            # the raised error names the actual cause instead of a generic
-            # already-claimed.
-            race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
-            race_run = race_run_result.scalar_one_or_none()
-            # "claimed" needs no RunNotAwaitingError: it is the same-account
-            # re-claim's own window status (FAR-686) or another operator's
-            # fresh claim — either way the accurate cause is the gate's
-            # account/decision state, re-read below.
-            if (
-                race_run is not None
-                and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES
-                and race_run.status != "claimed"
-            ):
-                raise RunNotAwaitingError(run_id, race_run.status)
-            race_gate_result = await session.execute(
-                select(HitlClaim).where(
-                    HitlClaim.run_id == run_id,
-                    HitlClaim.review_id == review_id,
-                    HitlClaim.organisation_id == org_id,
-                )
-            )
-            race_gate = race_gate_result.scalar_one_or_none()
-            if race_gate is None:
-                raise GateNotFoundError(run_id, review_id)
-            if race_gate.decision is not None:
-                raise GateAlreadyDecidedError(run_id, review_id)
-            raise AlreadyClaimedError(run_id, review_id)
+            # The UPDATE matched no row — a concurrent claim/decision/run-
+            # terminal race. Re-read the run and the gate and raise the error
+            # naming the actual cause (see _raise_claim_race_error).
+            await self._raise_claim_race_error(session, run_id=run_id, review_id=review_id, org_id=org_id)
 
         gate = await session.get(HitlClaim, claimed_id, populate_existing=True)
         if gate is None:
@@ -518,29 +451,18 @@ class HITLManager:
 
         # Re-verify team membership — the check above ran before the atomic
         # UPDATE, creating a TOCTOU window where the user could have been
-        # removed from the team.  If they're no longer a member, undo the
-        # claim and raise.
-        if gate_check is not None and gate_check.required_team_id is not None:
-            tm_still = await session.execute(
-                select(TeamMembership).where(
-                    TeamMembership.team_id == gate_check.required_team_id,
-                    TeamMembership.account_id == claimant_id,
-                    TeamMembership.organisation_id == org_id,
-                    TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
-                )
-            )
-            if tm_still.scalar_one_or_none() is None:
-                await session.execute(
-                    update(HitlClaim)
-                    .where(HitlClaim.id == claimed_id)
-                    .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
-                )
-                raise NotTeamMemberError(
-                    run_id=run_id,
-                    review_id=review_id,
-                    team_id=gate_check.required_team_id,
-                    user_id=claimant_id,
-                )
+        # removed from the team.  If they're no longer a member, the helper
+        # undoes the claim and raises.
+        await self._revert_claim_if_membership_lost(
+            session,
+            gate_check=gate_check,
+            claimed_id=claimed_id,
+            run_id=run_id,
+            review_id=review_id,
+            org_id=org_id,
+            claimant_id=claimant_id,
+            now=now,
+        )
 
         # PRD §8.12 ``hitl_claimed``: the claim acquisition itself was never
         # audited — only the later ``hitl.claim_expired``/decision events were.
@@ -575,6 +497,199 @@ class HITLManager:
             )
 
         return gate
+
+    # ------------------------------------------------------------------
+    # Claim helpers (S3776 split — claim() orchestrates these)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_claimable(gate_check: HitlClaim, claimant_id: uuid.UUID) -> bool:
+        """Raise unless ``gate_check`` is still claimable by ``claimant_id``.
+
+        Enforces the gate-side preconditions of a claim: no decision yet, and
+        no OTHER account holding the claim. Returns ``True`` when the claimant
+        already holds the gate (same-account re-claim, FAR-686) and ``False``
+        when the gate is unclaimed. ``gate_check.run_id``/``review_id`` are the
+        keys the caller fetched the row by, so the raised errors carry the same
+        identifiers as before.
+        """
+        if gate_check.decision is not None:
+            raise GateAlreadyDecidedError(gate_check.run_id, gate_check.review_id)
+        # Same-account re-claim (FAR-686): raise only when ANOTHER account
+        # holds the claim.
+        if gate_check.account_id is not None and gate_check.account_id != claimant_id:
+            raise AlreadyClaimedError(gate_check.run_id, gate_check.review_id)
+        return gate_check.account_id == claimant_id
+
+    async def _load_run_for_gate(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+        same_account_reclaim: bool,
+    ) -> None:
+        """Load the run behind a HITL gate and enforce the claimable-status guard.
+
+        FAR-612: the run itself must be waiting for a human (or parked on a
+        human decision). An undecided gate on any other status is data rot
+        (e.g. orphaned rows left by the since-fixed auto-approve bug) --
+        claiming it would flip a terminal run to "claimed" via the route's
+        update_run_status. ``hitl_parked`` is deliberately INCLUDED: per
+        FAR-604 D2 a parked run's gate stays OPEN AND CLAIMABLE (park !=
+        decide) until a decision un-parks it, so a parked run must remain
+        claimable. Org-scoped so a foreign run id can never be probed
+        through this check.
+
+        FAR-686: a same-account re-claim targets a run the claim itself
+        flipped to "claimed" (the claim route's update_run_status), so the
+        strict awaiting_human/hitl_parked guard would make token recovery
+        impossible during the claimed-but-undecided window. ``claimed`` is
+        accepted ONLY for the SAME-account re-claim arm; fresh and
+        cross-account claims keep the FAR-612 data-rot guard as shipped.
+        """
+        run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
+        run = run_result.scalar_one_or_none()
+        if run is None:
+            raise GateNotFoundError(run_id, review_id)
+        # FAR-645: the fresh/cross-account set is single-sourced on
+        # HITL_CLAIMABLE_RUN_STATUSES -- the same set the atomic UPDATE's
+        # EXISTS predicate enforces, so the pre-check cannot drift from
+        # the atomic guard.
+        allowed_statuses: frozenset[str] = HITL_CLAIMABLE_RUN_STATUSES
+        if same_account_reclaim:
+            allowed_statuses = HITL_CLAIMABLE_RUN_STATUSES | {"claimed"}
+        if run.status not in allowed_statuses:
+            raise RunNotAwaitingError(run_id, run.status)
+
+    async def _assert_team_member_for_claim(
+        self,
+        session: AsyncSession,
+        *,
+        gate_check: HitlClaim,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+        claimant_id: uuid.UUID,
+    ) -> None:
+        """Team-scoped claim pre-check: lock the gate row, then check membership.
+
+        For a gate with ``required_team_id``, locks the gate row (``FOR
+        UPDATE``) so the team check is serialised with the claim UPDATE,
+        re-checks decision/claim state under the lock (it may have changed
+        since the fast pre-check), and verifies the claimant holds a
+        ``runner``/``operator`` membership of the required team. No-op for
+        org-scoped gates.
+        """
+        if gate_check.required_team_id is None:
+            return
+        # Lock the gate row so the team check is serialised with the UPDATE.
+        locked_result = await session.execute(select(HitlClaim).where(HitlClaim.id == gate_check.id).with_for_update())
+        locked_gate = locked_result.scalar_one_or_none()
+        if locked_gate is None:
+            raise GateNotFoundError(run_id, review_id)
+        if locked_gate.decision is not None:
+            raise GateAlreadyDecidedError(run_id, review_id)
+        if locked_gate.account_id is not None and locked_gate.account_id != claimant_id:
+            raise AlreadyClaimedError(run_id, review_id)
+        tm_result = await session.execute(
+            select(TeamMembership).where(
+                TeamMembership.team_id == gate_check.required_team_id,
+                TeamMembership.account_id == claimant_id,
+                TeamMembership.organisation_id == org_id,
+                TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
+            )
+        )
+        if tm_result.scalar_one_or_none() is None:
+            raise NotTeamMemberError(
+                run_id=run_id,
+                review_id=review_id,
+                team_id=gate_check.required_team_id,
+                user_id=claimant_id,
+            )
+
+    async def _raise_claim_race_error(
+        self,
+        session: AsyncSession,
+        *,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+    ) -> NoReturn:
+        """The claim UPDATE matched no row — re-read run + gate, raise the real cause.
+
+        Either another operator claimed the gate between the pre-check and the
+        write (AlreadyClaimedError), the gate was DECIDED in the same window
+        (GateAlreadyDecidedError), or the run went terminal in the same window
+        and the run-status EXISTS predicate refused the claim
+        (RunNotAwaitingError, FAR-645). Re-read the run and the gate so the
+        raised error names the actual cause instead of a generic
+        already-claimed.
+        """
+        race_run_result = await session.execute(select(Run).where(Run.id == run_id, Run.organisation_id == org_id))
+        race_run = race_run_result.scalar_one_or_none()
+        # "claimed" needs no RunNotAwaitingError: it is the same-account
+        # re-claim's own window status (FAR-686) or another operator's fresh
+        # claim — either way the accurate cause is the gate's account/decision
+        # state, re-read below.
+        if race_run is not None and race_run.status not in HITL_CLAIMABLE_RUN_STATUSES and race_run.status != "claimed":
+            raise RunNotAwaitingError(run_id, race_run.status)
+        race_gate_result = await session.execute(
+            select(HitlClaim).where(
+                HitlClaim.run_id == run_id,
+                HitlClaim.review_id == review_id,
+                HitlClaim.organisation_id == org_id,
+            )
+        )
+        race_gate = race_gate_result.scalar_one_or_none()
+        if race_gate is None:
+            raise GateNotFoundError(run_id, review_id)
+        if race_gate.decision is not None:
+            raise GateAlreadyDecidedError(run_id, review_id)
+        raise AlreadyClaimedError(run_id, review_id)
+
+    async def _revert_claim_if_membership_lost(
+        self,
+        session: AsyncSession,
+        *,
+        gate_check: HitlClaim,
+        claimed_id: uuid.UUID,
+        run_id: uuid.UUID,
+        review_id: str,
+        org_id: uuid.UUID,
+        claimant_id: uuid.UUID,
+        now: datetime,
+    ) -> None:
+        """Re-verify team membership after the claim UPDATE; undo the claim if lost.
+
+        The pre-claim team check ran before the atomic UPDATE, creating a
+        TOCTOU window where the user could have been removed from the team.
+        If they're no longer a member, reset the claim row to unclaimed and
+        raise. No-op for org-scoped gates.
+        """
+        if gate_check.required_team_id is None:
+            return
+        tm_still = await session.execute(
+            select(TeamMembership).where(
+                TeamMembership.team_id == gate_check.required_team_id,
+                TeamMembership.account_id == claimant_id,
+                TeamMembership.organisation_id == org_id,
+                TeamMembership.role.in_(_TEAM_CLAIM_ROLES),
+            )
+        )
+        if tm_still.scalar_one_or_none() is None:
+            await session.execute(
+                update(HitlClaim)
+                .where(HitlClaim.id == claimed_id)
+                .values(account_id=None, claimed_at=None, claim_token=None, expires_at=now)
+            )
+            raise NotTeamMemberError(
+                run_id=run_id,
+                review_id=review_id,
+                team_id=gate_check.required_team_id,
+                user_id=claimant_id,
+            )
 
     # ------------------------------------------------------------------
     # Approve / Reject

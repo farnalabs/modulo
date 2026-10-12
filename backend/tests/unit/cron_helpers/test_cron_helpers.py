@@ -13,8 +13,8 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Generator
-from contextlib import ExitStack
+from collections.abc import Generator, Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
@@ -29,22 +29,22 @@ from sqlalchemy.pool import QueuePool
 from modulo.core import cron_helpers as ch
 from modulo.db.models.eval_suite_run import SuiteRun
 from modulo.db.sqlstates import sqlstate_of
+from tests.unit.cron_helpers._helpers import (
+    _Begin as _MockBegin,
+)
+from tests.unit.cron_helpers._helpers import (
+    _mock_result,
+    _org_result,
+    _patch_env,
+    _rows_result,
+    _settings,
+)
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
 TRIGGER_B = uuid.uuid4()
 TRIGGER_POLL = uuid.uuid4()
 REPORT = uuid.uuid4()
-
-_UNSET_REPORT = object()
-
-
-class _MockBegin:
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
 
 
 class _MockBeginNested(_MockBegin):
@@ -102,12 +102,6 @@ class _MockSession:
         return None
 
 
-def _org_result(org_ids: list[uuid.UUID]) -> MagicMock:
-    r = MagicMock()
-    r.scalars.return_value = org_ids
-    return r
-
-
 def _pause_result(org_id: uuid.UUID, paused: bool = False, status: str = "active") -> MagicMock:
     """Result for the org-wide pause batched read: (id, triggers_paused, status)."""
     r = MagicMock()
@@ -144,12 +138,6 @@ def _org_not_paused() -> Generator[None, None, None]:
     """
     with patch.object(ch, "org_is_paused", new_callable=AsyncMock, return_value=False):
         yield
-
-
-def _rows_result(rows: list[Any]) -> MagicMock:
-    r = MagicMock()
-    r.all.return_value = rows
-    return r
 
 
 def _cron_row(
@@ -195,23 +183,6 @@ def _report_row(report_id: uuid.UUID) -> SimpleNamespace:
     return SimpleNamespace(id=report_id, cron_expression="0 9 * * *")
 
 
-def _settings(**overrides: object) -> MagicMock:
-    base: dict[str, object] = {
-        "saq_runs_queue": "runs",
-        "redis_url": "redis://localhost:6379/0",
-        "saq_redis_pool_size": 5,
-        "fernet_key": "b" * 44,
-    }
-    base.update(overrides)
-    return MagicMock(**base)
-
-
-def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-    monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "b" * 44)
-
-
 def _make_trigger(**overrides: object) -> MagicMock:
     """Build a Trigger-like double with defaults for the per-item fire jobs."""
     from modulo.db.models.trigger import Trigger
@@ -234,19 +205,55 @@ def _make_trigger(**overrides: object) -> MagicMock:
     return trigger
 
 
-def _mock_result(**kwargs: Any) -> MagicMock:
-    result = MagicMock()
-    for name, value in kwargs.items():
-        getattr(result, name).return_value = value
-    return result
-
-
 def _lock_result(acquired: bool) -> MagicMock:
     return _mock_result(scalar_one=acquired)
 
 
 def _trigger_result(trigger: Any) -> MagicMock:
     return _mock_result(scalar_one_or_none=trigger)
+
+
+def _fetchone_execute(session: Any, row: Any) -> None:
+    """Point ``session.execute`` at a result whose ``fetchone()`` yields *row*
+    (``None`` for a conditional UPDATE that matched no rows). The atomic-advance
+    helpers expose exactly this control — one returning row or none."""
+    result = MagicMock()
+    result.fetchone.return_value = row
+    session.execute = AsyncMock(return_value=result)
+
+
+@contextmanager
+def _tick_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    results: list[MagicMock] | None = None,
+    *,
+    redis: bool = True,
+) -> Iterator[tuple[MagicMock, AsyncMock]]:
+    """Shared driver scope for the ``fire_due_triggers`` / ``fire_cron_trigger``
+    tick tests: patches the environment (``_patch_env``), the DB session
+    factory (a ``_MockSession`` replaying *results*), and — for the
+    scheduler-level driver — the settings + Redis plumbing the tick builds,
+    yielding ``(session, redis_client)``. Site-specific patches (advance
+    mocks, enqueue side effects, org gates) stay in the test's own ``with``
+    block, entered after this one.
+
+    Pass ``redis=False`` for the job-level ``fire_cron_trigger`` tests: the
+    job receives its redis handle as an argument and never builds one, so
+    ``get_settings``/``AsyncRedis``/``RedisQueue`` are left for the test to
+    patch (they mostly patch the org gates directly instead).
+    """
+    _patch_env(monkeypatch)
+    session = _MockSession(list(results or []))
+    factory = MagicMock(return_value=session)
+    redis_client = AsyncMock()
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(ch, "_open_factory", return_value=factory))
+        if redis:
+            stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
+            redis_cls = stack.enter_context(patch.object(ch, "AsyncRedis"))
+            stack.enter_context(patch.object(ch, "RedisQueue", MagicMock()))
+            redis_cls.from_url.return_value = redis_client
+        yield session, redis_client
 
 
 # ---------------------------------------------------------------------------
@@ -257,30 +264,22 @@ def _trigger_result(trigger: Any) -> MagicMock:
 class TestFireDueTriggers:
     @pytest.mark.asyncio
     async def test_enqueues_once_per_type_for_returned_rows_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A), _cron_row(TRIGGER_B, snapshot_id=str(uuid.uuid4()))]),
-                _rows_result([_polling_row(TRIGGER_POLL)]),
-                _rows_result([_report_row(REPORT)]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A), _cron_row(TRIGGER_B, snapshot_id=str(uuid.uuid4()))]),
+                    _rows_result([_polling_row(TRIGGER_POLL)]),
+                    _rows_result([_report_row(REPORT)]),
+                ],
+            ) as (_session, redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, side_effect=[True, False]) as adv_cron,
             patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
             patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True) as adv_report,
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         # TRIGGER_B's advance returned False (a second machine already advanced)
@@ -307,24 +306,17 @@ class TestFireDueTriggers:
         """FAR-166: the cron/polling/catch-up scan SELECTs must filter
         ``Trigger.deleted_at IS NULL`` — a soft-deleted trigger (deleted_at set,
         active still True) must never be selected for firing."""
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A)]),
-                _rows_result([_polling_row(TRIGGER_POLL)]),
-                _rows_result([_report_row(REPORT)]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A)]),
+                    _rows_result([_polling_row(TRIGGER_POLL)]),
+                    _rows_result([_report_row(REPORT)]),
+                ],
+            ) as (session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True),
@@ -332,7 +324,6 @@ class TestFireDueTriggers:
             patch.object(ch, "_claim_catchup_marker", new_callable=AsyncMock, return_value=False),
             patch.object(ch, "_mark_catchup_fired", new_callable=AsyncMock),
         ):
-            redis_cls.from_url.return_value = redis_client
             await ch.fire_due_triggers()
 
         # Every scan over the triggers table — cron, polling, and the missed-fire
@@ -344,29 +335,21 @@ class TestFireDueTriggers:
 
     @pytest.mark.asyncio
     async def test_second_machine_epoch_skipped_when_already_advanced(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A)]),
-                _rows_result([]),
-                _rows_result([]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A)]),
+                    _rows_result([]),
+                    _rows_result([]),
+                ],
+            ) as (_session, _redis_client),
             # A concurrent machine already advanced next_fire_at.
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=False),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_due"] == 1
@@ -375,29 +358,21 @@ class TestFireDueTriggers:
 
     @pytest.mark.asyncio
     async def test_enqueue_failure_ingests_error_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A)]),
-                _rows_result([]),
-                _rows_result([]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A)]),
+                    _rows_result([]),
+                    _rows_result([]),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_enqueued"] == 0
@@ -411,29 +386,21 @@ class TestFireDueTriggers:
     async def test_cron_advance_passes_row_cron_timezone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Fix 2 review: fire_due_triggers must fetch cron_timezone from the
         SELECT and pass it through to the atomic advance."""
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A, cron_timezone="America/New_York")]),
-                _rows_result([]),
-                _rows_result([]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A, cron_timezone="America/New_York")]),
+                    _rows_result([]),
+                    _rows_result([]),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True) as adv_cron,
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id"),
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock),
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_enqueued"] == 1
@@ -449,30 +416,24 @@ class TestFireDueTriggers:
         tick killer). Now it is caught, logged, and the default 60s interval
         is used so the polling trigger still fires.
         """
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A)]),
-                _rows_result([_polling_row(TRIGGER_POLL, config_overrides={"poll_interval_seconds": "not-an-int"})]),
-                _rows_result([_report_row(REPORT)]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A)]),
+                    _rows_result(
+                        [_polling_row(TRIGGER_POLL, config_overrides={"poll_interval_seconds": "not-an-int"})]
+                    ),
+                    _rows_result([_report_row(REPORT)]),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
             patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id"),
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         # The tick survives and the polling trigger fires with the 60s default.
@@ -487,30 +448,22 @@ class TestFireDueTriggers:
     ) -> None:
         """SKIP-not-defer: paused org -> next_fire_at still advanced, fire jobs
         NOT enqueued, skip counters incremented, scheduled reports still enqueued."""
-        _patch_env(monkeypatch)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG, paused=True),
-                _rows_result([_cron_row(TRIGGER_A)]),
-                _rows_result([_polling_row(TRIGGER_POLL)]),
-                _rows_result([_report_row(REPORT)]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG, paused=True),
+                    _rows_result([_cron_row(TRIGGER_A)]),
+                    _rows_result([_polling_row(TRIGGER_POLL)]),
+                    _rows_result([_report_row(REPORT)]),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True) as adv_cron,
             patch.object(ch, "_advance_polling_next_fire", new_callable=AsyncMock, return_value=True) as adv_poll,
             patch.object(ch, "_advance_report_next_send", new_callable=AsyncMock, return_value=True) as adv_report,
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         # Cron + polling skipped but ADVANCED (no catch-up storm on unpause).
@@ -639,30 +592,22 @@ class TestFireDueTriggers:
         """2026-08-10 incident (A): when the enqueue fails AFTER the atomic
         advance, the advance is rolled back to the trigger's previous
         ``next_fire_at`` (guarded) so the next tick re-selects the epoch."""
-        _patch_env(monkeypatch)
         old = datetime.now(UTC) - timedelta(hours=1)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A, next_fire_at=old)]),
-                _rows_result([]),
-                _rows_result([]),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A, next_fire_at=old)]),
+                    _rows_result([]),
+                    _rows_result([]),
+                ],
+            ) as (session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
             patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock) as ingest,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_enqueued"] == 0
@@ -729,35 +674,27 @@ class TestFireDueTriggers:
         already in the FUTURE (epoch consumed) but whose ``last_fired_at`` is
         older than cadence + grace is re-fired exactly once, and its
         ``next_fire_at`` advances."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         old = now_val - timedelta(hours=25)  # missed ~1 daily cadence
         future = now_val + timedelta(hours=24)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result(
-                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                ),
-                _mock_result(fetchone=("advanced-id",)),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        redis_client.set.return_value = True  # atomic claim wins — no marker yet
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result(
+                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                    ),
+                    _mock_result(fetchone=("advanced-id",)),
+                ],
+            ) as (session, redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
+            redis_client.set.return_value = True  # atomic claim wins — no marker yet
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_catchup_enqueued"] == 1
@@ -780,33 +717,25 @@ class TestFireDueTriggers:
     async def test_catchup_skips_fresh_last_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """2026-08-10 incident (C): a trigger whose last fire is fresh (normal
         state) is NEVER caught up — no double-fire of a healthy trigger."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         fresh = now_val - timedelta(minutes=5)
         future = now_val + timedelta(hours=24)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result(
-                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=fresh)]
-                ),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result(
+                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=fresh)]
+                    ),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_catchup_enqueued"] == 0
@@ -816,33 +745,25 @@ class TestFireDueTriggers:
     async def test_catchup_skips_ancient_stale_trigger(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """2026-08-10 incident (D): an ancient stale trigger (disabled for
         months, then re-enabled) is NOT caught up — the bounded window caps it."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         ancient = now_val - timedelta(days=60)
         future = now_val + timedelta(hours=24)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result(
-                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=ancient)]
-                ),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result(
+                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=ancient)]
+                    ),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_catchup_enqueued"] == 0
@@ -852,35 +773,27 @@ class TestFireDueTriggers:
     async def test_catchup_skips_epoch_already_fired_this_tick(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The catch-up scan must NOT re-fire an epoch the normal due-loop
         already advanced AND enqueued in the same tick (double-fire guard)."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         old = now_val - timedelta(hours=25)
         past = now_val - timedelta(minutes=1)
         future = now_val + timedelta(hours=24)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([_cron_row(TRIGGER_A, next_fire_at=past)]),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result(
-                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                ),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([_cron_row(TRIGGER_A, next_fire_at=past)]),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result(
+                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                    ),
+                ],
+            ) as (_session, _redis_client),
             patch.object(ch, "_advance_cron_next_fire", new_callable=AsyncMock, return_value=True),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-id") as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_enqueued"] == 1
@@ -891,34 +804,26 @@ class TestFireDueTriggers:
     async def test_catchup_skips_marked_epoch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A missed epoch already caught up (Redis marker present — fire job
         still pending) is NOT re-fired on a later tick."""
-        _patch_env(monkeypatch)
         now_val = datetime.now(UTC)
         old = now_val - timedelta(hours=25)
         future = now_val + timedelta(hours=24)
-        session = _MockSession(
-            [
-                _org_result([ORG]),
-                _pause_result(ORG),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result([]),
-                _rows_result(
-                    [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
-                ),
-            ]
-        )
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        redis_client.set.return_value = None  # SET NX returns None — marker present, claim lost
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
-            patch.object(ch, "RedisQueue", MagicMock()),
+            _tick_scope(
+                monkeypatch,
+                [
+                    _org_result([ORG]),
+                    _pause_result(ORG),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result([]),
+                    _rows_result(
+                        [_cron_row(TRIGGER_A, cron_expression="0 4 * * *", next_fire_at=future, last_fired_at=old)]
+                    ),
+                ],
+            ) as (_session, redis_client),
             patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock) as enqueue,
         ):
-            redis_cls.from_url.return_value = redis_client
+            redis_client.set.return_value = None  # SET NX returns None — marker present, claim lost
             summary = await ch.fire_due_triggers()
 
         assert summary["cron_catchup_enqueued"] == 0
@@ -931,39 +836,34 @@ class TestFireDueTriggers:
 
 
 class TestFireReportTrigger:
-    def _report_session(
+    def _default_report(
         self,
         *,
-        report: SimpleNamespace | None = _UNSET_REPORT,
-    ) -> _MockSession:
-        if report is _UNSET_REPORT:
-            report = SimpleNamespace(
-                id=REPORT,
-                organisation_id=ORG,
-                report_type="quality",
-                config_json={"schedule_type": "recurring"},
-                recipient_config={"type": "webhook", "urls": ["https://x"]},
-                active=True,
-                cron_expression="0 9 * * *",
-            )
-        r = MagicMock()
-        r.scalar_one_or_none.return_value = report
-        return _MockSession([r])
+        schedule_type: str = "recurring",
+    ) -> SimpleNamespace:
+        """A loadable active report row for ``fire_report_trigger``."""
+        return SimpleNamespace(
+            id=REPORT,
+            organisation_id=ORG,
+            report_type="quality",
+            config_json={"schedule_type": schedule_type},
+            recipient_config={"type": "webhook", "urls": ["https://x"]},
+            active=True,
+            cron_expression="0 9 * * *",
+        )
 
     @pytest.mark.asyncio
     async def test_success_sets_last_sent_at_and_clears_counter(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-        session = self._report_session()
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        report = self._default_report()
 
         async def _fake_generator(s, org, config):
             return {"rows": 1}
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
+            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+                session,
+                redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.reports.scheduler.get_generator", return_value=_fake_generator),
             patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
@@ -975,34 +875,41 @@ class TestFireReportTrigger:
             ) as deliver,
             patch.object(ch, "_clear_report_failure_counter", new_callable=AsyncMock) as clear,
         ):
-            redis_cls.from_url.return_value = redis_client
             result = await ch.fire_report_trigger(report_id=REPORT, org_id=ORG)
 
         assert result["status"] == "sent"
         deliver.assert_awaited_once()
         clear.assert_awaited_once()
         redis_client.aclose.assert_awaited_once()
+        # The success branch must also stamp ``last_sent_at`` (the behaviour the
+        # test name claims); assert on the recorded UPDATE statement itself.
+        # Pin the VALUE to a recency bound, not merely its type, so a wrong-but-
+        # datetime stamp (e.g. a stale or mis-set clock) fails.
+        sent_stmts = [
+            s for s, _ in session.executed if "UPDATE scheduled_reports" in str(s) and "last_sent_at" in str(s)
+        ]
+        assert sent_stmts, "a successful send must stamp last_sent_at"
+        stamped = sent_stmts[0].compile().params.get("last_sent_at")
+        assert isinstance(stamped, datetime)
+        assert abs((datetime.now(UTC) - stamped).total_seconds()) < 60
 
     @pytest.mark.asyncio
     async def test_failure_backs_off_next_send_at_not_reenqueue(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-        session = self._report_session()
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        redis_client.incr = AsyncMock(return_value=1)
+        report = self._default_report()
 
         async def _boom_generator(s, org, config):
             raise RuntimeError("delivery boom")
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
+            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+                _session,
+                redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch("modulo.core.reports.scheduler.get_generator", return_value=_boom_generator),
             patch.object(ch, "_handle_report_failure", new_callable=AsyncMock) as handle_failure,
         ):
-            redis_cls.from_url.return_value = redis_client
+            redis_client.incr = AsyncMock(return_value=1)
             result = await ch.fire_report_trigger(report_id=REPORT, org_id=ORG)
 
         assert result["status"] == "failed"
@@ -1013,18 +920,13 @@ class TestFireReportTrigger:
     async def test_skips_when_report_inactive_or_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A deactivated/deleted report is skipped silently — no failure counter,
         no backoff, no re-enqueue loop."""
-        _patch_env(monkeypatch)
-        session = self._report_session(report=None)
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
+            _tick_scope(monkeypatch, [_trigger_result(None)], redis=True) as (
+                _session,
+                redis_client,
+            ),
             patch.object(ch, "_handle_report_failure", new_callable=AsyncMock) as handle_failure,
         ):
-            redis_cls.from_url.return_value = redis_client
             result = await ch.fire_report_trigger(report_id=REPORT, org_id=ORG)
 
         assert result["status"] == "skipped"
@@ -1036,20 +938,17 @@ class TestFireReportTrigger:
     async def test_fails_when_no_generator_with_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No generator registered for the report type -> back off next_send_at
         (never silently loop on a misconfigured report)."""
-        _patch_env(monkeypatch)
-        session = self._report_session()
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
-        redis_client.incr = AsyncMock(return_value=1)
+        report = self._default_report()
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
+            _tick_scope(monkeypatch, [_trigger_result(report)], redis=True) as (
+                _session,
+                redis_client,
+            ),
             patch("modulo.core.reports.scheduler.get_generator", return_value=None),
             patch.object(ch, "_handle_report_failure", new_callable=AsyncMock) as handle_failure,
         ):
-            redis_cls.from_url.return_value = redis_client
+            redis_client.incr = AsyncMock(return_value=1)
             result = await ch.fire_report_trigger(report_id=REPORT, org_id=ORG)
 
         assert result["status"] == "failed"
@@ -1060,27 +959,16 @@ class TestFireReportTrigger:
     async def test_success_deactivates_one_time_report(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A one_time report is deactivated after delivery — never re-fired by
         the scheduler (next_send_at also cleared)."""
-        _patch_env(monkeypatch)
-        one_time = SimpleNamespace(
-            id=REPORT,
-            organisation_id=ORG,
-            report_type="quality",
-            config_json={"schedule_type": "one_time"},
-            recipient_config={"type": "webhook", "urls": ["https://x"]},
-            active=True,
-            cron_expression="0 9 * * *",
-        )
-        session = self._report_session(report=one_time)
-        factory = MagicMock(return_value=session)
-        redis_client = AsyncMock()
+        one_time = self._default_report(schedule_type="one_time")
 
         async def _fake_generator(s, org, config):
             return {"rows": 1}
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
-            patch.object(ch, "get_settings", return_value=_settings()),
-            patch.object(ch, "AsyncRedis") as redis_cls,
+            _tick_scope(monkeypatch, [_trigger_result(one_time)], redis=True) as (
+                session,
+                redis_client,
+            ),
             patch("modulo.core.reports.scheduler.get_generator", return_value=_fake_generator),
             patch("modulo.core.reports.scheduler.get_formatter", return_value=None),
             patch("modulo.core.reports.scheduler.get_deliverer", return_value=None),
@@ -1091,7 +979,6 @@ class TestFireReportTrigger:
             ) as deliver,
             patch.object(ch, "_clear_report_failure_counter", new_callable=AsyncMock),
         ):
-            redis_cls.from_url.return_value = redis_client
             result = await ch.fire_report_trigger(report_id=REPORT, org_id=ORG)
 
         assert result["status"] == "sent"
@@ -1106,14 +993,12 @@ class TestFireReportTrigger:
     async def test_handle_report_failure_uses_5min_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        factory = MagicMock(return_value=session)
         redis_client = AsyncMock()
         redis_client.incr = AsyncMock(return_value=1)
         redis_client.expire = AsyncMock(return_value=True)
 
         now = ch.datetime.now(ch.UTC)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "AsyncRedis") as redis_cls,
         ):
@@ -1194,9 +1079,7 @@ class TestAtomicAdvance:
     async def test_cron_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (TRIGGER_A,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (TRIGGER_A,))
         ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "*/30 * * * * *")
         assert ok is True
         _stmt, params = session.execute.await_args.args
@@ -1207,9 +1090,7 @@ class TestAtomicAdvance:
     async def test_cron_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = None
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, None)
         ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "*/30 * * * * *")
         assert ok is False
 
@@ -1219,9 +1100,7 @@ class TestAtomicAdvance:
         timezone (legacy CronFireTask behaviour), never UTC."""
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (TRIGGER_A,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (TRIGGER_A,))
         with patch.object(ch, "compute_next_fire") as cnf:
             cnf.return_value = ch.datetime.now(ch.UTC)
             ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "0 9 * * *", "America/New_York")
@@ -1233,9 +1112,7 @@ class TestAtomicAdvance:
     async def test_cron_advance_defaults_to_utc(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (TRIGGER_A,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (TRIGGER_A,))
         with patch.object(ch, "compute_next_fire") as cnf:
             cnf.return_value = ch.datetime.now(ch.UTC)
             ok = await ch._advance_cron_next_fire(session, TRIGGER_A, "0 9 * * *", None)
@@ -1246,9 +1123,7 @@ class TestAtomicAdvance:
     async def test_polling_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (TRIGGER_POLL,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (TRIGGER_POLL,))
         before = datetime.now(UTC)
         ok = await ch._advance_polling_next_fire(session, TRIGGER_POLL, 60)
         assert ok is True
@@ -1263,9 +1138,7 @@ class TestAtomicAdvance:
     async def test_polling_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = None
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, None)
         ok = await ch._advance_polling_next_fire(session, TRIGGER_POLL, 60)
         assert ok is False
 
@@ -1274,9 +1147,7 @@ class TestAtomicAdvance:
         """A poll interval <= 0 must never produce a non-advancing (<= now) nf."""
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (TRIGGER_POLL,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (TRIGGER_POLL,))
         await ch._advance_polling_next_fire(session, TRIGGER_POLL, 0)
         params = session.execute.await_args.args[1]
         assert params["nf"] > datetime.now(UTC)
@@ -1285,9 +1156,7 @@ class TestAtomicAdvance:
     async def test_report_advance_returns_true_when_row_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (REPORT,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (REPORT,))
         ok = await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
         assert ok is True
         _stmt, params = session.execute.await_args.args
@@ -1299,9 +1168,7 @@ class TestAtomicAdvance:
     async def test_report_advance_returns_false_when_not_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = None
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, None)
         ok = await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
         assert ok is False
 
@@ -1311,9 +1178,7 @@ class TestAtomicAdvance:
         the same multi-machine atomicity guarantee as the trigger advances."""
         _patch_env(monkeypatch)
         session = _MockSession([])
-        r = MagicMock()
-        r.fetchone.return_value = (REPORT,)
-        session.execute = AsyncMock(return_value=r)
+        _fetchone_execute(session, (REPORT,))
         await ch._advance_report_next_send(session, REPORT, "0 9 * * *")
         stmt, _ = session.execute.await_args.args
         sql = str(stmt)
@@ -1553,14 +1418,13 @@ class TestSuiteRunDispatchRouting:
 class TestFireCronTriggerSkips:
     @pytest.mark.asyncio
     async def test_skips_when_trigger_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
-
         trigger = _make_trigger(id=TRIGGER_A, active=False)
 
-        session = _MockSession([_lock_result(True), _trigger_result(trigger)])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_event", new_callable=AsyncMock),
@@ -1582,14 +1446,13 @@ class TestFireCronTriggerSkips:
         True) is not loaded by the fire job — the load SELECT filters
         ``deleted_at``, so the trigger resolves to None and the job skips as
         inactive/missing."""
-        _patch_env(monkeypatch)
-
         trigger = _make_trigger(id=TRIGGER_A, deleted_at=datetime.now(UTC))
 
-        session = _MockSession([_lock_result(True), _trigger_result(None)])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(None)], redis=False) as (
+                session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         ):
             result = await ch.fire_cron_trigger(
@@ -1616,10 +1479,11 @@ class TestFireCronTriggerSkips:
         trigger = _make_trigger(id=TRIGGER_A, daily_spend_limit=Decimal("100.00"))
         cost_result = _mock_result(scalar_one=Decimal("150.00"))
 
-        session = _MockSession([_lock_result(True), _trigger_result(trigger), cost_result])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger), cost_result], redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_event", new_callable=AsyncMock),
@@ -1643,7 +1507,6 @@ class TestFireCronTriggerSkips:
     async def test_skips_when_org_triggers_paused(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Paused org -> fire_cron_trigger returns skipped/triggers_paused with
         NO event row written."""
-        _patch_env(monkeypatch)
 
         from modulo.db.models.trigger import Trigger
 
@@ -1657,15 +1520,11 @@ class TestFireCronTriggerSkips:
         trigger.daily_spend_limit = None
         trigger.config_json = {}
 
-        lock_result = MagicMock()
-        lock_result.scalar_one.return_value = True
-        trigger_result = MagicMock()
-        trigger_result.scalar_one_or_none.return_value = trigger
-
-        session = _MockSession([lock_result, trigger_result])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+                session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_event", new_callable=AsyncMock),
@@ -1689,7 +1548,6 @@ class TestFireCronTriggerSkips:
         to NOT paused (inside a savepoint, so the transaction is never poisoned)
         and the job proceeds to fire — mirroring the scheduler's not-paused
         choice, instead of dead-lettering every cron job."""
-        _patch_env(monkeypatch)
 
         from modulo.db.models.trigger import Trigger
 
@@ -1703,17 +1561,13 @@ class TestFireCronTriggerSkips:
         trigger.daily_spend_limit = None
         trigger.config_json = {}
 
-        lock_result = MagicMock()
-        lock_result.scalar_one.return_value = True
-        trigger_result = MagicMock()
-        trigger_result.scalar_one_or_none.return_value = trigger
-
-        session = _MockSession([lock_result, trigger_result])
-        factory = MagicMock(return_value=session)
         run_mock = MagicMock()
         run_mock.id = uuid.uuid4()
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_event", new_callable=AsyncMock) as log_event,
@@ -1742,7 +1596,6 @@ class TestFireCronTriggerSkips:
         """A plain SQLAlchemyError (DB down / connection error) from the org
         pause read PROPAGATES so the job fails and SAQ retries — never degraded
         to not-paused, never fabricated into paused."""
-        _patch_env(monkeypatch)
 
         from modulo.db.models.trigger import Trigger
 
@@ -1756,15 +1609,11 @@ class TestFireCronTriggerSkips:
         trigger.daily_spend_limit = None
         trigger.config_json = {}
 
-        lock_result = MagicMock()
-        lock_result.scalar_one.return_value = True
-        trigger_result = MagicMock()
-        trigger_result.scalar_one_or_none.return_value = trigger
-
-        session = _MockSession([lock_result, trigger_result])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, [_lock_result(True), _trigger_result(trigger)], redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "org_is_paused", new_callable=AsyncMock, side_effect=SQLAlchemyError("connection boom")),
             pytest.raises(SQLAlchemyError, match="connection boom"),
@@ -1848,10 +1697,6 @@ class TestComputeNextFire:
         nf = ch.compute_next_fire("0 9 * * *", after=base)
         assert nf.tzinfo == UTC
         assert nf > base
-
-    def test_naive_after_interpreted_as_utc(self) -> None:
-        nf = ch.compute_next_fire("0 9 * * *", after=datetime(2026, 1, 1, 8, 0, 0))
-        assert nf == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
 
     def test_honors_configured_timezone(self) -> None:
         """09:00 America/New_York in January (UTC-5) == 14:00 UTC — a non-UTC
@@ -2348,14 +2193,17 @@ class TestFirePollingTrigger:
         ):
             yield
 
-    def _session(
+    def _session_results(
         self,
         trigger: MagicMock,
         connector_instance: Any,
-    ) -> _MockSession:
+    ) -> list[Any]:
+        """The canned execute() sequence for the polling fire job: org-lock,
+        trigger, connector-instance lookup, and the deferred last_fired_at
+        UPDATE slot. Feeds ``_tick_scope`` in every fire-path test."""
         conn_result = MagicMock()
         conn_result.scalar_one_or_none.return_value = connector_instance
-        return _MockSession([_lock_result(True), _trigger_result(trigger), conn_result, MagicMock()])
+        return [_lock_result(True), _trigger_result(trigger), conn_result, MagicMock()]
 
     @pytest.mark.asyncio
     async def test_skips_when_trigger_soft_deleted(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2363,12 +2211,16 @@ class TestFirePollingTrigger:
         True) is not loaded by the fire job — the load SELECT filters
         ``deleted_at``, so the trigger resolves to None and the job skips; the
         poll query never runs."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger(id=TRIGGER_POLL, deleted_at=datetime.now(UTC))
-        session = _MockSession([_lock_result(True), _trigger_result(None)])
-        factory = MagicMock(return_value=session)
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(
+                monkeypatch,
+                [_lock_result(True), _trigger_result(None)],
+                redis=False,
+            ) as (
+                session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         ):
             result = await ch.fire_polling_trigger(
@@ -2390,11 +2242,8 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_fires_run_when_condition_met(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger(config_json={"snapshot_id": str(uuid.uuid4())})
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(return_value=SimpleNamespace(records=[{"id": 1}], total=1))
         backend = MagicMock()
@@ -2403,7 +2252,10 @@ class TestFirePollingTrigger:
         event = SimpleNamespace(id=uuid.uuid4())
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2437,13 +2289,13 @@ class TestFirePollingTrigger:
     async def test_skips_when_concurrency_limit_reached(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Polling fire honours max_concurrent_runs — the poll query is never
         run against the external service while the trigger is over budget."""
-        _patch_env(monkeypatch)
         trigger = _make_trigger(max_concurrent_runs=2)
-        session = self._session(trigger, None)
-        factory = MagicMock(return_value=session)
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, None), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=2),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2468,25 +2320,26 @@ class TestFirePollingTrigger:
     async def test_skips_when_spend_limit_exceeded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An over-budget polling trigger is skipped BEFORE the connector query —
         it must stop hitting the external service every cycle."""
-        _patch_env(monkeypatch)
         from decimal import Decimal
 
         trigger = _make_trigger(daily_spend_limit=Decimal("100.00"))
         cost_result = _mock_result(scalar_one=Decimal("150.00"))
         conn_result = MagicMock()
         conn_result.scalar_one_or_none.return_value = SimpleNamespace(id=uuid.uuid4())
-        session = _MockSession([_lock_result(True), _trigger_result(trigger), cost_result, conn_result])
-        factory = MagicMock(return_value=session)
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(
+                monkeypatch,
+                [_lock_result(True), _trigger_result(trigger), cost_result, conn_result],
+                redis=False,
+            ) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
             patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
-            # FAR-604 backpressure gate: patched out — the side_effect
-            # sequence here pins the spend-gate's session reads.
-            patch("modulo.core.run_admission.evaluate_backpressure", new_callable=AsyncMock, return_value=(False, "")),
         ):
             result = await ch.fire_polling_trigger(
                 trigger_id=trigger.id,
@@ -2506,13 +2359,13 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_error_when_connector_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
-        session = self._session(trigger, None)
-        factory = MagicMock(return_value=session)
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, None), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "_log_poll_event", new_callable=AsyncMock) as log_poll,
@@ -2536,14 +2389,14 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_error_when_connector_init_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2566,18 +2419,18 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_query_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(side_effect=TimeoutError("timed out"))
         backend = MagicMock()
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2601,18 +2454,18 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_error_when_query_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(side_effect=RuntimeError("boom"))
         backend = MagicMock()
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2635,18 +2488,18 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_no_match_when_condition_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
         backend = MagicMock()
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2670,18 +2523,18 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_returns_error_when_condition_eval_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger()
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
         backend = MagicMock()
         backend.get_secret = AsyncMock(return_value="{}")
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2706,11 +2559,8 @@ class TestFirePollingTrigger:
 
     @pytest.mark.asyncio
     async def test_invalid_snapshot_id_falls_back_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _patch_env(monkeypatch)
         trigger = _make_trigger(config_json={"snapshot_id": "not-a-uuid"})
         connector_instance = SimpleNamespace(id=uuid.uuid4(), connector_type_id="github", config_json={})
-        session = self._session(trigger, connector_instance)
-        factory = MagicMock(return_value=session)
         connector = MagicMock()
         connector.query = AsyncMock(return_value=SimpleNamespace(records=[], total=0))
         backend = MagicMock()
@@ -2719,7 +2569,10 @@ class TestFirePollingTrigger:
         event = SimpleNamespace(id=uuid.uuid4())
 
         with (
-            patch.object(ch, "_open_factory", return_value=factory),
+            _tick_scope(monkeypatch, self._session_results(trigger, connector_instance), redis=False) as (
+                _session,
+                _redis_client,
+            ),
             patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
             patch.object(ch, "_count_active_runs", new_callable=AsyncMock, return_value=0),
             patch.object(ch, "get_settings", return_value=_settings()),
@@ -2778,12 +2631,12 @@ class TestCreateRunPauseClassification:
     @pytest.mark.parametrize(
         ("trigger_type", "pause_eligible"),
         [
-            ("manual", False),
-            ("webhook", True),
-            ("cron", True),
-            ("polling", True),
-            ("agent_signal", True),
-            ("correction", False),
+            pytest.param("manual", False, id="manual-exempt"),
+            pytest.param("webhook", True, id="webhook-paused"),
+            pytest.param("cron", True, id="cron-paused"),
+            pytest.param("polling", True, id="polling-paused"),
+            pytest.param("agent_signal", True, id="agent_signal-paused"),
+            pytest.param("correction", False, id="correction-exempt"),
         ],
     )
     @pytest.mark.asyncio
@@ -4334,7 +4187,7 @@ class TestOrgBoundedFailureCounters:
         assert "session-acquire" in message
 
     async def test_org_timeout_last_error_and_warning_name_the_blocking_stage(
-        self, caplog: pytest.LogCaptureFixture
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """THE proposal-1 pin: when the per-org bound fires, the persisted
         ``last_error`` AND the WARNING both carry the finest-grained stage the
@@ -4347,16 +4200,35 @@ class TestOrgBoundedFailureCounters:
         real bound), rather than raising ``TimeoutError`` by hand: since qa F2
         the body only claims the per-org cut once the slice has actually
         elapsed, so a hand-raised timeout at t=0 would (correctly) be reported
-        as an in-pass timeout instead. It opts into a 1s slice so the test
-        waits one second, not the production 30 — the short slice costs this
-        test nothing, because a cut can only be observed at or after the
-        deadline (see M6: the short-slice harness default was the flake for
-        the OTHER tests, which never wait for it).
+        as an in-pass timeout instead. It opts into a 1s slice, and the wedge
+        JUMPS the shared ``time.monotonic`` clock past that slice before its
+        first await: production reads ``time.monotonic`` (module attribute, so
+        the patch reaches it through ``cron_helpers``' own ``time`` reference)
+        for both ``org_pass_started`` and the ``org_elapsed`` discriminator,
+        and the event loop's timer clock resolves ``time.monotonic`` the same
+        way, so the real ``asyncio.timeout`` deadline (armed at real+1.0s)
+        expires on the next loop iteration and the REAL cancellation path —
+        CancelledError converted to TimeoutError by the timeout context —
+        still fires, in milliseconds instead of one second. If the arming were
+        removed, the wedge would hang until the pytest timeout — the test
+        still fails when the per-org bound stops working.
         """
         hang_org = uuid.uuid4()
         summary = ch._dispatcher_summary()
         terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
         blocking_stage = "row_loop:3/10"
+
+        # Offset-jump fake over the REAL monotonic clock: capture the real
+        # function before patching, then shift the reported time by
+        # ``clock_offset`` seconds. The wedge advances the offset by the org
+        # slice so the armed asyncio deadline is already due.
+        clock_offset = 0.0
+        real_monotonic = time.monotonic
+
+        def fake_monotonic() -> float:
+            return real_monotonic() + clock_offset
+
+        monkeypatch.setattr(time, "monotonic", fake_monotonic)
 
         async def fake_reconcile_org(
             *,
@@ -4364,11 +4236,17 @@ class TestOrgBoundedFailureCounters:
             stage: dict[str, str] | None = None,
             **_kwargs: Any,
         ) -> int:
+            nonlocal clock_offset
             if org_id == hang_org:
                 if stage is not None:
                     stage["op"] = f"reconcile_org:{org_id}/{blocking_stage}"
                 summary["scanned"] += 2
-                # Wedged await — only the per-org time bound can stop it.
+                # Jump the shared monotonic clock past the 1s slice BEFORE
+                # wedging: the per-org asyncio.timeout deadline (armed from the
+                # same patched clock) is now due, so the cut fires on the next
+                # loop iteration. Only the per-org time bound can stop this
+                # await — it is still genuinely wedged.
+                clock_offset += 1.0
                 await asyncio.Event().wait()
                 return 0  # pragma: no cover - reached only pre-fix
             summary["scanned"] += 1

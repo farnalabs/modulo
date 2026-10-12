@@ -23,6 +23,7 @@ tests, matching the harness in ``test_far1464_route_arm_coverage``.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from types import SimpleNamespace
 
@@ -102,6 +103,7 @@ async def test_programming_error_arms_answer_501(monkeypatch: pytest.MonkeyPatch
     await _assert_status(
         mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 501
     )
+    await _assert_status(mcp_oauth.consent_context(state="s", session=session), 501)
     await _assert_status(webhooks.cleanup_expired(session=session, principal=_tenant()), 501)
 
 
@@ -137,4 +139,19 @@ async def test_transient_sqlalchemy_error_arms_answer_503(monkeypatch: pytest.Mo
     await _assert_status(
         mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 503
     )
+    await _assert_status(mcp_oauth.consent_context(state="s", session=session), 503)
     await _assert_status(webhooks.cleanup_expired(session=session, principal=_tenant()), 503)
+
+
+async def test_consent_context_catch_all_arms(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-auth consent-context route's final two arms (FAR-1476).
+
+    ``consent_context`` duplicates the file's manual except-chain, so its
+    generic ``except Exception`` -> 500 and ``except asyncio.CancelledError``
+    -> re-raise arms are not reached by the two DB-error sweeps above (or any
+    other test) and must be driven explicitly for the changed-lines gate.
+    """
+    _patch_route_seams(monkeypatch)
+    await _assert_status(mcp_oauth.consent_context(state="s", session=_RaisingSession(RuntimeError("boom"))), 500)
+    with pytest.raises(asyncio.CancelledError):
+        await mcp_oauth.consent_context(state="s", session=_RaisingSession(asyncio.CancelledError()))

@@ -4,6 +4,7 @@ Uses OTel's InMemorySpanExporter — no network, no DB, no LangGraph process.
 """
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -15,8 +16,8 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from modulo.otel_bridge.handler import LangGraphOtelBridge
-from modulo.otel_bridge.trace_id import trace_id_for_thread
+from modulo.otel_bridge.handler import LangGraphOtelBridge, _anonymise_id
+from modulo.otel_bridge.trace_id import trace_id_int_for_thread
 
 
 @pytest.fixture
@@ -34,6 +35,27 @@ def bridge(exporter: InMemorySpanExporter) -> LangGraphOtelBridge:
 
 def _serialized(name: str) -> dict[str, Any]:
     return {"name": name, "id": ["langchain", name]}
+
+
+def _boom(exc: BaseException):
+    """Build a replacement for a span method that raises *exc* when called.
+
+    The default span methods cannot be told to fail, so the defensive
+    try/except blocks in the handler are exercised by swapping the method on
+    the live span object. Reused by every failure/cancellation test below.
+    """
+
+    def _raise(*_args: Any, **_kwargs: Any) -> None:
+        raise exc
+
+    return _raise
+
+
+def _span_named(spans: Any, fragment: str) -> Any:
+    """Return the single exported span whose name contains *fragment*."""
+    matches = [s for s in spans if fragment in s.name]
+    assert len(matches) == 1, f"expected exactly one span matching {fragment!r}, got {[s.name for s in spans]}"
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------
@@ -63,37 +85,39 @@ def test_chain_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: InMem
     assert str(run_id) not in bridge._spans
 
 
-def test_chain_error_finishes_span_with_error(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
+@pytest.mark.parametrize(
+    ("node", "error", "expected_category"),
+    [
+        pytest.param("ErrNode", ValueError("boom"), "ValueError", id="value-error"),
+        # A secret-bearing message must never reach an exported span.
+        pytest.param(
+            "SensitiveNode",
+            RuntimeError("api_key=sk-secret-value\x00\x1f invalid"),
+            "RuntimeError",
+            id="secret-message",
+        ),
+    ],
+)
+def test_error_span_exports_only_the_error_category(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, node: str, error: BaseException, expected_category: str
+) -> None:
+    """The error status carries the exception class name only — never the message.
+
+    Only the error CATEGORY is exported (consent copy: "Error category
+    frequencies (no error messages or stack traces)"; FAR-1131). The full
+    detail must stay in local-only log sinks.
+    """
     run_id = uuid.uuid4()
-    err = ValueError("boom")
-    bridge.on_chain_start(_serialized("ErrNode"), {}, run_id=run_id)
-    bridge.on_chain_error(err, run_id=run_id)
-
-    spans = exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
-    assert span.status.status_code == StatusCode.ERROR
-    # Only the error category (exception class name) is exported — never the
-    # raw exception message or a stack trace (consent copy: "Error category
-    # frequencies (no error messages or stack traces)"; FAR-1131).
-    assert span.status.description == "ValueError"
-    assert "boom" not in (span.status.description or "")
-    events = [e.name for e in span.events]
-    assert "exception" not in events
-    assert str(run_id) not in bridge._spans
-
-
-def test_error_status_description_excludes_message(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    """Secret-bearing exception messages must never reach an exported span."""
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("SensitiveNode"), {}, run_id=run_id)
-    bridge.on_chain_error(RuntimeError("api_key=sk-secret-value\x00\x1f invalid"), run_id=run_id)
+    bridge.on_chain_start(_serialized(node), {}, run_id=run_id)
+    bridge.on_chain_error(error, run_id=run_id)
 
     span = exporter.get_finished_spans()[0]
     assert span.status.status_code == StatusCode.ERROR
-    assert span.status.description == "RuntimeError"
-    assert "sk-secret-value" not in (span.status.description or "")
-    assert not [e for e in span.events if e.name == "exception"]
+    assert span.status.description == expected_category
+    # The raw message must not appear anywhere on the span.
+    assert str(error) not in (span.status.description or "")
+    assert not [e for e in span.events if e.name == "exception"], "stack traces must not be exported"
+    assert str(run_id) not in bridge._spans
 
 
 def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -118,7 +142,7 @@ def test_run_root_span_carries_deterministic_trace_id(
     root = bridge.start_run_root(thread_id)
     bridge.end_run_root()
 
-    expected_trace_id = int(trace_id_for_thread(thread_id), 16)
+    expected_trace_id = trace_id_int_for_thread(thread_id)
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     assert spans[0].name == "modulo.pipeline.run"
@@ -145,10 +169,10 @@ def test_bridge_spans_inherit_run_root_trace_id(bridge: LangGraphOtelBridge, exp
     bridge.on_chain_end({}, run_id=run_id)
     bridge.end_run_root()
 
-    expected_trace_id = int(trace_id_for_thread(thread_id), 16)
+    expected_trace_id = trace_id_int_for_thread(thread_id)
     spans = exporter.get_finished_spans()
-    chain = next(s for s in spans if "MyNode" in s.name)
-    root = next(s for s in spans if "modulo.pipeline.run" in s.name)
+    chain = _span_named(spans, "MyNode")
+    root = _span_named(spans, "modulo.pipeline.run")
     assert chain.context.trace_id == expected_trace_id
     assert expected_trace_id == root.context.trace_id
     assert chain.parent is not None
@@ -168,12 +192,12 @@ def test_span_id_for_run_returns_hex_after_end(bridge: LangGraphOtelBridge, expo
     live = bridge.span_id_for_run(run_id)
     assert live is not None
     assert len(live) == 16
-    int(live, 16)  # must be hex-parsable
+    # The returned id must be the 16-hex form of the span's own span id.
+    assert int(live, 16) == bridge._spans[str(run_id)].get_span_context().span_id
     bridge.on_chain_end({}, run_id=run_id)
 
     # After end the span is popped from _spans but the id is still readable.
-    after = bridge.span_id_for_run(run_id)
-    assert after == live
+    assert bridge.span_id_for_run(run_id) == live
 
 
 def test_span_id_for_run_unknown_returns_none(bridge: LangGraphOtelBridge) -> None:
@@ -240,8 +264,6 @@ def test_unknown_parent_run_id_is_handled_gracefully(
 
 
 def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    from modulo.otel_bridge.handler import _anonymise_id
-
     bridge.set_run_context(org_id="org-123", pipeline_id="pipe-456")
     run_id = uuid.uuid4()
 
@@ -261,8 +283,6 @@ def test_run_context_via_constructor(
     exporter: InMemorySpanExporter,
 ) -> None:
     """The constructor's org_id/pipeline_id must seed (anonymised) span attributes."""
-    from modulo.otel_bridge.handler import _anonymise_id
-
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer("test.langgraph")
@@ -289,8 +309,6 @@ def test_run_context_not_set_leaves_no_attributes(bridge: LangGraphOtelBridge, e
 
 
 def test_run_context_applies_to_new_spans_only(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    from modulo.otel_bridge.handler import _anonymise_id
-
     early_id = uuid.uuid4()
     late_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("Early"), {}, run_id=early_id)
@@ -459,6 +477,39 @@ def test_chat_model_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: 
     assert str(run_id) not in bridge._spans
 
 
+@pytest.mark.parametrize(
+    ("messages", "expected_count"),
+    [
+        pytest.param([[HumanMessage(content="a")]], 1, id="single-group-single-message"),
+        pytest.param([[HumanMessage(content="a"), SystemMessage(content="b")]], 2, id="single-group-two-messages"),
+        # Several groups arrive when a chain fans out; the count must be the sum,
+        # not the length of the first group.
+        pytest.param(
+            [[HumanMessage(content="a")], [HumanMessage(content="b"), AIMessage(content="c")]],
+            3,
+            id="multiple-groups-are-summed",
+        ),
+        pytest.param([], 0, id="no-groups"),
+        pytest.param([[]], 0, id="one-empty-group"),
+    ],
+)
+def test_chat_model_start_counts_messages_across_groups(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, messages: list[list[Any]], expected_count: int
+) -> None:
+    """``message_count`` must total every message in every group.
+
+    Only ``len(messages)`` (group count) would under-report whenever LangGraph
+    fans out, so the exported token-spend signal would silently be too low.
+    """
+    run_id = uuid.uuid4()
+    bridge.on_chat_model_start(_serialized("gpt-4"), messages, run_id=run_id)
+    bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert span.attributes.get("langgraph.llm.message_count") == expected_count
+
+
 def test_chat_model_error_records_exception(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     _chat_start(bridge, run_id)
@@ -469,16 +520,6 @@ def test_chat_model_error_records_exception(bridge: LangGraphOtelBridge, exporte
     assert span.status.description == "RuntimeError"
     assert "provider down" not in (span.status.description or "")
     assert str(run_id) not in bridge._spans
-
-
-def test_chat_model_start_empty_messages(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    run_id = uuid.uuid4()
-    bridge.on_chat_model_start(_serialized("gpt-4"), [], run_id=run_id)
-    bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.attributes is not None
-    assert span.attributes.get("langgraph.llm.message_count") == 0
 
 
 def test_chat_model_span_inherits_parent_context(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -583,63 +624,38 @@ def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, expo
     assert len(exporter.get_finished_spans()) == 3
 
 
-def test_serialized_name_falls_back_to_id_path(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    run_id = uuid.uuid4()
-    bridge.on_chain_start({"id": ["a", "b", "MyClass"]}, {}, run_id=run_id)
-    bridge.on_chain_end({}, run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.MyClass"
-
-
-def test_serialized_name_handles_none(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(None, {}, run_id=run_id)
-    bridge.on_chain_end({}, run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.unknown"
-
-
-def test_serialized_name_prefers_name_over_id(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    run_id = uuid.uuid4()
-    bridge.on_chain_start({"name": "ExplicitName", "id": ["ignored", "Fallback"]}, {}, run_id=run_id)
-    bridge.on_chain_end({}, run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.ExplicitName"
-
-
-def test_serialized_name_empty_name_falls_back_to_id(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+@pytest.mark.parametrize(
+    ("serialized", "expected_name"),
+    [
+        pytest.param({"id": ["a", "b", "MyClass"]}, "langgraph.chain.MyClass", id="name-falls-back-to-id-path"),
+        pytest.param(None, "langgraph.chain.unknown", id="serialized-is-none"),
+        pytest.param(
+            {"name": "ExplicitName", "id": ["ignored", "Fallback"]},
+            "langgraph.chain.ExplicitName",
+            id="name-wins-over-id",
+        ),
+        pytest.param(
+            {"name": "", "id": ["a", "b", "IdName"]}, "langgraph.chain.IdName", id="empty-name-falls-back-to-id"
+        ),
+        pytest.param({}, "langgraph.chain.unknown", id="empty-dict"),
+        # ``id`` is not a list — must not raise and must fall back to "unknown".
+        pytest.param({"id": "not-a-list"}, "langgraph.chain.unknown", id="non-list-id"),
+    ],
+)
+def test_serialized_name_resolution(
+    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, serialized: dict[str, Any] | None, expected_name: str
 ) -> None:
+    """The span name is derived from LangChain's ``serialized`` dict.
+
+    ``serialized`` is frequently ``None`` or partial in production, so each
+    fallback arm must produce a stable, non-crashing name.
+    """
     run_id = uuid.uuid4()
-    bridge.on_chain_start({"name": "", "id": ["a", "b", "IdName"]}, {}, run_id=run_id)
+    bridge.on_chain_start(serialized, {}, run_id=run_id)  # type: ignore[arg-type]
     bridge.on_chain_end({}, run_id=run_id)
 
     span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.IdName"
-
-
-def test_serialized_name_handles_empty_dict(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    run_id = uuid.uuid4()
-    bridge.on_chain_start({}, {}, run_id=run_id)
-    bridge.on_chain_end({}, run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.unknown"
-
-
-def test_serialized_name_non_list_id_falls_back_to_unknown(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
-    run_id = uuid.uuid4()
-    # id is not a list — must not raise and must fall back to "unknown".
-    bridge.on_chain_start({"id": "not-a-list"}, {}, run_id=run_id)
-    bridge.on_chain_end({}, run_id=run_id)
-
-    span = exporter.get_finished_spans()[0]
-    assert span.name == "langgraph.chain.unknown"
+    assert span.name == expected_name
 
 
 def test_tags_set_on_span(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
@@ -678,122 +694,79 @@ def test_start_with_same_run_id_finalizes_previous_span(
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 2
-    first = next(s for s in spans if "First" in s.name)
-    second = next(s for s in spans if "Second" in s.name)
+    first = _span_named(spans, "First")
+    second = _span_named(spans, "Second")
     assert first.status.status_code == StatusCode.OK
     assert second.status.status_code == StatusCode.OK
 
 
-def test_stale_span_finalization_errors_are_swallowed(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
-    """Reusing a run_id whose previous span fails to finalize must not raise."""
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
-    stale = bridge._spans[str(run_id)]
-    stale.set_status = lambda _status: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[method-assign]
-    stale.end = lambda: (_ for _ in ()).throw(RuntimeError("end boom"))  # type: ignore[method-assign]
-
-    bridge.on_chain_start(_serialized("Second"), {}, run_id=run_id)  # must not raise
-    bridge.on_chain_end({}, run_id=run_id)
-
-    assert str(run_id) not in bridge._spans
+# Each scenario below opens a span of one kind, breaks one of the two span
+# finalization methods, then drives the matching end/error callback. Every
+# non-CancelledError failure must be swallowed and logged; CancelledError must
+# propagate so an in-flight shutdown is not masked.
+_FINALIZE_KINDS = ["chain", "llm", "stale"]
 
 
-def test_llm_finalize_errors_are_swallowed(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    """A failing set_status/end on an LLM span must not break the bridge."""
-    run_id = uuid.uuid4()
-    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.set_status = lambda _status: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[method-assign]
-    bad_span.end = lambda: (_ for _ in ()).throw(RuntimeError("end boom"))  # type: ignore[method-assign]
-
-    bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)  # must not raise
-    assert str(run_id) not in bridge._spans
-
-
-def test_span_finalization_errors_are_swallowed(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    """A span whose set_status/end raise must not break the bridge."""
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
-
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.set_status = lambda _status: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[method-assign]
-    bad_span.end = lambda: (_ for _ in ()).throw(RuntimeError("end boom"))  # type: ignore[method-assign]
-
-    bridge.on_chain_end({}, run_id=run_id)  # must not raise
-    assert str(run_id) not in bridge._spans
+def _open_span(bridge: LangGraphOtelBridge, kind: str, run_id: uuid.UUID) -> None:
+    """Open a chain/llm span, or leave a chain span open as a stale one."""
+    if kind == "chain":
+        bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
+    elif kind == "llm":
+        bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
+    else:
+        # A span that will be superseded when the same run_id starts again.
+        bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
 
 
-def test_stale_span_set_status_cancellation_propagates(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
-    """A CancelledError finalizing a stale span must propagate, not be swallowed."""
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
-    stale = bridge._spans[str(run_id)]
-    stale.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
-
-    with pytest.raises(asyncio.CancelledError):
+def _drive_end(bridge: LangGraphOtelBridge, kind: str, run_id: uuid.UUID) -> None:
+    """Drive the callback that ends the span opened by :func:`_open_span`."""
+    if kind == "chain":
+        bridge.on_chain_end({}, run_id=run_id)
+    elif kind == "llm":
+        bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
+    else:
+        # Re-starting the same run_id finalizes the stale span.
         bridge.on_chain_start(_serialized("Second"), {}, run_id=run_id)
 
 
-def test_stale_span_end_cancellation_propagates(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    """A CancelledError ending a stale span must propagate."""
-    run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)
-    stale = bridge._spans[str(run_id)]
-    stale.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
-
-    with pytest.raises(asyncio.CancelledError):
-        bridge.on_chain_start(_serialized("Second"), {}, run_id=run_id)
-
-
-def test_span_finalization_set_status_cancellation_propagates(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+@pytest.mark.parametrize("kind", _FINALIZE_KINDS)
+@pytest.mark.parametrize("broken_method", ["set_status", "end"])
+def test_span_finalization_errors_are_swallowed(
+    bridge: LangGraphOtelBridge,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    broken_method: str,
 ) -> None:
-    """A CancelledError while setting the final span status must propagate."""
+    """A span whose set_status/end raises must not break the bridge.
+
+    Instrumentation must never break the pipeline it instruments: the failure
+    is logged and the run continues.
+    """
     run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+    _open_span(bridge, kind, run_id)
+    broken_span = bridge._spans[str(run_id)]
+    setattr(broken_span, broken_method, _boom(RuntimeError("boom")))
 
-    with pytest.raises(asyncio.CancelledError):
-        bridge.on_chain_end({}, run_id=run_id)
+    with caplog.at_level(logging.ERROR, logger="modulo.otel_bridge.handler"):
+        _drive_end(bridge, kind, run_id)  # must not raise
+
+    # The broken span must no longer be the live one (dropped for chain/llm,
+    # superseded for a stale span), so a later lookup cannot return it.
+    assert bridge._spans.get(str(run_id)) is not broken_span
+    assert any("Failed to" in r.message for r in caplog.records), "the swallowed failure must be logged"
 
 
-def test_span_finalization_end_cancellation_propagates(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
+@pytest.mark.parametrize("kind", _FINALIZE_KINDS)
+@pytest.mark.parametrize("broken_method", ["set_status", "end"])
+def test_span_finalization_cancellation_propagates(
+    bridge: LangGraphOtelBridge,
+    kind: str,
+    broken_method: str,
 ) -> None:
-    """A CancelledError while ending a span must propagate."""
+    """A CancelledError during finalization must propagate, not be swallowed."""
     run_id = uuid.uuid4()
-    bridge.on_chain_start(_serialized("Broken"), {}, run_id=run_id)
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
+    _open_span(bridge, kind, run_id)
+    setattr(bridge._spans[str(run_id)], broken_method, _boom(asyncio.CancelledError()))
 
     with pytest.raises(asyncio.CancelledError):
-        bridge.on_chain_end({}, run_id=run_id)
-
-
-def test_llm_finalize_set_status_cancellation_propagates(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
-    """A CancelledError setting the LLM span status must propagate."""
-    run_id = uuid.uuid4()
-    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.set_status = lambda _status: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
-
-    with pytest.raises(asyncio.CancelledError):
-        bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
-
-
-def test_llm_finalize_end_cancellation_propagates(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
-    """A CancelledError ending the LLM span must propagate."""
-    run_id = uuid.uuid4()
-    bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
-    bad_span = bridge._spans[str(run_id)]
-    bad_span.end = lambda: (_ for _ in ()).throw(asyncio.CancelledError())  # type: ignore[method-assign]
-
-    with pytest.raises(asyncio.CancelledError):
-        bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
+        _drive_end(bridge, kind, run_id)

@@ -625,6 +625,7 @@ async def test_mcp_oauth_arms_guard_session_contract(monkeypatch: pytest.MonkeyP
     await _assert_500(
         mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=_RaisingSession(), principal=principal)
     )
+    await _assert_500(mcp_oauth.consent_context(state="s", session=_RaisingSession()))
 
 
 # ---------------------------------------------------------------------------

@@ -129,11 +129,49 @@ class TestDashboardNotifications:
         assert result == notifications
 
     async def test_limit_clamped_to_five_when_out_of_range(self, mock_session: AsyncMock) -> None:
+        """FAR-249: an out-of-range limit is clamped, not silently reset to 5.
+
+        Name retained from the pre-FAR-249 contract, which reset anything out of
+        range back to the default of 5 (so a caller asking for 50 got 5 with no
+        signal). The clamp now resolves into [1, DASHBOARD_LIMIT_MAX], preserving
+        the caller's intent; the route 422s out-of-range values, so this is
+        defence in depth for internal callers.
+        """
+        from sqlalchemy.dialects import sqlite
+
+        from modulo.db.crud.notifications import DASHBOARD_LIMIT_MAX, get_dashboard_notifications
+
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
+
+        def _sql_of(call_index: int) -> str:
+            query = mock_session.execute.await_args_list[call_index].args[0]
+            return str(query.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+
+        await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=0)
+        assert "LIMIT 1" in _sql_of(0)
+
+        await get_dashboard_notifications(
+            mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=DASHBOARD_LIMIT_MAX + 100
+        )
+        assert f"LIMIT {DASHBOARD_LIMIT_MAX}" in _sql_of(1)
+
+    async def test_in_range_limit_passed_through_untouched(self, mock_session: AsyncMock) -> None:
+        """FAR-249: an in-range limit reaches the query untouched.
+
+        The clamp must only bound out-of-range values; a caller asking for 10
+        rows gets 10, never a silent reset to the default.
+        """
+        from sqlalchemy.dialects import sqlite
+
         from modulo.db.crud.notifications import get_dashboard_notifications
 
-        assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=0)
-        assert not await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=500)
+        mock_session.execute = AsyncMock(return_value=_listing_result([]))
+
+        await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=10)
+
+        query = mock_session.execute.await_args_list[0].args[0]
+        sql = str(query.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+        assert "LIMIT 10" in sql
 
     async def test_min_level_filter_admits_lower_levels(self, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(return_value=_listing_result([]))
@@ -631,3 +669,82 @@ class TestLinkedRunState:
         states = await get_linked_run_states(mock_session, org_id=_ORG_ID, notifications=[notification])
 
         assert states == {}
+
+
+class TestMarkAllRead:
+    """FAR-249 — bulk per-user self-dismissal ("mark all read")."""
+
+    async def test_files_self_dismissals_for_every_live_visible_row(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        live_ids = [uuid.uuid4(), uuid.uuid4()]
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(live_ids[0],), (live_ids[1],)])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        marked = await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        assert marked == 2
+        added = mock_session.add_all.call_args.args[0]
+        dismissals = list(added)
+        assert [d.notification_id for d in dismissals] == live_ids
+        # Per-user, per-org, self scope — never a sibling's unread state.
+        for dismissal in dismissals:
+            assert dismissal.dismissed_by_user_id == _USER_ID
+            assert dismissal.organisation_id == _ORG_ID
+            assert dismissal.dismiss_scope == "self"
+        mock_session.flush.assert_awaited_once()
+
+    async def test_live_view_clauses_are_applied_to_the_select(self, mock_session: AsyncMock) -> None:
+        """The select must carry visibility, not-expired and not-dismissed."""
+        from sqlalchemy.dialects import sqlite
+
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        sql = str(mock_session.execute.await_args.args[0].compile(dialect=sqlite.dialect()))
+        assert "expires_at" in sql
+        assert "dismissals" in sql
+        assert "organisation_id" in sql
+
+    async def test_no_live_rows_is_a_noop(self, mock_session: AsyncMock) -> None:
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[])
+        mock_session.execute = AsyncMock(return_value=result)
+
+        marked = await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+        assert marked == 0
+        mock_session.add_all.assert_not_called()
+        mock_session.flush.assert_not_awaited()
+
+    async def test_programming_error_is_propagated_not_swallowed(self, mock_session: AsyncMock) -> None:
+        """PROVE-THE-FIX (FAR-249 QA): this WRITE path used to catch the SELECT's
+        ``ProgrammingError`` and ``return 0``, so a DB/RLS failure answered the
+        route with HTTP 200 ``{marked: 0}`` instead of its intended 501. The
+        read paths degrade to empty; the write path must fail loud."""
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        mock_session.execute = AsyncMock(side_effect=ProgrammingError("42P01", None, Exception("boom")))
+
+        with pytest.raises(ProgrammingError):
+            await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
+
+    async def test_concurrent_duplicate_raises_value_error(self, mock_session: AsyncMock) -> None:
+        """A concurrent self-dismissal of the same rows surfaces as ValueError."""
+        from modulo.db.crud.notifications import mark_all_read_for_user
+
+        result = MagicMock()
+        result.all = MagicMock(return_value=[(_NOTIF_ID,)])
+        mock_session.execute = AsyncMock(return_value=result)
+        mock_session.flush = AsyncMock(side_effect=IntegrityError("s", {}, Exception()))
+
+        with pytest.raises(ValueError, match="concurrent"):
+            await mark_all_read_for_user(mock_session, org_id=_ORG_ID, user_id=_USER_ID)
