@@ -35,7 +35,7 @@
               <template v-for="plugin in plugins" :key="plugin.PLUGIN_ID">
                 <tr
                   class="hover:bg-muted/30 transition-colors"
-                  :class="{ 'opacity-60': !activeStates[plugin.PLUGIN_ID] }"
+                  :class="{ 'opacity-60': !plugin.health_ok }"
                 >
                   <td class="table-cell">
                     <div>
@@ -64,32 +64,17 @@
                   <td class="table-cell">
                     <span
                       class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                      :class="activeStates[plugin.PLUGIN_ID] !== false && plugin.health_ok ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
+                      :class="plugin.health_ok ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'"
                     >
                       <span
                         class="h-1.5 w-1.5 rounded-full"
-                        :class="activeStates[plugin.PLUGIN_ID] !== false && plugin.health_ok ? 'bg-success' : 'bg-muted-foreground'"
+                        :class="plugin.health_ok ? 'bg-success' : 'bg-muted-foreground'"
                       />
-                      {{ activeStates[plugin.PLUGIN_ID] !== false && plugin.health_ok ? 'Active' : 'Inactive' }}
+                      {{ plugin.health_ok ? 'Healthy' : 'Unhealthy' }}
                     </span>
                   </td>
                   <td class="table-cell-numeric">
                     <div class="flex items-center justify-end gap-1">
-                      <label :for="`adminpluginsview-toggle-${plugin.PLUGIN_ID}`"
-                        class="relative inline-flex cursor-pointer items-center"
-                        :title="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
-                        :aria-label="activeStates[plugin.PLUGIN_ID] !== false ? 'Disable plugin' : 'Enable plugin'"
-                      >
-                        <input :id="`adminpluginsview-toggle-${plugin.PLUGIN_ID}`"
-                          type="checkbox"
-                          class="sr-only peer"
-                          :checked="activeStates[plugin.PLUGIN_ID] !== false"
-                          @change="togglePlugin(plugin.PLUGIN_ID)"
-                        />
-                        <div
-                          class="peer h-5 w-9 rounded-full bg-muted-foreground/30 after:absolute after:start-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-background after:transition-all peer-checked:bg-primary peer-checked:after:translate-x-full"
-                        />
-                      </label>
                       <button
                         type="button"
                         class="rounded p-1 text-muted-foreground hover:bg-accent"
@@ -164,10 +149,9 @@
 
 <script setup lang="ts">
 import PageHeader from '../components/shared/PageHeader.vue'
-import { reactive, computed, watch } from 'vue'
+import { reactive, computed } from 'vue'
 import { api } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
-import { formatApiError } from '../lib/api/formatError'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
@@ -191,17 +175,6 @@ const { data: pluginsData, loading, error, load: loadPlugins } = useDataFetch(
 
 const plugins = computed(() => pluginsData.value ?? [])
 
-watch(pluginsData, (newData) => {
-  if (newData) {
-    for (const p of newData) {
-      if (activeStates[p.PLUGIN_ID] === undefined) {
-        activeStates[p.PLUGIN_ID] = true
-      }
-    }
-  }
-})
-
-const activeStates = reactive<Record<string, boolean>>({})
 const expanded = reactive<Record<string, boolean>>({})
 
 function pluginTypeLabel(capabilities: string[]): string {
@@ -214,21 +187,8 @@ function toggleExpand(id: string) {
   expanded[id] = !expanded[id]
 }
 
-async function togglePlugin(id: string) {
-  const newState = activeStates[id] === false
-  activeStates[id] = newState
-  try {
-    const { error: err } = await (api as any).PUT(`/api/v1/plugins/${id}/toggle`, {
-      body: { active: newState }
-    })
-    if (err) {
-      activeStates[id] = !newState
-      error.value = `Failed to toggle plugin: ${formatApiError(err)}`
-    }
-  } catch (e: unknown) {
-    activeStates[id] = !newState
-    error.value = `Failed to toggle plugin: ${formatApiError(e)}`
-  }
-}
-
+// The plugin API is read-only by design — install / enable / disable /
+// uninstall are managed with pip, not through the registry API (see
+// docs/product-map/admin/plugins.md). There is deliberately no lifecycle
+// control here: the surface only lists plugins and their health.
 </script>
