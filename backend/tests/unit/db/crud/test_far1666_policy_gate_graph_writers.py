@@ -32,7 +32,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from modulo.db.crud.pipeline import _clone_pipeline_config, _CloneSourceSnapshot, strip_declared_policy_gates
+from modulo.db.crud.pipeline import (
+    _clone_pipeline_config,
+    _clone_snapshots,
+    _CloneSourceSnapshot,
+    strip_declared_policy_gates,
+)
 from modulo.db.crud.pipeline_snapshot_versioning import rollback_to_snapshot
 from modulo.db.models.account import Account
 from modulo.db.models.base import Base
@@ -131,6 +136,34 @@ def _clone_snapshot(nodes: list[dict[str, Any]]) -> _CloneSourceSnapshot:
         edges=[],
         snapshots=[],
     )
+
+
+def _clone_source_snapshot_row(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """A plain-data snapshot row as ``_snapshot_to_dict`` produces for the clone."""
+    return {
+        "snapshot_version": 1,
+        "account_id": _ACCOUNT_ID,
+        "environment_profile_id": None,
+        "graph_json": {"nodes": nodes, "edges": []},
+        "connector_bindings_json": [],
+        "schema_pins_json": [],
+        "prompt_pins_json": [],
+        "model_backend_pins_json": [],
+        "composite_bindings_json": None,
+        "parameter_bindings_json": None,
+        "guardrail_pins_json": None,
+        "guardrail_pins_fingerprint": None,
+        "policy_gate_pins_json": None,
+        "policy_gate_pins_fingerprint": None,
+        "tag": None,
+        "notes": None,
+        "default_autonomy_level": "manual_approval",
+        "max_autonomy_level": None,
+        "config_json": {},
+        "run_context_defaults": {},
+        "stdout_retention_config": None,
+        "pins": [],
+    }
 
 
 async def _seed_eval(
@@ -250,6 +283,55 @@ class TestCloneStripsDeclaredPolicyGates:
             )
 
         assert "policy_gate declaration(s) dropped on clone" not in caplog.text
+
+
+class TestCloneSnapshotsStripDeclaredPolicyGates:
+    async def test_cloned_snapshot_nodes_carry_no_declaration_and_warn(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        source_nodes = [_gate_node(_NODE_A), _plain_node(_NODE_B)]
+        row = _clone_source_snapshot_row(source_nodes)
+        cloned_id = uuid.uuid4()
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+            count = await _clone_snapshots(
+                session,
+                [row],
+                source_id=_PIPELINE_ID,
+                cloned_id=cloned_id,
+                org_id=_ORG_ID,
+            )
+
+        assert count == 1
+        stored = (
+            await session.execute(select(PipelineSnapshot).where(PipelineSnapshot.pipeline_id == cloned_id))
+        ).scalar_one()
+        assert all("policy_gate" not in node for node in stored.graph_json["nodes"])
+        assert "policy_gate declaration(s) dropped on clone of snapshot" in caplog.text
+        assert _NODE_A in caplog.text
+        # The source dict is deep-copied, never mutated: a re-clone (or a
+        # rollback path reading the source) must still see the declaration.
+        assert "policy_gate" in source_nodes[0]
+
+    async def test_gate_free_snapshot_does_not_warn(
+        self,
+        session: AsyncSession,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        row = _clone_source_snapshot_row([_plain_node(_NODE_A)])
+
+        with caplog.at_level(logging.WARNING, logger="modulo.db.crud.pipeline"):
+            await _clone_snapshots(
+                session,
+                [row],
+                source_id=_PIPELINE_ID,
+                cloned_id=uuid.uuid4(),
+                org_id=_ORG_ID,
+            )
+
+        assert "policy_gate declaration(s) dropped on clone of snapshot" not in caplog.text
 
 
 class TestRollbackReconcilesDeclaredPolicyGates:
