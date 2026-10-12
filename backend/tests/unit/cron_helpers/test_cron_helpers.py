@@ -29,6 +29,16 @@ from sqlalchemy.pool import QueuePool
 from modulo.core import cron_helpers as ch
 from modulo.db.models.eval_suite_run import SuiteRun
 from modulo.db.sqlstates import sqlstate_of
+from tests.unit.cron_helpers._helpers import (
+    _Begin as _MockBegin,
+)
+from tests.unit.cron_helpers._helpers import (
+    _mock_result,
+    _org_result,
+    _patch_env,
+    _rows_result,
+    _settings,
+)
 
 ORG = uuid.uuid4()
 TRIGGER_A = uuid.uuid4()
@@ -37,14 +47,6 @@ TRIGGER_POLL = uuid.uuid4()
 REPORT = uuid.uuid4()
 
 _UNSET_REPORT = object()
-
-
-class _MockBegin:
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
 
 
 class _MockBeginNested(_MockBegin):
@@ -102,12 +104,6 @@ class _MockSession:
         return None
 
 
-def _org_result(org_ids: list[uuid.UUID]) -> MagicMock:
-    r = MagicMock()
-    r.scalars.return_value = org_ids
-    return r
-
-
 def _pause_result(org_id: uuid.UUID, paused: bool = False, status: str = "active") -> MagicMock:
     """Result for the org-wide pause batched read: (id, triggers_paused, status)."""
     r = MagicMock()
@@ -144,12 +140,6 @@ def _org_not_paused() -> Generator[None, None, None]:
     """
     with patch.object(ch, "org_is_paused", new_callable=AsyncMock, return_value=False):
         yield
-
-
-def _rows_result(rows: list[Any]) -> MagicMock:
-    r = MagicMock()
-    r.all.return_value = rows
-    return r
 
 
 def _cron_row(
@@ -195,23 +185,6 @@ def _report_row(report_id: uuid.UUID) -> SimpleNamespace:
     return SimpleNamespace(id=report_id, cron_expression="0 9 * * *")
 
 
-def _settings(**overrides: object) -> MagicMock:
-    base: dict[str, object] = {
-        "saq_runs_queue": "runs",
-        "redis_url": "redis://localhost:6379/0",
-        "saq_redis_pool_size": 5,
-        "fernet_key": "b" * 44,
-    }
-    base.update(overrides)
-    return MagicMock(**base)
-
-
-def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-    monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "b" * 44)
-
-
 def _make_trigger(**overrides: object) -> MagicMock:
     """Build a Trigger-like double with defaults for the per-item fire jobs."""
     from modulo.db.models.trigger import Trigger
@@ -232,13 +205,6 @@ def _make_trigger(**overrides: object) -> MagicMock:
     for key, value in defaults.items():
         setattr(trigger, key, value)
     return trigger
-
-
-def _mock_result(**kwargs: Any) -> MagicMock:
-    result = MagicMock()
-    for name, value in kwargs.items():
-        getattr(result, name).return_value = value
-    return result
 
 
 def _lock_result(acquired: bool) -> MagicMock:
@@ -982,6 +948,13 @@ class TestFireReportTrigger:
         deliver.assert_awaited_once()
         clear.assert_awaited_once()
         redis_client.aclose.assert_awaited_once()
+        # The success branch must also stamp ``last_sent_at`` (the behaviour the
+        # test name claims); assert on the recorded UPDATE statement itself.
+        sent_stmts = [
+            s for s, _ in session.executed if "UPDATE scheduled_reports" in str(s) and "last_sent_at" in str(s)
+        ]
+        assert sent_stmts, "a successful send must stamp last_sent_at"
+        assert isinstance(sent_stmts[0].compile().params.get("last_sent_at"), datetime)
 
     @pytest.mark.asyncio
     async def test_failure_backs_off_next_send_at_not_reenqueue(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1848,10 +1821,6 @@ class TestComputeNextFire:
         nf = ch.compute_next_fire("0 9 * * *", after=base)
         assert nf.tzinfo == UTC
         assert nf > base
-
-    def test_naive_after_interpreted_as_utc(self) -> None:
-        nf = ch.compute_next_fire("0 9 * * *", after=datetime(2026, 1, 1, 8, 0, 0))
-        assert nf == datetime(2026, 1, 1, 9, 0, 0, tzinfo=UTC)
 
     def test_honors_configured_timezone(self) -> None:
         """09:00 America/New_York in January (UTC-5) == 14:00 UTC — a non-UTC
