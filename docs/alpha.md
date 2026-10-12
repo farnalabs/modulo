@@ -31,6 +31,7 @@ Alpha and beta are gated purely by deliverables in the code: the scoped Alpha-mi
 - **Contribution path:** the public repo is usable by an outside contributor (CI runs for forks, internal references scrubbed).
 - **Release engineering:** signed images/artifacts and an SBOM per release.
 - **Deployment shape:** a Kubernetes deployment path (Helm chart plus a runtime provider) as the recommended production self-hosting shape. Shipped - the Helm chart for the stack was validated end-to-end on EKS (FAR-1052), the runtime provider that runs agent workspaces as pods ships on main (FAR-1051), and its kind conformance gate is green (FAR-1053), so the combined path may be presented publicly as an existing capability. The scheduled managed-cluster conformance run has not executed yet (its kubeconfig secrets are pending), so no managed-cluster validation is claimed. The public reader-facing guide for the path is https://modulo.run/docs/kubernetes.
+- **Frontend stack:** the browser UI is a Vue 3 single-page app built on the PrimeVue component library (migrated from shadcn-vue + Radix Vue in FAR-317), themed through `frontend/src/lib/primevue-theme.ts`. Shipped - `docs/architecture.md` carries the full tech-stack table.
 - **Governance model:** the evaluation and policy-gate model ships before any customer exposure - it is a conceptual change to how runs are governed, not an incremental feature.
 
 ## Exit criteria
