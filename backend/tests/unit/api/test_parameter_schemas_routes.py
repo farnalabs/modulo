@@ -454,6 +454,34 @@ def test_validate_values_collects_all_error_kinds(client: TestClient) -> None:
     assert fields == {"region", "retries", "mode", "verbose", "label"}
 
 
+def test_validate_values_number_below_minimum_and_optional_absent(client: TestClient) -> None:
+    # Exercises the number lower-bound error arm and the optional-absent early
+    # return added when value validation was split into per-param helpers (S3776).
+    schema = _make_schema(
+        parameters=[
+            {"name": "retries", "type": "number", "minimum": 1, "maximum": 5},
+            {"name": "label", "type": "string"},
+        ]
+    )
+    with (
+        patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=schema),
+        patch("modulo.api.routes.parameter_schemas.set_rls_org", new_callable=AsyncMock),
+        patch("modulo.api.routes.parameter_schemas.set_rls_user_context", new_callable=AsyncMock),
+    ):
+        resp = client.post(
+            f"/api/v1/parameter-schemas/{schema.id}/validate",
+            json={"values": {"retries": 0}},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["valid"] is False
+    errors = {e["field"]: e["message"] for e in body["errors"]}
+    assert errors == {"retries": "Value must be >= 1."}
+    # "label" is optional and absent from the submitted values, so it must be
+    # silently skipped rather than reported as an error.
+    assert "label" not in errors
+
+
 def test_validate_missing_schema_returns_404(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.parameter_schemas.get_schema", new_callable=AsyncMock, return_value=None),
