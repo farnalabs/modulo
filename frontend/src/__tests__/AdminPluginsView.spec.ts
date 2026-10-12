@@ -70,6 +70,32 @@ describe('AdminPluginsView', () => {
     expect(wrapper.text()).toContain('connector')
   })
 
+  it('is read-only — no plugin enable/disable lifecycle control', async () => {
+    const { api: mockApi } = await import('../lib/api/client')
+    ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: mockPlugins,
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminPluginsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // Install / enable / disable / uninstall are pip-managed; the registry API
+    // has no lifecycle endpoint, so the view must not render a toggle that
+    // would call a non-existent route (see docs/product-map/admin/plugins.md).
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+  })
+
   it('shows empty state when no plugins', async () => {
     const { api: mockApi } = await import('../lib/api/client')
     ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({

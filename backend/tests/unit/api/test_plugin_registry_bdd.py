@@ -450,6 +450,55 @@ class TestPluginManifestValidation:
             assert health["modulo-connector-slack"].ok is True
 
 
+class TestPluginFeatureGate:
+    """Mirrors: the plugin routes are gated by require_feature("plugin_management")."""
+
+    def _disable_plugin_management(self) -> None:
+        disabled = MagicMock()
+        disabled.feature_enabled.return_value = False
+        app.dependency_overrides[get_plan_context] = lambda: disabled
+
+    def test_list_blocked_when_feature_disabled(self, client: TestClient) -> None:
+        self._disable_plugin_management()
+        resp = client.get("/api/v1/plugins")
+
+        assert resp.status_code == 402
+
+    def test_detail_blocked_when_feature_disabled(self, client: TestClient) -> None:
+        self._disable_plugin_management()
+        resp = client.get("/api/v1/plugins/modulo-connector-slack")
+
+        assert resp.status_code == 402
+
+    def test_health_blocked_when_feature_disabled(self, client: TestClient) -> None:
+        self._disable_plugin_management()
+        resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
+
+        assert resp.status_code == 402
+
+
+class TestPluginErrorPaths:
+    """The 500 fallback of every endpoint, not just the detail one."""
+
+    def test_list_registry_failure_returns_500(self, client: TestClient) -> None:
+        mock_registry = _make_mock_registry([PLUGIN_SLACK])
+        mock_registry.health_check.side_effect = RuntimeError("registry exploded")
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+            resp = client.get("/api/v1/plugins")
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Failed to list plugins"
+
+    def test_health_registry_failure_returns_500(self, client: TestClient) -> None:
+        mock_registry = _make_mock_registry([PLUGIN_SLACK])
+        mock_registry.get_plugin.side_effect = RuntimeError("registry exploded")
+        with patch("modulo.api.routes.plugins.get_plugin_registry", return_value=mock_registry):
+            resp = client.get("/api/v1/plugins/modulo-connector-slack/health")
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Failed to check plugin health"
+
+
 class TestPluginCapabilitiesAdvertised:
     """Mirrors: Plugin capabilities advertised in list response."""
 
