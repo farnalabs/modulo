@@ -13,6 +13,7 @@ import pytest
 from modulo.core.pipeline_engine.errors import RouterNoMatchError
 from modulo.core.pipeline_engine.graph_cache import (
     RouterConfigError,
+    _register_router_rule_targets,
     _validate_router_config,
     build_graph_from_json,
 )
@@ -314,6 +315,30 @@ def test_router_rule_targets_excluded_from_entry_point():
     # Without the fix the entry becomes "A" (a router rule target) and the real
     # entry S + router R are dead.
     assert entry_nodes == ["S"]
+
+
+def test_register_router_rule_targets_registers_targets_and_skips_missing() -> None:
+    # FAR-415: every router rule target is registered so entry-point selection
+    # cannot pick one; both the modern `target` and the legacy `target_port`
+    # keys are honoured, and a rule carrying neither contributes nothing (it
+    # must never register the string "None" as a graph target).
+    target_ids: set[str] = set()
+    nodes: list[dict[str, Any]] = [
+        {
+            "id": "R",
+            "node_type": "router",
+            "router_config": {
+                "rules": [
+                    {"guard": "state.x == `1`", "target": "A"},
+                    {"default": True, "target_port": "B"},
+                    {"guard": "state.y == `1`"},
+                ]
+            },
+        },
+        {"id": "S", "node_type": "agent"},
+    ]
+    _register_router_rule_targets(nodes, target_ids)
+    assert target_ids == {"A", "B"}
 
 
 # ---------------------------------------------------------------------------
