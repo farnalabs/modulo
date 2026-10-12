@@ -196,7 +196,15 @@ def running_pipeline_with_stub(pipeline_name: str, request: pytest.FixtureReques
 def running_pipeline(pipeline_name: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_run
 
-    request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    # When a scenario already declared a concurrency cap for this pipeline, the
+    # mock must carry that same cap — otherwise this step overwrites the declared
+    # fixture with the factory default (5), leaving ``_max_concurrent`` and
+    # ``_mock_pipeline.max_concurrent_runs`` disagreeing.
+    max_concurrent = getattr(request.node, "_max_concurrent", None)
+    if max_concurrent is None:
+        request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name)
+    else:
+        request.node._mock_pipeline = make_mock_pipeline(name=pipeline_name, max_concurrent_runs=max_concurrent)
     mock_run = make_mock_run(status="running", pipeline_id=request.node._mock_pipeline.id)
     request.node._mock_run = mock_run
     request.node._run_status = "running"

@@ -706,8 +706,7 @@ def manual_output_in_artifacts(ctx):
 @then(parsers.parse('the run status becomes "{status}"'))
 def run_status_becomes(status: str, ctx):
     expected = ctx.get("run_status")
-    if expected is None:
-        return
+    assert expected is not None, "run_status was never set by a preceding step"
     assert expected == status, f"Expected run status {status!r}, got {expected!r}"
 
 
