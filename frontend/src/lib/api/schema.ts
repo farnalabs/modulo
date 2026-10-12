@@ -4693,6 +4693,12 @@ export interface paths {
          *     level interception at creation, NULL / pre-node phase) flips to
          *     ``pending`` and is re-dispatched from run start (execute_run).
          *
+         *     A node-started run is refused with 409 when its thread carries no
+         *     resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
+         *     M1 — the reachable case is a non-interactive pipeline, which never
+         *     persists one): resuming it would silently re-execute it, so the run is
+         *     left terminal ``eval_blocked`` rather than burned.
+         *
          *     Requires operator or admin role.
          */
         post: operations["guardrail_override_run_api_v1_runs__run_id__guardrail_override_post"];

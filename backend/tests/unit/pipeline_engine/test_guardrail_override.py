@@ -19,6 +19,7 @@ from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
+    GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     guardrail_override,
 )
@@ -94,8 +95,16 @@ def _guardrail_row() -> MagicMock:
     return row
 
 
-def _session_execute_results(session: AsyncMock, *, run, rows) -> None:
-    """Wire session.execute to return the run/row sequence used by the override."""
+def _session_execute_results(
+    session: AsyncMock, *, run, rows, node_started: bool = False, has_checkpoint: bool = True
+) -> None:
+    """Wire session.execute to return the run/row sequence used by the override.
+
+    A node-started run (FAR-1711 M1) adds ONE checkpoint-existence probe
+    between the post-lock re-read and the guardrail-row load; the probe's
+    result is what decides between the ``running`` flip and the fail-closed
+    no-checkpoint refusal.
+    """
     run_result = MagicMock()
     run_result.scalar_one_or_none.return_value = run
     pipeline_result = MagicMock()
@@ -104,7 +113,13 @@ def _session_execute_results(session: AsyncMock, *, run, rows) -> None:
     rows_result.scalars.return_value.all.return_value = rows
     locked_result = MagicMock()
     locked_result.scalar_one_or_none.return_value = _RUN_ID
-    session.execute = AsyncMock(side_effect=[run_result, pipeline_result, run_result, rows_result, locked_result])
+    checkpoint_result = MagicMock()
+    checkpoint_result.first.return_value = (1,) if has_checkpoint else None
+    results = [run_result, pipeline_result, run_result]
+    if node_started:
+        results.append(checkpoint_result)
+    results.extend([rows_result, locked_result])
+    session.execute = AsyncMock(side_effect=results)
 
 
 @pytest.mark.asyncio
@@ -306,13 +321,20 @@ async def test_guardrail_override_node_started_run_flips_to_running_for_resume()
     node-started run, violating FAR-1649 ("a node-started run may only be
     resumed from checkpoint, never re-executed"). The zero-node control is
     ``test_guardrail_override_clean_input_flips_to_pending`` (explicit NULL
-    phase -> ``pending``)."""
+    phase -> ``pending``).
+
+    FAR-1711 (C1): the flip must ALSO stamp ``heartbeat_at`` one full
+    claim-stale window into the past, because the resume claim matches a
+    ``running`` row only when its heartbeat is stale — a bare status flip
+    leaves a FRESH block-time heartbeat and the run is unclaimable for a
+    whole ``RUN_CLAIM_STALE_SECONDS`` window (the override is silently lost).
+    """
     run = _make_run(
         input_payload={"body": "clean"},
         dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
     )
     session = _mock_session()
-    _session_execute_results(session, run=run, rows=[_guardrail_row()])
+    _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=True)
 
     with patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
         result = await guardrail_override(
@@ -329,4 +351,64 @@ async def test_guardrail_override_node_started_run_flips_to_running_for_resume()
     # The phase is preserved through the flip — the resume machinery resets it
     # atomically with its claim, and reconcile belts still recognise the row.
     assert result.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
+    # C1: the heartbeat is stamped stale by at least the claim-stale window, so
+    # ``claim_resume_run_async``'s stale-running arm matches on the first try.
+    from datetime import UTC, datetime
+
+    from modulo.settings import get_settings
+
+    stale_seconds = int(get_settings().run_claim_stale_seconds)
+    assert result.heartbeat_at is not None
+    heartbeat_age = (datetime.now(UTC) - result.heartbeat_at).total_seconds()
+    assert heartbeat_age >= stale_seconds
     mock_audit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_node_started_run_without_checkpoint_fails_closed():
+    """FAR-1711 (M1): a node-STARTED run whose thread carries NO root
+    checkpoint cannot be resumed (FAR-1649 forbids re-execution), so the
+    override FAILS CLOSED — ``GuardrailOverrideNoCheckpointError``, run left
+    terminal ``eval_failed``/``eval_blocked``, nothing flipped, no dispatch.
+    The reachable shape is a non-interactive pipeline (FAR-432 attaches no
+    checkpointer there, so none was ever persisted)."""
+    run = _make_run(
+        input_payload={"body": "clean"},
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    session = _mock_session()
+    _session_execute_results(session, run=run, rows=[_guardrail_row()], node_started=True, has_checkpoint=False)
+
+    with (
+        patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit,
+        pytest.raises(GuardrailOverrideNoCheckpointError),
+    ):
+        await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"body": "clean replacement text"},
+            actor_id=_ACTOR_ID,
+        )
+
+    # Fail CLOSED before any state write: the run stays the terminal block it
+    # was, and no audit event is recorded for a refused override.
+    assert run.status == "eval_failed"
+    assert run.error_code == "eval_blocked"
+    assert run.is_replay is False
+    mock_audit.assert_not_called()
+    # No optimistic status UPDATE was attempted (the last execute is the
+    # checkpoint probe, not the flip).
+    assert session.execute.await_count == 4
+
+
+def test_guardrail_override_job_type_follows_the_flip_target():
+    """FAR-1711 (m1): the re-dispatch job type comes from the ONE shared
+    predicate ``guardrail_override_job_type`` (owned by the module that owns
+    the flip target), so the route never re-derives it from a magic status."""
+    from modulo.core.pipeline_engine.recovery import guardrail_override_job_type
+
+    node_started_run = _make_run(status="running", dispatch_phase=PHASE_FIRST_NODE_DISPATCHED)
+    zero_node_run = _make_run(status="pending")
+    assert guardrail_override_job_type(node_started_run) == "resume_run"
+    assert guardrail_override_job_type(zero_node_run) == "execute_run"

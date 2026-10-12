@@ -10,7 +10,11 @@ guardrail rows, real create_run to produce the blocked run):
   journey increments exactly once — never a duplicate run); the flip target
   is ``pending`` for the genuine zero-node block and ``running`` for a
   node-started one (FAR-1711: the caller re-dispatches ``resume_run`` there,
-  never re-executes);
+  never re-executes), and the node-started flip is IMMEDIATELY claimable by
+  the resume claim's stale-running arm (the ``heartbeat_at`` stamp — C1);
+* **fail-closed without a checkpoint** — a node-started run with no root
+  checkpoint is refused (``GuardrailOverrideNoCheckpointError``, FAR-1711
+  M1) and left terminal, never flipped;
 * **single-flight** — a concurrent override that loses the status-update race
   raises ``ConcurrentRecoveryError`` and does NOT clobber the winner.
 
@@ -26,12 +30,14 @@ from collections.abc import AsyncGenerator
 from typing import cast
 
 import pytest
-from sqlalchemy import Table, select
+import sqlalchemy as sa
+from sqlalchemy import Table, bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
+    GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     guardrail_override,
 )
@@ -84,6 +90,17 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=_TABLES))
         await conn.exec_driver_sql("PRAGMA foreign_keys = OFF")
+        # FAR-1711 (M1): the override's resumable-checkpoint probe reads the
+        # ModuloPostgresSaver ``checkpoints`` table (runtime DDL, not an ORM
+        # model) — the SQLite e2e fixture mirrors its org/thread/ns key so the
+        # node-started branch can be exercised for real, with and without a
+        # checkpoint row.
+        await conn.exec_driver_sql(
+            "CREATE TABLE IF NOT EXISTS checkpoints ("
+            "organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, "
+            "checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, "
+            "PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))"
+        )
     yield eng
     await eng.dispose()
 
@@ -169,6 +186,23 @@ async def _blocked_run(session: AsyncSession) -> Run:
     )
 
 
+async def _seed_root_checkpoint(session: AsyncSession, run: Run) -> None:
+    """Insert the root-namespace checkpoint row a completed superstep leaves.
+
+    Mirrors the ModuloPostgresSaver runtime-DDL key
+    ``(organisation_id, thread_id, checkpoint_ns, checkpoint_id)`` — only the
+    key columns matter to the override's existence probe.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id) "
+            "VALUES (:oid, :tid, '', :cid)"
+        ),
+        {"oid": str(_ORG), "tid": run.langgraph_thread_id, "cid": uuid.uuid4().hex},
+    )
+    await session.flush()
+
+
 async def test_override_reblock_loop_stays_terminal(session: AsyncSession):
     """A still-violating override input is refused; the run stays terminal and
     is never flipped — the re-block loop is safe through the real seam."""
@@ -231,7 +265,16 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
     re-dispatch it as ``resume_run`` (checkpoint resume, FAR-1649: never
     re-execute a node-started run); a ``pending`` flip would re-dispatch as
     ``execute_run`` and re-execute it. The zero-node control is
-    ``test_override_journey_increments_once`` (NULL phase -> ``pending``)."""
+    ``test_override_journey_increments_once`` (NULL phase -> ``pending``).
+
+    FAR-1711 (C1, real seam): the flip also stamps ``heartbeat_at`` one full
+    claim-stale window into the past so the resume claim is IMMEDIATELY
+    claimable — asserted here as the exact predicate
+    ``_RESUME_CLAIM_UPDATE_SQL``'s stale-running arm evaluates. A block-time
+    run keeps a FRESH heartbeat, so without the stamp the claim matches ZERO
+    rows for a whole ``RUN_CLAIM_STALE_SECONDS`` window and the override is
+    silently lost (see ``test_guardrail_override_resume_claim.py`` for the
+    real ``claim_resume_run_async`` proof on Postgres)."""
     await _seed(session)
     await _seed_guardrail(session)
     run = await _blocked_run(session)
@@ -240,7 +283,7 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
     # Stamp the durable node-start marker the executor leaves on a
     # node-scoped eval block (the phase never advances past it).
     run.dispatch_phase = PHASE_FIRST_NODE_DISPATCHED
-    await session.flush()
+    await _seed_root_checkpoint(session, run)
 
     override_run = await guardrail_override(
         session,
@@ -257,6 +300,67 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
 
     fresh = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
     assert fresh.status == "running"
+    # C1: the persisted heartbeat satisfies the resume claim's stale-running
+    # predicate IMMEDIATELY (``heartbeat_at < now() - run_claim_stale_seconds``).
+    # Evaluated against the DB clock, spelled per-dialect: Postgres is the
+    # claim SQL's own form; SQLite stores the column as an ISO string and
+    # exposes the DB clock as ``datetime('now')`` (UTC), which compares
+    # lexicographically in the same order.
+    from datetime import UTC, datetime
+
+    from modulo.settings import get_settings
+
+    stale_seconds = int(get_settings().run_claim_stale_seconds)
+    if session.get_bind().dialect.name == "postgresql":
+        claimable_sql = text(
+            "SELECT 1 FROM runs WHERE id = :rid AND status = 'running' "
+            "AND heartbeat_at < now() - (:stale * interval '1 second')"
+        )
+    else:
+        claimable_sql = text(
+            "SELECT 1 FROM runs WHERE id = :rid AND status = 'running' "
+            "AND heartbeat_at < datetime('now', '-' || :stale || ' seconds')"
+        )
+    # ``runs.id`` is a ``Uuid`` column: on SQLite it is stored in the
+    # dialect's own encoding, so the raw ``:rid`` bind must go through the
+    # same type processor the ORM write used (``str(run_id)`` alone would not
+    # match the stored form).
+    claimable = await session.execute(
+        claimable_sql.bindparams(bindparam("rid", type_=sa.Uuid())),
+        {"rid": run_id, "stale": stale_seconds},
+    )
+    assert claimable.first() is not None, "flipped row is NOT claimable by the resume claim's stale-running arm"
+    assert fresh.heartbeat_at is not None
+    assert (datetime.now(UTC) - fresh.heartbeat_at).total_seconds() >= stale_seconds
+
+
+async def test_override_node_started_run_without_checkpoint_fails_closed(session: AsyncSession):
+    """FAR-1711 (M1, real seam): a node-STARTED eval-blocked run whose thread
+    carries NO root checkpoint — the non-interactive-pipeline shape, where the
+    executor attaches no checkpointer (FAR-432) — is refused with
+    ``GuardrailOverrideNoCheckpointError`` and left terminal ``eval_failed`` /
+    ``eval_blocked``. Resuming it would silently RE-EXECUTE it from the start
+    (FAR-1649), so fail closed and keep the block overridable."""
+    await _seed(session)
+    await _seed_guardrail(session)
+    run = await _blocked_run(session)
+    run_id = run.id
+    run.dispatch_phase = PHASE_FIRST_NODE_DISPATCHED
+    await session.flush()
+
+    with pytest.raises(GuardrailOverrideNoCheckpointError):
+        await guardrail_override(
+            session,
+            org_id=_ORG,
+            run_id=run_id,
+            input_data={"body": "clean replacement text"},
+            actor_id=_ACTOR,
+        )
+
+    fresh = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+    assert fresh.status == "eval_failed"
+    assert fresh.error_code == "eval_blocked"
+    assert fresh.is_replay is False
 
 
 async def test_override_single_flight_race_loses(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
