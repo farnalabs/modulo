@@ -237,6 +237,23 @@ class TestReDoSBoundedMasking:
         assert "ss@host" not in masked
         assert MASK in masked
 
+    def test_conn_anchor_without_close_at_is_skipped(self) -> None:
+        # A ``://`` with no ``@`` after it carries no inline credential, so the
+        # bounded window scan must skip the anchor and leave the text intact
+        # (long input — the >cap windowed path, not the short-circuit sub).
+        text = "https://host/path" + ("y" * 6000)
+        assert mask_secret_values_in_text(text) == text
+
+    def test_conn_close_beyond_bounded_region_masks_whole_span(self) -> None:
+        # When the only ``@`` lies beyond the bounded region, the scan falls
+        # back to the first ``@`` after the anchor; the span then exceeds the
+        # ReDoS cap and is masked wholesale — fail-closed (over-masking), never
+        # a leak of the URL it swallowed.
+        text = "https://host/path" + ("y" * 6000) + "@elsewhere"
+        masked = mask_secret_values_in_text(text)
+        assert masked == f"{MASK}elsewhere"
+        assert "host" not in masked
+
 
 class TestWindowHelpers:
     def test_close_marker_end_connection_string_is_single_char(self) -> None:
