@@ -485,6 +485,148 @@ async def list_pipelines(
     return PageResult(items=items, total=total, page=page, page_size=page_size)
 
 
+def _validate_circuit_breaker_change(
+    pipeline: Pipeline,
+    updates: dict[str, Any],
+) -> tuple[dict[str, Any], Decimal | None, bool]:
+    """Validate/quantize a ``circuit_breaker_threshold`` update (FAR-1182).
+
+    Returns ``(updates, previous_threshold, threshold_changing)``. When the key
+    is absent the update dict is returned unchanged and the flag is ``False``;
+    otherwise the threshold is normalized (raising ``ValueError`` on an invalid
+    value BEFORE any row mutation) and the row's current value is captured as
+    ``previous_threshold`` for the post-apply audit. ``None`` disables the
+    breaker.
+    """
+    if "circuit_breaker_threshold" not in updates:
+        return updates, None, False
+    return (
+        {
+            **updates,
+            "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
+        },
+        pipeline.circuit_breaker_threshold,
+        True,
+    )
+
+
+def _owner_candidate(
+    pipeline: Pipeline,
+    field: str,
+    owner_updates: dict[str, uuid.UUID | None],
+) -> uuid.UUID | None:
+    """Resolve the owner value to validate for ``field``.
+
+    A payload-carried owner is an unconditional pass-through; a stored owner is
+    re-checked only because the scope changed. Real rows are ``UUID | None`` by
+    column type; partial test stand-ins (``SimpleNamespace``) may expose
+    non-column attribute children — treat those as "unassigned" rather than
+    feed a non-UUID into the query.
+    """
+    if field in owner_updates:
+        return owner_updates[field]
+    stored = getattr(pipeline, field, None)
+    return stored if isinstance(stored, uuid.UUID | None) else None
+
+
+async def _reassign_pipeline_owners(
+    session: AsyncSession,
+    pipeline: Pipeline,
+    updates: dict[str, Any],
+    *,
+    org_id: uuid.UUID | None = None,
+) -> tuple[dict[str, uuid.UUID | None], dict[str, uuid.UUID | None]]:
+    """FAR-1161 pre-apply owner validation. Returns ``(owner_updates, previous_owners)``.
+
+    Fail-closed owner eligibility is checked against the EFFECTIVE
+    (post-update) visibility/owner-team — a PATCH may change all three in one
+    payload, and the invariant must hold on the resulting pipeline, not the
+    stale one.
+
+    Scope-change re-validation: when the update contains ``visibility`` or
+    ``owner_team_id`` — the same presence test the route's team-transition gate
+    uses — the STORED owners are re-validated too, not just the ones the
+    payload carries. A team move or visibility flip can strand an already-stored
+    owner outside the new scope even when the owner keys are omitted; that
+    combination fails CLOSED with the same 422 the owner-assignment path raises
+    (naming the offending field), never a silent auto-clear. All validation
+    runs BEFORE ``apply_updates`` so an out-of-scope owner never mutates the row
+    (the 422 rolls the transaction back regardless; this keeps the in-memory
+    object clean for any later code in the same transaction).
+    """
+    owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
+    scope_changed = "visibility" in updates or "owner_team_id" in updates
+    fields_to_validate = set(owner_updates)
+    if scope_changed:
+        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
+    previous_owners: dict[str, uuid.UUID | None] = {f: getattr(pipeline, f) for f in owner_updates}
+    # Guard the whole block: an update that touches neither owners nor scope
+    # must not read scope attributes off partial stand-in rows at all.
+    if not fields_to_validate:
+        return owner_updates, previous_owners
+    # getattr defaults: real rows always carry both columns; partial test
+    # stand-ins (SimpleNamespace) may not, and a scope-less default only
+    # reaches the team gate when a real owner is being validated. Non-str
+    # scope (absent stand-in attribute, explicit null) behaves as org scope in
+    # the gate below — the same as `visibility != "team"`.
+    raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
+    effective_visibility = raw_visibility if isinstance(raw_visibility, str) else "org"
+    # .get is correct here: an explicit owner_team_id=None (clear) is in
+    # the dict, so .get returns None rather than the pipeline default.
+    effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
+    for field in sorted(fields_to_validate):
+        await validate_accountability_owner(
+            session,
+            owner_account_id=_owner_candidate(pipeline, field, owner_updates),
+            field=field,
+            org_id=org_id if org_id is not None else pipeline.organisation_id,
+            visibility=effective_visibility,
+            owner_team_id=effective_owner_team,
+        )
+    return owner_updates, previous_owners
+
+
+async def _enforce_team_ownership_move(
+    session: AsyncSession,
+    pipeline_id: uuid.UUID,
+    *,
+    old_team_id: uuid.UUID | None,
+    new_team_id: uuid.UUID | None,
+    org_id: uuid.UUID | None,
+    account_id: uuid.UUID | None,
+    request_id: str | None,
+) -> None:
+    """PRD §9.3 team-transfer guard: block while the pipeline has non-terminal runs.
+
+    Fires only when audit context is supplied (the REST route path) AND
+    ``owner_team_id`` actually changed. The transfer is blocked
+    (``PipelineHasActiveRunsError``) while any non-terminal run exists, and a
+    ``resource_team_ownership_changed`` audit event is recorded otherwise.
+    Callers that pass no audit context (internal tooling, MCP) are unaffected.
+    """
+    if org_id is None or account_id is None or new_team_id == old_team_id:
+        return
+    active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
+    if active_runs:
+        raise PipelineHasActiveRunsError(active_runs)
+    await append_audit_event(
+        session,
+        org_id=org_id,
+        event_type="resource_team_ownership_changed",
+        actor_user_id=account_id,
+        resource_type="pipeline",
+        resource_id=pipeline_id,
+        payload_json={
+            "resource_type": "pipeline",
+            "resource_id": str(pipeline_id),
+            "old_team_id": str(old_team_id) if old_team_id is not None else None,
+            "new_team_id": str(new_team_id) if new_team_id is not None else None,
+            "changed_by": str(account_id),
+        },
+        request_id=request_id,
+    )
+
+
 async def update_pipeline(
     session: AsyncSession,
     pipeline_id: uuid.UUID,
@@ -512,67 +654,8 @@ async def update_pipeline(
         return None
     if updates.get("max_concurrent_runs") is not None:
         validate_max_concurrent_runs(updates["max_concurrent_runs"])
-    threshold_changing = "circuit_breaker_threshold" in updates
-    previous_threshold: Decimal | None = None
-    if threshold_changing:
-        previous_threshold = pipeline.circuit_breaker_threshold
-        updates = {
-            **updates,
-            "circuit_breaker_threshold": normalize_circuit_breaker_threshold(updates["circuit_breaker_threshold"]),
-        }
-    # FAR-1161: fail-closed owner eligibility against the EFFECTIVE (post-update)
-    # visibility/owner-team — a PATCH may change all three in one payload, and
-    # the invariant must hold on the resulting pipeline, not the stale one.
-    #
-    # Scope-change re-validation (review finding): when the update contains
-    # ``visibility`` or ``owner_team_id`` — the same presence test the route's
-    # team-transition gate uses — the STORED owners are re-validated too, not
-    # just the ones the payload carries. A team move or visibility flip can
-    # strand an already-stored owner outside the new scope even when the owner
-    # keys are omitted; that combination fails CLOSED with the same 422 the
-    # owner-assignment path raises (naming the offending field), never a
-    # silent auto-clear. All validation runs BEFORE apply_updates so an
-    # out-of-scope owner never mutates the row (the 422 rolls the transaction
-    # back regardless; this keeps the in-memory object clean for any later
-    # code in the same transaction).
-    owner_updates = {f: updates[f] for f in ACCOUNTABILITY_OWNER_FIELDS if f in updates}
-    scope_changed = "visibility" in updates or "owner_team_id" in updates
-    fields_to_validate = set(owner_updates)
-    if scope_changed:
-        fields_to_validate.update(ACCOUNTABILITY_OWNER_FIELDS)
-    # Guard the whole block: an update that touches neither owners nor scope
-    # must not read scope attributes off partial stand-in rows at all.
-    if fields_to_validate:
-        # getattr defaults: real rows always carry both columns; partial
-        # test stand-ins (SimpleNamespace) may not, and a scope-less default
-        # only reaches the team gate when a real owner is being validated.
-        # Non-str scope (absent stand-in attribute, explicit null) behaves as
-        # org scope in the gate below — the same as `visibility != "team"`.
-        _raw_visibility = updates.get("visibility", getattr(pipeline, "visibility", None))
-        effective_visibility = _raw_visibility if isinstance(_raw_visibility, str) else "org"
-        # .get is correct here: an explicit owner_team_id=None (clear) is in
-        # the dict, so .get returns None rather than the pipeline default.
-        effective_owner_team = updates.get("owner_team_id", getattr(pipeline, "owner_team_id", None))
-        for _field in sorted(fields_to_validate):
-            if _field in owner_updates:
-                # Payload-carried owner: same unconditional pass-through as before.
-                _candidate = owner_updates[_field]
-            else:
-                # Stored owner re-checked because the scope changed. Real rows
-                # are UUID | None by column type; partial test stand-ins
-                # expose non-column attribute children — treat those as
-                # "unassigned" rather than feed a non-UUID into the query.
-                _stored = getattr(pipeline, _field, None)
-                _candidate = _stored if isinstance(_stored, uuid.UUID | None) else None
-            await validate_accountability_owner(
-                session,
-                owner_account_id=_candidate,
-                field=_field,
-                org_id=org_id if org_id is not None else pipeline.organisation_id,
-                visibility=effective_visibility,
-                owner_team_id=effective_owner_team,
-            )
-    previous_owners: dict[str, uuid.UUID | None] = {f: getattr(pipeline, f) for f in owner_updates}
+    updates, previous_threshold, threshold_changing = _validate_circuit_breaker_change(pipeline, updates)
+    owner_updates, previous_owners = await _reassign_pipeline_owners(session, pipeline, updates, org_id=org_id)
     old_team_id = pipeline.owner_team_id
     apply_updates(pipeline, updates)
     if threshold_changing:
@@ -597,27 +680,15 @@ async def update_pipeline(
             new=owner_updates[_field],
             request_id=request_id,
         )
-    new_team_id = pipeline.owner_team_id
-    if org_id is not None and account_id is not None and new_team_id != old_team_id:
-        active_runs = await count_active_runs_for_pipeline(session, pipeline_id, include_pending=True)
-        if active_runs:
-            raise PipelineHasActiveRunsError(active_runs)
-        await append_audit_event(
-            session,
-            org_id=org_id,
-            event_type="resource_team_ownership_changed",
-            actor_user_id=account_id,
-            resource_type="pipeline",
-            resource_id=pipeline_id,
-            payload_json={
-                "resource_type": "pipeline",
-                "resource_id": str(pipeline_id),
-                "old_team_id": str(old_team_id) if old_team_id is not None else None,
-                "new_team_id": str(new_team_id) if new_team_id is not None else None,
-                "changed_by": str(account_id),
-            },
-            request_id=request_id,
-        )
+    await _enforce_team_ownership_move(
+        session,
+        pipeline_id,
+        old_team_id=old_team_id,
+        new_team_id=pipeline.owner_team_id,
+        org_id=org_id,
+        account_id=account_id,
+        request_id=request_id,
+    )
     await session.flush()
     return pipeline
 
