@@ -486,6 +486,8 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import FeatureGate from '../components/FeatureGate.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 import TableActions from '../components/shared/TableActions.vue'
@@ -505,6 +507,7 @@ interface PresetItem {
 }
 
 const { t } = useI18n()
+const { track } = useProductAnalytics()
 
 interface BackendFormState {
   name: string
@@ -745,6 +748,7 @@ async function createBackend() {
     if (err) {
       formError.value = formatApiError(err)
     } else if (data) {
+      track(ANALYTICS_EVENTS.MODEL_BACKEND_ADDED, { model_backend_id: data.id })
       closeForm()
       loadBackends()
     }

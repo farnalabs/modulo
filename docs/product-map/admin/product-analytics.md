@@ -18,6 +18,7 @@ unit-tests:
   - backend/tests/unit/product_analytics/test_license_enforcement.py
   - backend/tests/unit/product_analytics/test_metrics_dump.py
   - backend/tests/unit/product_analytics/test_metrics_ingest.py
+  - backend/tests/unit/product_analytics/test_metrics_staging_consumer.py
   - backend/tests/unit/product_analytics/test_routes.py
   - backend/tests/unit/api/routes/test_product_analytics_transparency.py
   - backend/tests/unit/api/test_product_analytics_identity_hardening.py
@@ -114,21 +115,29 @@ an eligible tier.
       (`api/routes/metrics_ingest.py`,
       `tests/unit/product_analytics/test_metrics_ingest.py`,
       `tests/bdd/features/product_analytics/metrics_ingest.feature`)
-- [ ] `metrics_staging` is never consumed and never purged: the daily dump builds
-      its payload only from aggregate tables (`RunDailyFact`, `ErrorGroup` and the
-      entity counts) and never reads staged events, and no retention/purge path
-      exists. Staged rows therefore accumulate without bound while the
-      transparency surface can still report `egress_allowed`. Both the model
-      docstring (`db/models/metrics_staging.py`) and migration 0121 claim the dump
-      consumes and purges the rows — that contract is unmet. Feature completion,
-      not a QA fix — tracked for a follow-up ticket.
-- [ ] The frontend event-capture composable is unwired: `initProductAnalytics` /
-      `useProductAnalytics.track` (`frontend/src/composables/useProductAnalytics.ts`)
-      has no production call site (no initialiser in `App.vue` / `main.ts`), so no
-      client event is ever buffered or posted. Its docstrings also describe a
-      server-side `page_view` daily counter (Redis INCR, flushed once per dump
-      window) that exists nowhere in the backend. Feature completion, not a QA fix
-      — tracked for a follow-up ticket.
+- [x] Staged frontend events are consumed and purged end to end (FAR-1717): the
+      daily dump's `_aggregate_staged_events` folds each UTC day's
+      `metrics_staging` rows into the payload's `event_counts` section, and
+      `_purge_staging` runs on EVERY `metrics_dump` cron tick before the jitter
+      gate — deleting consumed rows (the watermark has passed their date) plus
+      anything older than the 30-day retention bound, so the table cannot grow
+      unbounded even when a dump gate skips; the supporting plain index
+      `ix_metrics_staging_recorded_at` (migration 0304) serves the purge's
+      `recorded_at < :cutoff` DELETE. Turning the org's level off — admin PUT or
+      prompt decline — purges its staged rows immediately in the same
+      transaction (`api/routes/product_analytics.py`)
+      (`tests/unit/product_analytics/test_metrics_staging_consumer.py`,
+      `test_routes.py`)
+- [x] The frontend event-capture composable is initialised in the app root
+      (FAR-1718): `App.vue` calls `initProductAnalytics` with
+      `productAnalyticsStore.isOptedIn` as the live consent function, and
+      curated `track()` call sites ship with pipeline create / run start,
+      schema create, connector add, model-backend add, trigger create, eval
+      create and HITL claim/approve/reject. No `page_view` event exists — the
+      stale docstring claim of a server-side Redis counter was removed; no
+      per-route data is captured, client or server side
+      (`frontend/src/App.vue`,
+      `frontend/src/composables/useProductAnalytics.ts`)
 
 ## Consent scoping (FAR-1635)
 
@@ -163,23 +172,13 @@ intentional, not an open question:
   fields, which now reflect real state. An in-product analytics export/administration
   surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
   remains unshipped (warehouse scope sits under `feat-analytics`).
-- The `metrics_staging` consumer and its retention/purge are missing. The daily
-  dump never reads staged events, so the frontend ingest path
-  (`POST /api/v1/metrics/events` → `metrics_staging`) delivers nothing end to
-  end and the table grows without bound. Documented by the model docstring and
-  migration 0121 as consumed + purged by the dump — a contract that was never
-  implemented. Needs feature work (wire staging into the dump and add the purge);
-  tracked for a follow-up ticket.
-- The frontend capture composable
-  (`frontend/src/composables/useProductAnalytics.ts`) is not initialised anywhere
-  in the app, so client-only events are never captured. Wiring it should land
-  together with the staging consumer above — wiring capture without a consumer
-  would only accumulate unusable rows.
-- The event-capture docstrings (`productAnalyticsEvents.ts`,
-  `useProductAnalytics.ts`) describe a server-side `page_view` daily counter
-  (Redis INCR, flushed once per dump window, consent-gated before increment) that
-  does not exist anywhere in the backend, and `page_view` is not in
-  `metrics_constants.VALID_EVENT_TYPES`.
+- Events staged AFTER the daily dump moment on dump day are not delivered: the
+  dump is a point-in-time snapshot and the watermark advances to dump day, so
+  the next dump starts the following day; such rows are held back by the purge
+  (never deleted by their own dump day) and drop out via the 30-day retention
+  bound. Closing this would require the watermark to lag a full closed day —
+  which makes the vendor receive two payloads for the current date — i.e. a
+  payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
 - 2026-10-12: **Improve Architecture product-map walk** — wired the partner
@@ -195,6 +194,25 @@ intentional, not an open question:
   circuit). The request-time route half (`resolve_plan_context` /
   `require_feature` degrading the effective plan) is still open and stays
   tracked as the remaining unchecked behaviour.
+- 2026-10-12: **FAR-1717 + FAR-1718 (staging consumer + capture init)** — closed
+  both unwired halves of the frontend ingest path. Backend: `_build_payload`
+  now folds `metrics_staging` into the payload (`_aggregate_staged_events` →
+  the new `event_counts` section; `SCHEMA_VERSION` bumped 1 → 2 per the module
+  contract that it changes when the payload shape changes); every
+  `metrics_dump` tick purges consumed + expired staging rows (`_purge_staging`,
+  bounded by the watermark and a 30-day retention cap) with the supporting
+  plain index `ix_metrics_staging_recorded_at` (migration 0304 — a *partial*
+  index is impossible here: the purge cutoff is a moving bind parameter and
+  Postgres requires IMMUTABLE index predicates); the admin PUT and the consent
+  decline path purge the org's staged rows in the same transaction, replacing
+  the "will be implemented in FAR-355" docstring on the level-update route.
+  Frontend: `App.vue` initialises `initProductAnalytics` with the store's live
+  `isOptedIn` as the consent function, curated `track()` call sites landed in
+  the same change (so captured events have a consumer), and the non-existent
+  `page_view` Redis-counter docstring claim was dropped. Evidence: the new
+  real-SQLite suite `test_metrics_staging_consumer.py` (aggregation, payload
+  section, purge cutoffs, jitter-skip wiring) and `test_routes.py::TestStagingPurgeOnOptOut`
+  both fail against the pre-change code (missing functions / no DELETE executed).
 - 2026-10-12: **Improve Architecture product-map walk** — documented the
   event-ingest path and found its two unwired halves (both feature completion, not
   QA fixes). (1) `POST /api/v1/metrics/events` → `metrics_staging` has no consumer
