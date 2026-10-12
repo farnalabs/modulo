@@ -15,9 +15,11 @@ patched, so the route's typed error mapping (200 replay/skip, 403 role gate,
 are asserted end to end.
 """
 
+import asyncio
 import contextlib
 import json
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,7 +30,7 @@ with contextlib.suppress(FileNotFoundError, OSError):
 with contextlib.suppress(FileNotFoundError, OSError):
     scenarios("../features/errors/recovery.feature")
 
-from tests.bdd.conftest import _active_client, make_mock_run
+from tests.bdd.conftest import ORG_ID, _active_client, make_mock_run
 
 
 @given(parsers.parse("a run that failed at node {failed:d} of {total:d}"))
@@ -196,21 +198,145 @@ def check_error_detail_field(request):
     assert data.get("error_detail") is not None or "error_detail" in data
 
 
-# NOTE: no real seam exists for these two steps. A failed run writes NO audit
-# event — the failure path only ``broker.publish("run_failed", ...)`` (a
-# notifier event; ``core/notifier.EVENT_RUN_FAILED``), and there is no
-# ``append_audit_event(event_type="run_failed")`` anywhere in the pipeline
-# engine. The audit read route cannot therefore observe a run-failure audit
-# event, and fabricating one through its query seam would assert a fiction.
-# Left deliberately vacuous rather than fabricating a pass.
+# ---------------------------------------------------------------------------
+# Audit trail (REAL background-sweep write path -> REAL GET /api/v1/admin/audit)
+# ---------------------------------------------------------------------------
+# The IN-RUN EXECUTOR failure path writes NO audit event: it publishes the
+# notifier event only (``broker.publish("run_failed", ...)`` ->
+# ``core.notifier.EVENT_RUN_FAILED``). A failed run IS recorded on the org audit
+# chain by BACKGROUND-SWEEP TERMINALISATION, however:
+# ``record_run_state_change_audits`` (core/audit_logger/background.py) is called
+# from the stale-run / slot reconciliation sweeps
+# (``core/run_terminal_advance.advance_terminalised_run``,
+# ``core/runner_capacity``, ``core/cron_helpers``) and writes a
+# ``run.sweep_terminalised`` event with ``resource_type="run"`` and
+# ``payload_json["run_status"]`` for every run whose LIVE status is in
+# ``TERMINAL_STATUSES`` (db/models/run.py) -- which includes ``"failed"``. That
+# event is readable through the REAL ``GET /api/v1/admin/audit`` route.
+#
+# These steps therefore drive that path end to end rather than asserting
+# nothing: the production writer runs for real with only its DB session seam
+# (the post-commit ``Run`` re-select) and its ``append_audit_event`` append
+# patched, and the event it produces is served through the real audit read
+# route. The steps fail if the writer stops emitting a run-entity event for a
+# failed terminal run -- the discriminating fields (event_type, resource_type,
+# run_status) are the writer's, not the test's.
+
+
+def _write_failed_run_audit(request) -> dict:
+    """Run the REAL background-sweep audit writer for the scenario's failed run.
+
+    Only the writer's DB session seam (the post-commit ``Run`` re-select) and
+    its ``append_audit_event`` append are patched -- the same seams the unit
+    contract for this writer patches
+    (tests/unit/audit_logger/test_background_audit.py). ``expected_statuses``
+    is the real ``TERMINAL_STATUSES``, so a ``"failed"`` run is only recorded
+    when production still classifies it terminal. Returns the event kwargs the
+    production writer handed to ``append_audit_event``.
+    """
+    from modulo.core.audit_logger import background
+    from modulo.db.models.run import TERMINAL_STATUSES
+
+    run = make_mock_run(id=request.node._run_id, status="failed", error_detail="Node 2: Connection timeout")
+    run.organisation_id = ORG_ID
+    run.error_code = "node.failed"
+
+    session = MagicMock()
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [run]
+    session.execute = AsyncMock(return_value=result)
+    session_begin = MagicMock()
+    session_begin.__aenter__ = AsyncMock(return_value=session)
+    session_begin.__aexit__ = AsyncMock(return_value=False)
+    session.begin.return_value = session_begin
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=session_cm)
+
+    append = AsyncMock(return_value=None)
+    with (
+        patch.object(background, "set_rls_org", new=AsyncMock()),
+        patch.object(background, "append_audit_event", new=append),
+    ):
+        recorded = asyncio.run(
+            background.record_run_state_change_audits(
+                factory,
+                [(request.node._run_id, ORG_ID)],
+                event_type="run.sweep_terminalised",
+                expected_statuses=TERMINAL_STATUSES,
+                actor_source="stale_run_recovery",
+                log_key="bdd.failed_state.audit_append_failed",
+                summary_prefix="Run terminalised by background sweep:",
+            )
+        )
+    assert recorded == 1, "the production audit writer recorded no event for the failed run"
+    return append.await_args.kwargs
+
+
+def _audit_event_item(event: dict) -> dict:
+    """One ``GET /api/v1/admin/audit`` item, shaped as the read route returns it.
+
+    Every discriminating field is taken from the production writer's
+    ``append_audit_event`` kwargs; only the chain bookkeeping (id, hash,
+    timestamp) is synthesised, since the BDD suite has no database.
+    """
+    return {
+        "id": str(uuid.uuid4()),
+        "event_type": event["event_type"],
+        "actor_user_id": event["actor_user_id"],
+        "resource_type": event["resource_type"],
+        "resource_id": str(event["resource_id"]),
+        "payload_json": event["payload_json"],
+        "request_id": None,
+        "previous_hash": "hash_0",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+
+
 @when("I check the audit log")
 def check_audit_log(request):
-    pass
+    """Read the REAL audit route over the event the REAL writer produced.
+
+    The run-failure event comes from the production background-sweep writer
+    (see the block comment above); only the read route's ``list_audit_events``
+    DB seam and ``set_rls_org`` are patched -- the same pattern the rest of
+    this module uses for its route-level steps.
+    """
+    event = _write_failed_run_audit(request)
+    client = _active_client(request)
+    with (
+        patch("modulo.api.routes.audit.set_rls_org"),
+        patch(
+            "modulo.api.routes.audit.list_audit_events",
+            return_value={
+                "items": [_audit_event_item(event)],
+                "total": 1,
+                "next_cursor": None,
+                "prev_cursor": None,
+                "limit": 50,
+            },
+        ),
+    ):
+        resp = client.get("/api/v1/admin/audit")
+    request.node._resp = resp
 
 
 @then("an audit event exists for run failure")
 def audit_event_for_failure(request):
-    pass
+    """``GET /api/v1/admin/audit`` surfaces the failed run's ``run``-entity event.
+
+    Asserts the route returned 200 and carried a ``run``-entity event whose
+    payload records the terminal failure -- the observable audit-trail evidence
+    of a failed run, as written by the production background-sweep writer.
+    """
+    resp = request.node._resp
+    assert resp.status_code == 200, resp.text
+    items = resp.json()["items"]
+    run_events = [e for e in items if e.get("resource_type") == "run"]
+    assert run_events, "No run-entity event observable through GET /api/v1/admin/audit"
+    failed = [e for e in run_events if (e.get("payload_json") or {}).get("run_status") == "failed"]
+    assert failed, "No run-failure (run_status='failed') event observable through GET /api/v1/admin/audit"
 
 
 # ---------------------------------------------------------------------------
