@@ -60,9 +60,12 @@ async def _count_sql_and_value(
     counted: int = 0,
     exclude_run_id: uuid.UUID | None = None,
     host_resource_only: bool = False,
+    org: uuid.UUID = _ORG,
 ) -> tuple[str, int]:
     """Run the count, capturing and rendering its SELECT, returning the raw
-    SELECT text plus the value the fake session reported."""
+    SELECT text plus the value the fake session reported. ``org`` selects the
+    caller's organisation — the default pins the shared _ORG shape; tests
+    varying it prove the predicate renders the CALLER's org, not a constant."""
     statements: list[Any] = []
 
     class _Settings:
@@ -80,19 +83,29 @@ async def _count_sql_and_value(
 
     session.execute = AsyncMock(side_effect=_execute)
     value = await count_active_runner_dispatches_for_org(
-        session, _ORG, exclude_run_id=exclude_run_id, host_resource_only=host_resource_only
+        session, org, exclude_run_id=exclude_run_id, host_resource_only=host_resource_only
     )
     assert len(statements) == 1
     return _compile_with_literal_binds(statements[0]), value
 
 
 class TestActiveWorkspaceCountPopulation:
+    async def test_count_is_bound_to_the_callers_org(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The org predicate renders THE CALLER's org — proven in BOTH
+        directions: each caller's own org renders into that caller's SQL and
+        the two callers' SQL differ. A predicate hardcoded to (or defaulting
+        to) one org would render identical SQL for two different callers,
+        silently counting one org's workspaces under the other's name."""
+        sql_a, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, org=_ORG)
+        sql_b, _ = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, org=_OTHER_ORG)
+        assert f"organisation_id = '{_ORG}'" in sql_a
+        assert f"organisation_id = '{_OTHER_ORG}'" in sql_b
+
     async def test_running_run_with_live_marker_counts_and_returns_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sql, value = await _count_sql_and_value(flag_on=True, monkeypatch=monkeypatch, counted=5)
         # The count is org-scoped — a foreign marker never reaches the figure
         # (the explicit organisation_id predicate; RLS is the second fence).
         assert _ORG_SQL in sql
-        assert str(_OTHER_ORG) not in sql
         assert "sandbox_dispatch_state IS NOT NULL" in sql
         # D8 flag-on population: RUNNING runs only — a live marker can only
         # legally exist on a running run.

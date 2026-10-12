@@ -13,7 +13,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.db.crud.library_primitive import copy_to_adapt, list_library_primitives
 from modulo.db.models.library_primitive import LibraryPrimitive
-from tests.unit.crud.helpers import compile_sql, executed_sql, mock_execute, mock_session
+from tests.unit.crud.helpers import (
+    compile_sql,
+    executed_sql,
+    executed_statements,
+    find_entity_statement,
+    mock_execute,
+    mock_session,
+    where_column_names,
+)
 
 ORG_ID = uuid.uuid4()
 ORG_ID_SQL = f"organisation_id = '{ORG_ID.hex}'"
@@ -40,10 +48,12 @@ async def test_excluded_tiers_empty_skips_filter() -> None:
     result = await list_library_primitives(session, org_id=ORG_ID, excluded_tiers=[])
 
     assert result.total == 5
-    for sql in executed_sql(session):
-        assert "tier NOT IN" not in sql
-        assert ORG_ID_SQL in sql
-        assert "deleted_at IS NULL" in sql
+    # Structural negatives: no tier column in either where clause; the deleted_at
+    # soft-delete guard stays (positive, value-bearing).
+    for stmt in executed_statements(session):
+        assert "tier" not in where_column_names(stmt)
+        assert ORG_ID_SQL in compile_sql(stmt)
+        assert "deleted_at IS NULL" in compile_sql(stmt)
 
 
 async def test_excluded_tiers_preview() -> None:
@@ -65,10 +75,12 @@ async def test_org_id_none_omits_org_condition() -> None:
     result = await list_library_primitives(session, org_id=None)
 
     assert result.total == 1
-    for sql in executed_sql(session):
-        assert "organisation_id =" not in sql
-        assert "deleted_at IS NULL" in sql
-        assert "tier NOT IN ('in_dev')" in sql
+    # Structural negative: the org column must vanish entirely from both
+    # where clauses; the remaining guards are value-bearing positives.
+    for stmt in executed_statements(session):
+        assert "organisation_id" not in where_column_names(stmt)
+        assert "deleted_at IS NULL" in compile_sql(stmt)
+        assert "tier NOT IN ('in_dev')" in compile_sql(stmt)
 
 
 async def test_excluded_tiers_with_search_and_type() -> None:
@@ -100,11 +112,12 @@ async def test_page_offset_applied() -> None:
     result = await list_library_primitives(session, org_id=ORG_ID, page=2, page_size=10, excluded_tiers=["preview"])
 
     assert result.total == 7
-    items_sql = executed_sql(session)[1]
-    assert "LIMIT 10" in items_sql
-    assert "OFFSET 10" in items_sql
-    assert "tier NOT IN ('preview')" in items_sql
-    assert ORG_ID_SQL in items_sql
+    # Selected semantically as the row-select (shape-routed), not by position.
+    page_sql = compile_sql(find_entity_statement(executed_statements(session), LibraryPrimitive))
+    assert "LIMIT 10" in page_sql
+    assert "OFFSET 10" in page_sql
+    assert "tier NOT IN ('preview')" in page_sql
+    assert ORG_ID_SQL in page_sql
 
 
 async def test_sqlalchemy_error_is_re_raised() -> None:
