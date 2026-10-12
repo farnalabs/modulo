@@ -42,6 +42,24 @@ from modulo.core.product_analytics.vendor_client import (
     sign_outbound_batch,
 )
 
+
+@pytest.fixture(autouse=True)
+def _stub_purge_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub ``_purge_staging`` for every metrics_dump test in this module.
+
+    FAR-1717 made ``metrics_dump`` purge ``metrics_staging`` on EVERY tick,
+    before the jitter gate. The ``_FakeSessionFactory`` sessions in this module
+    cannot execute SQL (their ``execute`` returns a bare MagicMock), so the real
+    purge would blow up on the watermark read instead of testing the gate under
+    examination. The purge's real behaviour — including that it fires on a
+    jitter-skip tick — is covered against a real in-memory DB by
+    ``tests/unit/product_analytics/test_metrics_staging_consumer.py``.
+    """
+    from modulo.core.product_analytics import metrics_dump as md_module
+
+    monkeypatch.setattr(md_module, "_purge_staging", AsyncMock(return_value=0))
+
+
 # --- HMAC signing ---
 
 

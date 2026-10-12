@@ -6826,7 +6826,9 @@ export interface paths {
          * Update Product Analytics Level
          * @description Update the analytics level (admin toggle).
          *
-         *     Turning off sets level=off; staging buffer purge will be implemented in FAR-355.
+         *     Turning off sets level=off and purges the org's ``metrics_staging`` rows in
+         *     the same transaction (FAR-1717): staged events are dropped immediately on
+         *     withdrawal instead of waiting for the daily dump's consumed/expired purge.
          */
         put: operations["update_product_analytics_level_api_v1_org_product_analytics_put"];
         post?: never;

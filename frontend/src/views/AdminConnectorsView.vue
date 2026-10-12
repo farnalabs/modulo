@@ -280,6 +280,8 @@ import { api } from '../lib/api/client'
 import { formatApiError } from '../lib/api/formatError'
 import type { components } from '../lib/api/client'
 import { useDataFetch } from '../composables/useDataFetch'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { usePlanStore } from '../stores/planStore'
@@ -297,6 +299,7 @@ import RestConnectorConfigForm, {
 
 const { t } = useI18n()
 const planStore = usePlanStore()
+const { track } = useProductAnalytics()
 
 interface ConnectorItem {
   id: string
@@ -660,6 +663,7 @@ async function createConnector() {
         enabled: true,
         config_json: data.config_json ?? null,
       })
+      track(ANALYTICS_EVENTS.CONNECTOR_ADDED, { connector_id: data.id })
       closeForm()
     }
   } catch (e: unknown) {

@@ -33,6 +33,10 @@ from modulo.settings import Settings, get_settings
 _CODE_ORG_LICENSE_MANAGE = "org.license.manage"
 _CODE_LICENSE_GET_FAILED = "license.get_failed"
 
+#: Redis key prefix for the per-org licence-status cache (FAR-1719).
+_LICENSE_CACHE_KEY_PREFIX = "license:"
+#: TTL for the per-org licence-status cache, in seconds.
+_LICENSE_CACHE_TTL_SECONDS = 60
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +127,7 @@ async def _read_license_cache(settings: Settings, org_id: str) -> LicenseStatusR
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        cached = await redis.get(f"license:{org_id}")
+        cached = await redis.get(f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}")
         if cached:
             return LicenseStatusResponse(**json.loads(cached))
     except Exception:
@@ -141,9 +145,49 @@ async def _write_license_cache(settings: Settings, org_id: str, response: Licens
         redis = Redis.from_url(
             settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
         )
-        await redis.setex(f"license:{org_id}", 60, response.model_dump_json())
+        await redis.set(
+            f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}", response.model_dump_json(), ex=_LICENSE_CACHE_TTL_SECONDS
+        )
     except Exception:
         logger.warning("license.cache_write_failed", exc_info=True)
+    finally:
+        if redis is not None:
+            await redis.aclose()
+
+
+async def invalidate_license_status_cache(settings: Settings, org_id: str | None = None) -> None:
+    """Best-effort invalidation of the licence-status Redis cache (FAR-1719).
+
+    With ``org_id``, delete that org's cached entry — an org-level licence
+    rotate/clear (``PUT/DELETE /api/v1/admin/orgs/{org_id}/license``) changes
+    only that org's resolution. With ``org_id=None``, delete every
+    ``license:*`` entry — a system-licence change (``POST /api/v1/admin/license``
+    upload) can change the effective resolution of EVERY org that falls back
+    to the system licence, so every cached entry is potentially stale.
+
+    Failures are swallowed and logged: the mutation that triggered
+    invalidation has already committed, and the cache expires on its own
+    (60s TTL), so invalidation is best-effort and must never turn the
+    committed request into a 500 (commit-then-error).
+    """
+    redis: Redis | None = None
+    try:
+        redis = Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0
+        )
+        if org_id is not None:
+            await redis.delete(f"{_LICENSE_CACHE_KEY_PREFIX}{org_id}")
+            return
+        batch: list[str] = []
+        async for key in redis.scan_iter(match=f"{_LICENSE_CACHE_KEY_PREFIX}*", count=100):
+            batch.append(key)
+            if len(batch) >= 500:
+                await redis.delete(*batch)
+                batch.clear()
+        if batch:
+            await redis.delete(*batch)
+    except Exception:
+        logger.warning("license.cache_invalidate_failed", exc_info=True)
     finally:
         if redis is not None:
             await redis.aclose()
@@ -203,6 +247,7 @@ async def get_license_status(
 @handle_db_errors("admin.license.upload_license")
 async def upload_license(
     req: LicenseUploadRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
     _: TenantPrincipal = require_system_permission("system.config.manage"),  # type: ignore[assignment]
 ) -> LicenseUploadResponse:
     try:
@@ -220,6 +265,11 @@ async def upload_license(
         )
 
     store_license(req.license_key, validation.license_data)
+    # A system-licence change can flip the effective resolution of EVERY org
+    # that falls back to the system licence, so bust every cached entry. The
+    # upload above already committed to in-memory state; a cache failure must
+    # not turn it into a 500 (best-effort inside the helper, FAR-1719).
+    await invalidate_license_status_cache(settings)
 
     data = validation.license_data
 

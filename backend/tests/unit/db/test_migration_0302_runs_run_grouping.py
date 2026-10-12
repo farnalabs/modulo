@@ -5,7 +5,7 @@ database, plus ORM parity for the two new columns and the two partial
 unique indexes that replace the global thread unique:
 
 1. the chain: 0302 revises 0301_oauth_consent_state_preauth_rls, the
-   migrations directory has exactly one head (0303_feedback_records_lookup_indexes), the
+   migrations directory has exactly one head (0304_metrics_staging_recorded_at_index), the
    revision id matches the filename, and there are no branch labels;
 2. the upgrade adds EXACTLY two nullable columns with NO server default
    (metadata-only on the hot ``runs`` table), creates the ``run_group_id``
@@ -43,7 +43,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0302_runs_run_grouping"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0301_oauth_consent_state_preauth_rls"
-_CHAIN_HEAD_MIGRATION = "0303_feedback_records_lookup_indexes"
+_CHAIN_HEAD_MIGRATION = "0304_metrics_staging_recorded_at_index"
 
 #: The constraint 0003/0110 put on the global thread id — dropped by the upgrade.
 _THREAD_CONSTRAINT = "runs_langgraph_thread_id_key"

@@ -99,6 +99,17 @@ signed/org licence; see Known Gaps.)
       `admin_license.issue_license`, which answers 500 for the same condition
       instead of returning a bad key (`test_stripe_fulfilment.py`,
       `test_unverifiable_generated_key_is_not_emailed_or_claimed`)
+- [x] Licence-status cache is invalidated on every licence mutation: the admin
+      status cache (`license:{org_id}`, 60s TTL in `admin_license.py`) is busted
+      when the underlying licence changes — a system upload
+      (`POST /api/v1/admin/license`) deletes every `license:*` entry, and an
+      org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
+      deletes that org's entry — so the next status read reflects the new state
+      instead of serving the stale resolution until TTL. Invalidation is
+      best-effort (fails open with a logged warning; the licence mutation has
+      already committed) (`test_admin_license.py`
+      `TestLicenseCacheInvalidationSystemChange`,
+      `test_admin_orgs_coverage_gaps.py` set/remove invalidation tests; FAR-1719)
 
 ## Known Gaps
 
@@ -112,18 +123,6 @@ signed/org licence; see Known Gaps.)
   coverage (`admin/tier_catalog.feature`) and the Stripe purchase webhook ships
   a dedicated executing BDD surface (`licensing/stripe_billing.feature`), both
   cited above.
-- **The admin license-status Redis cache is not invalidated on a licence
-  mutation** — `GET /api/v1/admin/license` caches its resolved status under
-  `license:{org_id}` with a 60s TTL (`_read_license_cache` / `_write_license_cache`
-  in `admin_license.py`), but neither `POST /api/v1/admin/license` (system-level
-  upload) nor `PUT/DELETE /api/v1/admin/orgs/{org_id}/license` (org-level
-  rotate/clear in `admin_orgs.py`) deletes that key. An operator who uploads or
-  rotates a licence can therefore still see the previous (community / expired)
-  status for up to 60s. Tests do not exercise this path — every licence unit/BDD
-  test sets `redis_url=""` so the cache is disabled. A correct fix needs a
-  deliberate invalidation strategy (bust every `license:*` key on a
-  system-licence change, or stop caching system-sourced resolutions under an
-  org key), so it is recorded here rather than patched ad hoc.
 - **The public `/api/v1/license` surface does not read the signed licence** —
   `viewmodel.license_info` reports `tier = "team"` iff `settings.modulo_license_key`
   is non-empty, returns a hardcoded `features: ["notifications"]`, and always
@@ -154,6 +153,23 @@ signed/org licence; see Known Gaps.)
   license-status cache-invalidation gap and the public-`/api/v1/license`
   resolution gap. Status stays `partial` (the manifest's universal-gating
   deferral is unchanged).
+
+- 2026-10-12: **FAR-1719** — closed the licence-status cache-invalidation gap
+  raised by the improve-architecture `feat-license` pass. A system upload
+  (`POST /api/v1/admin/license`) now busts every `license:*` Redis entry, and
+  an org-level rotate/clear (`PUT/DELETE /api/v1/admin/orgs/{org_id}/license`)
+  busts the mutated org's `license:{org_id}` entry. Both invalidations are
+  best-effort (fail open with a logged `license.cache_invalidate_failed`
+  warning) — the licence mutation has already committed, so a Redis failure
+  must not turn the request into a 500 (commit-then-error). Regression tests
+  drive the real routes over a shared fakeredis server and prove the second
+  status read reflects the new licence rather than the stale cache
+  (`test_admin_license.py` `TestLicenseCacheInvalidationSystemChange`,
+  `test_admin_orgs_coverage_gaps.py` `test_set_org_license_invalidates_org_status_cache`
+  and `test_remove_org_license_invalidates_org_status_cache`). The
+  previously-tracked "admin license-status Redis cache is not invalidated on a
+  licence mutation" gap is resolved. The public `/api/v1/license` surface is
+  intentionally untouched (FAR-1720).
 
 - 2026-09-29: **Improve Architecture product-map walk** — reconciled the
   tracker frontmatter `status:` with the manifest `feat-license` registry: the
