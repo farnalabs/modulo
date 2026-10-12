@@ -521,17 +521,28 @@ def test_default_probes_real(tmp_path: Path):
     # uid resolves to an int on POSIX and to None on Windows (os.getuid is
     # POSIX-only; _effective_uid's contract is `int | None`).
     uid = probes.effective_uid()
-    if hasattr(os, "getuid"):
-        assert isinstance(uid, int)
-    else:
+    if sys.platform == "win32":
+        # TODO(P3): Windows seams; uid is None, and the uid/owner probes
+        # honestly report None rather than guessing a SID/account.
         assert uid is None
-    assert probes.username_of_uid(uid) is not None or probes.username_of_uid(uid) is None
-    assert probes.file_owner(tmp_path) is not None or probes.file_owner(tmp_path) is None
+        assert probes.username_of_uid(1000) is None
+        assert probes.file_owner(tmp_path) is None
+    else:
+        assert isinstance(uid, int)
+        import pwd
 
-    # env snapshot probes
-    assert probes.env_value("PATH") is not None or probes.env_value("PATH") is None
+        # Both probes resolve to THIS process's own login name on POSIX.
+        me = pwd.getpwuid(os.getuid()).pw_name
+        assert probes.username_of_uid(uid) == me
+        assert probes.file_owner(tmp_path) == me
+
+    # env snapshot probes: the snapshot is taken inside default_probes(), so
+    # it must reflect the live process environment (PATH is a stable anchor).
+    assert probes.env_value("PATH") == os.environ.get("PATH")
     assert isinstance(probes.ambient_env_names(), list)
-    assert isinstance(probes.available_memory_bytes(), int) or probes.available_memory_bytes() is None
+    available_memory = probes.available_memory_bytes()
+    assert isinstance(available_memory, int)
+    assert available_memory > 0
 
     # PG_VERSION read from pgdata
     pgdata = tmp_path / "pgdata"
@@ -545,9 +556,12 @@ def test_default_probes_real(tmp_path: Path):
     assert probes.cloud_sync_hit(synced) is not None
     assert probes.cloud_sync_hit(tmp_path) is None
 
-    # PATH / install root probes
+    # PATH / install root probes: `modulo` is installed into this worktree's
+    # venv, which `uv run` prepends to PATH, so the probe must resolve it.
     assert probes.install_root() is not None
-    assert probes.modulo_on_path() is None or isinstance(probes.modulo_on_path(), str)
+    on_path = probes.modulo_on_path()
+    assert on_path is not None
+    assert Path(on_path).name == "modulo"
 
     # second install hint (sandbox may share a parent dir with other installs)
     hint = probes.second_install_hint()
@@ -578,7 +592,10 @@ def test_default_probes_real(tmp_path: Path):
 
     # bundled binaries / bundle version resolve (may be empty if no bundle)
     assert isinstance(probes.bundled_binaries(), list)
-    assert probes.bundle_pg_version() is None or isinstance(probes.bundle_pg_version(), str)
+    # No bundled postgres exists under this venv's sys.prefix, so the probe
+    # must honestly report None (its dotted-token parse path is owned by
+    # test_probe_bundle_pg_version_parses_dotted_token in test_doctor.py).
+    assert probes.bundle_pg_version() is None
 
     # launcher-running + env-file-pinned probes run without crashing
     assert isinstance(probes.launcher_running(), bool)

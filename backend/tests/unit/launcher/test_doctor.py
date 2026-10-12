@@ -697,7 +697,7 @@ def test_stale_backup_warn_old(tmp_path: Path) -> None:
     assert "30" in result.detail
 
 
-def test_stale_backup_fail_missing(tmp_path: Path) -> None:
+def test_stale_backup_missing_timestamp_is_honest_skip(tmp_path: Path) -> None:
     """No last_backup_at ever recorded -> honest skip (schema v1)."""
     result = check_stale_backup(tmp_path, None, _probes(last_backup_at=lambda: None))
     assert result.ok is True
@@ -873,7 +873,12 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
     from unittest.mock import AsyncMock, MagicMock, patch
 
     composed = {"DATABASE_URL": "postgresql+asyncpg://u:p@h/db?sslmode=require"}
-    probe = doctor_module._build_database_probes(composed, 5432, "redis://localhost:6379/0")[3]
+    (
+        _probe_postgres,
+        _role_violations,
+        _probe_redis,
+        migrations_at_head,
+    ) = doctor_module._build_database_probes(composed, 5432, "redis://localhost:6379/0")
 
     mock_engine = MagicMock()
     mock_engine.dispose = AsyncMock()
@@ -881,11 +886,10 @@ def test_probe_migrations_at_head_translates_sslmode() -> None:
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=mock_engine) as create_engine,
         patch("modulo.db.health_checks.db_is_at_migration_head", AsyncMock(return_value=True)),
     ):
-        assert probe() is True
+        assert migrations_at_head() is True
 
-    args, kwargs = create_engine.call_args
-    assert args[0] == "postgresql+asyncpg://u:p@h/db"
-    assert kwargs["connect_args"]["ssl"] == "require"
+    assert create_engine.call_args.args[0] == "postgresql+asyncpg://u:p@h/db"
+    assert create_engine.call_args.kwargs["connect_args"]["ssl"] == "require"
 
 
 def test_probe_registry_names_and_order(tmp_path: Path) -> None:

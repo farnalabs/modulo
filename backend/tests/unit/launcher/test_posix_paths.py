@@ -57,12 +57,22 @@ class TestAtomicSymlinkSwap:
         assert link.is_symlink()
         assert link.readlink() == Path("versions/1.1.0")
 
-    def test_atomic_swap_preserves_old_target_on_failure(self, tmp_path: Path) -> None:
+    def test_atomic_swap_preserves_old_target_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         link = tmp_path / "current"
         link.symlink_to("versions/1.0.0")
-        # Pointing to a nonexistent target is valid for a symlink.
-        upgrade_module.atomic_symlink_swap(link, "versions/9.9.9")
-        assert link.readlink() == Path("versions/9.9.9")
+        temp = tmp_path / f".current.new.{os.getpid()}"
+
+        def _boom(self, target, *args, **kwargs):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(Path, "replace", _boom)
+
+        with pytest.raises(OSError, match="simulated rename failure"):
+            upgrade_module.atomic_symlink_swap(link, "versions/9.9.9")
+
+        # The incumbent symlink is preserved and the temp sibling is cleaned up.
+        assert link.readlink() == Path("versions/1.0.0")
+        assert not temp.exists()
 
     def test_sweep_before_swap_removes_stale_temps(self, tmp_path: Path) -> None:
         link = tmp_path / "current"

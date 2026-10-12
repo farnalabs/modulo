@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -1618,15 +1619,13 @@ class TestAssertUpgradePlatform:
 
 
 class TestAlembicHeads:
-    def test_missing_ini_returns_unknown(self, monkeypatch):
-        original_exists = Path.exists
-
-        def _patched_exists(self):
-            if "alembic.ini" in str(self):
-                return False
-            return original_exists(self)
-
-        monkeypatch.setattr(Path, "exists", _patched_exists)
+    def test_missing_ini_returns_unknown(self, monkeypatch, tmp_path):
+        # Point the module's __file__ so Path(__file__).resolve().parents[3]
+        # (the backend/ dir) lands under tmp_path, where no alembic.ini exists.
+        fake_file = tmp_path / "a" / "b" / "c" / "backend" / "src" / "modulo" / "launcher" / "upgrade.py"
+        fake_file.parent.mkdir(parents=True)
+        fake_file.write_text("", encoding="utf-8")
+        monkeypatch.setattr(upgrade_module, "__file__", str(fake_file))
         result = upgrade_module._alembic_heads()
         assert result == ["unknown"]
 
@@ -2103,7 +2102,7 @@ class TestVerifyExtractedBundleArtifacts:
         with patch.object(upgrade_module.manifest_module, "verify_artifacts") as mock_verify:
             upgrade_module._verify_extracted_bundle_artifacts(tmp_path, manifest, "bundle.tar.gz")
         mock_verify.assert_called_once()
-        called_manifest = mock_verify.call_args[0][1]
+        called_manifest = mock_verify.call_args.kwargs.get("manifest") or mock_verify.call_args.args[1]
         assert "pg/bin/postgres" in called_manifest.artifact_checksums
         assert "bundle.tar.gz" not in called_manifest.artifact_checksums
 
@@ -2195,25 +2194,37 @@ class TestRestartUnitBestEffort:
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: tmp_path / "no.unit")
         assert upgrade_module._restart_unit_best_effort(why="test") is None
 
-    def test_unit_restart_success(self, tmp_path, monkeypatch):
+    def test_unit_restart_success(self, tmp_path, monkeypatch, caplog):
         unit_file = tmp_path / "test.service"
         unit_file.write_text("[Unit]\n", encoding="utf-8")
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
         monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
 
         mock_result = MagicMock(returncode=0)
-        with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
+        with (
+            caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"),
+            patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result),
+        ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
 
-    def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch):
+        warnings = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+        assert any("unit_started_after_abort" in message for message in warnings)
+
+    def test_unit_restart_failure_logs_error(self, tmp_path, monkeypatch, caplog):
         unit_file = tmp_path / "test.service"
         unit_file.write_text("[Unit]\n", encoding="utf-8")
         monkeypatch.setattr("modulo.launcher.service.default_unit_path", lambda: unit_file)
         monkeypatch.setattr("modulo.launcher.service.UNIT_FILENAME", "test.service")
 
         mock_result = MagicMock(returncode=1, stderr=b"failed")
-        with patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result):
+        with (
+            caplog.at_level(logging.ERROR, logger="modulo.launcher.upgrade"),
+            patch("modulo.launcher.upgrade.subprocess.run", return_value=mock_result),
+        ):
             assert upgrade_module._restart_unit_best_effort(why="test") is None
+
+        errors = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+        assert any("unit_restart_after_abort_FAILED" in message for message in errors)
 
     def test_import_error_caught(self):
         with patch("builtins.__import__", side_effect=ImportError("no service module")):
