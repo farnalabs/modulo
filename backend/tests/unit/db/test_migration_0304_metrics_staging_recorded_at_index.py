@@ -1,9 +1,9 @@
-"""Unit tests for migration 0303_metrics_staging_recorded_at_index (FAR-1717).
+"""Unit tests for migration 0304_metrics_staging_recorded_at_index (FAR-1717).
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0303 revises ``0302_runs_run_grouping``; the migrations
-  directory has exactly one head (``0303_metrics_staging_recorded_at_index``,
+* **Revision chain** — 0304 revises ``0303_feedback_records_lookup_indexes``; the
+  migrations directory has exactly one head (``0304_metrics_staging_recorded_at_index``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -21,7 +21,7 @@ Postgres requires index predicates to be IMMUTABLE — ``now()`` is STABLE and a
 bind parameter is not an expression at all, so the "partial index on the exact
 predicate" shape cannot express this purge (the column is already ``NOT NULL``,
 so an immutable ``WHERE recorded_at IS NOT NULL`` partial would add nothing).
-``tests/unit/db/test_migration_0303_metrics_staging_recorded_at_index.py`` pins
+``tests/unit/db/test_migration_0304_metrics_staging_recorded_at_index.py`` pins
 that shape decision against the migration source.
 """
 
@@ -38,10 +38,10 @@ from alembic.script import ScriptDirectory
 from modulo.db.models.metrics_staging import MetricsStaging
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0303_metrics_staging_recorded_at_index"
+_MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0302_runs_run_grouping"
-_CHAIN_HEAD_MIGRATION = "0303_metrics_staging_recorded_at_index"
+_DOWN_REVISION = "0303_feedback_records_lookup_indexes"
+_CHAIN_HEAD_MIGRATION = "0304_metrics_staging_recorded_at_index"
 _INDEX_NAME = "ix_metrics_staging_recorded_at"
 
 
@@ -77,11 +77,11 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0303_metrics_staging_recorded_at_index(self) -> None:
+    def test_single_head_is_0304_metrics_staging_recorded_at_index(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0302_runs_run_grouping(self) -> None:
+    def test_down_revision_is_0303_feedback_records_lookup_indexes(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -131,7 +131,7 @@ class TestModelParity:
         ]
         assert matches, (
             f"MetricsStaging must declare {_INDEX_NAME}(recorded_at) to stay in parity with "
-            "migration 0303 — a migration/model index drift is a review block"
+            "migration 0304 — a migration/model index drift is a review block"
         )
 
     def test_model_keeps_the_org_scoped_dump_index(self) -> None:

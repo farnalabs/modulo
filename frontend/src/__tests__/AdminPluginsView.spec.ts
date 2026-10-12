@@ -70,6 +70,62 @@ describe('AdminPluginsView', () => {
     expect(wrapper.text()).toContain('connector')
   })
 
+  it('is read-only — no plugin enable/disable lifecycle control', async () => {
+    const { api: mockApi } = await import('../lib/api/client')
+    ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: mockPlugins,
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminPluginsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // Install / enable / disable / uninstall are pip-managed; the registry API
+    // has no lifecycle endpoint, so the view must not render a toggle that
+    // would call a non-existent route (see docs/product-map/admin/plugins.md).
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+  })
+
+  it('renders the health status pill from health_ok — Healthy and Unhealthy', async () => {
+    const { api: mockApi } = await import('../lib/api/client')
+    ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        ...mockPlugins,
+        { ...mockPlugins[0], PLUGIN_ID: 'modulo-unhealthy', health_ok: false, health_detail: 'Failed to load entry point broken_con' },
+      ],
+      error: undefined,
+    })
+
+    const wrapper = mount(AdminPluginsView, {
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+          ErrorAlert: true,
+          FeatureGate: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    await nextTick()
+    await nextTick()
+    await nextTick()
+
+    // The status pill is health-driven by design (no lifecycle endpoint, so
+    // 'Active'/'Inactive' from the removed toggle is gone) — both branches of
+    // the health_ok ternary are asserted so deleting the pill renders is caught.
+    expect(wrapper.text()).toContain('Healthy')
+    expect(wrapper.text()).toContain('Unhealthy')
+  })
+
   it('shows empty state when no plugins', async () => {
     const { api: mockApi } = await import('../lib/api/client')
     ;(mockApi.GET as ReturnType<typeof vi.fn>).mockResolvedValue({

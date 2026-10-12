@@ -1,7 +1,7 @@
 """Supporting index for the metrics_staging purge (FAR-1717).
 
-Revision ID: 0303_metrics_staging_recorded_at_index
-Revises: 0302_runs_run_grouping
+Revision ID: 0304_metrics_staging_recorded_at_index
+Revises: 0303_feedback_records_lookup_indexes
 Create Date: 2026-10-12
 
 ``core/product_analytics/metrics_dump.py::_purge_staging`` deletes
@@ -43,13 +43,13 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0303_metrics_staging_recorded_at_index"
-down_revision: str | None = "0302_runs_run_grouping"
+revision: str = "0304_metrics_staging_recorded_at_index"
+down_revision: str | None = "0303_feedback_records_lookup_indexes"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
 #: Index name — asserted against the ``MetricsStaging`` model declaration by
-#: ``tests/unit/db/test_migration_0303_metrics_staging_recorded_at_index.py``.
+#: ``tests/unit/db/test_migration_0304_metrics_staging_recorded_at_index.py``.
 INDEX_NAME: str = "ix_metrics_staging_recorded_at"
 
 
