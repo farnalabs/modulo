@@ -603,11 +603,6 @@ class TestMetricsDumpSkipConditions:
                 return_value=None,
             ),
             patch(
-                "modulo.core.product_analytics.metrics_dump.is_enforcement_active",
-                new_callable=AsyncMock,
-                return_value=False,
-            ),
-            patch(
                 "modulo.settings.get_settings",
                 return_value=MagicMock(
                     product_analytics_endpoint_url="",
