@@ -34,6 +34,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.db.models.run import AWAITING_HUMAN_STATUS, HITL_PARKED_STATUS
 from modulo.db.sqlstates import is_row_lock_timeout
 from modulo.settings import get_settings
@@ -67,6 +68,18 @@ _SLOT_RELEASE_DETAIL = "Slot reconciliation: heartbeat stale past threshold; pip
 # terminal-failed once claim_count EXCEEDS the budget. A zero-node run is
 # always safe to re-dispatch (nothing can double-execute); the budget absorbs a
 # transient dispatch wobble so a task that never started is not lost.
+# FAR-1649 qa iteration 2 (finding 5): the "zero-node run is always safe"
+# premise does NOT hold for a durably node-STARTED run
+# (``dispatch_phase='first_node_dispatched'``) — re-dispatching it re-executes
+# the started node. The sweep's UPDATE therefore excludes that class from the
+# RETRY-RESET arm only: such a row is never reset to ``pending`` (which would
+# admit it to the reconcile re-dispatch legs). The TERMINAL-FAIL arm still
+# collects it once its claim budget is exhausted — terminal-fail re-executes
+# nothing, and excluding it there too would only delay the pipeline-slot
+# release by the age gate's window (~105 min under shipped defaults) while
+# proving nothing extra. Until the budget exhausts, the row stays ``running``
+# for the in-process watchdogs and, once dead, the reconcile age gate's
+# truthful ``run.no_progress`` (whose detail carries the phase).
 
 
 async def _advance_released_run(async_engine: AsyncEngine, run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -485,6 +498,11 @@ async def reconcile_pipeline_slots(
                     # next 60s tick. When claim_count > budget, the run is
                     # terminal-failed — it has been claimed multiple times and
                     # still goes heartbeat-stale, meaning it is genuinely stuck.
+                    # FAR-1649 qa iteration 2 (finding 5): the UPDATE's WHERE
+                    # excludes durably node-STARTED rows (first_node_dispatched)
+                    # from the RETRY-RESET arm only — see the SQL comment below;
+                    # over-budget node-started rows are still terminal-failed
+                    # here so their pipeline slot is released promptly.
                     result = await conn.execute(
                         text(
                             "UPDATE runs SET "
@@ -506,6 +524,27 @@ async def reconcile_pipeline_slots(
                             "AND cancellation_requested = false "
                             "AND COALESCE(heartbeat_at, started_at, created_at) "
                             "    < now() - (:stale_seconds * interval '1 second') "
+                            # FAR-1649 qa iteration 2 (finding 5): the node-started
+                            # exclusion applies to the RETRY-RESET arm only
+                            # (claim_count <= budget). The retry reset clears
+                            # ``dispatched_at``, which would admit the row to the
+                            # reconcile re-dispatch legs and RE-EXECUTE the started
+                            # node (side effects can duplicate) — so an in-budget
+                            # node-started row is left ``running`` for the
+                            # in-process watchdogs and the reconcile age gate's
+                            # truthful ``run.no_progress`` (the generic
+                            # stale-heartbeat leg of the reconcile predicate
+                            # carries the SAME exclusion so nothing re-dispatches
+                            # it in between). The OVER-budget arm (claim_count >
+                            # budget) still terminal-fails the row: terminal-fail
+                            # re-executes nothing, and skipping it there only
+                            # delays the pipeline-slot release until the age gate
+                            # collects the same row much later. A NULL phase = no
+                            # durable node-start evidence (legacy rows) and stays
+                            # fully eligible for both arms.
+                            "AND (claim_count > :retry_budget "
+                            "     OR dispatch_phase IS NULL "
+                            "     OR dispatch_phase <> :first_node_phase) "
                             "RETURNING id, organisation_id, pipeline_id, claim_count"
                         ),
                         {
@@ -513,6 +552,7 @@ async def reconcile_pipeline_slots(
                             "stale_seconds": window,
                             "detail": _SLOT_RELEASE_DETAIL,
                             "retry_budget": retry_budget,
+                            "first_node_phase": PHASE_FIRST_NODE_DISPATCHED,
                         },
                     )
                     for row in result.all():
