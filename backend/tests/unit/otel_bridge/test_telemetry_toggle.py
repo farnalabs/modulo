@@ -13,6 +13,38 @@ from opentelemetry.sdk.trace import TracerProvider
 from modulo.otel_bridge.export import setup_otel
 from tests.unit.otel_bridge.conftest import span_processors
 
+# Minimum env a Settings() instance accepts — hoisted so the settings-based
+# tests below do not each restate the same four required values.
+_SETTINGS_KWARGS = {
+    "database_url": "postgresql+asyncpg://localhost/test",
+    "secret_key": "a" * 32,
+    "fernet_key": "a" * 32,
+    "modulo_admin_password": "testpass",
+}
+
+
+def _settings(**overrides):
+    from modulo.settings import Settings
+
+    return Settings(**_SETTINGS_KWARGS, **overrides)
+
+
+@pytest.fixture
+def settings_env(monkeypatch: pytest.MonkeyPatch):
+    """Pin the Settings env every ``is_telemetry_enabled`` test depends on.
+
+    ``get_settings`` is an lru_cache, so it is cleared here and again on
+    teardown — otherwise a test that reads Settings would poison the next one.
+    """
+    from modulo.settings import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", _SETTINGS_KWARGS["database_url"])
+    monkeypatch.setenv("SECRET_KEY", _SETTINGS_KWARGS["secret_key"])
+    monkeypatch.setenv("FERNET_KEY", _SETTINGS_KWARGS["fernet_key"])
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
 
 class TestTelemetryDefaults:
     """Tests that telemetry is disabled by default."""
@@ -94,60 +126,37 @@ class TestTelemetryEnabled:
 
 
 class TestSettingsIntegration:
-    """Tests the Settings model integration with telemetry."""
-
-    def _settings(self, **overrides):
-        from modulo.settings import Settings
-
-        return Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-            **overrides,
-        )
+    """Tests that the Settings model integration with telemetry."""
 
     def test_settings_defaults_to_disabled(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled should default to False."""
         # Isolate from any ambient MODULO_TELEMETRY_ENABLED in the runner env.
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        assert self._settings().modulo_telemetry_enabled is False
+        assert _settings().modulo_telemetry_enabled is False
 
     def test_settings_can_enable(self, monkeypatch: pytest.MonkeyPatch):
         """Settings.modulo_telemetry_enabled can be set to True."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        assert self._settings(modulo_telemetry_enabled=True).modulo_telemetry_enabled is True
+        assert _settings(modulo_telemetry_enabled=True).modulo_telemetry_enabled is True
 
     def test_env_var_overrides_default(self, monkeypatch: pytest.MonkeyPatch):
         """MODULO_TELEMETRY_ENABLED env var should override the default."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        assert self._settings().modulo_telemetry_enabled is True
+        assert _settings().modulo_telemetry_enabled is True
 
 
 class TestIsTelemetryEnabled:
     """Tests for the is_telemetry_enabled() bridge function (FAR-1131)."""
 
-    def _settings(self, **overrides):
-        from modulo.settings import Settings
-
-        return Settings(
-            database_url="postgresql+asyncpg://localhost/test",
-            secret_key="a" * 32,
-            fernet_key="a" * 32,
-            modulo_admin_password="testpass",
-            **overrides,
-        )
-
-    def test_falls_back_to_settings_when_store_unavailable(self, monkeypatch: pytest.MonkeyPatch):
+    def test_falls_back_to_settings_when_store_unavailable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings_env: None,
+    ):
         """When the runtime config store is not initialised, falls back to Settings."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-        monkeypatch.setenv("SECRET_KEY", "a" * 32)
-        monkeypatch.setenv("FERNET_KEY", "a" * 32)
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-        from modulo.settings import get_settings
 
-        get_settings.cache_clear()
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", side_effect=RuntimeError("not init")):
             assert is_telemetry_enabled() is False
 
@@ -164,56 +173,57 @@ class TestIsTelemetryEnabled:
         ):
             is_telemetry_enabled()
 
-    def test_reads_from_store_override(self, monkeypatch: pytest.MonkeyPatch):
+    def test_reads_from_store_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings_env: None,
+    ):
         """When the store has an override, is_telemetry_enabled reads it."""
         monkeypatch.delenv("MODULO_TELEMETRY_ENABLED", raising=False)
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-        monkeypatch.setenv("SECRET_KEY", "a" * 32)
-        monkeypatch.setenv("FERNET_KEY", "a" * 32)
         from modulo.core.runtime_config.store import RuntimeConfigStore
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-        from modulo.settings import get_settings
 
-        get_settings.cache_clear()
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
-    def test_store_false_overrides_env_true(self, monkeypatch: pytest.MonkeyPatch):
+    def test_store_false_overrides_env_true(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings_env: None,
+    ):
         """When env is true but store override is false, store wins."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-        monkeypatch.setenv("SECRET_KEY", "a" * 32)
-        monkeypatch.setenv("FERNET_KEY", "a" * 32)
         from modulo.core.runtime_config.store import RuntimeConfigStore
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-        from modulo.settings import get_settings
 
-        get_settings.cache_clear()
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "false")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is False
 
-    def test_store_clear_falls_back_to_env(self, monkeypatch: pytest.MonkeyPatch):
+    def test_store_clear_falls_back_to_env(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings_env: None,
+    ):
         """When the store override is cleared, falls back to env/Settings."""
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-        monkeypatch.setenv("SECRET_KEY", "a" * 32)
-        monkeypatch.setenv("FERNET_KEY", "a" * 32)
         from modulo.core.runtime_config.store import RuntimeConfigStore
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-        from modulo.settings import get_settings
 
-        get_settings.cache_clear()
         store = RuntimeConfigStore()
         store.set_override("MODULO_TELEMETRY_ENABLED", "true")
         store.clear_override("MODULO_TELEMETRY_ENABLED")
         with patch("modulo.core.runtime_config.store.get_runtime_config_store", return_value=store):
             assert is_telemetry_enabled() is True
 
-    def test_store_none_value_falls_back_to_settings(self, monkeypatch: pytest.MonkeyPatch):
+    def test_store_none_value_falls_back_to_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        settings_env: None,
+    ):
         """When the store returns None for the key, fall back to Settings.
 
         The MODULO_TELEMETRY_ENABLED default is "false" rather than None, so
@@ -221,14 +231,9 @@ class TestIsTelemetryEnabled:
         were reset/torn down for test isolation.
         """
         monkeypatch.setenv("MODULO_TELEMETRY_ENABLED", "true")
-        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-        monkeypatch.setenv("SECRET_KEY", "a" * 32)
-        monkeypatch.setenv("FERNET_KEY", "a" * 32)
         from modulo.core.runtime_config.store import RuntimeConfigStore
         from modulo.core.runtime_config.telemetry_bridge import is_telemetry_enabled
-        from modulo.settings import get_settings
 
-        get_settings.cache_clear()
         store = RuntimeConfigStore()
         with (
             patch.object(store, "get", return_value=None),
