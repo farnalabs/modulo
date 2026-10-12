@@ -39,7 +39,7 @@ from modulo.db.crud.pipeline import (
     ManualNodeOutputSchemaError,
     create_pipeline,
     enforce_manual_node_output_schemas,
-    reject_declared_policy_gates,
+    strip_declared_policy_gates,
 )
 from modulo.db.crud.pipeline_owner import validate_accountability_owner
 from modulo.db.crud.schema import create_schema, create_schema_version
@@ -1438,11 +1438,20 @@ async def _materialize_pipeline_and_edges(
         schema_id_map,
         ctx.overrides.connector_instances,
     )
-    # FAR-1109: import writes ``graph_nodes_json`` directly and does NOT run the
-    # graph-write policy-gate translation, so a bundle declaring a
-    # ``policy_gate`` block must fail loudly rather than import silently
-    # unenforced.
-    reject_declared_policy_gates(graph_nodes, surface="Pipeline import")
+
+    # FAR-1666: an imported pipeline cannot carry gate rows — the bundle
+    # exports no ``policy_gates`` section and evals are not imported, so a
+    # declared block would persist INERT (governing nothing) or reference a
+    # foreign eval. Strip the blocks through the shared helper, consistent with
+    # the module's credential-stripping, and disclose it in the import warnings.
+    graph_nodes, dropped_policy_gates = strip_declared_policy_gates(graph_nodes)
+    if dropped_policy_gates:
+        warning = (
+            f"{len(dropped_policy_gates)} policy_gate declaration(s) were removed on import "
+            f"(evals and gates are not part of a bundle): {'; '.join(dropped_policy_gates)}."
+        )
+        ctx.warnings.append(warning)
+        logger.warning("Import stripped declared policy gates: %s", "; ".join(dropped_policy_gates))
 
     pipeline = await _create_imported_pipeline(
         ctx,
