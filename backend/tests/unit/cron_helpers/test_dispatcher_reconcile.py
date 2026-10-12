@@ -22,6 +22,8 @@ from sqlalchemy import Delete, Select, Update
 from modulo.core import cron_helpers as ch
 from modulo.db.crud.run import ERROR_CODE_PIPELINE_CAPACITY
 from modulo.db.models.pipeline import Pipeline
+from tests.unit.cron_helpers._helpers import _Begin as _MockBegin
+from tests.unit.cron_helpers._helpers import _org_result, _patch_env, _rows_result
 
 ORG = uuid.uuid4()
 RUN_PENDING_UNDISPATCHED = uuid.uuid4()
@@ -37,14 +39,6 @@ def _result_row(row: Any) -> MagicMock:
     result = MagicMock()
     result.first.return_value = row
     return result
-
-
-class _MockBegin:
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(self, *args: object) -> bool:
-        return False
 
 
 def _classify_statement(stmt: Any, params: dict[str, Any]) -> str:
@@ -190,18 +184,6 @@ class _MockSession:
         return r
 
 
-def _org_result(org_ids: list[uuid.UUID]) -> MagicMock:
-    r = MagicMock()
-    r.scalars.return_value = org_ids
-    return r
-
-
-def _rows_result(rows: list[Any]) -> MagicMock:
-    r = MagicMock()
-    r.all.return_value = rows
-    return r
-
-
 def _run_row(
     run_id: uuid.UUID,
     status: str,
@@ -279,12 +261,6 @@ def _make_queue(redis_client: MagicMock, *, job_result: Any = None) -> MagicMock
     q.job_id.side_effect = lambda key: f"saq:job:runs:{key}"
     q.job = AsyncMock(return_value=job_result)
     return q
-
-
-def _patch_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/test")
-    monkeypatch.setenv("SECRET_KEY", "a" * 40)
-    monkeypatch.setenv("FERNET_KEY", "b" * 44)
 
 
 async def _run_reconcile(
@@ -384,12 +360,13 @@ def _pipeline_capacity_marker_update(session: _MockSession, run_id: uuid.UUID) -
     ``error_code='pipeline_capacity'`` so the never_dispatched kill sweep
     excludes it and the capacity_marked_stale branch can rescue it. The
     statement carries its params via ``.bindparams()`` (not the execute
-    ``params`` dict), so the bound values are read from the clause; the
-    statement is identified by its operation class (the same structural
-    signature the mock's router keys on), never by rendered SQL text.
+    ``params`` dict), so the bound values are read from the compiled statement
+    (``stmt.compile().params``); the statement is identified by its operation
+    class (the same structural signature the mock's router keys on), never by
+    rendered SQL text.
     """
     for stmt, params in session.executed:
-        if _classify_statement(stmt, params) == "capacity_mark" and stmt._bindparams["rid"].value == run_id:
+        if _classify_statement(stmt, params) == "capacity_mark" and stmt.compile().params.get("rid") == run_id:
             return stmt, params
     return None
 
@@ -451,7 +428,7 @@ class TestReconcilePredicateMatrix:
         # re-marking an already-marked run is a no-op. Whitespace-normalized:
         # the idiom is semantic, only its rendering offsets may vary.
         assert re.search(r"IS\s+DISTINCT\s+FROM", str(stmt)), str(stmt)
-        assert stmt._bindparams["code"].value == "pipeline_capacity"
+        assert stmt.compile().params.get("code") == "pipeline_capacity"
 
     @pytest.mark.asyncio
     async def test_pending_dispatched_stale_redispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2226,7 +2203,7 @@ class TestAwaitingHumanHasCommittedDecision:
         await self._assert_query_order(session)
 
     @pytest.mark.asyncio
-    async def test_legacy_payload_less_approved_is_committed(self) -> None:
+    async def test_legacy_payload_less_approved_is_not_committed_stranded(self) -> None:
         """FAR-541 iteration 4 (FIX C): a legacy/pre-migration approved row
         with a NULL payload is STRANDED — the claimed-branch identity match
         that used to accept it via the decision ROW's gate id is structurally
@@ -2256,7 +2233,7 @@ class TestAwaitingHumanHasCommittedDecision:
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
 
     @pytest.mark.asyncio
-    async def test_legacy_payload_less_rejected_is_committed(self) -> None:
+    async def test_legacy_payload_less_rejected_is_not_committed_stranded(self) -> None:
         """FAR-541 iteration 4 (FIX C): a legacy payload-less REJECTED row is
         equally stranded in the no-undecided-rows crash-recovery branch — a
         stamp is required to verify the identity (accepted residue)."""
@@ -2298,13 +2275,6 @@ class TestAwaitingHumanHasCommittedDecision:
     @pytest.mark.asyncio
     async def test_claimed_no_decision_skipped(self) -> None:
         """No committed decision at all -> never resume."""
-        session = self._mock_session([None])
-        assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
-
-    @pytest.mark.asyncio
-    async def test_claimed_no_committed_decision_but_pending_claimed_row_skipped(self) -> None:
-        """A claimed-but-undecided gate with NO committed decision anywhere ->
-        SKIP (the FAR-541 original bug: empty resume auto-approved the gate)."""
         session = self._mock_session([None])
         assert await ch._awaiting_human_has_committed_decision(session, ORG, RUN_AWAITING) is False
 

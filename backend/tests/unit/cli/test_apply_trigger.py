@@ -17,6 +17,7 @@ import respx
 from modulo.api.routes.triggers import TriggerCreate, TriggerUpdate
 from modulo.cli.apply.executor import PAGE_SIZE, ApplyExecutor
 from modulo.cli.apply.loader import ApplyLoadError, parse_apply_documents
+from modulo.cli.apply.trigger_apply import _apply_one_trigger
 from tests.unit.cli.test_apply_executor import _mock_current
 
 LIST_PARAMS = {"page": "1", "page_size": str(PAGE_SIZE)}
@@ -649,3 +650,81 @@ class TestRefResolution:
         assert len(blocked) == 1
         assert "secretref resolution not supported yet" in blocked[0]["reason"]
         assert not report["failed"]
+
+
+class TestExtractedTriggerHelpers:
+    """Direct coverage for the S3776-extracted per-trigger helper (FAR-366).
+
+    The orchestrator's plan phase normally filters these lanes out before
+    execution: a trigger whose pipeline is neither declared nor present is
+    blocked at plan time, and an unresolved env ref is blocked too. The
+    defensive branches inside ``_apply_one_trigger`` remain reachable when the
+    helper is invoked directly, so exercise them here rather than leaving the
+    extracted branches untested.
+    """
+
+    _PIPELINE_ID = "00000000-0000-0000-0000-0000000000aa"
+
+    @respx.mock
+    def test_undeclared_missing_pipeline_raises_not_found(self) -> None:
+        config = parse_apply_documents(CRON_TRIGGER_TEXT)
+        entity = config.entities.triggers[0]
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(KeyError) as excinfo:
+                _apply_one_trigger(
+                    executor,
+                    entity,
+                    "created",
+                    entry_name=entity.display_key(),
+                    declared_pipelines=set(),
+                    current_triggers={},
+                    pipeline_ids={},
+                    resolved_configs={entity.display_key(): {}},
+                )
+        message = excinfo.value.args[0]
+        assert "not found - declare it in this config" in message
+        assert "apply failed upstream" not in message
+
+    @respx.mock
+    def test_resolves_config_when_not_preseeded_and_creates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HS", "resolved-hmac-secret")
+        route = respx.post(re.compile(r"https://api\.test/api/v1/pipelines/[0-9a-f-]+/triggers")).mock(
+            return_value=httpx.Response(201, json={"id": str(uuid.uuid4()), "name": "hook"})
+        )
+        config = parse_apply_documents(_CONFIG_WITH_SECRET)
+        entity = config.entities.triggers[0]
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            _apply_one_trigger(
+                executor,
+                entity,
+                "created",
+                entry_name=entity.display_key(),
+                declared_pipelines={"nightly-report"},
+                current_triggers={},
+                pipeline_ids={"nightly-report": self._PIPELINE_ID},
+                resolved_configs={},
+            )
+        payload = json.loads(route.calls.last.request.content)
+        assert payload["config_json"]["hmac_secret"] == "resolved-hmac-secret"
+
+    @respx.mock
+    def test_unresolved_config_when_not_preseeded_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HS", raising=False)
+        config = parse_apply_documents(_CONFIG_WITH_SECRET)
+        entity = config.entities.triggers[0]
+        with httpx.Client() as client:
+            executor = ApplyExecutor("https://api.test", "key", client=client)
+            with pytest.raises(ValueError, match="unresolved env ref") as excinfo:
+                _apply_one_trigger(
+                    executor,
+                    entity,
+                    "created",
+                    entry_name=entity.display_key(),
+                    declared_pipelines={"nightly-report"},
+                    current_triggers={},
+                    pipeline_ids={"nightly-report": self._PIPELINE_ID},
+                    resolved_configs={},
+                )
+        assert "unresolved env ref" in str(excinfo.value)
