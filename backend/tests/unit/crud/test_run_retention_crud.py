@@ -16,6 +16,7 @@ thread-ids) rather than against a live schema.
 
 from __future__ import annotations
 
+import itertools
 import json
 import time
 import uuid
@@ -29,14 +30,15 @@ from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
-from modulo.db.models.run import TERMINAL_STATUSES, Run
+from modulo.db.models.run import ACTIVE_RUN_STATUSES, TERMINAL_STATUSES, Run
 from tests.unit.crud.helpers import compile_sql, fake_nested_cm
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 # Literal-binds compilation under the sqlite dialect (Uuid → 32-char hex) —
 # the rendering every org predicate assertion in this file relies on.
 _ORG_SQL = f"organisation_id = '{_ORG.hex}'"
-_LIVE_STATUSES = ("running", "pending", "awaiting_human")
+# Derived from the production vocabulary — never a hand-copied partial set.
+_LIVE_STATUSES = tuple(sorted(ACTIVE_RUN_STATUSES - TERMINAL_STATUSES))
 
 
 def _compile_with_literal_binds(conditions: list[object]) -> str:
@@ -67,10 +69,6 @@ def _run(status: str, *, thread_id: str | None = None) -> Run:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         cost_breakdown=[{"amount": "1"}],
     )
-
-
-# The async-CM double for ``session.begin_nested()`` is the shared
-# ``helpers.fake_nested_cm`` (FIX dedup: it was a local copy).
 
 
 def _expected_components() -> int:
@@ -321,8 +319,8 @@ class TestEstimateStatementBuilders:
     statement and assert its shape against a real dialect."""
 
     def _compile(self, stmt: object, dialect: object, *, literal_binds: bool = False) -> str:
-        compile_kwargs = {"literal_binds": True} if literal_binds else {}
-        return str(stmt.compile(dialect=dialect, compile_kwargs=compile_kwargs))  # type: ignore[attr-defined]
+        # Delegates to the shared helper — the local copy was byte-identical.
+        return compile_sql(stmt, dialect, literal_binds=literal_binds)
 
     def test_runs_payload_stmt_groups_by_status_and_measures_the_three_columns(self) -> None:
         sql = self._compile(rr._runs_payload_stmt([]), sqlite.dialect())
@@ -404,13 +402,18 @@ class TestEstimateBytesByStatus:
 
         # Pattern per scan: set to the remaining budget, then reset to 0.
         assert len(session.timeout_budgets) == 2 * _expected_components()
-        budgets = session.timeout_budgets[0::2]
+        budgets = [int(b) for b in session.timeout_budgets[0::2]]
         resets = session.timeout_budgets[1::2]
         assert resets == ["0"] * _expected_components()
+        # The first scan gets ~the full budget (its set_config runs immediately
+        # at call time; the small floor leaves jitter headroom).
+        assert budgets[0] > int(0.75 * rr.ESTIMATE_DEADLINE_SECONDS * 1000)
+        # The budget is non-increasing — a later scan can only have less left.
+        assert all(b <= a for a, b in itertools.pairwise(budgets))
         for budget in budgets:
             # Bounded by the module deadline — the deadline skip guard must
             # keep passing within the SAME budget the scan is granted.
-            assert 0 < int(budget) <= int(rr.ESTIMATE_DEADLINE_SECONDS * 1000)
+            assert 0 < budget <= int(rr.ESTIMATE_DEADLINE_SECONDS * 1000)
 
     async def test_default_deadline_is_applied_when_none(self) -> None:
         session = _EstimateSession([])
@@ -434,7 +437,7 @@ class TestEstimateBytesByStatus:
         the remaining components still run, and the caller still gets a total —
         flagged degraded."""
         calls = {"n": 0}
-        canned = [[("complete", 10)], None, [("complete", 100)], [], []]
+        canned = [[("complete", 10)], None, [("complete", 100)]] + [[] for _ in range(_expected_components() - 3)]
         session = _EstimateSession([])
 
         async def flaky_execute(stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
@@ -451,7 +454,7 @@ class TestEstimateBytesByStatus:
 
         assert result == {"complete": 110}
         assert degraded is True
-        assert calls["n"] == 5
+        assert calls["n"] == _expected_components()
 
     async def test_statement_timeout_degrades_to_zero_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """qa Major: a scan cancelled by its per-scan ``statement_timeout``
@@ -479,7 +482,7 @@ class TestEstimateBytesByStatus:
 
         assert result == {}
         assert degraded is True
-        assert calls["n"] == 5
+        assert calls["n"] == _expected_components()
         assert any("estimate_statement_timeout" in r.message for r in caplog.records)
         assert not any("estimate_component_unavailable" in r.message for r in caplog.records)
 
@@ -531,7 +534,7 @@ class TestCheckpointDetail:
         assert count_by_thread == {"t-a": 3, "t-b": 1}
         assert session.begin_nested.call_count == self._TABLE_COUNT
 
-    async def test_failed_table_is_skipped_without_poisoning_others(self) -> None:
+    async def test_failed_table_is_skipped_without_poisoning_others(self, caplog: pytest.LogCaptureFixture) -> None:
         """The probe is best-effort per table: a mid-pass SQLAlchemyError is
         swallowed (never re-raised), the remaining table still contributes,
         and each table got its own savepoint."""
@@ -542,10 +545,13 @@ class TestCheckpointDetail:
                 [("t-b", 9, 2)],
             ]
         )
+        caplog.set_level("ERROR", logger="modulo.db.crud.run_retention")
         bytes_by_thread, count_by_thread = await rr._checkpoint_detail(session, self.THREADS, _ORG)
         assert bytes_by_thread == {"t-a": 50, "t-b": 9}
         assert count_by_thread == {"t-a": 1, "t-b": 2}
         assert session.begin_nested.call_count == self._TABLE_COUNT
+        # Fail-open WITH a log: the skipped table surfaces a specific error.
+        assert any("checkpoint_size_unavailable" in r.message for r in caplog.records)
 
     async def test_empty_thread_ids_returns_empty(self) -> None:
         session = _FakeProbeSession([])
@@ -557,9 +563,11 @@ class TestCheckpointDetail:
         session = _FakeProbeSession([[] for _ in range(self._TABLE_COUNT)])
         await rr._checkpoint_detail(session, self.THREADS, _ORG)
         assert session.execute_calls
-        for _stmt, params in session.execute_calls:
+        for stmt, params in session.execute_calls:
             assert params["org"] == str(_ORG)
             assert params["tids"] == self.THREADS
+            # The SQL clause side is what actually scopes the aggregate.
+            assert rr._ORG_CLAUSE in str(stmt)
 
 
 # ---------------------------------------------------------------------------
@@ -828,8 +836,10 @@ class TestDeleteCheckpoints:
         assert any("checkpoints" in s for s in stmts)
         assert any("checkpoint_blobs" in s for s in stmts)
         assert any("checkpoint_writes" in s for s in stmts)
-        assert any(p.get("org") == str(_ORG) for _, p in executed)
-        assert any(p.get("tids") == thread_ids for _, p in executed)
+        # The destructive org scoping applies to EVERY table's delete —
+        # `any()` would pass while two of three tables delete cross-tenant.
+        assert all(p.get("org") == str(_ORG) for _, p in executed)
+        assert all(p.get("tids") == thread_ids for _, p in executed)
 
 
 class TestDeleteRunIdRows:
@@ -942,6 +952,7 @@ class TestPurgeTerminalCheckpoints:
         assert abs((zero_days_cutoff - now_utc).total_seconds()) < 120
 
         hundred_days_cutoff = await _capture(100)
+        assert now_utc - timedelta(days=100) - timedelta(seconds=120) < hundred_days_cutoff
         assert hundred_days_cutoff < now_utc - timedelta(days=99)
 
     async def test_idempotent_when_no_matching_runs(self) -> None:

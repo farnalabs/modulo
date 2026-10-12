@@ -125,6 +125,7 @@ async def test_cursor_pagination_applies_filter() -> None:
     assert result.total == 1
     assert len(result.items) == 1
     assert result.next_cursor == "next"
+    assert result.has_more is False
     stmt = paginator.paginate.await_args.args[1]
     sql = compile_sql(stmt)
     assert "tier NOT IN ('preview')" in sql
