@@ -31,12 +31,19 @@ name: "Merge: Queue Watchdog"
 #      cron cadence). A quiet-but-healthy repo must NOT be re-armed repeatedly;
 #      the threshold adds no load relative to design intent and is self-limiting
 #      (a dispatched run becomes in-progress/queued, blocking the next tick).
-#   3. Escalate on dispatch failure: when nothing has completed for >60 min
-#      despite repeated re-arms (::error:: annotation). A completed run of ANY
-#      conclusion (success, failure, cancelled) proves the queue machinery is
-#      alive — a quiet-but-healthy repo produces no alert. When no completed
-#      runs exist (age == -1), re-arm but do not alert (the age is
-#      unmeasurable, so "dispatch failure" cannot be asserted).
+#   3. Escalate on a stalled queue (::error:: annotation): fire when at least
+#      one open PR is approved and mergeable (reviewDecision APPROVED with
+#      mergeStateStatus CLEAN or UNSTABLE) while the last SUCCESSFUL
+#      merge-queue run is older than 60 min. The alert is keyed on success,
+#      NOT on any completion: a timed-out or displaced run still completes, so
+#      the any-conclusion age stays fresh throughout a real stall and would
+#      suppress the alert (FAR-1689, observed 2026-10-11: ~5.5 h of 30-min
+#      queue-job timeouts, 25 approved PRs never merged, no alert). Never
+#      alert when the success age is unmeasurable (no successful run at all,
+#      age == -1) or when no approved PR is waiting. A completed run of ANY
+#      conclusion (success, failure, cancelled) still proves the machinery is
+#      alive FOR RE-ARM PURPOSES (#2) - it just must no longer suppress the
+#      stall alert.
 #
 # Division of labour with merge-queue.yml's in-job sweep:
 #   - merge-queue.yml in-job sweep = belt-and-braces: runs only when the lock
@@ -74,9 +81,12 @@ concurrency:
 #   /repos/{owner}/{repo}/dispatches requires contents: write, so a read-only
 #   contents scope makes every re-arm attempt 403 (behaviour #2 silently dead).
 # actions: write -> gh run cancel (the cancel leg needs only actions: write).
+# pull-requests: read -> gh pr list, for the approved-and-waiting count that
+#   gates the stall alert (behaviour #3). Read-only, least privilege.
 permissions:
   contents: write
   actions: write
+  pull-requests: read
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -151,6 +161,10 @@ jobs:
           # structurally dominate a window and produce false "stalled"
           # alarms (FAR-975, observed 2026-09-18: 1373 min reported while
           # true last success was ~20 min old, with 9 of last 10 cancelled).
+          # This age drives RE-ARM only (section 3); the stall ALERT is keyed
+          # on the last successful run (section 4), because a timeout or a
+          # pending-run displacement completes as "cancelled" and would keep
+          # this age fresh forever during a real stall (FAR-1689).
           LAST_COMPLETED="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status completed --limit 1 --json updatedAt 2>/dev/null)" || LAST_COMPLETED="[]"
           LAST_COMPLETED_AGE="$(echo "$LAST_COMPLETED" | python3 -c '
           import json, sys, datetime
@@ -168,9 +182,9 @@ jobs:
           ' 2>/dev/null)" || LAST_COMPLETED_AGE="-1"
 
           REARM_MIN=15   # match merge-queue.yml's intended 15-min cron cadence
-          ALERT_MIN_STALE=60  # four consecutive missed re-arms = dispatch failure
+          ALERT_MIN_STALE=60  # stall threshold: no SUCCESSFUL run for this long
 
-          # ---- 3. Decide: re-arm, alert, or both ----
+          # ---- 3. Decide whether to re-arm ----
           # Re-query in_progress AND queued AFTER the cancel loop: if the sweep
           # just cancelled a stuck run, the pre-sweep snapshot still shows it
           # as in_progress and would skip re-arm for a whole tick (up to 10 min).
@@ -186,54 +200,89 @@ jobs:
           ' 2>/dev/null)" || ACTIVE_COUNT="0"
 
           SHOULD_DISPATCH=false
-          SHOULD_ALERT=false
 
           if [ "$ACTIVE_COUNT" -eq 0 ] && [ "$CANCELLED_COUNT" -gt 0 ]; then
             # Priority 1: we just freed the queue by cancelling stuck runs
             SHOULD_DISPATCH=true
             echo "Freed the queue by cancelling ${CANCELLED_COUNT} stuck run(s) — rearming."
-            # Cancelling stuck runs proves the machinery was wedged, so a
-            # no-completion gap past the alert threshold on this same tick is a
-            # genuine dispatch failure — escalate instead of re-arming silently
-            # and hoping a later tick notices. (-1 means unmeasurable: no alert.)
-            #
-            # Knowingly conservative, and it can fire one tick early: the
-            # cancellations just issued become completed runs (conclusion
-            # "cancelled") moments later, so the NEXT tick would see fresh
-            # liveness and stay quiet. We accept that one-tick-early ::error::
-            # rather than deferring, because deferring creates a blind spot: if
-            # runner allocation is what is broken, every re-armed run gets stuck
-            # again, and a defer-only cancel/re-arm loop would escalate never.
-            # Section 1 restores the queue; this alert fires when it cannot stay
-            # restored. A one-off wedge therefore costs at most one early alert,
-            # while a permanent wedge still escalates.
-            if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
-              SHOULD_ALERT=true
-            fi
+            # The stall ALERT is deliberately NOT decided in this branch (nor
+            # in any other): cancelling runs proves the machinery was wedged,
+            # but whether the queue is actually merging is decided solely by
+            # the success-aware check in section 4. Keying the alert on the
+            # any-conclusion age here was the FAR-1689 silence — the
+            # cancellations this sweep issues become completed runs moments
+            # later, so that age never goes stale during a real stall.
           elif [ "$ACTIVE_COUNT" -gt 0 ]; then
-            echo "Run(s) in progress/queued — skipping re-arm and alert."
+            echo "Run(s) in progress/queued — skipping re-arm."
           elif [ "$LAST_COMPLETED_AGE" -ge "$REARM_MIN" ]; then
             # No active runs; last completed is old enough to re-arm
             SHOULD_DISPATCH=true
             echo "No in_progress/queued runs and last completed was ${LAST_COMPLETED_AGE} min ago — rearming."
-            if [ "$LAST_COMPLETED_AGE" -ge "$ALERT_MIN_STALE" ]; then
-              SHOULD_ALERT=true
-            fi
           elif [ "$LAST_COMPLETED_AGE" -ge 0 ]; then
             echo "No in_progress/queued runs but last completed was only ${LAST_COMPLETED_AGE} min ago — within rearm threshold."
           else
-            # No completed runs at all — re-arm but do not alert (age is
-            # unmeasurable, so "dispatch failure" cannot be asserted).
+            # No completed runs at all — re-arm. The success age is -1 too, so
+            # section 4 will not alert: with no run history the stall age is
+            # unmeasurable and cannot be asserted.
             SHOULD_DISPATCH=true
-            echo "::warning::merge-queue-watchdog: no completed merge-queue run found — rearming; cannot assess dispatch failure without a completed-run baseline."
+            echo "::warning::merge-queue-watchdog: no completed merge-queue run found — rearming; stall age unmeasurable without a run baseline."
+          fi
+
+          # ---- 4. Success-aware stall alert ----
+          # The alert is keyed on the last SUCCESSFUL run plus the number of
+          # approved-and-mergeable open PRs waiting, never on the
+          # any-conclusion age from section 2. Every timeout and every
+          # pending-run-displacement cancellation completes a run, so during a
+          # real stall the any-conclusion age stays fresh and the old
+          # condition suppressed the alert indefinitely (FAR-1689, 2026-10-11:
+          # ~5.5 h stall, 25 approved PRs never merged, zero alerts).
+          LAST_SUCCESS="$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --status success --limit 1 --json updatedAt 2>/dev/null)" || LAST_SUCCESS="[]"
+          LAST_SUCCESS_AGE="$(echo "$LAST_SUCCESS" | python3 -c '
+          import json, sys, datetime
+          try:
+              runs = json.loads(sys.stdin.read())
+          except Exception:
+              runs = []
+          if runs and runs[0].get("updatedAt"):
+              updated = runs[0]["updatedAt"].replace("Z", "+00:00")
+              dt = datetime.datetime.fromisoformat(updated)
+              now = datetime.datetime.now(datetime.timezone.utc)
+              print(int((now - dt).total_seconds() / 60))
+          else:
+              print(-1)
+          ' 2>/dev/null)" || LAST_SUCCESS_AGE="-1"
+          # Normalise: empty or non-numeric => -1 (unmeasurable, never alerts).
+          case "$LAST_SUCCESS_AGE" in
+            -1) : ;;
+            ''|*[!0-9]*) LAST_SUCCESS_AGE="-1" ;;
+          esac
+
+          OPEN_PRS="$(gh pr list --repo "$REPO" --state open --limit 100 --json reviewDecision,mergeStateStatus 2>/dev/null)" || OPEN_PRS="[]"
+          APPROVED_WAITING="$(echo "$OPEN_PRS" | jq '[.[] | select(.reviewDecision == "APPROVED") | select(.mergeStateStatus == "CLEAN" or .mergeStateStatus == "UNSTABLE")] | length' 2>/dev/null)" || APPROVED_WAITING="0"
+          # Normalise: empty or non-numeric => 0 (never alerts).
+          case "$APPROVED_WAITING" in
+            ''|*[!0-9]*) APPROVED_WAITING="0" ;;
+          esac
+
+          # Alert iff approved PRs are waiting AND no successful run for the
+          # stale threshold. -1 (unmeasurable) and 0 (nothing waiting) can
+          # never satisfy this, so neither ever alerts.
+          SHOULD_ALERT=false
+          if [ "$APPROVED_WAITING" -gt 0 ] && [ "$LAST_SUCCESS_AGE" -ge "$ALERT_MIN_STALE" ]; then
+            SHOULD_ALERT=true
           fi
 
           if [ "$SHOULD_ALERT" = "true" ]; then
-            echo "::error::merge-queue-watchdog: no merge-queue run completed for ${LAST_COMPLETED_AGE} min despite repeated re-arms — the queue machinery appears broken."
+            echo "::error::merge-queue-watchdog: no SUCCESSFUL merge-queue run for ${LAST_SUCCESS_AGE} min while ${APPROVED_WAITING} approved PR(s) wait — the queue is not merging."
             echo "stalled=true" >> "$GITHUB_OUTPUT"
-            echo "last_completed_age=${LAST_COMPLETED_AGE}" >> "$GITHUB_OUTPUT"
-          elif [ "$LAST_COMPLETED_AGE" -ge 0 ]; then
-            echo "Last completed merge-queue run was ${LAST_COMPLETED_AGE} min ago — within alert threshold."
+            echo "last_success_age=${LAST_SUCCESS_AGE}" >> "$GITHUB_OUTPUT"
+            echo "approved_waiting=${APPROVED_WAITING}" >> "$GITHUB_OUTPUT"
+          elif [ "$LAST_SUCCESS_AGE" -lt 0 ]; then
+            echo "No successful merge-queue run found (success age unmeasurable) — not alerting."
+          elif [ "$APPROVED_WAITING" -eq 0 ]; then
+            echo "No approved-and-mergeable PR waiting — not alerting (last success ${LAST_SUCCESS_AGE} min ago)."
+          else
+            echo "Last successful merge-queue run was ${LAST_SUCCESS_AGE} min ago with ${APPROVED_WAITING} approved PR(s) waiting — within alert threshold."
           fi
 
           if [ "$SHOULD_DISPATCH" = "true" ]; then
