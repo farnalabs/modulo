@@ -45,8 +45,8 @@ def validate_guardrail_request(
 ) -> None:
     """Graph-save validation for guardrail definitions (FAR-208 item 5).
 
-    Four config-vocabulary checks.  The ``failure_behaviour`` parameter was
-    retired from the public surface in FAR-1103 chunk 5a.
+    Five checks.  The ``failure_behaviour`` parameter was retired from the
+    public surface in FAR-1103 chunk 5a.
 
     1. ``config_json.action`` not in ``("observe", "warn", "block", "redact")`` → reject.
     2. Top-level ``config_json.type`` not in ``("regex", "json_schema")`` → reject.
@@ -55,6 +55,10 @@ def validate_guardrail_request(
        ``("input", "output")`` → reject (an unknown seam value must never
        silently bind — the engine's input-passthrough/output-strict split
        would strand it).
+    5. A ``destroy`` redaction rule with no configured deployment pepper
+       (FAR-209 Track B) → reject, mirroring the config-as-code propose path
+       (``_validate_config_item``) so the graph-save authoring paths fail
+       closed at authoring time too.
 
     Raises :class:`fastapi.HTTPException` (422) on violation.
     """
@@ -96,6 +100,29 @@ def validate_guardrail_request(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Guardrail detection envelope type must be regex|json_schema (got {env_type!r}).",
+            )
+
+    # 5. FAR-209 Track B — a destroy-redaction rule cannot run without the
+    # deployment pepper. The config-as-code propose path enforces this
+    # (``_validate_config_item``) but the graph-save authoring paths did not,
+    # so a destroy rule could be authored with the pepper unset and only fail
+    # (closed) at the runtime edge. Reject at authoring here too. Checked
+    # regardless of ``action`` (mirroring ``_validate_config_item``); a
+    # non-list ``redaction`` is left to shape-level validation elsewhere.
+    redaction = config_json.get("redaction")
+    if isinstance(redaction, list):
+        from modulo.core.guardrails import FieldRedactionMode
+        from modulo.core.guardrails.redaction_mode import resolve_guardrail_destroy_pepper
+
+        if (
+            any(isinstance(rule, dict) and rule.get("mode") == FieldRedactionMode.DESTROY for rule in redaction)
+            and not resolve_guardrail_destroy_pepper()
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "Guardrail destroy redaction mode requires the guardrail_destroy_pepper setting to be configured."
+                ),
             )
 
 
