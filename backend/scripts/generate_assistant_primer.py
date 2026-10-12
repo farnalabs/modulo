@@ -296,6 +296,56 @@ def _estimate_tokens(text: str) -> int:
 _MAX_PRIMER_TOKENS = 800
 
 
+_CONCEPTS_HEADING = "## Key Concepts"
+_CONCEPT_TERM_RE = re.compile(r"- \*\*(\w+)\*\*")
+
+
+def _select_section(sections: list[str], heading: str) -> str | None:
+    """Return the last section in *sections* starting with *heading*, else None."""
+    matches = [section for section in sections if section.startswith(heading)]
+    return matches[-1] if matches else None
+
+
+def _concept_term(line: str) -> str | None:
+    """Return ``- <term>`` when *line* is a ``- **Term** — definition`` bullet."""
+    match = _CONCEPT_TERM_RE.match(line)
+    if match is None:
+        return None
+    return f"- {match.group(1)}"
+
+
+def _trim_section(section: str, budget: int) -> str:
+    """Reduce the Key Concepts definitions in *section* to bare term names.
+
+    Only runs when *section* exceeds *budget* tokens; otherwise *section* is
+    returned unchanged. Within every ``## Key Concepts`` block each
+    ``- **Term** — definition`` line becomes ``- Term`` and the remaining
+    block lines (definitions, blanks) are dropped; everything outside those
+    blocks is preserved verbatim.
+    """
+    if _estimate_tokens(section) <= budget:
+        return section
+
+    lines = section.splitlines()
+    trimmed: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith(_CONCEPTS_HEADING):
+            trimmed.append(line)
+            index += 1
+            continue
+        # Keep the heading, then reduce the whole block until the next heading.
+        trimmed.append(line)
+        index += 1
+        while index < len(lines) and not lines[index].startswith("## "):
+            term = _concept_term(lines[index])
+            if term is not None:
+                trimmed.append(term)
+            index += 1
+    return "\n".join(trimmed)
+
+
 def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
     """Truncate from bottom sections to stay within token budget.
 
@@ -304,64 +354,31 @@ def _truncate_primer(primer: str, max_tokens: int = _MAX_PRIMER_TOKENS) -> str:
       2. Key Concepts section
     The overview section is never truncated.
     """
-    tokens = _estimate_tokens(primer)
-    if tokens <= max_tokens:
+    if _estimate_tokens(primer) <= max_tokens:
         return primer
 
     parts = primer.split("\n\n## ")
     if len(parts) <= 2:
         return primer
 
-    # Keep "What is Modulo" (part[0]) and Key Concepts, drop navigation
     overview = parts[0]
     remaining = parts[1:]
+    key_concepts_section = _select_section(remaining, "Key Concepts")
+    active_context_section = _select_section(remaining, "Active Context")
 
-    # Try dropping navigation last; if still over, drop key concepts too
-    key_concepts_section = None
-    active_context_section = None
-    other_sections: list[str] = []
-
-    for p in remaining:
-        if p.startswith("Key Concepts"):
-            key_concepts_section = p
-        elif p.startswith("Pages & Navigation"):
-            # Navigation section is dropped first when truncating to token budget.
-            pass
-        elif p.startswith("Active Context"):
-            active_context_section = p
-        else:
-            other_sections.append(p)
-
+    # Rebuild the candidate from the sections that fit: "Pages & Navigation"
+    # is dropped first (it is never re-added), then Active Context, then the
+    # Key Concepts definitions, and finally the whole Key Concepts block.
     candidate = overview
     if key_concepts_section and _estimate_tokens(overview) < max_tokens:
         candidate = f"{overview}\n\n## {key_concepts_section}"
 
-    if _estimate_tokens(candidate) <= max_tokens and active_context_section:
+    if active_context_section and _estimate_tokens(candidate) <= max_tokens:
         check = f"{candidate}\n\n## {active_context_section}"
         if _estimate_tokens(check) <= max_tokens:
             candidate = check
 
-    if _estimate_tokens(candidate) > max_tokens:
-        # Still over — trim key concepts definitions to one-liners
-        lines = candidate.splitlines()
-        trimmed: list[str] = []
-        in_concepts = False
-        for line in lines:
-            if line.startswith("## Key Concepts"):
-                in_concepts = True
-                trimmed.append(line)
-            elif in_concepts:
-                if line.startswith("## "):
-                    in_concepts = False
-                    trimmed.append(line)
-                elif line.startswith("- **"):
-                    term_match = re.match(r"- \*\*(\w+)\*\*", line)
-                    if term_match:
-                        trimmed.append(f"- {term_match.group(1)}")
-                # skip definition lines
-            else:
-                trimmed.append(line)
-        candidate = "\n".join(trimmed)
+    candidate = _trim_section(candidate, max_tokens)
 
     return candidate if _estimate_tokens(candidate) <= max_tokens else overview
 
