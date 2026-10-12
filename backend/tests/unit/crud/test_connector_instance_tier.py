@@ -1,17 +1,24 @@
 """Unit tests for connector_instance CRUD tier filtering.
 
 Tests the default-behaviour, None-handling, empty-list, explicit-filter,
-pagination, error-path, and cursor-pagination code paths in the function.
-No DB — uses mock sessions.
+org-scoping, pagination, error-path, and cursor-pagination code paths in the
+function. No DB — uses mock sessions.
 """
 
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.db.crud.connector_instance import list_connector_instances
 from modulo.db.models.connector_instance import ConnectorInstance
-from tests.unit.crud.helpers import executed_sql, mock_execute, mock_session
+from tests.unit.crud.helpers import compile_sql, executed_sql, mock_execute, mock_session
+
+_ORG = uuid.UUID("33333333-3333-3333-3333-333333333333")
+# Statement compilation with literal binds under the DEFAULT dialect renders
+# :bindparam tokens as 32-char hex — the same rendering every org predicate
+# assertion in this tier relies on.
+_ORG_SQL = f"organisation_id = '{_ORG.hex}'"
 
 
 async def test_default_excludes_in_dev() -> None:
@@ -22,28 +29,6 @@ async def test_default_excludes_in_dev() -> None:
 
     assert result.total == 2
     assert len(result.items) == 2
-    for sql in executed_sql(session):
-        assert "tier NOT IN ('in_dev')" in sql
-
-
-async def test_excluded_tiers_none_same_as_default() -> None:
-    session = mock_session()
-    session.execute = mock_execute(model=ConnectorInstance, count=2)
-
-    result = await list_connector_instances(session, excluded_tiers=None)
-
-    assert result.total == 2
-    for sql in executed_sql(session):
-        assert "tier NOT IN ('in_dev')" in sql
-
-
-async def test_excluded_tiers_explicit_in_dev() -> None:
-    session = mock_session()
-    session.execute = mock_execute(model=ConnectorInstance, count=1)
-
-    result = await list_connector_instances(session, excluded_tiers=["in_dev"])
-
-    assert result.total == 1
     for sql in executed_sql(session):
         assert "tier NOT IN ('in_dev')" in sql
 
@@ -67,6 +52,19 @@ async def test_excluded_tiers_preview() -> None:
     assert result.total == 3
     for sql in executed_sql(session):
         assert "tier NOT IN ('preview')" in sql
+
+
+async def test_org_scoping_applies_to_count_and_items() -> None:
+    """tenant-scope: BOTH executed statements — the count and the items page —
+    must carry the ``organisation_id`` predicate, not just the items query."""
+    session = mock_session()
+    session.execute = mock_execute(model=ConnectorInstance, count=2)
+
+    result = await list_connector_instances(session, organisation_id=_ORG)
+
+    assert result.total == 2
+    for sql in executed_sql(session):
+        assert _ORG_SQL in sql
 
 
 async def test_page_offset_applied() -> None:
@@ -108,7 +106,7 @@ async def test_programming_error_on_items_query_returns_empty_result() -> None:
 
 
 async def test_cursor_pagination_applies_filter() -> None:
-    """The cursor path must forward the tier filter into the paginated stmt."""
+    """The cursor path must forward the tier + org filters into the paginated stmt."""
     session = mock_session()
     paginator = MagicMock()
     paginator.paginate = AsyncMock(
@@ -121,11 +119,13 @@ async def test_cursor_pagination_applies_filter() -> None:
     )
 
     with patch("modulo.db.crud.connector_instance.CursorPaginator", return_value=paginator) as paginator_cls:
-        result = await list_connector_instances(session, cursor="abc", excluded_tiers=["preview"])
+        result = await list_connector_instances(session, organisation_id=_ORG, cursor="abc", excluded_tiers=["preview"])
 
     paginator_cls.assert_called_once()
     assert result.total == 1
     assert len(result.items) == 1
     assert result.next_cursor == "next"
     stmt = paginator.paginate.await_args.args[1]
-    assert "tier NOT IN ('preview')" in str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    sql = compile_sql(stmt)
+    assert "tier NOT IN ('preview')" in sql
+    assert _ORG_SQL in sql

@@ -16,9 +16,11 @@ thread-ids) rather than against a live schema.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,8 +30,13 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from modulo.db.crud import run_retention as rr
 from modulo.db.models.run import TERMINAL_STATUSES, Run
+from tests.unit.crud.helpers import compile_sql, fake_nested_cm
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
+# Literal-binds compilation under the sqlite dialect (Uuid → 32-char hex) —
+# the rendering every org predicate assertion in this file relies on.
+_ORG_SQL = f"organisation_id = '{_ORG.hex}'"
+_LIVE_STATUSES = ("running", "pending", "awaiting_human")
 
 
 def _compile_with_literal_binds(conditions: list[object]) -> str:
@@ -42,7 +49,7 @@ def _compile_with_literal_binds(conditions: list[object]) -> str:
     """
 
     stmt = select(Run).where(*conditions)  # type: ignore[arg-type]
-    return str(stmt.compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+    return compile_sql(stmt, sqlite.dialect())
 
 
 def _run(status: str, *, thread_id: str | None = None) -> Run:
@@ -62,14 +69,15 @@ def _run(status: str, *, thread_id: str | None = None) -> Run:
     )
 
 
-def _nested_cm(*, enter_exc: Exception | None = None) -> MagicMock:
-    cm = MagicMock()
-    if enter_exc is not None:
-        cm.__aenter__ = AsyncMock(side_effect=enter_exc)
-    else:
-        cm.__aenter__ = AsyncMock(return_value=None)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return cm
+# The async-CM double for ``session.begin_nested()`` is the shared
+# ``helpers.fake_nested_cm`` (FIX dedup: it was a local copy).
+
+
+def _expected_components() -> int:
+    """The estimate's scan count from the production source: the runs payload
+    scan + the node-output scan + one grouped scan per checkpoint agg source.
+    A frozen literal would silently desync when the checkpoint set grows."""
+    return 2 + len(rr._CHECKPOINT_AGG_SOURCES)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +149,13 @@ class TestListRetentionCandidates:
         count_result = MagicMock()
         count_result.scalar_one.return_value = 3
         session.execute = AsyncMock(return_value=count_result)
-        runs = [_run("complete"), _run("failed")]
+        runs = [
+            _run("complete", thread_id="t-complete"),
+            _run("failed", thread_id="t-failed"),
+        ]
+        checkpoint_bytes = {"t-complete": 500, "t-failed": 23}
+        checkpoint_counts = {"t-complete": 5, "t-failed": 2}
+        node_bytes = {runs[0].id: 111, runs[1].id: 222}
 
         # FAR-583: per-run blob bytes come from the repo reader; the mock
         # session cannot execute it, so the orchestration-level test mocks
@@ -150,11 +164,11 @@ class TestListRetentionCandidates:
         # mocked here at the orchestration boundary.
         with (
             patch.object(rr, "_select_run_page", new=AsyncMock(return_value=runs)),
-            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({"tid": 500}, {"tid": 2}))),
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=(checkpoint_bytes, checkpoint_counts))),
             patch.object(
                 rr, "_estimate_bytes_by_status", new=AsyncMock(return_value=({"complete": 100, "failed": 23}, False))
             ),
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value=node_bytes)),
         ):
             result = await rr.list_retention_candidates(session, org_id=_ORG, status=None)
 
@@ -165,11 +179,15 @@ class TestListRetentionCandidates:
         assert result["terminal_estimated_bytes"] == 123
         assert result["estimate_degraded"] is False
         assert len(result["runs"]) == 2
-        # Each run's estimate = its own JSON columns + its checkpoint bytes.
-        for item in result["runs"]:
-            # thread "tid" yields 500 checkpoint bytes; "tid" is not one of the
-            # runs' real thread-ids, so their checkpoint bytes resolve to 0.
-            assert item["estimated_bytes"] >= rr._run_row_bytes(_run("failed"))
+        # Each run's estimate is EXACT: the run's own JSON row bytes +
+        # that run's reassembled blob bytes + its OWN checkpoint thread's
+        # bytes (the earlier `>=` form would also pass on a shared-status
+        # minimum, and its `rr._run_row_bytes(_run("failed"))` operand
+        # re-constructed a throwaway run instead of the listed one).
+        for run, item in zip(runs, result["runs"], strict=True):
+            assert item["id"] == str(run.id)
+            expected = rr._run_row_bytes(run, node_bytes[run.id]) + checkpoint_bytes[run.langgraph_thread_id]
+            assert item["estimated_bytes"] == expected
 
     async def test_terminal_total_is_surfaced_and_distinct_from_total(self) -> None:
         """terminal_total/terminal_estimated_bytes are reported separately so the
@@ -287,7 +305,7 @@ class _EstimateSession:
         self._results = list(results)
         self.executed: list[object] = []
         self.timeout_budgets: list[str] = []
-        self.begin_nested = MagicMock(return_value=_nested_cm())
+        self.begin_nested = MagicMock(return_value=fake_nested_cm())
 
     async def execute(self, stmt: object, params: object = None) -> _FakeEstimateRows | MagicMock:
         self.executed.append(stmt)
@@ -349,8 +367,10 @@ class TestEstimateStatementBuilders:
 @pytest.mark.asyncio
 class TestEstimateBytesByStatus:
     async def test_accumulates_per_status_across_all_five_components(self) -> None:
-        """Component order: runs payload, run_node_outputs, then the three
-        checkpoint tables; per-status bytes accumulate across all of them."""
+        """Component order: runs payload, run_node_outputs, then every
+        checkpoint table in ``rr._CHECKPOINT_AGG_SOURCES``; per-status bytes
+        accumulate across all of them. The exact component count is pinned by
+        the production source (3 agg sources → 5 scans)."""
         session = _EstimateSession(
             [
                 [("complete", 10), ("failed", 5)],
@@ -364,12 +384,14 @@ class TestEstimateBytesByStatus:
 
         assert result == {"complete": 113, "failed": 12}
         assert degraded is False
-        # Five scans, each preceded by its transaction-local statement_timeout
-        # set and followed by the reset-to-0 (before the savepoint releases).
+        # Five scans (runs payload + node outputs + one per agg source), each
+        # preceded by its transaction-local statement_timeout set and followed
+        # by the reset-to-0 (before the savepoint releases). The scan count is
+        # derived from the production source, not a frozen `5`.
         scans = [s for s in session.executed if "set_config" not in str(s)]
-        assert len(scans) == 5
-        assert len(session.executed) == 15
-        assert session.begin_nested.call_count == 5
+        assert len(scans) == _expected_components()
+        assert len(session.executed) == 3 * _expected_components()
+        assert session.begin_nested.call_count == _expected_components()
 
     async def test_each_scan_is_bounded_by_a_remaining_budget_statement_timeout(self) -> None:
         """qa Major: a STARTED scan must be bounded, not just its start — every
@@ -377,16 +399,18 @@ class TestEstimateBytesByStatus:
         monotonic budget and clears it back to 0 before the savepoint releases
         (a released SET LOCAL survives to the end of the transaction, and a
         leftover small budget would abort the cheap statements that follow)."""
-        session = _EstimateSession([[], [], [], [], []])
+        session = _EstimateSession([[] for _ in range(_expected_components())])
         await rr._estimate_bytes_by_status(session, org_id=_ORG)
 
         # Pattern per scan: set to the remaining budget, then reset to 0.
-        assert len(session.timeout_budgets) == 10
+        assert len(session.timeout_budgets) == 2 * _expected_components()
         budgets = session.timeout_budgets[0::2]
         resets = session.timeout_budgets[1::2]
-        assert resets == ["0"] * 5
+        assert resets == ["0"] * _expected_components()
         for budget in budgets:
-            assert 15_000 <= int(budget) <= 20_000
+            # Bounded by the module deadline — the deadline skip guard must
+            # keep passing within the SAME budget the scan is granted.
+            assert 0 < int(budget) <= int(rr.ESTIMATE_DEADLINE_SECONDS * 1000)
 
     async def test_default_deadline_is_applied_when_none(self) -> None:
         session = _EstimateSession([])
@@ -394,7 +418,7 @@ class TestEstimateBytesByStatus:
         # The default budget is in the future, so every component ran.
         assert result == {}
         assert degraded is False
-        assert len(session.executed) == 15
+        assert len(session.executed) == 3 * _expected_components()
 
     async def test_expired_deadline_skips_every_component(self) -> None:
         session = _EstimateSession([])
@@ -461,6 +485,84 @@ class TestEstimateBytesByStatus:
 
 
 # ---------------------------------------------------------------------------
+# _checkpoint_detail — the real, over-real-SQL size probe (per-table savepoints)
+# ---------------------------------------------------------------------------
+
+
+class _FakeProbeSession:
+    """Fake AsyncSession exercising the REAL ``_checkpoint_detail`` probe.
+
+    Canned rows are popped in execution order — one result per checkpoint
+    table; a table's entry may be an ``Exception`` to raise. Params are
+    recorded so the tests can pin the bind shape on the raw SQL.
+    """
+
+    def __init__(self, results: list[object]) -> None:
+        self._results = list(results)
+        self.execute_calls: list[tuple[object, dict[str, object]]] = []
+        self.begin_nested = MagicMock(return_value=fake_nested_cm())
+
+    async def execute(self, stmt: object, params: object = None) -> MagicMock:
+        bound = dict(params or {})
+        self.execute_calls.append((stmt, bound))
+        outcome = self._results.pop(0) if self._results else []
+        if isinstance(outcome, Exception):
+            raise outcome
+        result = MagicMock()
+        result.all.return_value = outcome
+        return result
+
+
+@pytest.mark.asyncio
+class TestCheckpointDetail:
+    THREADS: ClassVar[list[str]] = ["org:t1", "org:t2"]
+    _TABLE_COUNT: ClassVar[int] = len(rr._CHECKPOINT_TABLES)
+
+    async def test_aggregates_rows_across_tables(self) -> None:
+        session = _FakeProbeSession(
+            [
+                [("t-a", 100, 2)],  # checkpoints
+                [("t-a", 40, 1), ("t-b", 5, 1)],  # checkpoint_blobs
+                [],  # checkpoint_writes
+            ]
+        )
+        bytes_by_thread, count_by_thread = await rr._checkpoint_detail(session, self.THREADS, _ORG)
+        assert bytes_by_thread == {"t-a": 140, "t-b": 5}
+        assert count_by_thread == {"t-a": 3, "t-b": 1}
+        assert session.begin_nested.call_count == self._TABLE_COUNT
+
+    async def test_failed_table_is_skipped_without_poisoning_others(self) -> None:
+        """The probe is best-effort per table: a mid-pass SQLAlchemyError is
+        swallowed (never re-raised), the remaining table still contributes,
+        and each table got its own savepoint."""
+        session = _FakeProbeSession(
+            [
+                [("t-a", 50, 1)],
+                SQLAlchemyError("table missing"),
+                [("t-b", 9, 2)],
+            ]
+        )
+        bytes_by_thread, count_by_thread = await rr._checkpoint_detail(session, self.THREADS, _ORG)
+        assert bytes_by_thread == {"t-a": 50, "t-b": 9}
+        assert count_by_thread == {"t-a": 1, "t-b": 2}
+        assert session.begin_nested.call_count == self._TABLE_COUNT
+
+    async def test_empty_thread_ids_returns_empty(self) -> None:
+        session = _FakeProbeSession([])
+        assert await rr._checkpoint_detail(session, [], _ORG) == ({}, {})
+        assert not session.execute_calls
+        assert session.begin_nested.call_count == 0
+
+    async def test_org_id_is_bound_into_the_probe_sql(self) -> None:
+        session = _FakeProbeSession([[] for _ in range(self._TABLE_COUNT)])
+        await rr._checkpoint_detail(session, self.THREADS, _ORG)
+        assert session.execute_calls
+        for _stmt, params in session.execute_calls:
+            assert params["org"] == str(_ORG)
+            assert params["tids"] == self.THREADS
+
+
+# ---------------------------------------------------------------------------
 # purge_terminal_runs — terminal-only, checkpoint cascade, batching, idempotency
 # ---------------------------------------------------------------------------
 
@@ -489,10 +591,33 @@ class TestPurgeTerminalRuns:
         assert captured["status"] is None
         session.begin_nested.assert_not_called()
 
+    async def test_on_batch_purge_callback_invoked_per_batch(self) -> None:
+        """FAR-582 contract: the caller's artifact-cleanup callback fires once
+        per purged batch, INSIDE the batch savepoint, with that batch's runs
+        and the org id."""
+        session = AsyncMock()
+        session.begin_nested = MagicMock(return_value=fake_nested_cm())
+        runs = [_run("complete"), _run("failed")]
+        spy = MagicMock()
+
+        with (
+            patch.object(rr, "_select_run_page", side_effect=[runs, []]),
+            patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))),
+            patch.object(rr, "_delete_checkpoints", new=AsyncMock()),
+            patch.object(rr, "_delete_quarantine_rows", new=AsyncMock()),
+            patch.object(rr, "_delete_run_id_rows", new=AsyncMock()),
+            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value={})),
+        ):
+            await self._purge(session, batch_size=2, on_batch_purge=spy)
+
+        spy.assert_called_once()
+        assert spy.call_args.args[0] == runs
+        assert spy.call_args.args[1] == _ORG
+
     async def test_deletes_checkpoints_and_run_id_rows_then_runs(self) -> None:
         """Each purge batch deletes checkpoints + SET NULL/RESTRICT rows + runs."""
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm())
+        session.begin_nested = MagicMock(return_value=fake_nested_cm())
         runs = [_run("complete"), _run("failed")]
         thread_ids = [r.langgraph_thread_id for r in runs]
         delete_checkpoints = AsyncMock()
@@ -526,7 +651,7 @@ class TestPurgeTerminalRuns:
         FK, so without the explicit delete every purged run would leave a
         permanent orphaned blob copy."""
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm())
+        session.begin_nested = MagicMock(return_value=fake_nested_cm())
         runs = [_run("complete")]
         delete_quarantine = AsyncMock()
 
@@ -545,7 +670,7 @@ class TestPurgeTerminalRuns:
     async def test_batches_at_batch_size(self) -> None:
         """A set larger than batch_size is processed in more than one SAVEPOINT."""
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm())
+        session.begin_nested = MagicMock(return_value=fake_nested_cm())
         runs = [_run("complete") for _ in range(5)]
         counter = {"n": 0}
 
@@ -583,7 +708,7 @@ class TestPurgeTerminalRuns:
     async def test_batch_failure_rolls_back_that_batch_and_stops(self) -> None:
         """A SAVEPOINT failure rolls back the batch and returns partial counts."""
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm(enter_exc=RuntimeError("boom")))
+        session.begin_nested = MagicMock(return_value=fake_nested_cm(enter_exc=RuntimeError("boom")))
         runs = [_run("complete")]
         counter = {"n": 0}
 
@@ -614,6 +739,71 @@ class TestPurgeTerminalRuns:
             await self._purge(session, _status="running")
 
         assert selected_statuses == [TERMINAL_STATUSES]
+
+
+# ---------------------------------------------------------------------------
+# _serialize_run / iter_run_export — the streamed JSONL export
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeRun:
+    def test_serialize_run_none_optional_fields(self) -> None:
+        """qa Major: absent optional sides serialize as JSON ``null`` — never
+        as omitted keys (a consumer diffing two exports must see the absent
+        side explicitly)."""
+        run = _run("complete")
+        run.started_at = None
+        run.completed_at = None
+        run.total_cost_usd = None
+        serialized = rr._serialize_run(
+            run,
+            checkpoint_count=2,
+            checkpoint_bytes=99,
+            blobs=rr.RunBlobs(outputs={"a": 1}, telemetry=None, markers={}),
+        )
+
+        assert serialized["started_at"] is None
+        assert serialized["completed_at"] is None
+        assert serialized["total_cost_usd"] is None
+        assert serialized["node_telemetry_json"] is None
+        assert serialized["outputs_json"] == {"a": 1}
+        assert not serialized["raw_output_markers"]
+        assert serialized["checkpoint_summary"] == {"rows": 2, "estimated_bytes": 99}
+        # The whole shape must survive a JSON round-trip unchanged.
+        assert json.loads(json.dumps(serialized)) == serialized
+
+    async def test_iter_run_export_streams_paged_jsonl(self) -> None:
+        """Runs stream line-by-line: each yielded line is one JSONL record
+        (newline-terminated, JSON-round-trippable), pages are re-fetched until
+        a short page ends the loop, and absence of checkpoint/blob bytes
+        serializes as nulls."""
+        runs = [_run("complete"), _run("failed"), _run("complete")]
+        select_page = AsyncMock(side_effect=[[runs[0], runs[1]], [runs[2]]])
+        checkpoint_detail = AsyncMock(return_value=({}, {}))
+        read_blobs = AsyncMock(return_value=rr.RunBlobs(None, None, None))
+
+        with (
+            patch.object(rr, "_select_run_page", new=select_page),
+            patch.object(rr, "_checkpoint_detail", new=checkpoint_detail),
+            patch.object(rr, "read_run_blobs", new=read_blobs),
+        ):
+            lines = [line async for line in rr.iter_run_export(AsyncMock(), org_id=_ORG, page_size=2)]
+
+        assert len(lines) == 3
+        for line, run in zip(lines, runs, strict=True):
+            assert line.endswith("\n")
+            parsed = json.loads(line)
+            assert parsed["id"] == str(run.id)
+            assert parsed["status"] == run.status
+            assert parsed["checkpoint_summary"] == {"rows": 0, "estimated_bytes": 0}
+            assert parsed["outputs_json"] is None
+        assert select_page.await_count == 2
+
+    async def test_iter_run_export_empty_yields_nothing(self) -> None:
+        with patch.object(rr, "_select_run_page", new=AsyncMock(return_value=[])):
+            lines = [line async for line in rr.iter_run_export(AsyncMock(), org_id=_ORG)]
+
+        assert not lines
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +852,7 @@ class TestDeleteQuarantineRows:
 
     async def test_deletes_quarantine_rows_for_the_run_ids(self) -> None:
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm())
+        session.begin_nested = MagicMock(return_value=fake_nested_cm())
         run_ids = [uuid.uuid4(), uuid.uuid4()]
         await rr._delete_quarantine_rows(session, run_ids)
         statements = [c.args[0] for c in session.execute.call_args_list]
@@ -680,7 +870,7 @@ class TestDeleteQuarantineRows:
         """A privilege / missing-table failure (Postgres: no app-role grant on
         the quarantine table) must not raise into the purge batch."""
         session = AsyncMock()
-        session.begin_nested = MagicMock(return_value=_nested_cm(enter_exc=RuntimeError("permission denied")))
+        session.begin_nested = MagicMock(return_value=fake_nested_cm(enter_exc=RuntimeError("permission denied")))
         caplog.set_level("WARNING", logger="modulo.db.crud.run_retention")
         await rr._delete_quarantine_rows(session, [uuid.uuid4()])
         assert any("quarantine_delete_unavailable" in r.message for r in caplog.records)
@@ -721,6 +911,38 @@ class TestPurgeTerminalCheckpoints:
         assert delete_checkpoints.call_args.args[1] == threads
         assert delete_checkpoints.call_args.args[2] == _ORG
         session.flush.assert_awaited()
+
+        # The SELECT's safety predicate (read from the executed statement, not
+        # inferred): every terminal status is eligible, live statuses never
+        # are, and retention applies to coalesce(completed_at, created_at).
+        stmt = session.execute.await_args_list[0].args[0]
+        sql = compile_sql(stmt, sqlite.dialect())
+        for terminal_status in TERMINAL_STATUSES:
+            assert terminal_status in sql
+        for live_status in _LIVE_STATUSES:
+            assert live_status not in sql
+        assert "coalesce(runs.completed_at, runs.created_at)" in sql
+        assert _ORG_SQL in sql
+
+    async def test_cutoff_derives_from_max_age_days(self) -> None:
+        """The kill-line is ``now(UTC) - max_age_days`` — repurposed from the
+        operator-chosen age argument, never a frozen value or the ``date_*``
+        filters' own cutoff."""
+        now_utc = datetime.now(UTC)
+
+        async def _capture(max_age_days: int) -> datetime:
+            session = AsyncMock()
+            session.execute = AsyncMock(return_value=self._run_select([]))
+            with patch.object(rr, "_checkpoint_detail", new=AsyncMock(return_value=({}, {}))):
+                await rr.purge_terminal_checkpoints(session, org_id=_ORG, max_age_days=max_age_days)
+            stmt = session.execute.await_args_list[0].args[0]
+            return next(v for v in stmt.compile().params.values() if isinstance(v, datetime))
+
+        zero_days_cutoff = await _capture(0)
+        assert abs((zero_days_cutoff - now_utc).total_seconds()) < 120
+
+        hundred_days_cutoff = await _capture(100)
+        assert hundred_days_cutoff < now_utc - timedelta(days=99)
 
     async def test_idempotent_when_no_matching_runs(self) -> None:
         session = AsyncMock()

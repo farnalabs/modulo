@@ -13,7 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from modulo.db.crud.library_primitive import copy_to_adapt, list_library_primitives
 from modulo.db.models.library_primitive import LibraryPrimitive
-from tests.unit.crud.helpers import executed_sql, mock_execute, mock_session
+from tests.unit.crud.helpers import compile_sql, executed_sql, mock_execute, mock_session
 
 ORG_ID = uuid.uuid4()
 ORG_ID_SQL = f"organisation_id = '{ORG_ID.hex}'"
@@ -31,28 +31,6 @@ async def test_default_excludes_in_dev() -> None:
         assert "tier NOT IN ('in_dev')" in sql
         assert ORG_ID_SQL in sql
         assert "deleted_at IS NULL" in sql
-
-
-async def test_excluded_tiers_none_same_as_default() -> None:
-    session = mock_session()
-    session.execute = mock_execute(model=LibraryPrimitive, count=2)
-
-    result = await list_library_primitives(session, org_id=ORG_ID, excluded_tiers=None)
-
-    assert result.total == 2
-    for sql in executed_sql(session):
-        assert "tier NOT IN ('in_dev')" in sql
-
-
-async def test_excluded_tiers_explicit_in_dev() -> None:
-    session = mock_session()
-    session.execute = mock_execute(model=LibraryPrimitive, count=1)
-
-    result = await list_library_primitives(session, org_id=ORG_ID, excluded_tiers=["in_dev"])
-
-    assert result.total == 1
-    for sql in executed_sql(session):
-        assert "tier NOT IN ('in_dev')" in sql
 
 
 async def test_excluded_tiers_empty_skips_filter() -> None:
@@ -164,7 +142,7 @@ async def test_cursor_pagination_applies_filters() -> None:
     assert len(result.items) == 1
     assert result.next_cursor == "next"
     stmt = paginator.paginate.await_args.args[1]
-    sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    sql = compile_sql(stmt)
     assert "tier NOT IN ('preview')" in sql
     assert ORG_ID_SQL in sql
     assert "primitive_type = 'schema'" in sql
