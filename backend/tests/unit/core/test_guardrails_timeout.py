@@ -16,11 +16,13 @@ from modulo.core.eval_engine import EvalDefinition, EvalEngine, EvalType
 from modulo.core.guardrails import (
     DEFAULT_GUARDRAIL_TIMEOUT_SECONDS,
     DEFAULT_MAX_GUARDRAILS_PER_NODE,
+    GuardrailConfigError,
     GuardrailSkip,
     check_payload_within_budget,
     guardrail_cap_violation,
     resolve_guardrail_cap,
     resolve_guardrail_timeout,
+    run_interception_pass,
     run_interception_pass_async,
     serialize_guardrail_pin,
     to_engine_definition_from_pin,
@@ -144,6 +146,113 @@ async def test_detection_error_fails_closed_for_block_guardrail():
     assert outcome.blocked is True
     assert outcome.blocking_eval_name == "bad-pattern"
     assert "mechanism error" in outcome.block_message
+
+
+# ---------------------------------------------------------------------------
+# FAR-1700 — a malformed regex on a BLOCK/REDACT guardrail fails CLOSED
+# ---------------------------------------------------------------------------
+
+_MALFORMED_PATTERN = "SECRET_[A-Z0-9{"  # unterminated character set → re.error
+
+
+async def test_malformed_regex_fails_closed_for_block_guardrail():
+    """FAR-1700: a BLOCK guardrail whose pattern does not compile BLOCKS.
+
+    The eval engine swallows ``re.error`` into a FAILED result; under regex
+    violation semantics (match = violation) that reads as "no match", so the
+    broken detector used to let the payload straight through. A compile
+    failure is a detection MECHANISM error and must fail closed.
+    """
+    bad = _def("uncompilable", "block", config={"pattern": _MALFORMED_PATTERN, "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "uncompilable"
+    assert "mechanism error" in outcome.block_message
+
+
+async def test_malformed_regex_fails_closed_for_redact_guardrail():
+    """REDACT is a guarding action too: a broken pattern must fail closed."""
+    bad = _def("uncompilable-redact", "redact", config={"pattern": _MALFORMED_PATTERN, "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "uncompilable-redact"
+    assert "mechanism error" in outcome.block_message
+
+
+async def test_malformed_regex_unchanged_for_observe_guardrail():
+    """FAR-1700 must NOT change a non-blocking guardrail: observe keeps its
+    advisory log-and-continue behaviour — never a block, exactly one recorded
+    failed result carrying the engine's invalid-pattern detail."""
+    bad = _def("uncompilable-observe", "observe", config={"pattern": _MALFORMED_PATTERN, "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is False
+    assert len(outcome.results) == 1
+    assert outcome.results[0].passed is False
+    assert "invalid pattern" in outcome.results[0].detail
+
+
+async def test_non_string_regex_fails_closed_for_block_guardrail():
+    """A non-string pattern (e.g. an int) is the same "detector cannot run"
+    failure — fail closed for a block guardrail, surfaced as a clean config
+    error rather than a bare TypeError outside the mechanism-error path."""
+    bad = _def("non-string-pattern", "block", config={"pattern": 123, "field": "body"})
+    outcome = await run_interception_pass_async(
+        EvalEngine(),
+        [bad],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert outcome.blocked is True
+    assert outcome.blocking_eval_name == "non-string-pattern"
+    assert "mechanism error" in outcome.block_message
+
+
+def test_malformed_regex_surfaces_as_config_error_on_sync_pass():
+    """The sync seam (webhook intake) fails via the raised GuardrailConfigError
+    — the exception ``run_pre_trigger_guardrail_pass`` maps to its fail-closed
+    block. It must never return a silent non-blocked outcome."""
+    bad = _def("uncompilable", "block", config={"pattern": _MALFORMED_PATTERN, "field": "body"})
+    with pytest.raises(GuardrailConfigError, match="does not compile"):
+        run_interception_pass(EvalEngine(), [bad], {"body": "clean"})
+
+
+async def test_valid_regex_pattern_still_behaves_correctly():
+    """A VALID pattern is untouched by the compile check: it blocks on a match
+    and stays silent on a clean payload (both directions, same seam)."""
+    good = _def("valid-pattern", "block")
+    hit = await run_interception_pass_async(
+        EvalEngine(),
+        [good],
+        {"body": "leak SECRET_ABC12345"},
+        timeout_seconds=5.0,
+    )
+    assert hit.blocked is True
+    assert hit.blocking_eval_name == "valid-pattern"
+    miss = await run_interception_pass_async(
+        EvalEngine(),
+        [good],
+        {"body": "clean"},
+        timeout_seconds=5.0,
+    )
+    assert miss.blocked is False
+    assert len(miss.results) == 1
+    assert miss.results[0].passed is False
+    assert "mechanism error" not in miss.results[0].detail
 
 
 async def test_malformed_shape_guardrail_skipped_not_aborting_pass():
