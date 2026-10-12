@@ -13,6 +13,7 @@ paths are asserted directly rather than against external services.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import time
 from datetime import UTC, datetime, timedelta
@@ -467,7 +468,13 @@ def test_default_probes_real(tmp_path: Path):
         import pwd
 
         # Both probes resolve to THIS process's own login name on POSIX.
-        me = pwd.getpwuid(os.getuid()).pw_name
+        # Guard the UID lookup: a runner whose UID has no /etc/passwd entry
+        # makes getpwuid raise KeyError, whereas the probe under test returns
+        # None for that case — so mirror the probe's honest-None contract.
+        try:
+            me = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            me = None
         assert probes.username_of_uid(uid) == me
         assert probes.file_owner(tmp_path) == me
 
@@ -494,9 +501,10 @@ def test_default_probes_real(tmp_path: Path):
     # PATH / install root probes: `modulo` is installed into this worktree's
     # venv, which `uv run` prepends to PATH, so the probe must resolve it.
     assert probes.install_root() is not None
-    on_path = probes.modulo_on_path()
-    assert on_path is not None
-    assert Path(on_path).name == "modulo"
+    # The probe is `shutil.which("modulo")`; assert it agrees with the
+    # environment-agnostic source rather than assuming the venv bin is on
+    # PATH (a runner that does not prepend it would otherwise fail).
+    assert probes.modulo_on_path() == shutil.which("modulo")
 
     # second install hint (sandbox may share a parent dir with other installs)
     hint = probes.second_install_hint()
@@ -527,10 +535,12 @@ def test_default_probes_real(tmp_path: Path):
 
     # bundled binaries / bundle version resolve (may be empty if no bundle)
     assert isinstance(probes.bundled_binaries(), list)
-    # No bundled postgres exists under this venv's sys.prefix, so the probe
-    # must honestly report None (its dotted-token parse path is owned by
+    # Only assume "no bundled postgres" when the bundle list itself is empty;
+    # a bundle that does carry postgres is allowed to report a version (its
+    # dotted-token parse path is owned by
     # test_probe_bundle_pg_version_parses_dotted_token in test_doctor.py).
-    assert probes.bundle_pg_version() is None
+    if not probes.bundled_binaries():
+        assert probes.bundle_pg_version() is None
 
     # launcher-running + env-file-pinned probes run without crashing
     assert isinstance(probes.launcher_running(), bool)

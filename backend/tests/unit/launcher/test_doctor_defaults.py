@@ -105,11 +105,6 @@ def test_parse_listeners_from_proc_reads_loopback(monkeypatch: pytest.MonkeyPatc
 
 
 # ---------------------------------------------------------------------------
-# _load_state_readonly read-only paths
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # default_probes: the real-runtime wiring (probes exercised via injection)
 # ---------------------------------------------------------------------------
 

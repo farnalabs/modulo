@@ -1619,15 +1619,22 @@ class TestAssertUpgradePlatform:
 
 
 class TestAlembicHeads:
-    def test_missing_ini_returns_unknown(self, monkeypatch, tmp_path):
+    def test_missing_ini_returns_unknown(self, monkeypatch, tmp_path, caplog):
         # Point the module's __file__ so Path(__file__).resolve().parents[3]
         # (the backend/ dir) lands under tmp_path, where no alembic.ini exists.
         fake_file = tmp_path / "a" / "b" / "c" / "backend" / "src" / "modulo" / "launcher" / "upgrade.py"
         fake_file.parent.mkdir(parents=True)
         fake_file.write_text("", encoding="utf-8")
         monkeypatch.setattr(upgrade_module, "__file__", str(fake_file))
-        result = upgrade_module._alembic_heads()
+        with caplog.at_level(logging.WARNING, logger="modulo.launcher.upgrade"):
+            result = upgrade_module._alembic_heads()
         assert result == ["unknown"]
+        # The early return (`if not alembic_ini.exists()`) returns the
+        # placeholder WITHOUT logging; only the `except Exception` fallback
+        # logs. Asserting the absence of that log token proves the early
+        # return fired — deleting it would fall through to the fallback and
+        # log, failing this test.
+        assert not any("alembic_heads_unresolved" in r.getMessage() for r in caplog.records)
 
     def test_exception_returns_unknown(self):
         with patch("alembic.config.Config", side_effect=RuntimeError("boom")):
