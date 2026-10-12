@@ -32,6 +32,21 @@ from __future__ import annotations
 
 import pytest
 
+from tests.unit.cron_helpers._helpers import _patch_env
+
+
+@pytest.fixture(autouse=True)
+def _cron_helpers_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch the required env (``DATABASE_URL``/``SECRET_KEY``/``FERNET_KEY``)
+    for every test in this package.
+
+    Every test here previously repeated a ``(monkeypatch) -> _patch_env(monkeypatch)``
+    prologue (~90 sites); the autouse fixture makes it package-wide. Any test that
+    still needs to vary a value does it in its own body via ``monkeypatch.setenv``
+    (the same MonkeyPatch instance, layered after this fixture).
+    """
+    _patch_env(monkeypatch)
+
 
 @pytest.fixture(autouse=True)
 def _far681_any_credential_default() -> None:
