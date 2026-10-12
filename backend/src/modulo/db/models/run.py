@@ -131,6 +131,31 @@ CANCELLED_BY_SYSTEM: Final[str] = "system"
 EXECUTION_ORIGIN_DISPATCHED: Final[str] = "dispatched"
 EXECUTION_ORIGIN_VALUES: frozenset[str] = frozenset({EXECUTION_ORIGIN_DISPATCHED})
 
+# ---------------------------------------------------------------------------
+# FAR-153 / §15.1 (agent-failure UX v6) — WHY a run is an attempt of another.
+# The CLOSED vocabulary behind ``runs.run_group_kind``:
+#
+#   * RUN_GROUP_KIND_RETRY — a retry attempt: a CHILD row whose graph runs
+#     CLEAN on a fresh ``langgraph_thread_id`` (the default ``create_run``
+#     thread; no override).
+#   * RUN_GROUP_KIND_RESUME — a resume attempt: a CHILD row that inherits
+#     its parent's ``langgraph_thread_id`` via ``create_run(thread_id=...)``
+#     so it continues the parent's checkpoint.
+#   * ``NULL`` — a root run, or a signal / correction / work-item child
+#     (those keep their existing rollup behaviour; the new grouping logic
+#     filters ``run_group_kind IN ('retry','resume')``).
+#
+# Like ``EXECUTION_ORIGIN_VALUES`` above, no DB CHECK backs this yet (§15.12
+# schema diff lists no constraint): a CHECK validated against the populated
+# ``runs`` table costs a full-table scan for no safety the write site does
+# not already provide — ``crud.run.create_run`` refuses any value outside
+# this set at the persist boundary. Adding a value means adding it here AND
+# widening any future constraint in the same change.
+# ---------------------------------------------------------------------------
+RUN_GROUP_KIND_RETRY: Final[str] = "retry"
+RUN_GROUP_KIND_RESUME: Final[str] = "resume"
+RUN_GROUP_KIND_VALUES: frozenset[str] = frozenset({RUN_GROUP_KIND_RETRY, RUN_GROUP_KIND_RESUME})
+
 
 # The canonical status literal (FAR-604 qa F15): every write site that names the
 # parked status binds/compares against this constant so a rename or a typo can
@@ -307,6 +332,40 @@ class Run(OrgScoped):
                 "AND workspace_inputs_drift_detected IS NULL"
             ),
         ),
+        # FAR-153 / §15.1 — the two partial unique indexes that REPLACE the
+        # former global UNIQUE(langgraph_thread_id) (dropped by migration
+        # 0302_runs_run_grouping):
+        #
+        # 1. Exactly ONE resume child per parent: a second resume of the same
+        #    stalled parent is rejected at the DB (409 at the API), while a
+        #    resume child that itself stalls can be resumed again because its
+        #    parent is a DIFFERENT row — so resume-of-resume chains work.
+        Index(
+            "uq_runs_resume_parent",
+            "parent_run_id",
+            unique=True,
+            postgresql_where=text("run_group_kind = 'resume'"),
+            sqlite_where=text("run_group_kind = 'resume'"),
+        ),
+        # 2. Global thread uniqueness for every NON-resume row (roots,
+        #    retries, signal/correction/work-item children, legacy rows):
+        #    only a resume child may share its parent's thread, and only to
+        #    continue that parent's checkpoint — the "only their parent's"
+        #    half is enforced by ``crud.run.create_run``, which reads the
+        #    parent and rejects a resume whose thread_id is not the
+        #    parent's langgraph_thread_id (the indexes below exclude resume
+        #    rows, so they cannot make that check themselves).
+        #    ``IS NOT`` on SQLite has the
+        #    same null-safe semantics as ``IS DISTINCT FROM`` on Postgres
+        #    (NULL kind IS NOT 'resume' -> true), so both dialects index
+        #    exactly the rows the spec names.
+        Index(
+            "uq_runs_thread_non_resume",
+            "langgraph_thread_id",
+            unique=True,
+            postgresql_where=text("run_group_kind IS DISTINCT FROM 'resume'"),
+            sqlite_where=text("run_group_kind IS NOT 'resume'"),
+        ),
     )
 
     pipeline_id: Mapped[uuid.UUID] = mapped_column(
@@ -338,6 +397,19 @@ class Run(OrgScoped):
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("runs.id", ondelete=ONDELETE_SET_NULL), nullable=True, index=True
     )
+    # FAR-153 / §15.1 — run-group identity. ``run_group_id`` is the ROOT run
+    # id of the retry/resume group this attempt belongs to (indexed: group
+    # queries read WHERE run_group_id = :root). NULL for roots, for signal /
+    # correction / work-item children (their rollup behaviour is unchanged),
+    # and for legacy rows until the FAR-147 backfill classifies them — never
+    # backfilled here (additive column, no table rewrite; 0288 precedent).
+    # No FK: the root row may itself be purged by retention while a younger
+    # attempt survives, and a dangling group id is the intended read
+    # (grouping is by value, not by join). ``run_group_kind`` names WHY this
+    # row joined the group — one of RUN_GROUP_KIND_VALUES or NULL — and is
+    # what the two partial unique indexes in ``__table_args__`` key on.
+    run_group_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True, index=True)
+    run_group_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     run_number: Mapped[int] = mapped_column(Integer, nullable=False)
     owner_team_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(), ForeignKey("teams.id", ondelete="RESTRICT"), index=True
@@ -419,7 +491,12 @@ class Run(OrgScoped):
     node_token_usage: Mapped[dict[str, Any] | None] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
     error_detail: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(255))
-    langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    # FAR-153 / §15.1: the GLOBAL unique constraint this column used to carry
+    # (migration 0110's ``runs_langgraph_thread_id_key``) is replaced by the
+    # two partial unique indexes in ``__table_args__`` — a resume child
+    # INTENTIONALLY shares its parent's thread to continue the checkpoint,
+    # while every other row keeps global thread uniqueness.
+    langgraph_thread_id: Mapped[str] = mapped_column(String(512), nullable=False)
     input_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     rate_limit_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     claimed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
