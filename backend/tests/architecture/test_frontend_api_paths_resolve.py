@@ -68,31 +68,14 @@ _EXCLUDED_SUFFIXES = (".spec.ts", ".test.ts", ".spec.js", ".test.js")
 # ---------------------------------------------------------------------------
 # Allowlist. Each entry: normalised path -> reason. A reason is mandatory and
 # is asserted to be present and non-blank by the test below.
+#
+# Currently EMPTY: every dangling call previously listed here (the three from
+# FAR-1713) has been resolved on main, so the guard now requires every
+# frontend ``/api/`` literal to resolve with no exceptions. An entry belongs
+# here only for a genuine, documented dangling call — never to silence the
+# guard.
 # ---------------------------------------------------------------------------
-ALLOWLIST: dict[str, str] = {
-    "/api/v1/composites": (
-        "frontend/src/stores/compositeStore.ts loadComposites() GETs /api/v1/composites, but the "
-        "backend only mounts /api/v1/composite-templates (backend/src/modulo/api/routes/"
-        "composite_templates.py) — no /composites route exists anywhere in the backend. Genuine "
-        "dangling call in product code; fixing it means repointing the store AND its spec mock to "
-        "the composite-templates endpoint (response shape differs), which is not a one-line "
-        "correction. Reported for follow-up under FAR-1713."
-    ),
-    "/api/v1/admin/assistant/primer/regenerate": (
-        "frontend/src/views/AdminAssistantView.vue regeneratePrimer() POSTs this path, but "
-        "backend/src/modulo/api/routes/admin_assistant.py exposes no /primer/* route (only "
-        "/config, /available-providers, /skills, /context-sources). Genuine dangling call in "
-        "product code — the Regenerate Primer button can never succeed; fixing it needs a new "
-        "backend route. Reported for follow-up under FAR-1713."
-    ),
-    "/api/v1/plugins/{param}/toggle": (
-        "frontend/src/views/AdminPluginsView.vue togglePlugin() PUTs /api/v1/plugins/{id}/toggle, "
-        "but backend/src/modulo/api/routes/plugins.py (prefix /api/v1/plugins) exposes only GET "
-        "'', GET /{plugin_id} and GET /{plugin_id}/health — there is no PUT route at all. Genuine "
-        "dangling call in product code; fixing it needs a new backend route. Reported for "
-        "follow-up under FAR-1713."
-    ),
-}
+ALLOWLIST: dict[str, str] = {}
 
 
 def _iter_frontend_files() -> list[Path]:
