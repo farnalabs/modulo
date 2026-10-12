@@ -19,6 +19,8 @@ All delivery attempts are logged as TriggerEvent rows regardless of outcome.
 import asyncio
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
@@ -141,60 +143,19 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
         await _ingest_slack_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
 
 
-async def _verify_slack_delivery(
-    *,
-    session: AsyncSession,
-    system_session: AsyncSession,
-    request: Request,
-    trigger_id: uuid.UUID,
-    principal: TenantPrincipal | None,
-    raw_body: bytes,
-    slack_signature: str | None,
-    slack_timestamp: str | None,
-) -> tuple[Trigger, uuid.UUID]:
-    """Bootstrap the trigger row and verify the Slack delivery signature.
+@asynccontextmanager
+async def _map_trigger_delivery_errors(*, trigger_id: uuid.UUID) -> AsyncIterator[None]:
+    """Map the trigger/signature error family shared by both delivery stages.
 
-    Runs inside the route's open transaction. The trigger read must precede
-    any RLS org context on Postgres (FAR-523 bootstrap helper); the org
-    context is then pinned and the route-level timestamp + signature
-    validation runs ahead of any snapshot/dedup work so an unauthenticated
-    delivery never touches pipeline tables. FAR-1516 ordering is preserved:
-    the ``signature_verified`` audit actor-source promotion fires only AFTER
-    the check passes.
-
-    The except-order here is a verbatim subsequence of the route's original
-    inline ladder (TriggerNotFoundError → … → SlackSignatureError); the
-    dispatch-only errors are handled by ``_run_slack_pipeline`` and the
-    ProgrammingError/SQLAlchemyError/HTTPException/Exception tail stays on
-    the route (post-unwind, byte-identical to the original).
+    The bootstrap+verify stage (:func:`_verify_slack_delivery`) and the
+    in-transaction dispatch stage (:func:`_run_slack_pipeline`) both wrap work
+    that can raise the same typed errors — the bootstrap helper 404s/400s/401s,
+    and the engine's mid-dispatch re-read raises the same family. Defining the
+    ladder ONCE keeps the two stages byte-identical and avoids the duplicated
+    code block the SonarCloud duplication gate rejected.
     """
     try:
-        # Bootstrap via the shared system-session helper (FAR-523): the
-        # trigger read must precede any RLS org context on Postgres; the
-        # helper 404s a principal referencing another org's trigger.
-        trigger, org_id = await load_trigger_and_org_global(
-            system_session, trigger_id, principal.organisation_id if principal else None
-        )
-        await set_rls_org(session, org_id)
-        await set_rls_execution_context(session)
-
-        # config_json shape was validated by the shared bootstrap helper
-        # (TriggerConfigInvalidError → 400 below), so ``.get`` here cannot
-        # AttributeError on external ingress.
-        cfg = trigger.config_json or {}
-        signing_secret: str | None = cfg.get("signing_secret")
-
-        # Route-level signature + timestamp validation (belt-and-braces ahead
-        # of the engine's own check — required for the challenge handshake).
-        if signing_secret is None:
-            raise SlackSignatureError("Slack signing secret is not configured")
-        verify_slack_timestamp(slack_timestamp)
-        if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
-            raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
-        # FAR-1516: signature verified — publish the trigger's org so the
-        # audit event records signature_verified provenance for a real tenant.
-        bind_audit_org(request, org_id)
-        return trigger, org_id
+        yield
     except TriggerNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
     except TriggerInactiveError as exc:
@@ -218,6 +179,61 @@ async def _verify_slack_delivery(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Slack signature verification failed",
         ) from exc
+
+
+async def _verify_slack_delivery(
+    *,
+    session: AsyncSession,
+    system_session: AsyncSession,
+    request: Request,
+    trigger_id: uuid.UUID,
+    principal: TenantPrincipal | None,
+    raw_body: bytes,
+    slack_signature: str | None,
+    slack_timestamp: str | None,
+) -> tuple[Trigger, uuid.UUID]:
+    """Bootstrap the trigger row and verify the Slack delivery signature.
+
+    Runs inside the route's open transaction. The trigger read must precede
+    any RLS org context on Postgres (FAR-523 bootstrap helper); the org
+    context is then pinned and the route-level timestamp + signature
+    validation runs ahead of any snapshot/dedup work so an unauthenticated
+    delivery never touches pipeline tables. FAR-1516 ordering is preserved:
+    the ``signature_verified`` audit actor-source promotion fires only AFTER
+    the check passes.
+
+    The trigger/signature error family is mapped by the shared
+    :func:`_map_trigger_delivery_errors` context manager (the same ladder the
+    dispatch stage uses); the ProgrammingError/SQLAlchemyError/HTTPException/
+    Exception tail stays on the route (post-unwind).
+    """
+    async with _map_trigger_delivery_errors(trigger_id=trigger_id):
+        # Bootstrap via the shared system-session helper (FAR-523): the
+        # trigger read must precede any RLS org context on Postgres; the
+        # helper 404s a principal referencing another org's trigger.
+        trigger, org_id = await load_trigger_and_org_global(
+            system_session, trigger_id, principal.organisation_id if principal else None
+        )
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+
+        # config_json shape was validated by the shared bootstrap helper
+        # (TriggerConfigInvalidError → 400 by the shared error map), so ``.get``
+        # here cannot AttributeError on external ingress.
+        cfg = trigger.config_json or {}
+        signing_secret: str | None = cfg.get("signing_secret")
+
+        # Route-level signature + timestamp validation (belt-and-braces ahead
+        # of the engine's own check — required for the challenge handshake).
+        if signing_secret is None:
+            raise SlackSignatureError("Slack signing secret is not configured")
+        verify_slack_timestamp(slack_timestamp)
+        if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
+            raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
+        # FAR-1516: signature verified — publish the trigger's org so the
+        # audit event records signature_verified provenance for a real tenant.
+        bind_audit_org(request, org_id)
+        return trigger, org_id
 
 
 async def _create_slack_snapshot(
@@ -300,9 +316,10 @@ async def _run_slack_pipeline(
     fired (the paused TriggerEvent — when writable — commits with this
     transaction).
 
-    The except-order here is a verbatim subsequence of the route's original
-    inline ladder. Two families deliberately PROPAGATE to the route's ladder
-    instead of being caught here:
+    The trigger/signature error family is mapped by the shared
+    :func:`_map_trigger_delivery_errors` context manager (the same ladder the
+    bootstrap stage uses). Two families deliberately PROPAGATE to the route's
+    ladder instead of being caught here:
 
     * ``TriggerBusyError`` — the engine raises BEFORE any TriggerEvent is
       written and the main transaction must ROLL BACK; the route records the
@@ -313,17 +330,20 @@ async def _run_slack_pipeline(
       route-level ladder (rollback first, then the mapped response).
     """
     try:
-        snapshot = await _create_slack_snapshot(session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id)
-        run, _, _input_payload = await handle_app_mention(
-            session,
-            trigger_id=trigger_id,
-            org_id=org_id,
-            raw_body=raw_body,
-            raw_payload=raw_payload,
-            slack_signature=slack_signature,
-            slack_timestamp=slack_timestamp,
-            snapshot_id=snapshot.id,
-        )
+        async with _map_trigger_delivery_errors(trigger_id=trigger_id):
+            snapshot = await _create_slack_snapshot(
+                session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id
+            )
+            run, _, _input_payload = await handle_app_mention(
+                session,
+                trigger_id=trigger_id,
+                org_id=org_id,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                slack_signature=slack_signature,
+                slack_timestamp=slack_timestamp,
+                snapshot_id=snapshot.id,
+            )
         return run
     except TriggersPausedError:
         # The SINGLE writer of the ``paused`` TriggerEvent; it commits with
@@ -332,39 +352,6 @@ async def _run_slack_pipeline(
             session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id, raw_body=raw_body
         )
         return None
-    except TriggerNotFoundError as exc:
-        # engine._load_trigger re-reads the trigger row mid-dispatch and can
-        # raise the same typed errors the bootstrap helper does — same 404.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
-    except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
-    except TriggerConfigInvalidError as exc:
-        # Defensive: the bootstrap already validated config_json and the
-        # engine re-read cannot raise this today, but the mapping stays
-        # byte-identical with the original single ladder if it ever does.
-        _log.warning(
-            "slack.receive_event.trigger_config_invalid",
-            extra={"trigger_id": str(trigger_id)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trigger configuration is invalid",
-        ) from exc
-    except SlackTimestampExpiredError as exc:
-        # The engine re-checks the ±300s window; a delivery that straddles
-        # the boundary between the route-level check and the engine check
-        # lands here — same 400 as the route-level arm.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Slack-Request-Timestamp is outside the ±300s replay window",
-        ) from exc
-    except SlackSignatureError as exc:
-        # The engine re-verifies the signature (and resolves the stored
-        # secret) — same 401 as the route-level arm.
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Slack signature verification failed",
-        ) from exc
     except SlackEventTypeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
