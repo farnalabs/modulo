@@ -507,7 +507,7 @@ def _make_mock_entry_point(
     dist_name: str = "pkg-demo",
     dist_version: str = "1.0.0",
     load_result: object | None = None,
-    load_side_effect: type[Exception] | None = None,
+    load_side_effect: type[BaseException] | None = None,
     metadata: dict[str, str] | None = None,
 ) -> object:
     """Build a minimal mock of importlib.metadata.EntryPoint."""
@@ -732,6 +732,35 @@ def test_discover_plugins_isolates_broken_plugin_from_healthy_ones():
     assert registry.has_model_backend("good_backend")
     assert not registry.has_connector_type("bad_con")
     assert registry.health_check("pkg-bad")["pkg-bad"].ok is False
+
+
+def test_load_entry_point_cancelled_error_is_reraised():
+    """A cancelled plugin import must propagate, never be surfaced as unhealthy.
+
+    ``_load_entry_point`` catches ``Exception`` broadly so that one broken
+    plugin cannot abort discovery, but cancellation is cooperative control
+    flow, not a plugin defect: ``asyncio.CancelledError`` (a ``BaseException``,
+    so invisible to ``except Exception``) must re-raise. This pins the explicit
+    ``except asyncio.CancelledError: raise`` arm placed ahead of the broad
+    handler — without it a cancelled startup could be silently swallowed.
+    """
+    registry = PluginRegistry()
+    cancelled_ep = _make_mock_entry_point(
+        "modulo.connectors",
+        "cancelled_con",
+        dist_name="pkg-cancelled",
+        load_side_effect=asyncio.CancelledError,
+    )
+    with (
+        patch(
+            "modulo.core.plugin_registry.importlib.metadata.entry_points",
+            side_effect=[[cancelled_ep], [], [], []],
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        registry.discover_plugins()
+
+    assert not registry.has_connector_type("cancelled_con")
 
 
 def test_discover_plugins_connector_entry_point():
