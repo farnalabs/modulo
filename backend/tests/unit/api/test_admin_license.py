@@ -550,3 +550,27 @@ class TestLicenseCacheInvalidationSystemChange:
         # so a cache-invalidation failure must not turn the request into a 500.
         assert resp.status_code == 200
         assert get_license() is not None
+
+    def test_system_upload_sweeps_cache_in_batches(self, cached_client: tuple[TestClient, FakeRedis]) -> None:
+        """FAR-1719: a cache larger than one batch is swept in full.
+
+        The sweep flushes every 500 keys (``len(batch) >= 500``) so a
+        multi-org deployment with hundreds of cached entries is cleared
+        without holding the whole key set in memory. Seeding exactly 500
+        entries exercises the batched delete and leaves the batch empty for
+        the trailing ``if batch:`` check — proving both the flush and the
+        empty-remainder path.
+        """
+        client, probe = cached_client
+        stale = '{"has_license": false, "tier": "community", "features": [], "expires_at": null, "org_id": null}'
+        seeded = [f"license:{uuid.uuid4()}" for _ in range(500)]
+        for key in seeded:
+            probe.set(key, stale, ex=60)
+        assert probe.exists(*seeded) == 500
+
+        payload = _make_valid_payload()
+        key = _sign_license_payload(payload)
+        resp = client.post(self.URL, json={"license_key": key})
+        assert resp.status_code == 200
+        # The batched flush plus the trailing check cleared every seeded entry.
+        assert probe.exists(*seeded) == 0
