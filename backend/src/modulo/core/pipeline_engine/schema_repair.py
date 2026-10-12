@@ -439,7 +439,7 @@ def _invoke_and_validate_repair(
 
     try:
         repaired_data = json.loads(raw_output)
-    except (json.JSONDecodeError, ValueError):
+    except ValueError:
         # Raw output is not valid JSON → terminal, no more repair
         return SchemaValidationOutcome.NATIVE_DECODE_NOT_JSON, current_errors, None
 
