@@ -11,6 +11,7 @@ code:
   - backend/src/modulo/db/models/pipeline.py
   - backend/src/modulo/db/migrations/versions/0286_pipeline_run_state.py
   - backend/src/modulo/core/pipeline_engine
+  - backend/src/modulo/core/graph_validator/__init__.py
   - backend/src/modulo/connectors/base.py
   - backend/src/modulo/connectors/ci_runner/base.py
 unit-tests:
@@ -52,7 +53,6 @@ depends-on:
   - feat-schemas
   - feat-model-backends
   - feat-connectors
-  - feat-router
 status: covered
 ---
 
@@ -76,14 +76,16 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       is explicit on the pipeline; folders are a UI organisation concept. Any
       future proposal for folder-level security must address ADR 038's rationale
       for rejecting folders-as-security.
-- [x] Node types – standard agent, manual (pauses to `awaiting_human`), HITL gate
-      (`waiting_for_approval`) – are authorable and execute per type (`node_types.feature`)
+- [x] Node types – standard agent, manual (pauses the run to `awaiting_human` and
+      resumes with the human's output), HITL gate (interrupts the run to
+      `awaiting_human` for approval) – are authorable and execute per type
+      (`node_types.feature`)
 - [x] Conditional transitions and parallel fan-out route state between nodes
       (`conditional_transitions.feature`)
 - [x] Concurrency and error-recovery guard the authored graph
       (`error_recovery.feature`; concurrency admission is unit-covered in
-      `tests/unit/pipeline_engine` and surface-tested by the 429
-      `max_concurrent_runs` refusal in `run_sequential.feature`) – graph/config
+      `tests/unit/pipeline_engine` and surface-exercised by the
+      `max_concurrent_runs` refusal scenario in `run_sequential.feature`) – graph/config
       validation is unit-covered (`tests/unit/graph_validator`, `test_pipelines_endpoint.py`)
 - [x] Scheduling and webhook triggers start runs from the authored graph
       (owned by `feat-triggers`: cron CRUD is BDD-exercised here in
@@ -96,14 +98,15 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       (`tests/unit/pipeline_engine` recovery suite)
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending
       run (202), the engine moves it pending → running, a clean completion lands on
-      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      the terminal `complete` status, an unhandled node exception lands on `failed`
       with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`,
       no further nodes schedule). A node that returns `None` output is a normal empty
       result – the run continues to the next node with no error – and sequential
       pipelines complete nodes strictly in order (`run_lifecycle.feature`,
-      `run_sequential.feature`); a trigger refused by `max_concurrent_runs` while a
-      pending run is already active surfaces 429 through the typed
-      `RateLimitConflictError` path
+      `run_sequential.feature`); a rate-limit conflict on the manual-trigger route
+      surfaces 429 through the typed `RateLimitConflictError` path, while the pipeline
+      `max_concurrent_runs` cap is enforced at dispatch (an over-capacity run parks
+      with the `pipeline_capacity` marker rather than 429 at trigger time)
 - [x] Per-pipeline Paused execution state (FAR-1530): a pipeline can be PRESENT and
       VISIBLE but NON-EXECUTING — deliberately distinct from `archived_at` (hidden) and
       the ORG-level `triggers_paused` kill-switch. `run_enabled` (default true) is the
