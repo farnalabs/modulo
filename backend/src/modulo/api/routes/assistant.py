@@ -49,7 +49,11 @@ from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from modulo.api.constants import MSG_FEATURE_NOT_AVAILABLE, MSG_UNEXPECTED_ERROR
+from modulo.api.constants import (
+    MSG_FEATURE_NOT_AVAILABLE,
+    MSG_UNEXPECTED_ERROR,
+    MSG_UNEXPECTED_ERROR_PLEASE_TRY,
+)
 from modulo.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from modulo.api.dependencies import get_db_session
 from modulo.api.mcp_tool_registry import build_tool_registry, get_mcp_tool_definitions
@@ -1939,7 +1943,7 @@ async def _stream_event_generator(
         yield (_SSE_ERROR_PREFIX + json.dumps({"detail": _MSG_DATABASE_ERROR_PLEASE_TRY}) + "\n\n")
     except Exception:
         logger.exception("Assistant streaming error")
-        yield f"event: error\ndata: {json.dumps({'detail': 'An unexpected error occurred. Please try again.'})}\n\n"
+        yield f"event: error\ndata: {json.dumps({'detail': MSG_UNEXPECTED_ERROR_PLEASE_TRY})}\n\n"
 
 
 @router.post(
