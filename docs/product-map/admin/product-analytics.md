@@ -122,7 +122,7 @@ an eligible tier.
       gate — deleting consumed rows (the watermark has passed their date) plus
       anything older than the 30-day retention bound, so the table cannot grow
       unbounded even when a dump gate skips; the supporting plain index
-      `ix_metrics_staging_recorded_at` (migration 0303) serves the purge's
+      `ix_metrics_staging_recorded_at` (migration 0304) serves the purge's
       `recorded_at < :cutoff` DELETE. Turning the org's level off — admin PUT or
       prompt decline — purges its staged rows immediately in the same
       transaction (`api/routes/product_analytics.py`)
@@ -201,7 +201,7 @@ intentional, not an open question:
   contract that it changes when the payload shape changes); every
   `metrics_dump` tick purges consumed + expired staging rows (`_purge_staging`,
   bounded by the watermark and a 30-day retention cap) with the supporting
-  plain index `ix_metrics_staging_recorded_at` (migration 0303 — a *partial*
+  plain index `ix_metrics_staging_recorded_at` (migration 0304 — a *partial*
   index is impossible here: the purge cutoff is a moving bind parameter and
   Postgres requires IMMUTABLE index predicates); the admin PUT and the consent
   decline path purge the org's staged rows in the same transaction, replacing
