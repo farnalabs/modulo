@@ -462,8 +462,8 @@ _dispatcher_reconcile_stats: dict[str, Any] = {
     # from the registry (FAR-720) just after the registry is defined — see
     # ``_dispatcher_reconcile_stats.update(_terminalizer_stats_defaults())``.
     # They are listed here only for readability of the blob's full key set:
-    # claimed_but_never_dispatched, claim_cap_terminalized,
-    # mid_graph_wedge_terminalized, age_terminalized,
+    # claimed_but_never_dispatched, node_started_terminalized,
+    # claim_cap_terminalized, mid_graph_wedge_terminalized, age_terminalized,
     # hitl_review_expired_terminalized, hitl_review_missing_terminalized,
     # dispatch_failed_terminalized, enqueue_failed_ttl_terminalized.
     "enqueue_failed_redispatched": 0,
