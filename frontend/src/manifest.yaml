@@ -2704,6 +2704,9 @@ elements:
       - testid: eval-editor-cancel-delete
         type: button
         dynamic_testid: false
+      - testid: eval-editor-loading-skeleton
+        type: element
+        dynamic_testid: false
       - testid: policy-gate-heading
         type: element
         dynamic_testid: false
@@ -2732,6 +2735,9 @@ elements:
         type: element
         dynamic_testid: false
       - testid: policy-gate-confirm-delete
+        type: button
+        dynamic_testid: false
+      - testid: policy-gate-cancel-delete
         type: button
         dynamic_testid: false
       - testid: policy-gate-error

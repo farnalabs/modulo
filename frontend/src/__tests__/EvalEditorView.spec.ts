@@ -27,6 +27,7 @@ vi.mock('vue-i18n', () => ({
 }))
 
 import EvalEditorView from '../views/EvalEditorView.vue'
+import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { api } from '../lib/api/client'
 import PageTabs from '../components/PageTabs.vue'
 
@@ -198,7 +199,18 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await selectPipeline(wrapper, 'p1')
     await flush()
 
-    expect(wrapper.text()).toContain('views.EvalEditorView.failed_to_load_nodes')
+    // UX conformance STATE-2: API failures render ErrorAlert with a Retry button.
+    const nodesAlert = wrapper
+      .findAllComponents(ErrorAlert)
+      .find((a) => a.props('message') === 'views.EvalEditorView.failed_to_load_nodes')
+    expect(nodesAlert?.exists()).toBe(true)
+    // Retry reloads the graph.
+    apiGET.mockResolvedValue({ data: { nodes: [] } })
+    await (nodesAlert!.props('onRetry') as () => Promise<void>)()
+    await flush()
+    expect(apiGET).toHaveBeenCalledWith('/api/v1/pipelines/{pipeline_id}/graph', {
+      params: { path: { pipeline_id: 'p1' } },
+    })
   })
 
   it('evals load failure shows the evals error', async () => {
@@ -212,7 +224,18 @@ describe('EvalEditorView — FAR-617 pipeline/node/eval CRUD coverage', () => {
     await selectPipeline(wrapper, 'p1')
     await flush()
 
-    expect(wrapper.text()).toContain('views.EvalEditorView.failed_to_load_evals')
+    // UX conformance STATE-2: API failures render ErrorAlert with a Retry button.
+    const evalsAlert = wrapper
+      .findAllComponents(ErrorAlert)
+      .find((a) => a.props('message') === 'views.EvalEditorView.failed_to_load_evals')
+    expect(evalsAlert?.exists()).toBe(true)
+    // Retry reloads the evals.
+    apiGET.mockResolvedValue({ data: { items: [] } })
+    await (evalsAlert!.props('onRetry') as () => Promise<void>)()
+    await flush()
+    expect(apiGET).toHaveBeenCalledWith('/api/v1/evals', {
+      params: { query: { pipeline_id: 'p1' } },
+    })
   })
 
   it('save (create): POST body carries the parsed config, threshold; success message shown', async () => {
