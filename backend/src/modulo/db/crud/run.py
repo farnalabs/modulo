@@ -1994,6 +1994,98 @@ def graph_contains_dispatch(graph_json: Any) -> bool:
     return any(isinstance(node, dict) and connector_binding_operation(node) == "dispatch" for node in nodes)
 
 
+async def _validate_resume_thread_override(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    parent_run_id: uuid.UUID,
+    thread_id: str | None,
+) -> None:
+    """Validate a resume child's thread override against its parent (FAR-153 / §15.1).
+
+    §15.1 — the thread override must be the PARENT's thread, not just any
+    non-empty string. Both partial unique indexes EXCLUDE resume rows (that is
+    the whole point of dropping the global thread unique), so without this read
+    a wrong-thread resume — even a thread owned by a run in ANOTHER org — would
+    pass validation and every DB fence silently, landing a child on someone
+    else's checkpoint (or a foreign-org thread). One org-scoped read of the
+    parent, before any write; the parent must exist in THIS org (a resume never
+    crosses orgs).
+    """
+    if not thread_id:
+        # A resume that does not carry its parent's thread gets a fresh one and
+        # continues NOTHING — the silent failure mode the override kwarg exists
+        # to prevent.
+        raise ValueError(
+            "run_group_kind='resume' requires thread_id=<parent's thread> — "
+            "a resume child must continue its parent's checkpoint (§15.1)"
+        )
+    parent = (
+        await session.execute(
+            select(Run.id, Run.langgraph_thread_id).where(
+                Run.id == parent_run_id,
+                Run.organisation_id == org_id,
+            )
+        )
+    ).one_or_none()
+    if parent is None:
+        raise ValueError(
+            "run_group_kind='resume' parent_run_id not found in this org — "
+            "the resume child's parent must be a run of the same organisation (§15.1)"
+        )
+    if thread_id != parent.langgraph_thread_id:
+        raise ValueError(
+            "run_group_kind='resume' thread_id must equal the parent run's "
+            f"langgraph_thread_id — got {thread_id!r}, parent is on "
+            f"{parent.langgraph_thread_id!r} (§15.1)"
+        )
+
+
+async def _validate_run_grouping_kwargs(
+    session: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    parent_run_id: uuid.UUID | None,
+    run_group_id: uuid.UUID | None,
+    run_group_kind: str | None,
+    thread_id: str | None,
+) -> None:
+    """Validate ``create_run``'s grouping kwargs at the persist boundary (FAR-153 / §15.1).
+
+    The ``run_idempotency_key`` fail-loud pattern: these are caller-contract
+    violations, so a typo or a missing field must raise here rather than
+    silently write a row the group queries and the two partial unique indexes
+    cannot govern. The resume thread check needs ONE read (the parent row) —
+    still before any write. Extracted from ``create_run`` to keep that
+    function's cognitive complexity within the Sonar S3776 threshold.
+    """
+    if run_group_kind is not None:
+        if run_group_kind not in RUN_GROUP_KIND_VALUES:
+            raise ValueError(
+                f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})"
+            )
+        if parent_run_id is None:
+            # Both kinds are CHILD rows per §15.1. Without a parent the
+            # exactly-one-resume partial unique (parent_run_id WHERE
+            # kind='resume') never indexes the row — NULL parents are distinct
+            # in a unique index — so a parentless resume would silently bypass
+            # the double-resume fence.
+            raise ValueError("run_group_kind requires parent_run_id — retry/resume rows are child rows (§15.1)")
+        if run_group_id is None:
+            raise ValueError(
+                f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)"
+            )
+        if run_group_kind == RUN_GROUP_KIND_RESUME:
+            await _validate_resume_thread_override(
+                session,
+                org_id=org_id,
+                parent_run_id=parent_run_id,
+                thread_id=thread_id,
+            )
+    if thread_id is not None and not thread_id:
+        raise ValueError("thread_id override must be a non-empty string")
+
+
 async def create_run(
     session: AsyncSession,
     *,
@@ -2035,66 +2127,18 @@ async def create_run(
     thread_id: str | None = None,
 ) -> Run:
     # FAR-153 / §15.1 — validate the grouping kwargs at the persist boundary
-    # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern):
-    # these are caller-contract violations, so a typo or a missing field must
-    # raise here rather than silently write a row the group queries and the
-    # two partial unique indexes cannot govern. The resume thread check needs
-    # ONE read (the parent row) — still before any write.
-    if run_group_kind is not None:
-        if run_group_kind not in RUN_GROUP_KIND_VALUES:
-            raise ValueError(
-                f"invalid run_group_kind: {run_group_kind!r} (expected one of {sorted(RUN_GROUP_KIND_VALUES)!r})"
-            )
-        if parent_run_id is None:
-            # Both kinds are CHILD rows per §15.1. Without a parent the
-            # exactly-one-resume partial unique (parent_run_id WHERE
-            # kind='resume') never indexes the row — NULL parents are
-            # distinct in a unique index — so a parentless resume would
-            # silently bypass the double-resume fence.
-            raise ValueError("run_group_kind requires parent_run_id — retry/resume rows are child rows (§15.1)")
-        if run_group_id is None:
-            raise ValueError(
-                f"run_group_kind={run_group_kind!r} requires run_group_id (the group's root run id, §15.1)"
-            )
-        if run_group_kind == RUN_GROUP_KIND_RESUME and not thread_id:
-            # A resume that does not carry its parent's thread gets a fresh
-            # one and continues NOTHING — the silent failure mode the
-            # override kwarg exists to prevent.
-            raise ValueError(
-                "run_group_kind='resume' requires thread_id=<parent's thread> — "
-                "a resume child must continue its parent's checkpoint (§15.1)"
-            )
-        if run_group_kind == RUN_GROUP_KIND_RESUME:
-            # §15.1 — the thread override must be the PARENT's thread, not
-            # just any non-empty string. Both partial unique indexes EXCLUDE
-            # resume rows (that is the whole point of dropping the global
-            # thread unique), so without this read a wrong-thread resume —
-            # even a thread owned by a run in ANOTHER org — would pass
-            # validation and every DB fence silently, landing a child on
-            # someone else's checkpoint (or a foreign-org thread). One
-            # org-scoped read of the parent, before any write; the parent
-            # must exist in THIS org (a resume never crosses orgs).
-            parent = (
-                await session.execute(
-                    select(Run.id, Run.langgraph_thread_id).where(
-                        Run.id == parent_run_id,
-                        Run.organisation_id == org_id,
-                    )
-                )
-            ).one_or_none()
-            if parent is None:
-                raise ValueError(
-                    "run_group_kind='resume' parent_run_id not found in this org — "
-                    "the resume child's parent must be a run of the same organisation (§15.1)"
-                )
-            if thread_id != parent.langgraph_thread_id:
-                raise ValueError(
-                    "run_group_kind='resume' thread_id must equal the parent run's "
-                    f"langgraph_thread_id — got {thread_id!r}, parent is on "
-                    f"{parent.langgraph_thread_id!r} (§15.1)"
-                )
-    if thread_id is not None and not thread_id:
-        raise ValueError("thread_id override must be a non-empty string")
+    # BEFORE any DB write (the ``run_idempotency_key`` fail-loud pattern).
+    # Extracted into ``_validate_run_grouping_kwargs`` to keep this function's
+    # cognitive complexity within the Sonar S3776 threshold; semantics are
+    # unchanged.
+    await _validate_run_grouping_kwargs(
+        session,
+        org_id=org_id,
+        parent_run_id=parent_run_id,
+        run_group_id=run_group_id,
+        run_group_kind=run_group_kind,
+        thread_id=thread_id,
+    )
 
     # Soft-deleted-org guard — a run must never be created in an org whose
     # deletion flow has set status='deleted' (or in a hard-deleted org).
