@@ -254,7 +254,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -303,7 +303,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -354,7 +354,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -375,7 +375,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.5
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: pnpm
@@ -427,7 +427,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -533,7 +533,7 @@ jobs:
           fi
 
       # Full history required: semgrep diffs against --baseline-commit HEAD^.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -997,7 +997,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -1726,7 +1726,7 @@ jobs:
 
       - name: Upload migration machine logs (staging)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         # FAR-717: today only the exit code of the one-off migration machines
         # survives a failure, which is exactly why the 2026-09-08 outage took
         # so long to diagnose. Upload the captured machine logs (rehearsal
@@ -2087,7 +2087,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
 
@@ -2107,7 +2107,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.5
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: pnpm
@@ -2151,7 +2151,7 @@ jobs:
 
       - name: Upload test artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-traces-${{ github.run_id }}
           path: frontend/test-results/
@@ -2182,7 +2182,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 1
@@ -2912,7 +2912,7 @@ jobs:
 
       - name: Upload migration machine logs (prod)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         # FAR-717: today only the exit code of the one-off migration machines
         # survives a failure, which is exactly why the 2026-09-08 outage took
         # so long to diagnose. Upload the captured machine logs (rehearsal
@@ -3302,7 +3302,7 @@ jobs:
             echo "PUSH_AFTER=${{ needs.deploy-throttle.outputs.push_after }}"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
 
@@ -3322,7 +3322,7 @@ jobs:
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
         with:
           version: 11.28.5
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           cache: pnpm

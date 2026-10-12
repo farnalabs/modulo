@@ -66,8 +66,47 @@ jobs:
             echo "head_branch=${HEAD_BRANCH}" >> $GITHUB_OUTPUT
           fi
 
+      # FAR-264: the same-repo author gate, shared with merge-queue.yml via the
+      # versioned helper (.github/scripts/same-repo-author-guard.py) so the
+      # auto-merge and auto-review paths cannot diverge. A fork / external-author
+      # PR is NOT auto-reviewed - it needs a human review path. Unverifiable
+      # state (API error, missing script output) fails CLOSED: the webhook is
+      # NOT sent and the job fails loudly, never a silent green without review.
+      - name: Checkout repository (for the author gate script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Same-repo author gate (FAR-264)
+        id: author-gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr-details.outputs.pr_number }}
+          REPO: ${{ steps.pr-details.outputs.repo }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_FILE=$(mktemp)
+          if ! gh api "repos/${REPO}/pulls/${PR_NUMBER}" > "$PR_FILE" 2>/tmp/author-gate.err; then
+            echo "::error::FAR-264: could not fetch PR #${PR_NUMBER} for the same-repo author gate ($(head -1 /tmp/author-gate.err 2>/dev/null)) - failing CLOSED (no auto-review)."
+            exit 1
+          fi
+          OUT=$(python3 .github/scripts/same-repo-author-guard.py "$PR_FILE" "$REPO" 2>/dev/null) || true
+          rm -f "$PR_FILE"
+          VERDICT="${OUT%%|*}"
+          MSG="${OUT#*|}"
+          case "$VERDICT" in
+            ok)
+              echo "Same-repo author gate OK: $MSG" ;;
+            external)
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::FAR-264: skipping auto-review for PR #${PR_NUMBER} - $MSG. A human review path is required." ;;
+            *)
+              echo "::error::FAR-264: same-repo author gate produced no usable verdict ($OUT) - failing CLOSED (no auto-review)."
+              exit 1 ;;
+          esac
+
       - name: Send webhook to Modulo PR Review Agent
         id: webhook
+        if: steps.author-gate.outputs.skipped != 'true'
         env:
           MODULO_WEBHOOK_URL: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_URL }}
           MODULO_WEBHOOK_SECRET: ${{ secrets.MODULO_PR_REVIEW_WEBHOOK_SECRET }}
