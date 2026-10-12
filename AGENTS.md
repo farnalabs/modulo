@@ -5,7 +5,8 @@ Product-specific agent guidance for the `farnalabs/modulo` repository.
 ## What this repo is
 
 Self-hosted Agentic Delivery Governance for agentic SDLC pipelines. Backend:
-Python 3.12 FastAPI. Frontend: Vue 3 + Vite SPA. Runs on Postgres + Redis.
+Python 3.12 FastAPI. Frontend: Vue 3 + Vite SPA on the PrimeVue component
+library. Runs on Postgres + Redis.
 Product requirements and behaviour spec live in `docs/` and the product map
 `frontend/src/manifest.yaml` (ADR 008). The PRD is retired.
 

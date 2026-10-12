@@ -1057,6 +1057,161 @@ describe('SettingsTriggersView — FAR-617 create/delete/error-state coverage', 
     })
   })
 
+  it('create webhook: omitting the optional url/method leaves an empty config_json', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'webhook', webhook_url: '', webhook_method: '' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({})
+  })
+
+  it('create polling: omitting the optional connector/query/condition yields only the interval', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'polling',
+      poll_interval: 120,
+      connector_instance_id: '',
+      poll_query: '',
+      condition_expression: '',
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({ poll_interval_seconds: 120 })
+  })
+
+  it('create agent_signal: omitting the optional source pipeline/node leaves an empty config_json', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'agent_signal',
+      signal_source_pipeline: '',
+      signal_source_node: '',
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({})
+  })
+
+  it('create cron: an invalid input template blocks the POST with the template error', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'cron', input_template: '{bad json' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(vm.formError).toContain('Input template must be valid JSON')
+  })
+
+  it('create ongoing: an unset interval falls back to 60s and a snapshot id is carried', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'ongoing',
+      ongoing_scan_interval: 0,
+      input_template: '',
+      snapshot_id: 'snap-1',
+      daily_spend_limit: 25,
+      max_concurrent_runs: 3,
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({ scan_interval_seconds: 60, snapshot_id: 'snap-1' })
+  })
+
+  it('create ongoing: an invalid input template blocks the POST with the template error', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = {
+      ...vm.defaultForm,
+      pipeline_id: 'p1',
+      trigger_type: 'ongoing',
+      ongoing_scan_interval: 120,
+      input_template: '{bad json',
+      daily_spend_limit: 25,
+      max_concurrent_runs: 3,
+    }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(vm.formError).toContain('Input template must be valid JSON')
+  })
+
+  it('create: an unknown trigger type builds an empty config_json (switch default)', async () => {
+    const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
+    await flush()
+
+    await wrapper.find('[data-testid="settings-triggers-create"]').trigger('click')
+    await flush()
+    const vm = wrapper.vm as any
+    vm.form = { ...vm.defaultForm, pipeline_id: 'p1', trigger_type: 'mystery' }
+    await flush()
+
+    await wrapper.find('form').trigger('submit')
+    await flush()
+
+    expect(api.POST).toHaveBeenCalledTimes(1)
+    const [, options] = (api.POST as any).mock.calls[0]
+    expect(options.body.config_json).toEqual({})
+  })
+
   it('save without a pipeline shows the pipeline error and never calls the API', async () => {
     const wrapper = mountWithApi(fakeJwt('admin'), baseListData)
     await flush()
