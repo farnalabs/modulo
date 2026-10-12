@@ -6,8 +6,11 @@ guardrail rows, real create_run to produce the blocked run):
 * **re-block loop** — overriding with a STILL-VIOLATING input is refused
   (``GuardrailOverrideRejectedError``) and the run stays terminal ``eval_failed``;
 * **journey-increment-once** — overriding with clean input flips the SAME run
-  row to ``pending`` with ``is_replay=True`` (a single run record, so the
-  lifecycle-map journey increments exactly once — never a duplicate run);
+  row with ``is_replay=True`` (a single run record, so the lifecycle-map
+  journey increments exactly once — never a duplicate run); the flip target
+  is ``pending`` for the genuine zero-node block and ``running`` for a
+  node-started one (FAR-1711: the caller re-dispatches ``resume_run`` there,
+  never re-executes);
 * **single-flight** — a concurrent override that loses the status-update race
   raises ``ConcurrentRecoveryError`` and does NOT clobber the winner.
 
@@ -26,6 +29,7 @@ import pytest
 from sqlalchemy import Table, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideRejectedError,
@@ -216,6 +220,43 @@ async def test_override_journey_increments_once(session: AsyncSession):
     # Only ONE run row exists in the table.
     rows = (await session.execute(select(Run).where(Run.id == run_id))).scalars().all()
     assert len(rows) == 1
+
+
+async def test_override_node_started_run_flips_to_running_for_resume(session: AsyncSession):
+    """FAR-1711 regression (real seam): a node-STARTED eval-blocked run —
+    durable ``first_node_dispatched`` phase (FAR-1422) left behind by a
+    node-scoped ``block`` eval that terminalized the run from a completed
+    node — flips to ``running`` (the recover-node lock status the resume
+    claim's stale-running arm matches), NOT ``pending``. The caller must
+    re-dispatch it as ``resume_run`` (checkpoint resume, FAR-1649: never
+    re-execute a node-started run); a ``pending`` flip would re-dispatch as
+    ``execute_run`` and re-execute it. The zero-node control is
+    ``test_override_journey_increments_once`` (NULL phase -> ``pending``)."""
+    await _seed(session)
+    await _seed_guardrail(session)
+    run = await _blocked_run(session)
+    run_id = run.id
+    assert run.status == "eval_failed"
+    # Stamp the durable node-start marker the executor leaves on a
+    # node-scoped eval block (the phase never advances past it).
+    run.dispatch_phase = PHASE_FIRST_NODE_DISPATCHED
+    await session.flush()
+
+    override_run = await guardrail_override(
+        session,
+        org_id=_ORG,
+        run_id=run_id,
+        input_data={"body": "clean replacement text"},
+        actor_id=_ACTOR,
+    )
+    assert override_run.status == "running"
+    assert override_run.error_code is None
+    assert override_run.is_replay is True
+    # Preserved through the flip — the resume claim resets it atomically.
+    assert override_run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
+
+    fresh = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+    assert fresh.status == "running"
 
 
 async def test_override_single_flight_race_loses(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):

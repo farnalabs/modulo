@@ -3028,9 +3028,14 @@ async def guardrail_override_run(
     override is the ONLY remediation: it re-runs the guardrail pass on the
     supplied ``input_data`` (re-block safe default — a still-violating input is
     refused with 422 and the run stays terminal), persists the post-redaction
-    payload, flips the run to ``pending`` with ``is_replay=True``, and
-    re-dispatches it from run start (execute_run — the blocked run never
-    executed, so there is no checkpoint to resume).
+    payload, flips the run with ``is_replay=True``, and re-dispatches it. The
+    flip target and job type branch on node progress (FAR-1711): a node-
+    STARTED run (durable ``first_node_dispatched`` phase — a node-scoped
+    ``block`` eval terminalizes from a completed node) flips to ``running``
+    and is re-dispatched as ``resume_run`` (checkpoint resume — FAR-1649:
+    never re-execute a node-started run); the genuine zero-node block (run-
+    level interception at creation, NULL / pre-node phase) flips to
+    ``pending`` and is re-dispatched from run start (execute_run).
 
     Requires operator or admin role.
     """
@@ -3103,14 +3108,21 @@ async def guardrail_override_run(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
-    # Re-dispatch the pending run from run start (execute_run). The blocked run
-    # never executed, so there is no checkpoint to resume from — dispatch_run
-    # enqueues the default execute_run job with no resume data.
+    # FAR-1711: the re-dispatch job type follows the flip target
+    # ``guardrail_override`` chose. A node-STARTED eval-blocked run was left
+    # ``running`` (the recover-node lock status) and must be re-dispatched as
+    # ``resume_run`` — checkpoint resume, never re-execution (FAR-1649: a
+    # node-started run may only be resumed from checkpoint). The genuine
+    # zero-node block stays ``pending`` and is re-dispatched from run start
+    # (execute_run) with no resume data — no node ever ran, so there is
+    # nothing to resume.
+    job_type = "resume_run" if run.status == "running" else "execute_run"
     try:
         outcome, _job_id = await dispatch_run(
             str(run_id),
             str(principal.organisation_id),
             queue="runs",
+            job_type=job_type,
         )
     except Exception as exc:
         _log.exception("run.guardrail_override_dispatch_failed")

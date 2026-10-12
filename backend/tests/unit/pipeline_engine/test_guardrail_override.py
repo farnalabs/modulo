@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
@@ -36,6 +37,7 @@ def _make_run(
     status: str = "eval_failed",
     error_code: str = "eval_blocked",
     input_payload: dict[str, Any] | None = None,
+    dispatch_phase: str | None = None,
 ) -> MagicMock:
     run = MagicMock()
     run.id = _RUN_ID
@@ -49,6 +51,10 @@ def _make_run(
     run.input_hash = "stale-hash-of-original-blocked-payload"
     run.completed_at = "2026-01-01T00:00:00+00:00"
     run.is_replay = False
+    # FAR-1711: explicit None = the genuine zero-node block (run-level
+    # interception at creation). Node-started fixtures pass
+    # PHASE_FIRST_NODE_DISPATCHED instead.
+    run.dispatch_phase = dispatch_phase
     return run
 
 
@@ -287,3 +293,40 @@ async def test_guardrail_override_destroy_mechanism_error_fails_closed():
     assert run.status == "eval_failed"  # run never flipped
     assert run.is_replay is False
     mock_audit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_override_node_started_run_flips_to_running_for_resume():
+    """FAR-1711 regression: a node-STARTED eval-blocked run (durable
+    ``first_node_dispatched`` phase — a node-scoped ``block`` eval
+    terminalizes from a completed node) flips to ``running`` (the recover-
+    node lock status the resume claim's stale-running arm matches), NOT
+    ``pending``. The caller must re-dispatch it as ``resume_run`` — a
+    ``pending`` flip re-dispatches as ``execute_run`` and RE-EXECUTES the
+    node-started run, violating FAR-1649 ("a node-started run may only be
+    resumed from checkpoint, never re-executed"). The zero-node control is
+    ``test_guardrail_override_clean_input_flips_to_pending`` (explicit NULL
+    phase -> ``pending``)."""
+    run = _make_run(
+        input_payload={"body": "clean"},
+        dispatch_phase=PHASE_FIRST_NODE_DISPATCHED,
+    )
+    session = _mock_session()
+    _session_execute_results(session, run=run, rows=[_guardrail_row()])
+
+    with patch("modulo.core.pipeline_engine.recovery.append_audit_event", AsyncMock()) as mock_audit:
+        result = await guardrail_override(
+            session,
+            org_id=_ORG_ID,
+            run_id=_RUN_ID,
+            input_data={"body": "clean replacement text"},
+            actor_id=_ACTOR_ID,
+        )
+
+    assert result.status == "running"
+    assert result.error_code is None
+    assert result.is_replay is True
+    # The phase is preserved through the flip — the resume machinery resets it
+    # atomically with its claim, and reconcile belts still recognise the row.
+    assert result.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
+    mock_audit.assert_awaited_once()

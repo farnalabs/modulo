@@ -4684,9 +4684,14 @@ export interface paths {
          *     override is the ONLY remediation: it re-runs the guardrail pass on the
          *     supplied ``input_data`` (re-block safe default — a still-violating input is
          *     refused with 422 and the run stays terminal), persists the post-redaction
-         *     payload, flips the run to ``pending`` with ``is_replay=True``, and
-         *     re-dispatches it from run start (execute_run — the blocked run never
-         *     executed, so there is no checkpoint to resume).
+         *     payload, flips the run with ``is_replay=True``, and re-dispatches it. The
+         *     flip target and job type branch on node progress (FAR-1711): a node-
+         *     STARTED run (durable ``first_node_dispatched`` phase — a node-scoped
+         *     ``block`` eval terminalizes from a completed node) flips to ``running``
+         *     and is re-dispatched as ``resume_run`` (checkpoint resume — FAR-1649:
+         *     never re-execute a node-started run); the genuine zero-node block (run-
+         *     level interception at creation, NULL / pre-node phase) flips to
+         *     ``pending`` and is re-dispatched from run start (execute_run).
          *
          *     Requires operator or admin role.
          */

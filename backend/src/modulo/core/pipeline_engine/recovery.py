@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.audit_logger import append_audit_event
 from modulo.core.audit_logger.labels import SYSTEM_ACTOR
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.db.crud.run import POLICY_GATE_PIN_MISMATCH_MARKER, _input_hash, get_run
 from modulo.db.crud.run_node_outputs import read_run_blobs
@@ -415,14 +416,22 @@ async def guardrail_override(
     2. The override RE-RUNS the guardrail pass on the operator-supplied input
        (re-block safe default): a still-violating input raises
        :class:`GuardrailOverrideRejectedError` and the run STAYS terminal.
-    3. On clean input the run flips ``eval_failed -> pending`` with the
-       POST-redaction payload persisted, ``is_replay=True`` (so lifecycle-map
+    3. On clean input the run flips off ``eval_failed`` with the POST-redaction
+       payload persisted, ``is_replay=True`` (so lifecycle-map
        journeys increment EXACTLY ONCE on the re-dispatch), and a
-       ``guardrail.override`` audit event.
+       ``guardrail.override`` audit event. The flip target branches on node
+       progress (FAR-1711): a node-STARTED run — the durable
+       ``first_node_dispatched`` phase (FAR-1422) that a node-scoped ``block``
+       eval leaves behind when it terminalizes the run from a completed node —
+       flips to ``running`` (the recover-node lock status, whose stale-running
+       arm the resume claim matches); the genuine zero-node block (run-level
+       interception at creation, NULL / pre-node phase) flips to ``pending``.
 
-    The caller re-dispatches the pending run with ``execute_run`` (from run
-    start — the blocked run never executed, so there is no checkpoint to
-    resume). ``is_replay=True`` makes the re-dispatch detection-only.
+    The caller re-dispatches accordingly: ``resume_run`` for a node-started
+    run (checkpoint resume — FAR-1649: a node-started run may only be resumed
+    from checkpoint, never re-executed), ``execute_run`` from run start for
+    the zero-node case (no node ever ran, so there is nothing to resume).
+    ``is_replay=True`` makes the re-dispatch detection-only.
 
     Raises:
         GuardrailOverrideError — run is not a guardrail-blocked terminal run,
@@ -512,8 +521,24 @@ async def guardrail_override(
             outcome.block_message,
         )
 
+    # FAR-1711: node-progress gate. A node-SCOPED ``block`` eval terminalizes
+    # the run from a COMPLETED node (executor maps EvalBlockedError ->
+    # eval_failed/eval_blocked), so the "blocked run never executed" premise
+    # is FALSE for that class: such a row carries the durable
+    # ``first_node_dispatched`` phase (FAR-1422 — the phase never advances
+    # past it) and a checkpoint for the completed supersteps. FAR-1649: a
+    # node-started run may only be resumed from checkpoint, never re-executed,
+    # so the flip target branches here and the caller re-dispatches
+    # ``resume_run`` for the ``running`` outcome — the recover-node lock
+    # status, whose stale-running arm the resume claim matches. The genuine
+    # zero-node block (run-level interception at creation, NULL / pre-node
+    # phase) keeps the original ``pending`` flip + ``execute_run`` re-dispatch
+    # from run start. ``PHASE_FIRST_NODE_DISPATCHED`` is the ONE shared
+    # discriminator every reconcile re-dispatch decision binds (cron belt,
+    # F6a leg, slot sweep) — never a bare literal.
+    new_status = _RECOVERY_LOCK_STATUS if run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED else "pending"
+
     # Optimistic status UPDATE — a concurrent override loses the WHERE match.
-    new_status = "pending"
     stmt = (
         update(Run)
         .where(

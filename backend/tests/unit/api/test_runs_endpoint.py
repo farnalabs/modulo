@@ -2479,6 +2479,41 @@ def test_guardrail_override_clean_input_dispatches_execute_run(client: TestClien
     assert mock_dispatch.await_args.kwargs.get("resume_data") is None
 
 
+def test_guardrail_override_node_started_run_dispatches_resume_run(client: TestClient) -> None:
+    """FAR-1711 regression: when the override leaves the run resume-bound —
+    ``guardrail_override`` flips a node-STARTED eval-blocked run (durable
+    ``first_node_dispatched`` phase) to ``running`` — the route re-dispatches
+    ``resume_run`` (checkpoint resume), NEVER ``execute_run`` (re-execution),
+    per FAR-1649 ("a node-started run may only be resumed from checkpoint,
+    never re-executed"). The zero-node control is
+    ``test_guardrail_override_clean_input_dispatches_execute_run`` (pending ->
+    execute_run)."""
+    run = _make_run(status="running")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org"),
+        patch("modulo.api.routes.runs.guardrail_override", new_callable=AsyncMock, return_value=run),
+        patch(
+            "modulo.api.routes.runs.dispatch_run",
+            new_callable=AsyncMock,
+            return_value=("enqueued", "job-id"),
+        ) as mock_dispatch,
+    ):
+        resp = client.post(
+            f"/api/v1/runs/{_RUN_ID}/guardrail-override",
+            json={"input_data": {"body": "clean replacement text"}},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["action"] == "override"
+    assert body["status"] == "running"
+    mock_dispatch.assert_awaited_once()
+    # resume_run — checkpoint resume, never execute_run re-execution; no gate
+    # decision is fabricated (resume_data stays unset).
+    assert mock_dispatch.await_args.kwargs["job_type"] == "resume_run"
+    assert mock_dispatch.await_args.kwargs.get("resume_data") is None
+
+
 def test_guardrail_override_still_violating_input_rejected_422(client: TestClient) -> None:
     """A still-violating supplied input is refused (422, re-block safe default)
     and never dispatched."""
