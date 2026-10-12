@@ -70,8 +70,12 @@ from modulo.core.trigger_engine.slack_app_mention import (
     verify_slack_signature,
     verify_slack_timestamp,
 )
+from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_from_live_graph
 from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
+from modulo.db.models.pipeline_snapshot import PipelineSnapshot
+from modulo.db.models.run import Run
+from modulo.db.models.trigger import Trigger
 from modulo.db.models.trigger_event import TriggerEvent
 from modulo.db.rls import set_rls_execution_context, set_rls_org
 from modulo.db.settings_resolver import ensure_triggers_resumable
@@ -135,6 +139,324 @@ async def _dispatch_slack_run(run_id: str, org_id: str) -> None:
         return
     if outcome == "enqueue_failed":
         await _ingest_slack_dispatch_error(str(run_id), str(org_id), "SAQ enqueue failed")
+
+
+async def _verify_slack_delivery(
+    *,
+    session: AsyncSession,
+    system_session: AsyncSession,
+    request: Request,
+    trigger_id: uuid.UUID,
+    principal: TenantPrincipal | None,
+    raw_body: bytes,
+    slack_signature: str | None,
+    slack_timestamp: str | None,
+) -> tuple[Trigger, uuid.UUID]:
+    """Bootstrap the trigger row and verify the Slack delivery signature.
+
+    Runs inside the route's open transaction. The trigger read must precede
+    any RLS org context on Postgres (FAR-523 bootstrap helper); the org
+    context is then pinned and the route-level timestamp + signature
+    validation runs ahead of any snapshot/dedup work so an unauthenticated
+    delivery never touches pipeline tables. FAR-1516 ordering is preserved:
+    the ``signature_verified`` audit actor-source promotion fires only AFTER
+    the check passes.
+
+    The except-order here is a verbatim subsequence of the route's original
+    inline ladder (TriggerNotFoundError → … → SlackSignatureError); the
+    dispatch-only errors are handled by ``_run_slack_pipeline`` and the
+    ProgrammingError/SQLAlchemyError/HTTPException/Exception tail stays on
+    the route (post-unwind, byte-identical to the original).
+    """
+    try:
+        # Bootstrap via the shared system-session helper (FAR-523): the
+        # trigger read must precede any RLS org context on Postgres; the
+        # helper 404s a principal referencing another org's trigger.
+        trigger, org_id = await load_trigger_and_org_global(
+            system_session, trigger_id, principal.organisation_id if principal else None
+        )
+        await set_rls_org(session, org_id)
+        await set_rls_execution_context(session)
+
+        # config_json shape was validated by the shared bootstrap helper
+        # (TriggerConfigInvalidError → 400 below), so ``.get`` here cannot
+        # AttributeError on external ingress.
+        cfg = trigger.config_json or {}
+        signing_secret: str | None = cfg.get("signing_secret")
+
+        # Route-level signature + timestamp validation (belt-and-braces ahead
+        # of the engine's own check — required for the challenge handshake).
+        if signing_secret is None:
+            raise SlackSignatureError("Slack signing secret is not configured")
+        verify_slack_timestamp(slack_timestamp)
+        if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
+            raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
+        # FAR-1516: signature verified — publish the trigger's org so the
+        # audit event records signature_verified provenance for a real tenant.
+        bind_audit_org(request, org_id)
+        return trigger, org_id
+    except TriggerNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerInactiveError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerConfigInvalidError as exc:
+        _log.warning(
+            "slack.receive_event.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
+    except SlackTimestampExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Slack-Request-Timestamp is outside the ±300s replay window",
+        ) from exc
+    except SlackSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Slack signature verification failed",
+        ) from exc
+
+
+async def _create_slack_snapshot(
+    *,
+    session: AsyncSession,
+    trigger: Trigger,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> PipelineSnapshot:
+    """Create the run's pipeline snapshot (pause pre-check first).
+
+    Runs inside the route's open transaction. The pause pre-check fires
+    BEFORE the snapshot work so a paused delivery never touches
+    ``pipeline_snapshots``; ``TriggersPausedError`` propagates to
+    ``_run_slack_pipeline``'s in-transaction arm, which writes the paused
+    TriggerEvent (when the org row still exists) and commits it with this
+    transaction.
+    """
+    # Pause pre-check BEFORE the snapshot and dedup work.
+    if trigger.active:
+        await ensure_triggers_resumable(session, org_id, trigger_id=trigger_id, trigger_type="slack_app_mention")
+
+    snapshot = await create_snapshot_from_live_graph(session, pipeline_id=trigger.pipeline_id, account_id=None)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create pipeline snapshot for slack trigger",
+        )
+    return snapshot
+
+
+async def _record_paused_slack_delivery(
+    *,
+    session: AsyncSession,
+    trigger: Trigger,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    raw_body: bytes,
+) -> None:
+    """Write the paused TriggerEvent; commits with the caller's transaction.
+
+    Safe-event-write guard (same contract as the webhook route): an orphan
+    trigger whose org row was HARD-deleted must not attempt the TriggerEvent
+    INSERT (it would violate the organisations FK -> 503). Fail-closed with
+    no event row and no crash.
+    """
+    if not await _org_row_exists(session, org_id):
+        _log.warning(
+            "slack.receive_event: org %s missing — skipping paused event write for trigger %s",
+            org_id,
+            trigger_id,
+        )
+        return
+    paused_event = TriggerEvent(
+        organisation_id=org_id,
+        trigger_id=trigger.id,
+        trigger_type="slack_app_mention",
+        raw_payload_hash=sha256_hex(raw_body),
+        validation_result="paused",
+    )
+    session.add(paused_event)
+    await session.flush()
+
+
+async def _run_slack_pipeline(
+    *,
+    session: AsyncSession,
+    trigger: Trigger,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID,
+    raw_body: bytes,
+    raw_payload: dict[str, Any],
+    slack_signature: str | None,
+    slack_timestamp: str | None,
+) -> Run | None:
+    """Dispatch an authenticated Slack app_mention delivery (in-transaction).
+
+    Runs inside the route's open transaction AFTER signature verification.
+    Returns the created ``Run``, or ``None`` when the org pause kill-switch
+    fired (the paused TriggerEvent — when writable — commits with this
+    transaction).
+
+    The except-order here is a verbatim subsequence of the route's original
+    inline ladder. Two families deliberately PROPAGATE to the route's ladder
+    instead of being caught here:
+
+    * ``TriggerBusyError`` — the engine raises BEFORE any TriggerEvent is
+      written and the main transaction must ROLL BACK; the route records the
+      busy delivery in a fresh transaction AFTER the unwind (a return from
+      inside this transaction would commit the snapshot instead).
+    * the ``ProgrammingError`` / ``SQLAlchemyError`` / ``HTTPException`` /
+      ``Exception`` tail — same post-unwind placement as the original
+      route-level ladder (rollback first, then the mapped response).
+    """
+    try:
+        snapshot = await _create_slack_snapshot(session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id)
+        run, _, _input_payload = await handle_app_mention(
+            session,
+            trigger_id=trigger_id,
+            org_id=org_id,
+            raw_body=raw_body,
+            raw_payload=raw_payload,
+            slack_signature=slack_signature,
+            slack_timestamp=slack_timestamp,
+            snapshot_id=snapshot.id,
+        )
+        return run
+    except TriggersPausedError:
+        # The SINGLE writer of the ``paused`` TriggerEvent; it commits with
+        # this transaction (deliberately NOT after the unwind).
+        await _record_paused_slack_delivery(
+            session=session, trigger=trigger, trigger_id=trigger_id, org_id=org_id, raw_body=raw_body
+        )
+        return None
+    except TriggerNotFoundError as exc:
+        # engine._load_trigger re-reads the trigger row mid-dispatch and can
+        # raise the same typed errors the bootstrap helper does — same 404.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerInactiveError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
+    except TriggerConfigInvalidError as exc:
+        # Defensive: the bootstrap already validated config_json and the
+        # engine re-read cannot raise this today, but the mapping stays
+        # byte-identical with the original single ladder if it ever does.
+        _log.warning(
+            "slack.receive_event.trigger_config_invalid",
+            extra={"trigger_id": str(trigger_id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trigger configuration is invalid",
+        ) from exc
+    except SlackTimestampExpiredError as exc:
+        # The engine re-checks the ±300s window; a delivery that straddles
+        # the boundary between the route-level check and the engine check
+        # lands here — same 400 as the route-level arm.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Slack-Request-Timestamp is outside the ±300s replay window",
+        ) from exc
+    except SlackSignatureError as exc:
+        # The engine re-verifies the signature (and resolves the stored
+        # secret) — same 401 as the route-level arm.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Slack signature verification failed",
+        ) from exc
+    except SlackEventTypeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except SlackAppMentionParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Malformed app_mention payload",
+        ) from exc
+    except DuplicateWebhookError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Duplicate Slack event",
+        ) from exc
+    # EventNotAcceptedError is deliberately not caught here: the Slack path
+    # (handle_app_mention) never calls _enforce_event_acceptance, so this
+    # error cannot be raised from the Slack trigger route today.
+    except PipelineRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+        ) from exc
+    except PipelineNotRunnableError as exc:
+        # FAR-1528: the app-mention delivery is refused at the create_run
+        # choke point when the target pipeline is archived/soft-deleted — 409
+        # Conflict, never a generic 500. The HTTPException raised here
+        # unwinds the route's transaction, so the snapshot rolls back with
+        # the refusal (same rollback as the original catch-outside-begin arm).
+        _log.info(
+            "slack.receive_event.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
+            trigger_id,
+            exc.pipeline_id,
+            exc.state,
+        )
+        raise pipeline_not_runnable_http(exc) from None
+    except SnapshotLockNotAvailableError as exc:
+        # FAR-527 parity: the app-mention snapshot creation can lose the
+        # advisory-lock race under concurrent deliveries. Surface it as a
+        # retryable 503, never a generic 500 (matches the webhook + MCP paths).
+        _log.warning(
+            "slack.receive_event.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
+            trigger_id,
+            trigger.pipeline_id,
+            SNAPSHOT_LOCK_ATTEMPTS,
+        )
+        log_service_unavailable(
+            "snapshot_lock_unavailable",
+            exc,
+            route=_CODE_SLACK_RECEIVE_EVENT,
+            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the Slack delivery"
+            ),
+        ) from exc
+
+
+async def _ack_slack_busy_delivery(
+    *,
+    trigger_id: uuid.UUID,
+    org_id: uuid.UUID | None,
+    raw_body: bytes,
+) -> dict[str, Any]:
+    """Record a refused busy delivery post-unwind and build the 202 ack.
+
+    MUST run AFTER the route transaction has unwound: the engine raises
+    ``TriggerBusyError`` before writing any event and the main transaction
+    rolls back, so the busy delivery is recorded here in a fresh transaction
+    (``record_busy_delivery`` opens its own session and never raises). Slack
+    suppresses retries on 2xx BY DESIGN, so the recording is what makes the
+    202 ack honest — the delivery is visible in the event log, never
+    silently lost.
+    """
+    if org_id is not None:
+        await record_busy_delivery(
+            trigger_id=trigger_id,
+            org_id=org_id,
+            trigger_type="slack_app_mention",
+            payload_hash=sha256_hex(raw_body),
+        )
+        return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
+    # Defensive: TriggerBusyError can only fire after the bootstrap
+    # helper resolved the org — refuse loudly rather than false-ack.
+    _log.error("slack.receive_event.trigger_busy_unresolvable trigger=%s", trigger_id)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Pipeline busy — delivery not accepted; retry",
+        headers={"Retry-After": "5"},
+    ) from None
 
 
 # FAR-1472 exemption (kept in audit_coverage_baseline.txt): the principal here
@@ -218,33 +540,28 @@ async def receive_slack_event(
         )
 
     org_id: uuid.UUID | None = None
+    # Declared here so the post-transaction busy-ack path and the accepted
+    # ack below can reference it; it stays None exactly when an in-transaction
+    # path returned early (challenge / paused / busy) — those paths return
+    # before it is read.
+    run: Any = None
     try:
         async with session.begin():
-            # Bootstrap via the shared system-session helper (FAR-523): the
-            # trigger read must precede any RLS org context on Postgres; the
-            # helper 404s a principal referencing another org's trigger.
-            trigger, org_id = await load_trigger_and_org_global(
-                system_session, trigger_id, principal.organisation_id if principal else None
+            # Bootstrap + fail-closed signature verification (_verify_slack_delivery
+            # maps TriggerNotFoundError/TriggerInactiveError -> 404,
+            # TriggerConfigInvalidError -> 400, SlackTimestampExpiredError -> 400,
+            # SlackSignatureError -> 401 — the original inline ladder's order,
+            # preserved as a verbatim subsequence).
+            trigger, org_id = await _verify_slack_delivery(
+                session=session,
+                system_session=system_session,
+                request=request,
+                trigger_id=trigger_id,
+                principal=principal,
+                raw_body=raw_body,
+                slack_signature=slack_signature,
+                slack_timestamp=slack_timestamp,
             )
-            await set_rls_org(session, org_id)
-            await set_rls_execution_context(session)
-
-            # config_json shape was validated by the shared bootstrap helper
-            # (TriggerConfigInvalidError → 400 below), so ``.get`` here cannot
-            # AttributeError on external ingress.
-            cfg = trigger.config_json or {}
-            signing_secret: str | None = cfg.get("signing_secret")
-
-            # Route-level signature + timestamp validation (belt-and-braces ahead
-            # of the engine's own check — required for the challenge handshake).
-            if signing_secret is None:
-                raise SlackSignatureError("Slack signing secret is not configured")
-            verify_slack_timestamp(slack_timestamp)
-            if not verify_slack_signature(raw_body, signing_secret, slack_timestamp, slack_signature):
-                raise SlackSignatureError("Slack X-Slack-Signature is missing or invalid")
-            # FAR-1516: signature verified — publish the trigger's org so the
-            # audit event records signature_verified provenance for a real tenant.
-            bind_audit_org(request, org_id)
 
             # URL verification handshake — echo the challenge back.
             if raw_payload.get("type") == "url_verification":
@@ -258,134 +575,20 @@ async def receive_slack_event(
                 response.status_code = status.HTTP_200_OK
                 return {"challenge": challenge}
 
-            try:
-                # Pause pre-check BEFORE the snapshot and dedup work.
-                if trigger.active:
-                    await ensure_triggers_resumable(
-                        session, org_id, trigger_id=trigger_id, trigger_type="slack_app_mention"
-                    )
-
-                from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
-
-                snapshot = await create_snapshot_from_live_graph(
-                    session, pipeline_id=trigger.pipeline_id, account_id=None
-                )
-                if snapshot is None:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create pipeline snapshot for slack trigger",
-                    )
-
-                run, _, _input_payload = await handle_app_mention(
-                    session,
-                    trigger_id=trigger_id,
-                    org_id=org_id,
-                    raw_body=raw_body,
-                    raw_payload=raw_payload,
-                    slack_signature=slack_signature,
-                    slack_timestamp=slack_timestamp,
-                    snapshot_id=snapshot.id,
-                )
-            except TriggersPausedError:
-                if not await _org_row_exists(session, org_id):
-                    _log.warning(
-                        "slack.receive_event: org %s missing — skipping paused event write for trigger %s",
-                        org_id,
-                        trigger_id,
-                    )
-                    return {"status": "paused"}
-                paused_event = TriggerEvent(
-                    organisation_id=org_id,
-                    trigger_id=trigger.id,
-                    trigger_type="slack_app_mention",
-                    raw_payload_hash=sha256_hex(raw_body),
-                    validation_result="paused",
-                )
-                session.add(paused_event)
-                await session.flush()
+            run = await _run_slack_pipeline(
+                session=session,
+                trigger=trigger,
+                trigger_id=trigger_id,
+                org_id=org_id,
+                raw_body=raw_body,
+                raw_payload=raw_payload,
+                slack_signature=slack_signature,
+                slack_timestamp=slack_timestamp,
+            )
+            if run is None:
+                # Org pause kill-switch — the paused TriggerEvent (when
+                # writable) was committed with this transaction.
                 return {"status": "paused"}
-    except TriggerNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
-    except TriggerInactiveError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trigger not found") from exc
-    except TriggerConfigInvalidError as exc:
-        _log.warning(
-            "slack.receive_event.trigger_config_invalid",
-            extra={"trigger_id": str(trigger_id)},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trigger configuration is invalid",
-        ) from exc
-    except SlackTimestampExpiredError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Slack-Request-Timestamp is outside the ±300s replay window",
-        ) from exc
-    except SlackSignatureError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Slack signature verification failed",
-        ) from exc
-    except SlackEventTypeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
-    except SlackAppMentionParseError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Malformed app_mention payload",
-        ) from exc
-    except DuplicateWebhookError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Duplicate Slack event",
-        ) from exc
-    # EventNotAcceptedError is deliberately not caught here: the Slack path
-    # (handle_app_mention) never calls _enforce_event_acceptance, so this
-    # error cannot be raised from the Slack trigger route today.
-    except PipelineRateLimitError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
-        ) from exc
-    except PipelineNotRunnableError as exc:
-        # FAR-1528: the app-mention delivery is refused at the create_run
-        # choke point when the target pipeline is archived/soft-deleted — 409
-        # Conflict, never a generic 500. Caught outside the
-        # begin-block so the snapshot rolls back with the refusal.
-        _log.info(
-            "slack.receive_event.pipeline_not_runnable trigger=%s pipeline=%s state=%s",
-            trigger_id,
-            exc.pipeline_id,
-            exc.state,
-        )
-        raise pipeline_not_runnable_http(exc) from None
-    except SnapshotLockNotAvailableError as exc:
-        # FAR-527 parity: the app-mention snapshot creation can lose the
-        # advisory-lock race under concurrent deliveries. Surface it as a
-        # retryable 503, never a generic 500 (matches the webhook + MCP paths).
-        from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS
-
-        _log.warning(
-            "slack.receive_event.snapshot_lock_busy trigger=%s pipeline=%s attempts=%s (FAR-527)",
-            trigger_id,
-            trigger.pipeline_id if trigger is not None else None,
-            SNAPSHOT_LOCK_ATTEMPTS,
-        )
-        log_service_unavailable(
-            "snapshot_lock_unavailable",
-            exc,
-            route=_CODE_SLACK_RECEIVE_EVENT,
-            detail=f"snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Pipeline snapshot lock unavailable after {SNAPSHOT_LOCK_ATTEMPTS} attempts — retry the Slack delivery"
-            ),
-        ) from exc
     except TriggerBusyError:
         # Concurrent same-trigger deliveries serialize on the engine's
         # advisory lock. The loser is NOT executed and NOT auto-queued: the
@@ -396,22 +599,7 @@ async def receive_slack_event(
         # 2xx BY DESIGN, so the recording is what makes the 202 ack honest —
         # the delivery is visible in the event log, never silently lost.
         _log.info("slack.receive_event.trigger_busy trigger=%s", trigger_id)
-        if org_id is not None:
-            await record_busy_delivery(
-                trigger_id=trigger_id,
-                org_id=org_id,
-                trigger_type="slack_app_mention",
-                payload_hash=sha256_hex(raw_body),
-            )
-            return {"run_id": None, "status": "queued", "detail": BUSY_ACK_DETAIL}
-        # Defensive: TriggerBusyError can only fire after the bootstrap
-        # helper resolved the org — refuse loudly rather than false-ack.
-        _log.error("slack.receive_event.trigger_busy_unresolvable trigger=%s", trigger_id)
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Pipeline busy — delivery not accepted; retry",
-            headers={"Retry-After": "5"},
-        ) from None
+        return await _ack_slack_busy_delivery(trigger_id=trigger_id, org_id=org_id, raw_body=raw_body)
     except ProgrammingError:
         _log.exception(_CODE_SLACK_RECEIVE_EVENT)
         raise HTTPException(

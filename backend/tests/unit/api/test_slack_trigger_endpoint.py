@@ -19,12 +19,26 @@ from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from modulo.api.dependencies import _get_engine, get_db_session, get_system_db_session
 from modulo.api.main import app
 from modulo.auth.jwt import AuthenticatedPrincipal
+from modulo.core.trigger_engine import (
+    DuplicateWebhookError,
+    PipelineRateLimitError,
+    TriggerConfigInvalidError,
+    TriggerInactiveError,
+    TriggerNotFoundError,
+)
+from modulo.core.trigger_engine.slack_app_mention import (
+    SlackAppMentionParseError,
+    SlackEventTypeError,
+    SlackSignatureError,
+    SlackTimestampExpiredError,
+)
 from modulo.settings import Settings, get_settings
 from tests.unit.api.conftest import _ProvisionedSystemSettings, make_system_session_mock
 from tests.unit.api.mock_session import configure_mock_session
@@ -268,7 +282,7 @@ def test_app_mention_delivery_returns_202(client: TestClient) -> None:
             return_value=("enqueued", "job-id"),
         ),
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -306,7 +320,7 @@ def test_app_mention_ack_carries_dispatched_execution_origin(client: TestClient)
             return_value=("enqueued", "job-id"),
         ),
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -436,7 +450,7 @@ def test_app_mention_duplicate_event_returns_400(client: TestClient) -> None:
     with (
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack.set_rls_org"),
-        patch("modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
     ):
         snap_mock = MagicMock()
         snap_mock.id = uuid.uuid4()
@@ -583,7 +597,7 @@ def test_app_mention_snapshot_lock_busy_returns_503(client: TestClient) -> None:
         patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
         patch("modulo.api.routes.slack.set_rls_org"),
         patch(
-            "modulo.db.crud.pipeline_snapshot.create_snapshot_from_live_graph",
+            "modulo.api.routes.slack.create_snapshot_from_live_graph",
             new_callable=AsyncMock,
             side_effect=SnapshotLockNotAvailableError("busy"),
         ),
@@ -625,3 +639,107 @@ def test_app_mention_invalid_config_json_returns_400(client: TestClient) -> None
 
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Trigger configuration is invalid"
+
+
+def test_paused_org_missing_row_skips_event_write(client: TestClient) -> None:
+    """Orphan-org guard on the paused path (S3776 split, changed-lines
+    coverage): when the org row was HARD-deleted the paused TriggerEvent
+    INSERT is skipped (organisations FK) — still an honest 202 paused ack."""
+    body = _event_body()
+    ts = str(int(time.time()))
+    with (
+        patch("modulo.db.settings_resolver.org_is_paused", new_callable=AsyncMock, return_value=True),
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock) as m,
+        patch("modulo.api.routes.slack._dispatch_slack_run", new_callable=AsyncMock) as dispatch,
+        patch("modulo.api.routes.slack.set_rls_org"),
+        patch("modulo.api.routes.slack._org_row_exists", new_callable=AsyncMock, return_value=False),
+    ):
+        resp = client.post(
+            f"/api/v1/triggers/{_TRIGGER_ID}/slack",
+            content=body,
+            headers={**_headers(ts, body), "Content-Type": "application/json"},
+        )
+
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "paused"}
+    m.assert_not_called()
+    dispatch.assert_not_called()
+
+
+async def test_ack_slack_busy_delivery_unresolvable_org_refuses_429() -> None:
+    """Defensive arm (S3776 split, changed-lines coverage): a busy ack with
+    no resolved org must refuse with 429 + Retry-After, never a false 2xx."""
+    from modulo.api.routes.slack import _ack_slack_busy_delivery
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _ack_slack_busy_delivery(trigger_id=_TRIGGER_ID, org_id=None, raw_body=b"{}")
+
+    assert exc_info.value.status_code == 429
+    headers = exc_info.value.headers
+    assert headers is not None
+    assert headers["Retry-After"] == "5"
+
+
+def _dispatch_trigger_mock() -> MagicMock:
+    trigger = MagicMock()
+    trigger.id = _TRIGGER_ID
+    trigger.pipeline_id = uuid.uuid4()
+    trigger.active = True
+    trigger.config_json = {"signing_secret": _SECRET}
+    return trigger
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "expected_status"),
+    [
+        (TriggerNotFoundError(trigger_id=_TRIGGER_ID), 404),
+        (TriggerInactiveError(_TRIGGER_ID), 404),
+        (TriggerConfigInvalidError(trigger_id=_TRIGGER_ID), 400),
+        (SlackTimestampExpiredError("stale"), 400),
+        (SlackSignatureError("bad"), 401),
+        (SlackEventTypeError("unsupported envelope"), 400),
+        (SlackAppMentionParseError("malformed"), 400),
+        (DuplicateWebhookError("hash"), 400),
+        (PipelineRateLimitError(uuid.uuid4(), None, 1, 60), 429),
+    ],
+    ids=[
+        "trigger_not_found",
+        "trigger_inactive",
+        "trigger_config_invalid",
+        "slack_timestamp_expired",
+        "slack_signature",
+        "slack_event_type",
+        "slack_app_mention_parse",
+        "duplicate_webhook",
+        "pipeline_rate_limit",
+    ],
+)
+async def test_run_slack_pipeline_maps_dispatch_family_errors(side_effect: Exception, expected_status: int) -> None:
+    """S3776 split invariant: ``_run_slack_pipeline`` maps the typed errors
+    the engine can raise mid-dispatch to the SAME statuses the original
+    single route ladder produced — the error→status mapping is unchanged by
+    the split (each arm a verbatim subsequence of the original ladder)."""
+    from modulo.api.routes.slack import _run_slack_pipeline
+
+    session = _make_trigger_session()
+    with (
+        patch("modulo.api.routes.slack.ensure_triggers_resumable", new_callable=AsyncMock),
+        patch("modulo.api.routes.slack.handle_app_mention", new_callable=AsyncMock, side_effect=side_effect),
+        patch("modulo.api.routes.slack.create_snapshot_from_live_graph", new_callable=AsyncMock) as snap,
+    ):
+        snap_mock = MagicMock()
+        snap_mock.id = uuid.uuid4()
+        snap.return_value = snap_mock
+        with pytest.raises(HTTPException) as exc_info:
+            await _run_slack_pipeline(
+                session=session,
+                trigger=_dispatch_trigger_mock(),
+                trigger_id=_TRIGGER_ID,
+                org_id=_ORG_ID,
+                raw_body=b"{}",
+                raw_payload={},
+                slack_signature="v0=bad",
+                slack_timestamp="1",
+            )
+
+    assert exc_info.value.status_code == expected_status
