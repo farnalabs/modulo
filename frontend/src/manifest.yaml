@@ -5793,7 +5793,7 @@ features:
         behaviours:
             - "[x] Router nodes compile to ordered JMESPath rules with a default fallback edge"
             - "[x] The graph validator enforces router node topology constraints at save time"
-            - "[x] Conditional routing supports the full JMESPath expression language (nested filters/projections like items[?status=='open'], contains, multi-level access) because router guards, conditional edges, loop counters, HITL review conditions and polling triggers all compile and evaluate through the single consolidated evaluator (compile_jmespath + evaluate_jmespath_condition in core/pipeline_engine/jmespath_eval.py); an invalid expression surfaces an actionable ValueError and a no-match run terminalizes router_no_match (pipeline_engine/jmespath_eval.py, router_nodes.feature)"
+            - "[x] Conditional routing supports the full JMESPath expression language (nested filters/projections like items[?status=='open'], contains, multi-level access) because router guards, conditional edges, loop counters and HITL review conditions all compile and evaluate through the single consolidated evaluator (compile_jmespath + evaluate_jmespath_condition in core/pipeline_engine/jmespath_eval.py); an invalid expression surfaces an actionable ValueError and a no-match run terminalizes router_no_match (pipeline_engine/jmespath_eval.py, router_nodes.feature)"
     feat-library:
         description: Reusable pipeline templates and the template library
         status: covered

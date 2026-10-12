@@ -56,6 +56,7 @@ from modulo.core.audit_logger.labels import (
 )
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.cost_controller.finalize import FinalizeMetricSink, derive_node_type_map, finalize_cost
+from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.eval_engine import (
     EvalBlockedError,
 )
@@ -5688,6 +5689,17 @@ class PipelineExecutor:
         cannot resurrect a run the watchdog just failed, and a cancellation
         cannot be reversed.
 
+        The row keeps ``dispatcher='saq'``/``dispatched_at``/``dispatch_phase``,
+        so the resulting ``pending`` row's ONLY durable recovery is
+        ``dispatcher_reconcile``'s pending re-enqueue leg (FAR-1649 qa
+        iteration 3) — and that leg re-dispatches it as ``execute_run``,
+        i.e. re-executes the run. Safe ONLY because every call site of THIS
+        method is gated on ``_graph_is_idempotent`` (``_can_fenced_requeue``,
+        ``_retry_policy_applies``, watchdog_retry's ``not graph_idempotent``
+        stand-down): the reset is never performed on a graph whose re-run is
+        unsafe (FAR-295). A new call site MUST keep that gate or a
+        non-idempotent node-started run becomes re-dispatchable.
+
         Returns the UPDATE rowcount (1 = the fence held / reset confirmed,
         0 = fence lost) so callers can distinguish a confirmed reset from a
         lost race (FAR-525: the retry counter only fires on a CONFIRMED reset).
@@ -6582,9 +6594,14 @@ class PipelineExecutor:
             if not state.first_node_signalled:
                 state.first_node_signalled = True
                 # FAR-893: update phase tracker so the watchdog logs the transition.
+                # FAR-1649: bind the shared constant (dependency-free leaf
+                # ``dispatch_phases``) so the write site and every
+                # reconcile/age-gate predicate share ONE definition — a
+                # bare literal here could desynchronise from the
+                # ``:first_node_phase`` bind params silently.
                 _tracker = self._dispatch_phase_tracker
                 if _tracker is not None:
-                    _tracker.enter_phase("first_node_dispatched")
+                    _tracker.enter_phase(PHASE_FIRST_NODE_DISPATCHED)
                 if self.on_first_progress is not None:
                     self.on_first_progress()
             # FAR-369 absolute node-deadline watchdog: signal per-node

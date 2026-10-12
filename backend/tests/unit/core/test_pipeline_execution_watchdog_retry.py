@@ -452,6 +452,30 @@ async def test_deadline_kill_lost_fence_stands_down_without_redispatch():
     assert box.requested is False
 
 
+async def test_deadline_kill_never_resets_non_idempotent_graph():
+    """FAR-1649 qa iteration 3: the fenced pending-reset is NEVER performed
+    for a non-idempotent graph, so a node-started run on such a graph can
+    never become the ``pending`` row the restored reconcile re-enqueue leg
+    re-dispatches — that leg is safe precisely because its only producer is
+    idempotency-gated here (``not graph_idempotent`` stand-down), which is
+    the guarantee "never re-EXECUTE a node-started NON-idempotent run".
+
+    The timeout policy DOES cover the kill and the budget IS available — the
+    graph is the ONLY thing that stands the hook down."""
+    executor = _make_executor_mock(attempt_count=1)
+    dispatched, box, sleep_mock = await _consult_hook(
+        executor,
+        retry_policy={"on": ["timeout"], "max_retries": 3},
+        final_status="failed",
+        error_code="node_deadline_exceeded",
+        graph_json={"nodes": [{"id": "n1", "idempotent": False}], "edges": []},
+    )
+    assert dispatched is False
+    assert box.requested is False
+    executor._fenced_pending_reset.assert_not_awaited()
+    sleep_mock.assert_not_awaited()
+
+
 async def test_hook_stands_down_when_exec_task_already_done():
     """The hook's own done() re-check (belt-and-braces against the cancel→
     consult race) stands down BEFORE any DB consult when the executor task

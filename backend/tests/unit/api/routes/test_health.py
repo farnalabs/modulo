@@ -261,6 +261,43 @@ class TestCheckDispatcherReconcile:
         assert "claimed_but_never_dispatched=5" in result.detail
 
     @pytest.mark.asyncio
+    async def test_fresh_run_detail_surfaces_node_started_counters(self) -> None:
+        """FAR-1649: the readiness detail must surface the node-started counters
+        so an operator reading the /healthz detail sees the regression alarms
+        without querying the raw blob. Before this they were written to the
+        stats blob but omitted from the detail line."""
+        fake = _FakeStatsRedis(
+            blob=_fresh_payload(
+                node_started_terminalized=2,
+                node_started_deferred=3,
+            ).encode()
+        )
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_terminalized=2" in result.detail
+        assert "node_started_deferred=3" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fresh_run_detail_defaults_node_started_counters_to_zero(self) -> None:
+        """A payload without the FAR-1649 node-started keys still renders them
+        as 0 rather than raising (pre-FAR-1649 worker)."""
+        fake = _FakeStatsRedis(blob=_fresh_payload().encode())
+        with (
+            patch("modulo.api.routes.health.get_settings", return_value=_make_settings()),
+            patch("modulo.api.routes.health.aioredis.Redis.from_url", return_value=fake),
+        ):
+            result = await _check_dispatcher_reconcile()
+        assert result.status == "ok"
+        assert result.detail is not None
+        assert "node_started_terminalized=0" in result.detail
+        assert "node_started_deferred=0" in result.detail
+
+    @pytest.mark.asyncio
     async def test_fresh_run_detail_surfaces_per_org_bounded_failure_counters(self) -> None:
         """FAR-1621: the readiness detail must surface ALL the per-org
         bounded-failure counters (plus ``orgs_deferred``) so an alert email can

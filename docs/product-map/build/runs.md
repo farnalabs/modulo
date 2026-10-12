@@ -127,14 +127,16 @@ prompt-reveal actions, and error-state recovery BDD (`failed_state` / `recovery`
       patched (`steps/test_alpha_errors.py`)
 - [x] Run lifecycle is BDD-exercised end to end: a manual trigger creates a pending run
       (202), the engine moves it pending → running, a clean completion lands on
-      `completed` with a `final_state`, an unhandled node exception lands on `failed`
+      the terminal `complete` status, an unhandled node exception lands on `failed`
       with an `error_detail`, and a mid-run cancellation is terminal (`cancelled`, no
       further nodes execute). A node that returns `None` output is a normal empty
       result – the run continues to the next node with no error – and sequential
-      pipelines complete nodes strictly in order. A trigger refused by
-      `max_concurrent_runs` while a pending run is already active surfaces 429
-      (`run_lifecycle.feature`, `run_sequential.feature`, registered for execution by
-      `steps/test_pipelines.py`)
+      pipelines complete nodes strictly in order. A rate-limit conflict on the
+      manual-trigger route surfaces 429 through the typed `RateLimitConflictError`
+      path, while the pipeline `max_concurrent_runs` cap is enforced at dispatch (an
+      over-capacity run parks with the `pipeline_capacity` marker rather than 429 at
+      trigger time) (`run_lifecycle.feature`, `run_sequential.feature`, registered for
+      execution by `steps/test_pipelines.py`)
 - [x] Run-outcome delivery signal (FAR-189/228): every terminal run carries a
       `run_classification` JSON record written atomically with terminalization by
       the shared fenced terminal write – `value` (`delivered` / `no_delivery` /
