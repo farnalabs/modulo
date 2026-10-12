@@ -10,11 +10,21 @@ Thin connector model: this is a contextual integration, not a deep client.
                               method, implemented via _post_comment).
 
 No auto-create (create_ticket) and no compensate expansion - per the thin
-connector contract. Mirrors JiraConnector conventions (Bearer auth, httpx
-client, typed errors, no credentials in logs) but stays deliberately narrow.
+connector contract. Mirrors JiraConnector conventions (httpx client, typed
+errors, no credentials in logs) but stays deliberately narrow.
 
-Linear's API is GraphQL at https://api.linear.app/graphql authenticated with a
-Bearer API key (the connector credential ``token``).
+Linear's API is GraphQL at https://api.linear.app/graphql. Authentication
+depends on the credential kind (FAR-1683):
+
+* a **personal API key** is sent RAW — ``Authorization: <key>``. This mirrors
+  our own working client (``harness/mcp/linear/server.py``), which sends the
+  key with no scheme prefix.
+* an **OAuth access token** is sent as ``Authorization: Bearer <token>``.
+
+Linear personal API keys begin with ``lin_api_``; OAuth access tokens carry the
+``lin_oauth_`` prefix. The scheme is therefore chosen from the token shape, with
+RAW as the default (personal keys are by far the common case and are what our
+working client issues).
 """
 
 from __future__ import annotations
@@ -40,6 +50,24 @@ from modulo.connectors.ticket_tracker.base import Ticket, TicketTrackerBase
 from modulo.core.ssrf import pinned_async_client_sync
 
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
+
+# Linear OAuth access tokens carry a recognisable prefix; personal API keys
+# (``lin_api_``) do not and must be sent RAW. See module docstring (FAR-1683).
+_OAUTH_TOKEN_PREFIX = "lin_oauth_"
+
+
+def _authorization_header(token: str) -> str:
+    """Return the ``Authorization`` value for *token* in Linear's required scheme.
+
+    A Linear personal API key is sent RAW; only an OAuth access token uses the
+    ``Bearer`` scheme. Linear rejects a personal key sent with ``Bearer`` with an
+    HTTP 400 ("...trying to use an API key as a Bearer token...").
+    """
+    token = token.strip()
+    if token.startswith(_OAUTH_TOKEN_PREFIX):
+        return f"Bearer {token}"
+    return token
+
 
 # Retryable transport / upstream conditions for the thin GraphQL client.
 # FAR-410: the shared constant is the INTERSECTION {429, 502, 503, 504}; Linear
@@ -83,7 +111,7 @@ class LinearConnector(TicketTrackerBase):
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._token}",
+            "Authorization": _authorization_header(self._token),
             "Content-Type": "application/json",
         }
 

@@ -40,7 +40,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import yaml
-from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 import modulo.core.workflow_import_export as mod
@@ -1675,26 +1674,45 @@ async def test_materialize_does_not_warn_on_manual_node_with_schema(monkeypatch:
     assert not any("manual node without an output schema" in w for w in result["warnings"])
 
 
-async def test_materialize_rejects_declared_policy_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FAR-1109: a bundle whose graph declares a policy_gate block fails loudly.
+async def test_materialize_strips_declared_policy_gate_with_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAR-1666: a bundle cannot carry gate rows, so a declared block is stripped.
 
-    Import persists ``graph_nodes_json`` directly and does not translate a
-    declared block into a PolicyGate row, so the block must be rejected rather
-    than stored with no governing row (silent non-enforcement).
+    The bundle exports no ``policy_gates`` section and evals are not imported,
+    so a declared ``policy_gate`` would persist INERT. The import path removes
+    it (the shared strip helper) and discloses the drop in the import warnings.
     """
-    _patch_crud(monkeypatch)
+    created = _patch_crud(monkeypatch)
     gate_node = {
         "id": str(uuid.uuid4()),
         "node_type": "agent",
+        "label": "Gated",
+        "position": {"x": 0, "y": 0},
         "policy_gate": {"eval_id": str(uuid.uuid4()), "action": "block"},
     }
     bundle = _make_bundle()
     bundle["pipeline"]["graph_nodes_json"] = [gate_node]
 
-    with pytest.raises(HTTPException) as exc:
-        await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
-    assert exc.value.status_code == 422
-    assert "Pipeline import" in exc.value.detail
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    persisted = created["pipeline"].return_value.graph_nodes_json
+    assert len(persisted) == 1
+    assert "policy_gate" not in persisted[0]
+    assert any("policy_gate declaration(s) were removed on import" in w for w in result["warnings"])
+
+
+async def test_materialize_keeps_gate_free_graph_without_policy_gate_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FAR-1666: a graph with no declared gates imports without the strip warning."""
+    _patch_crud(monkeypatch)
+    bundle = _make_bundle()
+    bundle["pipeline"]["graph_nodes_json"] = [
+        {"id": str(uuid.uuid4()), "node_type": "agent", "label": "Plain", "position": {"x": 0, "y": 0}}
+    ]
+
+    result = await materialize_import(_FakeSession(_no_existing_schema_result()), _ORG_ID, _ACCOUNT_ID, bundle)
+
+    assert not any("policy_gate declaration(s) were removed on import" in w for w in result["warnings"])
 
 
 async def test_materialize_rewires_connector_binding_overrides(monkeypatch: pytest.MonkeyPatch) -> None:

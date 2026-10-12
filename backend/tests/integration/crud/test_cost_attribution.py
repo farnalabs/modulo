@@ -510,6 +510,58 @@ async def test_get_cost_report_by_team(
         assert report_map["Report B"]["total_runs"] == 1
 
 
+async def test_get_cost_report_by_team_resolves_soft_deleted_team_name(
+    db_engine: AsyncEngine,
+) -> None:
+    """A soft-deleted team's NAME must still resolve on the cost report (FAR-1653).
+
+    Historical cost rows for a team deleted after the spend was recorded must
+    keep showing the team's name — never degrade to "Unknown". The team-lookup
+    SELECT opts out of the global soft-delete filter via ``include_soft_deleted``.
+    """
+    from modulo.db.soft_delete import register_soft_delete_filter
+
+    # Idempotent — mirrors production (``db/session.py``) so the SELECT-only
+    # filter is active exactly as in a live deployment.
+    register_soft_delete_filter()
+
+    org = await _create_org(db_engine, f"report-delteam-{uuid.uuid4().hex[:8]}")
+    user = await _create_user(db_engine, org, "report-delteam@test.com")
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        team = await create_team(session, org_id=org, name="SoftDeleted Report Team", account_id=user)
+        await session.flush()
+        await check_and_record_spend(session, org_id=org, cost_usd=Decimal(42), team_id=team.id)
+        await session.commit()
+
+    # Soft-delete the team AFTER the spend was recorded — the historical cost
+    # attribution must keep the name.
+    async with db_engine.connect() as conn, conn.begin():
+        await conn.execute(
+            text("UPDATE teams SET deleted_at = now() WHERE id = :tid"),
+            {"tid": str(team.id)},
+        )
+
+    async with factory() as session:
+        await session.execute(
+            text("SELECT set_config('app.organisation_id', :oid, true)"),
+            {"oid": str(org)},
+        )
+        report = await get_cost_report(session, org_id=org, group_by="team", period="month")
+
+    assert len(report) == 1, f"expected the single team row, got {report!r}"
+    assert report[0]["entity_name"] == "SoftDeleted Report Team", (
+        "a soft-deleted team's NAME must resolve on the historical cost report "
+        f"(not 'Unknown'), got {report[0]['entity_name']!r}"
+    )
+    assert report[0]["total_spend_usd"] == 42.0
+
+
 async def test_get_cost_report_by_org(
     db_engine: AsyncEngine,
 ) -> None:

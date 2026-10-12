@@ -235,15 +235,22 @@ async def test_sweep_writes_validation_level_on_healthy_instance(sweep, tmp_path
 
 
 async def test_sweep_writes_validation_level_on_unhealthy_instance(sweep) -> None:
-    """A failed canary must degrade the validation_level one step below baseline."""
+    """A failed canary must degrade the validation_level one step below baseline.
+
+    ``github`` is used deliberately: its baseline is ``contract-recorded`` (above
+    the floor), so a build failure — no ``token`` in the fake creds, so the hub
+    skips it — degrades the level to ``unit-only``. A connector whose baseline is
+    already the floor (e.g. ``shell``) cannot demonstrate the degradation.
+    """
     run, seeder, rows = sweep
-    await seeder([_instance(connector_type_id="shell")])
+    await seeder([_instance(connector_type_id="github")])
 
     await run()
 
     (row,) = await rows()
-    assert row.validation_level is not None
-    # shell baseline is unit-only; failure stays at floor
+    assert row.last_health_check_at is not None
+    assert row.last_health_check_error
+    # github baseline is contract-recorded; a failure degrades one step to the floor
     assert row.validation_level == ValidationLevel.UNIT_ONLY
 
 

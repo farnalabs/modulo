@@ -396,7 +396,7 @@ class _SequenceAdapter:
     """Async backend fake returning queued responses in call order.
 
     ``make_node_fn``'s repair hook re-invokes the backend through
-    ``_run_coroutine_sync``; this adapter proves the async backend is really
+    ``run_coroutine_sync``; this adapter proves the async backend is really
     reached (not a sync fake) and records each prompt.
     """
 

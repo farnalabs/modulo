@@ -89,12 +89,25 @@ class _MockResult:
         return self._scalar_one
 
     def one(self) -> "_MockRow":
-        """Return the first row, or a default row if none exist."""
+        """Return the first row, or a default row if none exist.
+
+        The default row carries every column ``_facts_window`` reads so the
+        period path can compute against this mock — otherwise a flag-gate
+        regression (FAR-92) crashes with an AttributeError 500 instead of
+        surfacing a ``period`` block for a flag-off test to reject.
+        """
         if hasattr(self._rows, "__iter__"):
             rows_list = list(self._rows)
             if rows_list:
                 return rows_list[0]
-        return _MockRow(total=100, passed=75)
+        return _MockRow(
+            total=100,
+            passed=75,
+            complete=75,
+            active_pipelines=3,
+            tokens=1000,
+            avg_duration_ms=120.0,
+        )
 
     def scalars(self) -> "_MockResult":
         return self
@@ -705,6 +718,44 @@ class TestDashboardSummaryPeriod:
         response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
         assert response.status_code == 200
         assert "period" not in response.json()
+
+    def test_flag_off_skips_period_and_uses_flag_scoped_cache_key(
+        self, flag_off_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FAR-92 flag-off, end to end: no ``period`` block AND a flag-scoped key.
+
+        Runs the REAL cache helpers against a fake Redis so the key the route
+        actually looks up / writes is captured at the wire — one request proves
+        both halves of the gate: with ``analytics_page`` disabled ``days`` is
+        ignored (legacy all-time shape, no ``period``) and the summary cache is
+        keyed with the flag segment (``dashboard:summary:{org_id}:{days}:{flag}``,
+        flag ``0``), so a flag-off entry can never be served to a flag-on caller.
+
+        Discriminating: dropping the route's ``days = None`` gate reintroduces
+        the ``period`` block and flips the key to the ``:{days}:{flag}`` form
+        (``...:30:0``); not threading the flag into the cache call writes the
+        ``:1`` key. Either regression fails this test.
+        """
+        fake = _FakeRedis()
+        monkeypatch.setattr(
+            "modulo.api.routes.dashboard.Redis",
+            MagicMock(from_url=MagicMock(return_value=fake)),
+        )
+        # The module autouse fixture stubs the cache helpers for request tests;
+        # restore the real ones so this test exercises the production key path.
+        monkeypatch.setattr("modulo.api.routes.dashboard._get_cached_dashboard", _get_cached_dashboard)
+        monkeypatch.setattr("modulo.api.routes.dashboard._set_cached_dashboard", _set_cached_dashboard)
+
+        response = flag_off_client.get("/api/v1/dashboard/summary?days=30")
+
+        assert response.status_code == 200
+        assert "period" not in response.json()
+        # The gate nulls ``days`` before the cache calls, so the flag-off key
+        # carries the flag segment only — no ``:{days}`` middle segment.
+        assert len(fake.set_calls) == 1
+        key, ttl, _payload = fake.set_calls[0]
+        assert key == f"dashboard:summary:{_ORG_ID}:0"
+        assert ttl == 60
 
     def test_delta_pct_null_when_previous_zero(self, period_client: Callable[..., TestClient]) -> None:
         client = period_client(

@@ -114,7 +114,7 @@ async def test_sweep_isolates_poisoned_instance(sweep, tmp_path) -> None:
     await seeder(
         [
             _instance(connector_type_id="filesystem", config_json={"base_path": str(tmp_path)}),
-            _instance(connector_type_id="shell"),
+            _instance(connector_type_id="jira"),
             _instance(connector_type_id="no-such-connector-type"),
         ]
     )
@@ -127,10 +127,38 @@ async def test_sweep_isolates_poisoned_instance(sweep, tmp_path) -> None:
     by_type = {row.connector_type_id: row for row in await rows()}
     assert by_type["filesystem"].last_health_check_at is not None
     assert by_type["filesystem"].last_health_check_error is None
-    assert by_type["shell"].last_health_check_at is not None
-    assert by_type["shell"].last_health_check_error
+    assert by_type["jira"].last_health_check_at is not None
+    assert by_type["jira"].last_health_check_error
     assert by_type["no-such-connector-type"].last_health_check_at is not None
     assert by_type["no-such-connector-type"].last_health_check_error
+
+
+async def test_sweep_reports_shell_healthy_with_runtime_provider(sweep) -> None:
+    """FAR-1682: a ``shell`` connector's health check reports HEALTHY because a
+    ``RuntimeProviderHub`` is threaded into the sweep's ``ConnectorHub``.
+
+    Root cause of the bug: ``_check_instance`` built ``ConnectorHub`` with no
+    ``runtime_provider``/``runtime_provider_hub``, so ``ShellConnector``'s cheap
+    binding-only probe (``health_check``) always returned ``Runtime provider not
+    configured`` even though the runtime provider is available at runtime (the
+    run executor wires one). The sweep now builds one hub per tick — mirroring
+    the executor — and passes it through.
+
+    This test FAILS without the fix: with no runtime provider wired the shell
+    instance is recorded ``unhealthy`` with ``last_health_check_error`` set.
+    """
+    run, seeder, rows = sweep
+    await seeder([_instance(connector_type_id="shell")])
+
+    result = await run()
+
+    assert result["checked"] == 1
+    assert result["healthy"] == 1, result
+    assert result["unhealthy"] == 0, result
+    assert result["skipped"] == 0, result
+    (row,) = await rows()
+    assert row.last_health_check_at is not None
+    assert row.last_health_check_error is None
 
 
 async def test_sweep_isolates_exploding_instance(sweep, tmp_path, monkeypatch) -> None:
@@ -139,11 +167,16 @@ async def test_sweep_isolates_exploding_instance(sweep, tmp_path, monkeypatch) -
     real = health_sweep._check_instance
     calls = {"n": 0}
 
-    async def _flaky(ci, *, session, fernet_key):
+    async def _flaky(ci, *, session, fernet_key, runtime_provider_hub=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("boom")
-        return await real(ci, session=session, fernet_key=fernet_key)
+        return await real(
+            ci,
+            session=session,
+            fernet_key=fernet_key,
+            runtime_provider_hub=runtime_provider_hub,
+        )
 
     monkeypatch.setattr(health_sweep, "_check_instance", _flaky)
     await seeder(
