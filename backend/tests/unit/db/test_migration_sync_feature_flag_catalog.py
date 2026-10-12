@@ -25,7 +25,7 @@ from alembic.script import ScriptDirectory
 from modulo.core.feature_flags import _KNOWN_FLAGS
 from modulo.core.seed_data.catalog import FLAGS
 
-_HEAD_MIGRATION_NAME = "0299_accounts_service_identity"
+_HEAD_MIGRATION_NAME = "0300_benign_facts_repair"
 _HEAD_MIGRATION_PATH = (
     Path(__file__).resolve().parents[3]
     / "src"
