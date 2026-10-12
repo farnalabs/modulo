@@ -26,7 +26,11 @@ from modulo.db.crud.hitl_review_guard import (
     enforce_guardrail_binding_strip,
     resolve_effective_privilege,
 )
-from modulo.db.crud.pipeline import GRAPH_UPDATED_EVENT, graph_update_audit_payload
+from modulo.db.crud.pipeline import (
+    GRAPH_UPDATED_EVENT,
+    graph_update_audit_payload,
+    reconcile_graph_policy_gates,
+)
 from modulo.db.crud.pipeline_snapshot import create_snapshot_from_live_graph
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_edge import PipelineEdge
@@ -370,6 +374,21 @@ async def rollback_to_snapshot(
         )
         session.add(new_edge)
     await session.flush()
+
+    # FAR-1666: a rollback IS a graph write. Restoring a snapshot replays its
+    # declared ``policy_gate`` blocks verbatim, so translate them against the
+    # PRE-rollback graph IN THE SAME TRANSACTION through the shared
+    # reconciliation — a gate the rollback reintroduces gets its row, and one
+    # the rollback drops is soft-deleted. Without this the restored graph would
+    # carry a block with no governing row (or leave a live row = reverse drift).
+    await reconcile_graph_policy_gates(
+        session,
+        org_id=pipeline.organisation_id,
+        account_id=account_id,
+        pipeline_id=pipeline_id,
+        previous_nodes=previous_nodes,
+        new_nodes=copy.deepcopy(snapshot_nodes),
+    )
 
     # FAR-1471: a rollback IS a pipeline graph mutation, so it emits the SAME
     # ``pipeline.graph_updated`` event a graph write does — until now this

@@ -375,6 +375,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
             await run_evals_persist_before_decide(
                 eval_defs=[eval_def],
                 resolve_eval_target=lambda _ed: eval_target,
+                resolve_llm_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=session_factory,
@@ -458,6 +459,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
             await run_evals_persist_before_decide(
                 eval_defs=eval_defs,
                 resolve_eval_target=lambda _ed: {"content": "no match"},
+                resolve_llm_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=session_factory,
@@ -528,6 +530,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         results = await run_evals_persist_before_decide(
             eval_defs=[eval_def],
             resolve_eval_target=lambda _ed: {"content": "some output that will not match"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=run_id,
             org_id=org_id,
             session_factory=session_factory,
@@ -609,6 +612,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
         results = await run_evals_persist_before_decide(
             eval_defs=eval_defs,
             resolve_eval_target=lambda _ed: {"content": "some output"},
+            resolve_llm_judge=lambda _ed: None,
             run_id=run_id,
             org_id=org_id,
             session_factory=session_factory,
@@ -693,6 +697,7 @@ class TestC13WarnEvalPersistsResultAndRunContinues:
             await run_evals_persist_before_decide(
                 eval_defs=eval_defs,
                 resolve_eval_target=lambda _ed: {"content": "some output"},
+                resolve_llm_judge=lambda _ed: None,
                 run_id=run_id,
                 org_id=org_id,
                 session_factory=session_factory,

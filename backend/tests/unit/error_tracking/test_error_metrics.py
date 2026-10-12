@@ -65,6 +65,31 @@ def _make_meter() -> MagicMock:
     return meter
 
 
+def _metrics_records(
+    caplog: pytest.LogCaptureFixture, *, needle: str, level: int | None = None
+) -> list[logging.LogRecord]:
+    """Captured records from the metrics logger whose INTERPOLATED message
+    contains ``needle`` (optionally filtered to a level).
+
+    ``record.message`` is the un-interpolated format string — use
+    ``getMessage()`` so ``%s`` placeholders (e.g. the skipped instrument name)
+    are compared against what the code actually logged.
+
+    This helper exists because PR #1616 converted the former mock
+    ``assert_called_once_with`` log assertions to bare substring checks, which
+    match zero or many matching records indiscriminately — every strengthened
+    caller uses ``len(records) == 1`` (or ``not records``) to restore the
+    once-only/exact-message observation.
+    """
+    return [
+        record
+        for record in caplog.records
+        if record.name == metrics_mod._log.name
+        and needle in record.getMessage()
+        and (level is None or record.levelno == level)
+    ]
+
+
 # =========================================================================
 # _get_meter — OTel discovery
 # =========================================================================
@@ -98,7 +123,11 @@ class TestInitMetrics:
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is None
         assert metrics_mod._error_groups_active is None
-        assert "metrics.no_meter_provider" in caplog.text
+        # Restores the pre-#1616 strength: `_log.warning.assert_called_once_with(...)`
+        # (once-only + exact message) was weakened to bare substring presence.
+        no_provider_records = _metrics_records(caplog, needle="metrics.no_meter_provider", level=logging.WARNING)
+        assert len(no_provider_records) == 1
+        assert no_provider_records[0].getMessage() == "metrics.no_meter_provider — OTel metrics disabled"
 
     def test_registers_counter_and_gauge(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
@@ -109,7 +138,10 @@ class TestInitMetrics:
         assert metrics_mod._error_groups_active is meter.create_gauge.return_value
         meter.create_counter.assert_called_once()
         meter.create_gauge.assert_called_once()
-        assert "metrics.registered" in caplog.text
+        # Restores the pre-#1616 strength: `_log.info.assert_called_once_with("metrics.registered")`.
+        registered_records = _metrics_records(caplog, needle="metrics.registered", level=logging.INFO)
+        assert len(registered_records) == 1
+        assert registered_records[0].getMessage() == "metrics.registered"
 
     def test_idempotent_when_already_initialized(self, caplog: pytest.LogCaptureFixture) -> None:
         metrics_mod._errors_total = MagicMock()
@@ -118,7 +150,11 @@ class TestInitMetrics:
         with patch.object(metrics_mod, "_get_meter") as get_meter:
             metrics_mod.init_metrics()
         get_meter.assert_not_called()
-        assert "metrics.registered" not in caplog.text
+        # Restores the pre-#1616 strength: `_log.info.assert_not_called()` (a fully
+        # mocked `_log`) meant no log call of ANY kind — reconstruct that here as
+        # "no record at all from the metrics logger", not merely no "registered" one.
+        metrics_records = _metrics_records(caplog, needle="")
+        assert not metrics_records
 
     def test_gauge_attribute_error_keeps_counter_only(self, caplog: pytest.LogCaptureFixture) -> None:
         meter = _make_meter()
@@ -128,8 +164,17 @@ class TestInitMetrics:
             metrics_mod.init_metrics()
         assert metrics_mod._errors_total is meter.create_counter.return_value
         assert metrics_mod._error_groups_active is None
-        assert "metrics.gauge_not_supported" in caplog.text
-        assert "metrics.registered" in caplog.text
+        # Restores the pre-#1616 strength: warning-once-with-exact-message plus
+        # info-once ("metrics.gauge_not_supported — ..." / "metrics.registered").
+        gauge_unsupported_records = _metrics_records(
+            caplog, needle="metrics.gauge_not_supported", level=logging.WARNING
+        )
+        assert len(gauge_unsupported_records) == 1
+        assert gauge_unsupported_records[0].getMessage() == (
+            "metrics.gauge_not_supported — OTel SDK version does not support create_gauge"
+        )
+        registered_records = _metrics_records(caplog, needle="metrics.registered", level=logging.INFO)
+        assert len(registered_records) == 1
 
 
 # =========================================================================
@@ -692,5 +737,10 @@ class TestCreateRuntimeInstrumentException:
         meter.create_gauge.side_effect = ValueError("boom")
         result = metrics_mod._create_runtime_instrument(meter, "gauge", "my_gauge", "desc")
         assert result is None
-        assert "metrics.runtime_instrument_failed" in caplog.text
-        assert "my_gauge" in caplog.text
+        # Restores the pre-#1616 strength: `_log.warning.assert_called_once_with(
+        # "metrics.runtime_instrument_failed — %s skipped", "my_gauge", exc_info=True)`
+        # (once-only + interpolated name + exception cause).
+        failed_records = _metrics_records(caplog, needle="metrics.runtime_instrument_failed", level=logging.WARNING)
+        assert len(failed_records) == 1
+        assert failed_records[0].getMessage() == "metrics.runtime_instrument_failed — my_gauge skipped"
+        assert failed_records[0].exc_info is not None

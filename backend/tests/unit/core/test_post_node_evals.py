@@ -344,9 +344,9 @@ class TestPostNodeLlmJudgeCallable:
         clear configuration message — sibling evals still run.
 
         ``eval_def.config["model_backend_id"]`` is unvalidated free-form JSON;
-        before the defensive parse in ``_build_llm_judge_callable``, a typo or
+        before the defensive parse in ``build_llm_judge_callable``, a typo or
         stale manual edit (e.g. ``"not-a-uuid"``) raised a raw ``ValueError``
-        inside ``resolve_llm_judge()`` in ``run_evals_persist_before_decide``'s
+        inside ``resolve_llm_judge_callable()`` in ``run_evals_persist_before_decide``'s
         per-eval loop — aborting every sibling eval and terminalising the run
         via the generic error path.
 

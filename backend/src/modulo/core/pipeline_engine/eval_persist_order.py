@@ -275,11 +275,11 @@ def _compute_eval_result(
     engine: EvalEngine,
     compute_run_id: uuid.UUID,
     resolve_eval_target: Callable[[EvalDefDTO], Any],
-    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None] | None,
+    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None],
     on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None,
 ) -> EngineEvalResult:
     """Phase 1 — compute the eval result (never raises ``EvalBlockedError``)."""
-    judge = resolve_llm_judge(eval_def) if resolve_llm_judge else None
+    judge = resolve_llm_judge(eval_def)
     eval_target = resolve_eval_target(eval_def)
     eval_result = engine.evaluate_result(
         eval_target,
@@ -455,7 +455,7 @@ async def run_evals_persist_before_decide(
     org_id: uuid.UUID | None = None,
     session_factory: SessionFactory | None = None,
     node_id: str | None = None,
-    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None] | None = None,
+    resolve_llm_judge: Callable[[EvalDefDTO], LLMJudgeCallable | None],
     on_eval_result: Callable[[EvalDefDTO, EngineEvalResult], None] | None = None,
 ) -> dict[str, EngineEvalResult]:
     """Per-eval compute→persist→decide loop (shared by both call sites).
@@ -498,12 +498,16 @@ async def run_evals_persist_before_decide(
         session_factory: Callable returning an async context manager for
             ``AsyncSession``.  When ``None``, persistence is skipped.
         node_id: Graph node id (for logging / DB row).
-        resolve_llm_judge: Optional callback ``eval_def → LLMJudgeCallable | None``.
-            Both call sites pass ``_resolve_llm_judge_callable``: the
-            executor's post-node path (FAR-315) and the node-runner
-            HITL-gate path (FAR-307) — each resolves a real judge callable
-            from ``eval_def.config["model_backend_id"]`` via the
-            ModelBackendHub.
+        resolve_llm_judge: REQUIRED callback ``eval_def → LLMJudgeCallable | None``
+            (FAR-1652: previously optional, so a call site that simply forgot
+            it silently fail-closed every ``llm_judge`` eval to 0.0 — the
+            exact FAR-315 symptom). Both call sites pass
+            ``llm_judge.resolve_llm_judge_callable``: the executor's
+            post-node path (FAR-315) and the node-runner HITL-gate path
+            (FAR-307) — each resolves a real judge callable from
+            ``eval_def.config["model_backend_id"]`` via the
+            ModelBackendHub. A call site that genuinely has no hub passes an
+            explicit ``lambda eval_def: None`` so the omission is visible.
         on_eval_result: Optional per-eval callback invoked after each eval
             is computed.  Signature: ``(eval_def, result) → None``.
             Each call site passes its own callback to emit the appropriate

@@ -260,6 +260,16 @@ class TestMissedFireRedisConstruction:
         problem is "log + return 0", so the discriminating observations are the
         ``0`` return, the logged failure, and that the engine was never touched
         (proving the URL was rejected at client construction, before any query).
+
+        The capture level is DEBUG, not ERROR — deliberately. With the
+        ``finally`` close guard (``if redis_client is not None``) removed, a
+        ``None.aclose()`` AttributeError is swallowed by the close block's own
+        ``except Exception`` and logged as
+        ``error_tracking.missed_fire_redis_close_failed`` at WARNING level; an
+        ERROR-level capture never sees it and this test passes with the guard
+        deleted. Capturing at DEBUG makes the no-close-failed assertion the
+        discriminator that pins the guard; the ``0``-return and no-close-failed
+        assertions themselves are unchanged.
         """
         settings = MagicMock()
         settings.redis_url = "not-a-valid-redis-url"
@@ -267,7 +277,7 @@ class TestMissedFireRedisConstruction:
 
         with (
             patch.object(et, "get_settings", return_value=settings),
-            caplog.at_level("ERROR", logger="modulo.core.error_tracking"),
+            caplog.at_level("DEBUG", logger="modulo.core.error_tracking"),
         ):
             emitted = await et.check_missed_fire_alerts(aengine, org_id=_ORG_ID)
 
