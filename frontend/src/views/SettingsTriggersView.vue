@@ -985,52 +985,80 @@ function validateTriggerForm(): string {
   return ''
 }
 
-/** Build the config_json payload for the given trigger type. Returns an i18n error key on invalid JSON. */
-function buildConfigJson(triggerType: string): Record<string, unknown> | string {
+/** Build the config_json payload for a webhook trigger. Returns an i18n error key on invalid JSON. */
+function buildWebhookConfigJson(): Record<string, unknown> | string {
   const configJson: Record<string, unknown> = {}
-
-  if (triggerType === 'webhook') {
-    if (form.value.webhook_url) configJson.url = form.value.webhook_url
-    if (form.value.webhook_method) configJson.method = form.value.webhook_method
-    if (form.value.webhook_headers) {
-      const result = parseJsonOrError(form.value.webhook_headers, 'views.SettingsTriggersView.headers_must_be_valid_json')
-      if (typeof result === 'string') return result
-      configJson.headers = result
-    }
+  if (form.value.webhook_url) configJson.url = form.value.webhook_url
+  if (form.value.webhook_method) configJson.method = form.value.webhook_method
+  if (form.value.webhook_headers) {
+    const result = parseJsonOrError(form.value.webhook_headers, 'views.SettingsTriggersView.headers_must_be_valid_json')
+    if (typeof result === 'string') return result
+    configJson.headers = result
   }
+  return configJson
+}
 
-  if (triggerType === 'polling') {
-    if (!form.value.poll_interval || form.value.poll_interval < 60) {
-      return 'views.SettingsTriggersView.poll_interval_seconds_too_low'
-    }
-    if (form.value.connector_instance_id) configJson.connector_instance_id = form.value.connector_instance_id
-    if (form.value.poll_query) configJson.poll_query = form.value.poll_query
-    configJson.poll_interval_seconds = form.value.poll_interval
-    if (form.value.condition_expression) configJson.condition_expression = form.value.condition_expression
+/** Build the config_json payload for a polling trigger. Returns an i18n error key on invalid input. */
+function buildPollingConfigJson(): Record<string, unknown> | string {
+  if (!form.value.poll_interval || form.value.poll_interval < 60) {
+    return 'views.SettingsTriggersView.poll_interval_seconds_too_low'
   }
+  const configJson: Record<string, unknown> = {}
+  if (form.value.connector_instance_id) configJson.connector_instance_id = form.value.connector_instance_id
+  if (form.value.poll_query) configJson.poll_query = form.value.poll_query
+  configJson.poll_interval_seconds = form.value.poll_interval
+  if (form.value.condition_expression) configJson.condition_expression = form.value.condition_expression
+  return configJson
+}
 
-  if (triggerType === 'cron' && form.value.input_template) {
+/** Build the config_json payload for a cron trigger. Returns an i18n error key on invalid JSON. */
+function buildCronConfigJson(): Record<string, unknown> | string {
+  const configJson: Record<string, unknown> = {}
+  if (form.value.input_template) {
     const result = parseJsonOrError(form.value.input_template, 'views.SettingsTriggersView.input_template_must_be_valid_json')
     if (typeof result === 'string') return result
     configJson.input_template = result
   }
-
-  if (triggerType === 'agent_signal') {
-    if (form.value.signal_source_pipeline) configJson.source_pipeline_id = form.value.signal_source_pipeline
-    if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
-  }
-
-  if (triggerType === 'ongoing') {
-    configJson.scan_interval_seconds = form.value.ongoing_scan_interval || 60
-    if (form.value.input_template) {
-      const result = parseJsonOrError(form.value.input_template, 'views.SettingsTriggersView.input_template_must_be_valid_json')
-      if (typeof result === 'string') return result
-      configJson.input_template = result
-    }
-    if (form.value.snapshot_id) configJson.snapshot_id = form.value.snapshot_id
-  }
-
   return configJson
+}
+
+/** Build the config_json payload for an agent_signal trigger. */
+function buildAgentSignalConfigJson(): Record<string, unknown> {
+  const configJson: Record<string, unknown> = {}
+  if (form.value.signal_source_pipeline) configJson.source_pipeline_id = form.value.signal_source_pipeline
+  if (form.value.signal_source_node) configJson.source_node_id = form.value.signal_source_node
+  return configJson
+}
+
+/** Build the config_json payload for an ongoing trigger. Returns an i18n error key on invalid JSON. */
+function buildOngoingConfigJson(): Record<string, unknown> | string {
+  const configJson: Record<string, unknown> = {}
+  configJson.scan_interval_seconds = form.value.ongoing_scan_interval || 60
+  if (form.value.input_template) {
+    const result = parseJsonOrError(form.value.input_template, 'views.SettingsTriggersView.input_template_must_be_valid_json')
+    if (typeof result === 'string') return result
+    configJson.input_template = result
+  }
+  if (form.value.snapshot_id) configJson.snapshot_id = form.value.snapshot_id
+  return configJson
+}
+
+/** Build the config_json payload for the given trigger type. Returns an i18n error key on invalid JSON. */
+function buildConfigJson(triggerType: string): Record<string, unknown> | string {
+  switch (triggerType) {
+    case 'webhook':
+      return buildWebhookConfigJson()
+    case 'polling':
+      return buildPollingConfigJson()
+    case 'cron':
+      return buildCronConfigJson()
+    case 'agent_signal':
+      return buildAgentSignalConfigJson()
+    case 'ongoing':
+      return buildOngoingConfigJson()
+    default:
+      return {}
+  }
 }
 
 /** Build the PUT body for updating an existing trigger. */
