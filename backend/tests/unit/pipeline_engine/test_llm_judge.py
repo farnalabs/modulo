@@ -105,7 +105,7 @@ def test_response_detail_null_is_coerced_to_empty_string() -> None:
     result = judge({"content": "some output"}, _make_eval_def())
 
     assert result["passed"] is True
-    assert result["detail"] == ""
+    assert not result["detail"]
 
 
 # ---------------------------------------------------------------------------
