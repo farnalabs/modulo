@@ -13,7 +13,8 @@ database, plus ORM parity for both new columns:
    0295_decision_record_event_identity chains onto 0294_eval_results_org_fk, and
    0296_benign_run_outcomes chains onto 0295_decision_record_event_identity, and
    0297_autonomy_gating_s1 chains onto 0296_benign_run_outcomes, and
-   0298_oauth_consent_state_preauth_rls chains onto 0297_autonomy_gating_s1 as the single
+   0299_accounts_service_identity chains onto 0298_accounts_kind, and
+   0300_oauth_consent_state_preauth_rls chains onto 0299_accounts_service_identity as the single
    linear head;
 2. the upgrade adds EXACTLY two nullable ``varchar(20)`` columns with NO
    server default and NO backfill (metadata-only on the hot ``runs`` table);
@@ -45,7 +46,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0288_runs_execution_origin"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0287_team_rls_lifecycle_evals"
-_CHAIN_HEAD_MIGRATION = "0298_oauth_consent_state_preauth_rls"
+_CHAIN_HEAD_MIGRATION = "0300_oauth_consent_state_preauth_rls"
 
 #: (table, column) pairs the upgrade must add — the two read surfaces ADR-042
 #: needs: the run row itself and the self-contained analytics fact.

@@ -5516,7 +5516,7 @@ export interface paths {
          * @description List audit events with cursor pagination and filters.
          *
          *     Supports filtering by event_type (action_type), user_id (actor_user_id),
-         *     entity_type (resource_type), from_date, to_date.
+         *     entity_type (resource_type), from_date, to_date, principal_kind.
          */
         get: operations["list_audit_events_endpoint_api_v1_admin_audit_get"];
         put?: never;
@@ -32709,6 +32709,8 @@ export interface operations {
                 from_date?: string | null;
                 /** @description Filter by end date (ISO 8601) */
                 to_date?: string | null;
+                /** @description Filter by acting principal kind (human/service) */
+                principal_kind?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -32824,6 +32826,8 @@ export interface operations {
                 from_date?: string | null;
                 /** @description Filter by end date (ISO 8601) */
                 to_date?: string | null;
+                /** @description Filter by acting principal kind (human/service) */
+                principal_kind?: string | null;
                 _fresh?: boolean;
             };
             header?: never;
@@ -32868,6 +32872,8 @@ export interface operations {
                 from_date?: string | null;
                 /** @description Filter by end date (ISO 8601) */
                 to_date?: string | null;
+                /** @description Filter by acting principal kind (human/service) */
+                principal_kind?: string | null;
                 _fresh?: boolean;
             };
             header?: never;

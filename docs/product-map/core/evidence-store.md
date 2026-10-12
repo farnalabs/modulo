@@ -11,6 +11,7 @@ code:
   - backend/src/modulo/api/routes/admin_evidence_retention.py
   - backend/src/modulo/api/routes/evals.py
   - backend/src/modulo/core/pipeline_engine/evidence.py
+  - backend/src/modulo/db/crud/run.py
 unit-tests:
   - backend/tests/architecture/test_evidence_deletion_carveout.py
   - backend/tests/unit/core/test_evidence.py
@@ -21,6 +22,7 @@ unit-tests:
   - backend/tests/unit/api/test_evidence_retention_routes_coverage.py
   - backend/tests/integration/db/test_evidence_retention.py
   - backend/tests/integration/test_evidence_table.py
+  - backend/tests/unit/db/test_evidence_first_producer.py
   - backend/tests/unit/pipeline_engine/test_evidence_probes.py
 depends-on: []
 status: covered
@@ -56,6 +58,23 @@ the manifest registry.
       `KEY_NAMESPACE_OWNERSHIP` map (`assert_write_authorisation`); the CHECK
       constraint remains authoritative for the producer-type vocabulary
       (`core/eval_engine/evidence_layer.py`)
+- [x] First production write path (FAR-1293): `append_evidence()` in
+      `core/eval_engine/evidence_layer.py` is the store's single production
+      write seam — every producer routes through it, so
+      `assert_write_authorisation` runs before any row is added to the session
+      and an unowned namespace fails closed with
+      `EvidenceWriteAuthorisationError` (no partial write; the row is added to
+      the caller's session but not flushed). The first live producer is the
+      guardrail/eval persist seam
+      (`db/crud/run.py::_persist_guardrail_eval_results`), which appends one
+      fact per guardrail eval decision with key `eval_guardrail_<eval_id>`
+      (inside the `eval` producer's owned `eval_` namespace), producer `eval`,
+      subject `run` (so `fetch("run", <run_id>, org)` returns every guardrail
+      decision recorded for that run); a refusal propagates out of
+      `create_run` and aborts the run's transaction. Pinned at the unit tier
+      (`tests/unit/db/test_evidence_first_producer.py`: namespaced write
+      lands, unowned namespace refused fail-closed at both the production seam
+      and the helper, clean decisions also written, no guardrails → no rows)
 - [x] Run-evidence fold-in maps existing `RunEvidence` tri-state rows into the
       generic evidence format (`map_run_evidence_to_evidence`) so legacy run
       evidence becomes queryable as evidence facts
@@ -102,15 +121,27 @@ the manifest registry.
 
 - **The predicate language and `decide` function are deferred.** The evidence
   layer's predicate evaluation and the compatibility adapter (§4) remain parked
-  — the only live read of the store today is the author-warning check's own
-  query; the subject-scoped `fetch()` and `map_run_evidence_to_evidence` seam
-  have no production call site yet, not a general decision predicate over the
-  store.
+  — the store now has a production WRITE call site (the FAR-1293 guardrail
+  persist seam above), but the subject-scoped `fetch()` and
+  `map_run_evidence_to_evidence` seam still have no production READ call site:
+  the only live read of accumulated facts today is the author-warning check's
+  own query, not a general decision predicate over the store.
 - **Author warnings are advisory and can be noisy on purpose.** They warn on the
   safe direction (indeterminate producer position, store-query failure), so a
   gate's rigour is ultimately the author's judgment.
 
 ## QA History
+
+- 2026-10-11: **Improve Architecture product-map walk** — closed the stale
+  "no production call site" half of the predicate-language Known Gap left by
+  FAR-1293 (PR #1612): the store is no longer write-dormant — the
+  guardrail/eval persist seam appends one `eval_guardrail_<eval_id>` fact per
+  decision through the single `append_evidence()` write path with fail-closed
+  namespace authorisation. Added the ticked behaviour plus the
+  `db/crud/run.py` and `test_evidence_first_producer.py` citations; the gap
+  now scopes the deferral to production READS (`fetch()` /
+  `map_run_evidence_to_evidence`) and the parked predicate/`decide` (§4).
+  Status: covered.
 
 - 2026-10-10: **qa-iterate product-map pass** — added the missing citations for
   the author-warning surface: `api/routes/evals.py` (the `policy-gate` routes and

@@ -206,6 +206,27 @@ def test_accept_invite_passwordless_local_account_is_adopted(client: TestClient)
     assert account.password_hash.startswith("$2b$")
 
 
+def test_accept_invite_rejects_a_service_principal(client: TestClient) -> None:
+    """FAR-1385: a service principal can never be enrolled through an invite.
+
+    It has no human identity, so enrollment is refused with the byte-identical
+    generic 400 every other invalid invitation returns, and no password hash is
+    written onto the service row.
+    """
+    invitation = _make_invitation()
+    account = _make_account(auth_provider="local", password_hash="$2b$12$existing")
+    account.kind = "service"
+    patches = _base_patches(invitation)
+    with patch.dict(
+        "modulo.api.routes.auth.__dict__",
+        {**patches, "validate_password_strength": MagicMock(), "get_account_by_email": AsyncMock(return_value=account)},
+    ):
+        resp = client.post("/api/v1/auth/accept-invite", json={"token": "tok", "password": _STRONG_PASSWORD})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == _GENERIC_DETAIL
+    assert account.password_hash == "$2b$12$existing"
+
+
 def test_accept_invite_sso_account_never_gains_local_password(client: TestClient) -> None:
     """Branch (b): SSO/SCIM accounts are rejected with 409, no hash written."""
     invitation = _make_invitation()

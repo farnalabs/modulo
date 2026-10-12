@@ -24,8 +24,8 @@ Postgres-only policy DDL (SQLite/ORM-created schemas never materialise RLS
 policies; the unit/BDD tiers mock the session). Downgrade restores the strict
 0108 policy.
 
-Revision ID: 0298_oauth_consent_state_preauth_rls
-Revises: 0297_autonomy_gating_s1
+Revision ID: 0300_oauth_consent_state_preauth_rls
+Revises: 0299_accounts_service_identity
 Create Date: 2026-10-10
 """
 
@@ -33,8 +33,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision: str = "0298_oauth_consent_state_preauth_rls"
-down_revision: str | None = "0297_autonomy_gating_s1"
+revision: str = "0300_oauth_consent_state_preauth_rls"
+down_revision: str | None = "0299_accounts_service_identity"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

@@ -69,7 +69,7 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
         env:
@@ -341,7 +341,7 @@ jobs:
       CANARY: "1"
     steps:
       - name: Checkout (scripts/install.sh must exist for the from-file install)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the artifact to smoke + enforce the integrity gates
         env:

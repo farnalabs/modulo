@@ -313,7 +313,7 @@ applications. Built on the auth + model-backend core.
       (`frontend/src/views/OAuthConsentView.vue`,
       `frontend/src/__tests__/views/OAuthConsentView.spec.ts`,
       `backend/tests/unit/api/test_mcp_oauth_bdd.py`,
-      migration `0298_oauth_consent_state_preauth_rls`)
+      migration `0300_oauth_consent_state_preauth_rls`)
 - [x] Widened OAuth scope vocabulary + delegated HITL decisions (2026-10-10,
       FAR-1476): the grantable scope set is the delegable `PERMISSIONS`
       registry — every key `auth.permissions.is_delegable` accepts (~158
