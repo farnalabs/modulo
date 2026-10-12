@@ -346,7 +346,6 @@ _PG_AGE_BOUND_SECONDS_FMT = r"now\(\)\s*-\s*(?:{value}\s*\*\s*interval\s*'1 seco
 
 
 def _pg_age_bound(sql: str, seconds: int) -> bool:
-
     return re.search(_PG_AGE_BOUND_SECONDS_FMT.format(value=seconds), sql) is not None
 
 
@@ -2094,9 +2093,6 @@ class TestTerminalizerSyntheticErrorDetail:
         # cannot live in bindparams; no structural substitute exists for the
         # tail substrings) — never the supersede wording.
         assert params["detail"] == ch._NO_PROGRESS_ERROR_DETAIL_PREFIX_FMT.format(age=135)
-        assert "node_attempts=" in str(stmt)
-        assert "claims=" in str(stmt)
-        assert params["detail"] != "Superseded by a newer run."
         assert "node_attempts=" in str(stmt)
         assert "claims=" in str(stmt)
         assert params["detail"] != "Superseded by a newer run."
