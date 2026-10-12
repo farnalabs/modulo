@@ -47,6 +47,7 @@ _PATCHES = [
     "get_account_by_id",
     "update_account_preferences",
     "set_notification_preferences",
+    "mark_all_read_for_user",
 ]
 
 
@@ -204,6 +205,117 @@ def test_dashboard_sqlalchemy_error_maps_to_500(client: tuple[TestClient, _TestH
     harness.stub("get_dashboard_notifications", AsyncMock(side_effect=SQLAlchemyError("boom")))
 
     resp = http.get(f"{_BASE}/dashboard")
+
+    assert resp.status_code == 500
+
+
+def test_dashboard_limit_query_param_is_forwarded(client: tuple[TestClient, _TestHarness]) -> None:
+    """FAR-249: ``limit`` is a validated Query param, no longer hardcoded."""
+    http, harness = client
+    stub = AsyncMock(return_value=[])
+    harness.stub("get_dashboard_notifications", stub)
+
+    resp = http.get(f"{_BASE}/dashboard?limit=25")
+
+    assert resp.status_code == 200
+    assert stub.await_args.kwargs["limit"] == 25
+
+
+def test_dashboard_limit_defaults_to_five(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    stub = AsyncMock(return_value=[])
+    harness.stub("get_dashboard_notifications", stub)
+
+    resp = http.get(f"{_BASE}/dashboard")
+
+    assert resp.status_code == 200
+    assert stub.await_args.kwargs["limit"] == 5
+
+
+def test_dashboard_limit_out_of_range_is_422(client: tuple[TestClient, _TestHarness]) -> None:
+    """Out-of-range limits are rejected at the edge — never silently reset."""
+    http, _harness = client
+
+    assert http.get(f"{_BASE}/dashboard?limit=0").status_code == 422
+    assert http.get(f"{_BASE}/dashboard?limit=51").status_code == 422
+    assert http.get(f"{_BASE}/dashboard?limit=abc").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# POST /mark-all-read
+# ---------------------------------------------------------------------------
+
+
+def test_mark_all_read_returns_marked_count_and_publishes(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(return_value=4))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "marked_read", "marked": 4}
+    publish_kwargs = harness.event_bus.publish.await_args.kwargs
+    assert publish_kwargs["action"] == "marked_read_all"
+    assert publish_kwargs["resource_type"] == "notification"
+
+
+def test_mark_all_read_scopes_write_to_principal(client: tuple[TestClient, _TestHarness]) -> None:
+    """The bulk write targets exactly the caller's org + account, never a sibling's."""
+    http, harness = client
+    stub = AsyncMock(return_value=1)
+    harness.stub("mark_all_read_for_user", stub)
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 200
+    assert stub.await_args.kwargs["org_id"] == _ORG_ID
+    assert stub.await_args.kwargs["user_id"] == _USER_ID
+
+
+def test_mark_all_read_value_error_maps_to_400(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(side_effect=ValueError("already marked")))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 400
+    assert "already marked" in resp.json()["detail"]
+
+
+def test_mark_all_read_publish_failure_still_succeeds(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(return_value=2))
+    harness.event_bus.publish = AsyncMock(side_effect=RuntimeError("bus down"))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "marked_read", "marked": 2}
+
+
+def test_mark_all_read_programming_error_maps_to_501(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(side_effect=ProgrammingError("s", {}, Exception())))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 501
+
+
+def test_mark_all_read_integrity_error_maps_to_409(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(side_effect=IntegrityError("s", {}, Exception())))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
+
+    assert resp.status_code == 409
+
+
+def test_mark_all_read_sqlalchemy_error_maps_to_500(client: tuple[TestClient, _TestHarness]) -> None:
+    http, harness = client
+    harness.stub("mark_all_read_for_user", AsyncMock(side_effect=SQLAlchemyError("boom")))
+
+    resp = http.post(f"{_BASE}/mark-all-read")
 
     assert resp.status_code == 500
 
