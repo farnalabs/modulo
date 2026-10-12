@@ -53,13 +53,21 @@ an eligible tier.
       `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
       the transparency endpoint now delegates to the same helper, so the reported
       switch and the dump gate cannot disagree)
-- [ ] License/plan eligibility gating is not wired in production: every function
-      in `core/product_analytics/license_enforcement.py`
-      (`check_product_analytics_requirement`, `is_enforcement_active`,
-      `should_degrade_to_community`) plus `consent.partner_license_requires_analytics`
-      / `is_partner_carve_out_active` has no production call site (unit tests only),
-      so neither a route nor the dump applies the partner `product_analytics_required`
-      carve-out. Feature completion, not a QA fix — tracked for a follow-up ticket.
+- [x] The daily dump applies the partner `product_analytics_required` carve-out:
+      `metrics_dump` reads the enforcement kill switch once per run
+      (`license_enforcement.is_enforcement_active`, fail-safe enforced) and
+      `_get_consenting_orgs` excludes orgs where
+      `should_degrade_to_community` fires, so a degraded org can never appear
+      in a vendor payload even if the consent predicate ever widens beyond
+      `all` (`core/product_analytics/metrics_dump.py`,
+      `tests/unit/product_analytics/test_metrics_dump.py`
+      `TestGetConsentingOrgsLicenseEnforcement`)
+- [ ] License/plan eligibility gating is not wired into request-time routes: the
+      effective-plan resolution (`core/feature_flags.py` `resolve_plan_context` /
+      `require_feature`) never consults `should_degrade_to_community`, so a
+      degraded org keeps its paid tier on API routes until that half lands.
+      The dump half above is done; the route half remains feature completion,
+      not a QA fix — tracked for a follow-up ticket.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
 - [x] The transparency endpoint reports the instance's REAL product-analytics
@@ -124,6 +132,19 @@ intentional, not an open question:
   remains unshipped (warehouse scope sits under `feat-analytics`).
 
 ## QA History
+- 2026-10-12: **Improve Architecture product-map walk** — wired the partner
+  `product_analytics_required` carve-out into the daily metrics dump (the dump
+  half of the license-gating behaviour): `metrics_dump` now reads
+  `is_enforcement_active` once per run and `_get_consenting_orgs` drops orgs
+  where `should_degrade_to_community` fires, in the same system session (one
+  transaction, not two back-to-back sessions). Fixed the 10-test breakage the
+  first cut left behind (the enforcement seam was patched at the defining
+  module instead of the `metrics_dump` import site, so every `metrics_dump`
+  caller hit the real DB read). Added `TestGetConsentingOrgsLicenseEnforcement`
+  (degraded-consenting excluded, non-degraded kept, enforcement-off short
+  circuit). The request-time route half (`resolve_plan_context` /
+  `require_feature` degrading the effective plan) is still open and stays
+  tracked as the remaining unchecked behaviour.
 - 2026-10-10: **FAR-1635 (consent scope)** — replaced the transparency
   endpoint's hardcoded `off` fallback with an instance-level posture. Per-org
   consent remains the primary source; when the caller org cannot be resolved
