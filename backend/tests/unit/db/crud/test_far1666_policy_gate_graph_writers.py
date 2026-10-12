@@ -155,7 +155,15 @@ async def _seed_eval(
 
 
 async def _live_gates(session: AsyncSession) -> list[PolicyGate]:
-    return list((await session.execute(select(PolicyGate))).scalars())
+    # State the soft-delete predicate EXPLICITLY instead of depending on the
+    # app-wide soft-delete filter, which is an ORM event listener registered
+    # only by ``modulo.db.session`` — a module this test's import chain never
+    # loads. Expire first so a row mutated in-session (the fixture commits with
+    # ``expire_on_commit=False``) is re-read against the server's view before
+    # the filtered select.
+    session.expire_all()
+    stmt = select(PolicyGate).where(PolicyGate.deleted_at.is_(None))
+    return list((await session.execute(stmt)).scalars())
 
 
 class TestStripDeclaredPolicyGates:
