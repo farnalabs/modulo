@@ -1,13 +1,18 @@
 """BDD step definitions: Run failed state, recovery.
 
-``failed_state.feature`` drives ``GET /api/v1/runs/{id}`` through the real route
-handler with the ``_do_*`` DB-fetch seams patched. ``recovery.feature`` drives the
-REAL ``POST /api/v1/runs/{run_id}/nodes/{node_id}/recover`` route — the recover-node
-surface that replaced the draft run-level ``/resume`` / ``/retry`` endpoints — with
-only the ``recover_node`` DB seam and the ``dispatch_run`` resume seam patched, so
-the route's typed error mapping (200 replay/skip, 403 role gate, 404, 409, 422,
-500), the replay/skip action selector and the resume dispatch are asserted end to
-end.
+``failed_state.feature`` drives two REAL routes with only their DB seams
+patched: the run-detail ``GET /api/v1/runs/{id}`` (with the ``_do_*``
+DB-fetch seams patched) and the per-node output surface
+``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` (with ``get_run`` /
+``read_run_blobs`` patched) — the run-detail ``RunResponse`` carries no
+per-node map, so "inspecting the detail" of a failed run means reading its
+node outputs through that route. ``recovery.feature`` drives the REAL
+``POST /api/v1/runs/{run_id}/nodes/{node_id}/recover`` route — the recover-node
+surface that replaced the draft run-level ``/resume`` / ``/retry`` endpoints —
+with only the ``recover_node`` DB seam and the ``dispatch_run`` resume seam
+patched, so the route's typed error mapping (200 replay/skip, 403 role gate,
+404, 409, 422, 500), the replay/skip action selector and the resume dispatch
+are asserted end to end.
 """
 
 import contextlib
@@ -79,24 +84,95 @@ def check_error_detail(request):
     assert data.get("error_detail") is not None
 
 
+def _failed_run_blobs(request):
+    """The ``RunBlobs`` for the scenario's failed run, derived from the Given.
+
+    Node ids are the ``Given a run that failed at node {failed:d} of {total:d}``
+    integers as strings. Every node BEFORE the failed one completed with a
+    recorded pure return; the failed node has NO return but a telemetry entry
+    (so the endpoint derives ``{status, summary}`` from it rather than 404ing);
+    every node AFTER it has no entry at all (so the endpoint 404s). The shape is
+    fixed by the Given, never by the value an individual step asserts.
+    """
+    from modulo.db.crud.run_node_outputs import RunBlobs
+
+    failed = request.node._failed_node
+    outputs = {str(n): {"node": n, "status": "completed", "result": f"output-{n}"} for n in range(1, failed)}
+    telemetry = {
+        str(failed): {
+            "status": "failed",
+            "summary": "Connection timeout",
+            "agent_stdout": "internal log tail that must not leak through the derived surface",
+        }
+    }
+    return RunBlobs(outputs=outputs, telemetry=telemetry, markers=None)
+
+
+def _get_node_output(request, node):
+    """Drive the REAL ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output`` route.
+
+    Only the route module's DB seams are patched — ``set_rls_org``,
+    ``get_run`` and ``read_run_blobs`` (imported into ``modulo.api.routes.runs``
+    at runs.py:2521-2527) — so the route body, its response model, the
+    derived-telemetry fallback and its 404 all run for real.
+    """
+    client = _active_client(request)
+    run_id = request.node._run_id
+    run = make_mock_run(id=run_id, status="failed", error_detail="Node 2: Connection timeout")
+    with (
+        patch("modulo.api.routes.runs.set_rls_org", new=AsyncMock()),
+        patch("modulo.api.routes.runs.get_run", new=AsyncMock(return_value=run)),
+        patch("modulo.api.routes.runs.read_run_blobs", new=AsyncMock(return_value=_failed_run_blobs(request))),
+    ):
+        return client.get(f"/api/v1/runs/{run_id}/nodes/{node}/output")
+
+
 @when("I inspect the run detail")
 def inspect_run_detail(request):
-    pass
+    """Inspect the failed node through the REAL per-node output surface.
+
+    The run-detail payload (``RunResponse``) carries no per-node map; the
+    product's per-node surface is
+    ``GET /api/v1/runs/{run_id}/nodes/{node_id}/output``. This reads the failed
+    node through that route and asserts the inspection itself succeeds; the
+    ``Then`` steps below read their own node from the same surface.
+    """
+    resp = _get_node_output(request, request.node._failed_node)
+    request.node._resp = resp
+    assert resp.status_code == 200, resp.text
 
 
 @then(parsers.parse("node {node:d} output is available"))
 def node_output_available(node: int, request):
-    pass
+    """A completed node's pure return is served by the real node-output route."""
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["node_id"] == str(node)
+    assert body["output"] == {"node": node, "status": "completed", "result": f"output-{node}"}
 
 
 @then(parsers.parse("node {node:d} error is available"))
 def node_error_available(node: int, request):
-    pass
+    """A telemetry-only node surfaces a DERIVED ``{status, summary}``, never raw telemetry.
+
+    The endpoint must NOT 404 for the failed node (it has no pure return), and
+    the derived surface must not leak the log tail the summary was drawn from.
+    """
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 200, resp.text
+    output = resp.json()["output"]
+    assert output["status"] == "failed"
+    assert output["summary"] == "Connection timeout"
+    assert "agent_stdout" not in output
 
 
 @then(parsers.parse("node {node:d} has no output"))
 def node_no_output(node: int, request):
-    pass
+    """A node absent from both outputs and telemetry 404s on the real route."""
+    resp = _get_node_output(request, node)
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"] == f"Node {node} not found in run outputs"
 
 
 @then("the response reports a terminal run status")
@@ -120,6 +196,13 @@ def check_error_detail_field(request):
     assert data.get("error_detail") is not None or "error_detail" in data
 
 
+# NOTE: no real seam exists for these two steps. A failed run writes NO audit
+# event — the failure path only ``broker.publish("run_failed", ...)`` (a
+# notifier event; ``core/notifier.EVENT_RUN_FAILED``), and there is no
+# ``append_audit_event(event_type="run_failed")`` anywhere in the pipeline
+# engine. The audit read route cannot therefore observe a run-failure audit
+# event, and fabricating one through its query seam would assert a fiction.
+# Left deliberately vacuous rather than fabricating a pass.
 @when("I check the audit log")
 def check_audit_log(request):
     pass
