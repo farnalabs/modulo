@@ -43,6 +43,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -451,6 +452,44 @@ def _resolve_detection(eval_def: EvalDefinition) -> tuple[str, dict[str, Any]]:
     return _resolve_top_level_detection(config), config
 
 
+def _validate_guarding_regex_pattern(eval_def: EvalDefinition, pattern: Any) -> None:
+    """Fail closed when a BLOCK/REDACT guardrail's regex pattern cannot compile.
+
+    FAR-1700. The eval engine's ``_regex_search_result`` swallows ``re.error``
+    and returns a FAILED result. Under regex violation semantics (``passed``
+    means "pattern matched" — see :func:`_interpret_violation`) a failed
+    result reads as *no match*, so a block/redact guardrail whose pattern does
+    not compile would silently behave like a detector that found nothing and
+    let the payload through. A broken detection mechanism must never be
+    indistinguishable from one that detected nothing.
+
+    The compile failure is therefore raised here as a
+    :class:`GuardrailConfigError`, which the detection loop already treats as
+    a detection MECHANISM ERROR — the FAR-209 path: fail CLOSED (recorded as
+    a block) for block/redact, log-and-continue for observe/warn.
+
+    Non-blocking (observe/warn) guardrails are deliberately NOT checked: they
+    are advisory, and their existing behaviour — a recorded failed result,
+    never a block — is unchanged.
+
+    ``OverflowError`` is included because Python's ``re`` raises it for a
+    repetition number that is too large (e.g. ``a{999999999999}``) — also a
+    pattern that cannot compile.
+    """
+    if _resolve_action(eval_def) not in (GuardrailAction.BLOCK, GuardrailAction.REDACT):
+        return
+    if not isinstance(pattern, str):
+        raise GuardrailConfigError(
+            f"Guardrail {eval_def.name!r} regex detection pattern must be a string (got {type(pattern).__name__})"
+        )
+    try:
+        re.compile(pattern)
+    except (re.error, OverflowError) as exc:
+        raise GuardrailConfigError(
+            f"Guardrail {eval_def.name!r} regex detection pattern does not compile: {exc}"
+        ) from exc
+
+
 def _validate_guardrail_definition(eval_def: EvalDefinition) -> GuardrailConfig:
     if eval_def.eval_type != EvalType.GUARDRAIL:
         raise GuardrailMisroutedError(eval_def.name)
@@ -474,6 +513,10 @@ def _validate_guardrail_definition(eval_def: EvalDefinition) -> GuardrailConfig:
             f"Guardrail {eval_def.name!r} regex detection requires non-empty 'pattern' and 'field' "
             f"(got config {eval_def.config!r})"
         )
+    else:
+        # FAR-1700: a present-but-uncompilable pattern is the same
+        # "detector cannot run" failure — fail closed for block/redact.
+        _validate_guarding_regex_pattern(eval_def, effective_config.get("pattern"))
     return GuardrailConfig.from_eval_config(eval_def.config)
 
 
