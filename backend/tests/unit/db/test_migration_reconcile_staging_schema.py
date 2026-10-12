@@ -128,8 +128,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0295_decision_record_event_identity chains off 0294_eval_results_org_fk, and
 # 0296_benign_run_outcomes chains off 0295_decision_record_event_identity, and
 # 0297_autonomy_gating_s1 chains off 0296_benign_run_outcomes, and
-# 0298_benign_facts_repair chains off 0297_autonomy_gating_s1 as the chain head.
-_CHAIN_HEAD_MIGRATION = "0298_benign_facts_repair"
+# 0298_accounts_kind chains off 0297_autonomy_gating_s1, and
+# 0299_accounts_service_identity chains off 0298_accounts_kind, and
+# 0300_benign_facts_repair chains off 0299_accounts_service_identity as the chain head.
+_CHAIN_HEAD_MIGRATION = "0300_benign_facts_repair"
 
 
 def _source(name: str) -> str:

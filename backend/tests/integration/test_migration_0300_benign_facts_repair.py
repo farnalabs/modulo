@@ -1,4 +1,4 @@
-"""FAR-1665: historical ``run_daily_facts.benign`` repair (migration 0298), end to end.
+"""FAR-1665: historical ``run_daily_facts.benign`` repair (migration 0300), end to end.
 
 FAR-707's live path stamps ``benign`` at finalize and the reconcile sweep
 re-records the fact when it lands a benign verdict — but facts written BEFORE
@@ -8,7 +8,7 @@ the sweep skips already-classified runs, so nothing repairs them. Readers
 treat NULL as "not benign", so those historical benign outcomes keep inflating
 analytics failure rates.
 
-This module drives the REAL alembic upgrade of ``0298_benign_facts_repair``
+This module drives the REAL alembic upgrade of ``0300_benign_facts_repair``
 against a private Postgres database (testcontainers) seeded with the four
 historical fact shapes:
 
@@ -53,7 +53,7 @@ from tests.integration.test_org_sandbox_capacity import (
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0298_benign_facts_repair"
+MIGRATION_REV = "0300_benign_facts_repair"
 PREV_REV = "0297_autonomy_gating_s1"
 
 
@@ -88,7 +88,7 @@ async def isolated_db_url(db_url: str, monkeypatch: pytest.MonkeyPatch):
     ``env.py`` resolves the target DB from ``DATABASE_URL`` /
     ``DATABASE_ADMIN_URL``, so both are pinned for every alembic call."""
     admin_engine = create_async_engine(db_url, poolclass=NullPool, execution_options={"isolation_level": "AUTOCOMMIT"})
-    db_name = f"m0298_iso_{uuid.uuid4().hex[:10]}"
+    db_name = f"m0300_iso_{uuid.uuid4().hex[:10]}"
     async with admin_engine.connect() as conn:
         await conn.execute(text(f'CREATE DATABASE "{db_name}" WITH TEMPLATE template0'))
     await admin_engine.dispose()
@@ -213,10 +213,10 @@ async def _assert_repaired_state(engine: AsyncEngine, runs: dict[str, uuid.UUID]
 
 class TestBenignFactsRepair:
     async def test_repair_flips_only_null_next_to_benign_and_is_idempotent(self, isolated_db_url: str) -> None:
-        """0298 stamps ``benign=TRUE`` for NULL facts whose run classed
+        """0300 stamps ``benign=TRUE`` for NULL facts whose run classed
         benign, leaves every other shape untouched, and re-running is a no-op.
 
-        Without 0298 this test FAILS at step 2: the chain head stays at 0297
+        Without 0300 this test FAILS at step 2: the chain head stays at 0297
         and ``null_beside_benign`` remains NULL — the historical inflation
         reproduced verbatim.
         """

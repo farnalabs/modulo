@@ -1,7 +1,7 @@
 """One-off data repair: historical ``run_daily_facts.benign`` NULLs beside a persisted benign classification (FAR-1665).
 
-Revision ID: 0298_benign_facts_repair
-Revises: 0297_autonomy_gating_s1
+Revision ID: 0300_benign_facts_repair
+Revises: 0299_accounts_service_identity
 Create Date: 2026-10-11
 
 FAR-707's reconcile-restamp fix (migration 0296 + the sweep's re-record in
@@ -38,8 +38,8 @@ Downgrade is a deliberate no-op: a data repair has nothing to revert.
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0298_benign_facts_repair"
-down_revision: str | None = "0297_autonomy_gating_s1"
+revision: str = "0300_benign_facts_repair"
+down_revision: str | None = "0299_accounts_service_identity"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

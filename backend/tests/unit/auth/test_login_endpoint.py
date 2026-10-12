@@ -207,6 +207,26 @@ def test_login_unknown_user(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_login_rejects_service_principal(client: TestClient) -> None:
+    """FAR-1385: a service principal can never authenticate through login.
+
+    Even with a (hypothetical) matching password, the row is refused
+    byte-identically to a wrong password — no login path reaches it.
+    """
+    mock_user = _make_mock_user()
+    mock_user.kind = "service"
+    with (
+        patch("modulo.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=mock_user)),
+        patch("modulo.api.routes.auth.authenticate_db_user", return_value=True),
+    ):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"email": "svc@example.com", "password": "testpass"},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "Incorrect email or password"
+
+
 def test_me_returns_username(client: TestClient) -> None:
     mock_user = _make_mock_user()
     mock_user.created_at = datetime.now(UTC)
@@ -274,6 +294,18 @@ def _login(client: TestClient) -> str:
             json={"email": "admin@example.com", "password": "testpass"},
         )
     return str(login_resp.json()["access_token"])
+
+
+def test_me_returns_404_for_a_service_principal(client: TestClient) -> None:
+    """FAR-1385: a service principal has no human identity, so /me is
+    unreachable for it — answered 404 byte-identically to a missing account."""
+    token = _login(client)
+    service_user = _make_mock_user()
+    service_user.kind = "service"
+    with patch("modulo.api.routes.auth.get_account_by_id", new=AsyncMock(return_value=service_user)):
+        resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Account not found"
 
 
 def test_me_removed_member_returns_401(client: TestClient) -> None:
