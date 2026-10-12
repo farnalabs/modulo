@@ -131,9 +131,10 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0298_accounts_kind chains off 0297_autonomy_gating_s1, and
 # 0299_accounts_service_identity chains off 0298_accounts_kind, and
 # 0300_benign_facts_repair chains off 0299_accounts_service_identity,
-# 0301_oauth_consent_state_preauth_rls chains off 0300_benign_facts_repair, and
-# 0302_runs_run_grouping chains off 0301_oauth_consent_state_preauth_rls as the chain head.
-_CHAIN_HEAD_MIGRATION = "0302_runs_run_grouping"
+# 0301_oauth_consent_state_preauth_rls chains off 0300_benign_facts_repair,
+# 0302_runs_run_grouping chains off 0301_oauth_consent_state_preauth_rls, and
+# 0303_feedback_records_lookup_indexes chains off 0302_runs_run_grouping as the chain head.
+_CHAIN_HEAD_MIGRATION = "0303_feedback_records_lookup_indexes"
 
 
 def _source(name: str) -> str:

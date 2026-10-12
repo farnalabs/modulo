@@ -48,8 +48,9 @@ Lenses:
     0298_accounts_kind chains onto 0297_autonomy_gating_s1, and
     0299_accounts_service_identity chains onto 0298_accounts_kind, and
     0300_benign_facts_repair chains onto 0299_accounts_service_identity,
-    0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair, and
-    0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls as the
+    0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
+    0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
+    0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping as the
     single linear head.
 * **Structure (mocked ``op``)** - upgrade emits FOUR existence-gated DO blocks
   (add NOT VALID, then VALIDATE, for each of the two columns) carrying the full
@@ -75,7 +76,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0259_pipeline_snapshot_max_autonomy_check"
 _MIGRATION_DOWN_REVISION = "0258_pipeline_accountability_owners"
-_HEAD_MIGRATION = "0302_runs_run_grouping"
+_HEAD_MIGRATION = "0303_feedback_records_lookup_indexes"
 _MAX_CEILING_CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_level"
 _DEFAULT_LEVEL_CONSTRAINT = "ck_pipeline_snapshots_default_autonomy_level"
 _CONSTRAINTS = (_MAX_CEILING_CONSTRAINT, _DEFAULT_LEVEL_CONSTRAINT)
