@@ -18,6 +18,7 @@ from modulo.db.crud.system_audit_event import (
     LIST_MAX_PAGE_SIZE,
     list_system_audit_events,
 )
+from tests.unit.crud.helpers import compile_sql
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-000000000002")
@@ -66,7 +67,7 @@ def _params(stmt: Any) -> dict[str, Any]:
 
 def _sql_literal(stmt: Any) -> str:
     """Render bind params inline so LIMIT/OFFSET show their actual values."""
-    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    return compile_sql(stmt)
 
 
 async def _run(session: _CaptureSession, **kwargs: Any) -> tuple[list[Any], int]:
