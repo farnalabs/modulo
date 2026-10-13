@@ -20,9 +20,7 @@ package namespace), but nothing is imported until it is actually used.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-_MIGRATE_ORG_MODULE = "modulo.cli.migrate_org"
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from modulo.cli.break_glass import cli as break_glass_cli
@@ -37,7 +35,7 @@ __all__ = [
 ]
 
 #: Module holding the re-exported CLI symbols resolved lazily below.
-_MIGRATE_ORG_MODULE = "modulo.cli.migrate_org"
+_MIGRATE_ORG_MODULE: Final[str] = "modulo.cli.migrate_org"
 
 #: attribute name -> (module, attribute) resolved on first access.
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
