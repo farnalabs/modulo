@@ -179,11 +179,18 @@ def test_adopt_exhaustion_refuses_the_boot_with_attempts_in_message(
     attempt count (the operator-visible retry budget) and carry the LAST
     parse error, and the loser's own draw must never be written over the
     winner's file.
+
+    The number in the message is interpolated from ``_ADOPT_ATTEMPTS`` — the
+    same constant patched below — so the string assertion alone could never
+    disagree with the budget. The counting ``_parse`` seam pins the MAGNITUDE
+    instead: the number of actually observed parse attempts must equal the
+    configured budget exactly, so an off-by-one in the adopt loop fails here.
     """
     path = tmp_path / "secrets.json"
     # The file never becomes valid across the whole retry window.
     path.write_bytes(b'{"state_hmac_key": "truncated"')
-    monkeypatch.setattr(secrets_file_module, "_ADOPT_ATTEMPTS", 20)
+    attempts = 20
+    monkeypatch.setattr(secrets_file_module, "_ADOPT_ATTEMPTS", attempts)
     monkeypatch.setattr(secrets_file_module, "_ADOPT_RETRY_DELAY_SECONDS", 0.0)
     # exists() misses so the loser reaches the EEXIST branch (adopt path).
     real_exists = Path.exists
@@ -193,10 +200,21 @@ def test_adopt_exhaustion_refuses_the_boot_with_attempts_in_message(
         return real_exists(self) if self != path else False
 
     monkeypatch.setattr(Path, "exists", _target_absent)
+    real_parse = secrets_file_module._parse
+    parse_calls = {"n": 0}
+
+    def _counting_parse(data: bytes) -> LauncherSecrets:
+        parse_calls["n"] += 1
+        return real_parse(data)  # always refuses on the truncated payload
+
+    monkeypatch.setattr(secrets_file_module, "_parse", _counting_parse)
     with pytest.raises(SecretsFileError) as excinfo:
         load_or_create(path)
     message = str(excinfo.value)
-    assert "after 20 attempts" in message
+    # The observed retry count is exactly the configured budget — a mutation
+    # of the loop's trip count by +-1 changes this and fails the test.
+    assert parse_calls["n"] == attempts
+    assert f"after {attempts} attempts" in message
     assert "not valid JSON" in message
     # No orphaned draw was written over the winner's (broken) file.
     assert path.read_bytes() == b'{"state_hmac_key": "truncated"'
