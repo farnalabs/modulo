@@ -26,7 +26,10 @@
         <dt class="text-muted-foreground">
           {{ $t('views.PipelineEditorView.autonomy_panel_default') }}
         </dt>
-        <dd class="font-medium text-foreground">{{ levelLabel(defaultLevel) }}</dd>
+        <!-- A NULL stored default is the backend's manual_approval default
+             (AutonomyLevel.default()), so the row shows that label rather
+             than "Unknown level". -->
+        <dd class="font-medium text-foreground">{{ levelLabel(defaultLevel ?? 'manual_approval') }}</dd>
       </div>
       <div
         class="flex items-baseline justify-between gap-2"
@@ -103,12 +106,16 @@
       />
     </div>
 
+    <!-- The demote/promote permission rule rides on each button as BOTH a
+         title (mouse hover) and an aria-description: a title alone is
+         invisible to touch / keyboard assistive tech. -->
     <div class="flex items-center gap-2">
       <button
         type="button"
         :class="btnDemote"
         :disabled="!canDemote || pending !== null"
         :title="$t('views.PipelineEditorView.autonomy_panel_demote_hint')"
+        :aria-description="$t('views.PipelineEditorView.autonomy_panel_demote_hint')"
         data-testid="progressive-autonomy-demote"
         @click="apply('demote')"
       >
@@ -119,6 +126,7 @@
         :class="btnPromote"
         :disabled="!canPromote || pending !== null"
         :title="$t('views.PipelineEditorView.autonomy_panel_promote_hint')"
+        :aria-description="$t('views.PipelineEditorView.autonomy_panel_promote_hint')"
         data-testid="progressive-autonomy-promote"
         @click="apply('promote')"
       >
@@ -188,9 +196,11 @@ const statusMessage = ref<string | null>(null)
 const errorMessage = ref<string | null>(null)
 
 // A successful change updates these locally so the panel reflects the new
-// level immediately, without waiting for the parent's refetch to land; a
-// parent refetch that delivers the same value clears them (see the watch
-// below) so the panel never keeps an override over fresher prop data.
+// level immediately, without waiting for the parent's refetch to land. The
+// override never outlives fresher prop data: the watch below clears it as
+// soon as the parent's refetch either confirms our own write (same value) or
+// delivers a different value carrying a timestamp at least as new as the
+// override's own (a concurrent writer's fresher write always wins).
 const earnedOverride = ref<string | null>(null)
 const earnedAtOverride = ref<string | null>(null)
 
@@ -272,18 +282,33 @@ watch([currentLevel, ceilingLevel], ([cur]) => {
   }
 })
 
-watch(
-  () => props.earnedLevel,
-  (next) => {
-    if (next !== null && next === earnedOverride.value) earnedOverride.value = null
-  },
-)
-watch(
-  () => props.earnedUpdatedAt,
-  (next) => {
-    if (next !== null && next === earnedAtOverride.value) earnedAtOverride.value = null
-  },
-)
+/**
+ * True when the prop's timestamp is at least as new as the override's own.
+ * Both are ISO-8601 UTC strings from the API, which sort lexicographically.
+ * An unknown prop timestamp cannot prove the prop is stale, so it counts as
+ * fresh; an unknown override timestamp cannot defend itself, so anything
+ * beats it.
+ */
+function isPropAtLeastAsNew(propAt: string | null, overrideAt: string | null): boolean {
+  if (propAt === null || overrideAt === null) return true
+  return propAt >= overrideAt
+}
+
+// Drop the local override once the parent's refetch is authoritative: either
+// it confirms our own write (same value), or it delivers a DIFFERENT value
+// that is at least as new as the override (a concurrent writer's fresher
+// write). Only a differing value carrying an OLDER timestamp — a stale
+// in-flight response that landed after our write — keeps the override.
+watch([() => props.earnedLevel, () => props.earnedUpdatedAt], ([nextLevel, nextAt]) => {
+  if (earnedOverride.value === null) return
+  const confirmedOwnWrite = nextLevel !== null && nextLevel === earnedOverride.value
+  const fresherConcurrentWrite =
+    nextLevel !== earnedOverride.value && isPropAtLeastAsNew(nextAt, earnedAtOverride.value)
+  if (confirmedOwnWrite || fresherConcurrentWrite) {
+    earnedOverride.value = null
+    earnedAtOverride.value = null
+  }
+})
 
 /**
  * POST a manual autonomy change. 403 (not an admin / not on the owner team)

@@ -191,6 +191,7 @@
                 :class="btnToolbarSecondary"
                 :aria-expanded="autonomyPanelOpen"
                 aria-haspopup="dialog"
+                :aria-controls="autonomyPanelDialogId"
                 data-testid="pipeline-editor-autonomy-panel-toggle"
                 @click="toggleAutonomyPanel"
               >
@@ -199,6 +200,7 @@
               <dialog
                 v-if="autonomyPanelOpen"
                 open
+                :id="autonomyPanelDialogId"
                 ref="autonomyPanelDialogRef"
                 class="absolute right-0 left-auto top-full z-50 mt-1 w-80 max-w-[calc(100vw-1rem)] rounded-lg border border-border bg-card p-3 shadow-lg"
                 tabindex="-1"
@@ -1983,7 +1985,10 @@ onBeforeUnmount(() => {
 })
 
 // FAR-1696 (ADR 043 S5): progressive-autonomy panel popover. Same
-// open/Escape/focus-return shape as the retry-policy panel above it.
+// open/Escape/focus-return shape as the retry-policy panel above it, and the
+// same toggle→panel aria-controls wiring (the toggle button references this
+// dialog id so AT can announce the controlled element).
+const autonomyPanelDialogId = 'pipeline-editor-autonomy-panel-dialog'
 const autonomyPanelOpen = ref(false)
 const autonomyPanelToggleRef = ref<HTMLButtonElement | null>(null)
 const autonomyPanelDialogRef = ref<HTMLDialogElement | null>(null)

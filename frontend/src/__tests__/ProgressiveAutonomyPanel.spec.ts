@@ -193,4 +193,94 @@ describe('ProgressiveAutonomyPanel', () => {
     expect(error.text()).toContain(serverDetail)
     expect(wrapper.emitted('changed')).toBeUndefined()
   })
+
+  it('renders the manual approval default when defaultLevel is null', () => {
+    // A NULL stored default is the backend's manual_approval default, so the
+    // row shows that label — never "Unknown level".
+    const wrapper = mountPanel({ defaultLevel: null })
+
+    const defaultRow = wrapper.find('[data-testid="progressive-autonomy-default"]')
+    expect(defaultRow.text()).toContain('Manual approval')
+    expect(defaultRow.text()).not.toContain('Unknown')
+  })
+
+  it('surfaces a network failure that never produced an HTTP response', async () => {
+    // A thrown TypeError (fetch-level failure) is not an HTTP problem+json
+    // body: the catch path must still land in the alert region.
+    apiMocks.post.mockRejectedValue(new TypeError('Failed to fetch'))
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('manual_approval')
+    await wrapper.find('[data-testid="progressive-autonomy-demote"]').trigger('click')
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="progressive-autonomy-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('Failed to change the autonomy level: Failed to fetch')
+    expect(wrapper.emitted('changed')).toBeUndefined()
+    // The displayed earned level was never touched, and the button re-enables.
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Notify on complete',
+    )
+    expect(
+      wrapper.find('[data-testid="progressive-autonomy-demote"]').attributes('disabled'),
+    ).toBeUndefined()
+  })
+
+  it('disables demote at the floor and exposes the admin/owner hint to AT', async () => {
+    const wrapper = mountPanel({ earnedLevel: 'manual_approval' })
+
+    const demote = wrapper.find('[data-testid="progressive-autonomy-demote"]')
+    const promote = wrapper.find('[data-testid="progressive-autonomy-promote"]')
+    // Already at the ladder floor: there is nothing below to demote to.
+    expect(demote.attributes('disabled')).toBeDefined()
+
+    // A legal upward target within the ceiling re-enables promote only.
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('notify_on_complete')
+    expect(promote.attributes('disabled')).toBeUndefined()
+    expect(demote.attributes('disabled')).toBeDefined()
+
+    // The permission rule is not hover-only: each button carries it for AT.
+    expect(demote.attributes('aria-description')).toContain('organisation admin')
+    expect(promote.attributes('aria-description')).toContain('organisation admin')
+  })
+
+  it('clears a stale local override only once fresher prop data arrives', async () => {
+    apiMocks.post.mockResolvedValue({
+      data: successBody('manual_approval', 'notify_on_complete'),
+      error: undefined,
+      response: { status: 200 },
+    })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('manual_approval')
+    await wrapper.find('[data-testid="progressive-autonomy-demote"]').trigger('click')
+    await flushPromises()
+    // Local override: manual_approval, stamped by the response at 2026-09-02.
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Manual approval',
+    )
+
+    // A stale in-flight refetch (older timestamp, pre-write value) must not
+    // clobber the override the write just established.
+    await wrapper.setProps({
+      earnedLevel: 'notify_on_complete',
+      earnedUpdatedAt: '2026-09-01T10:00:00Z',
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Manual approval',
+    )
+
+    // A concurrent writer's fresher write (different value, later timestamp)
+    // wins — the override never sticks over it.
+    await wrapper.setProps({
+      earnedLevel: 'fully_autonomous',
+      earnedUpdatedAt: '2026-09-03T09:00:00Z',
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Fully autonomous',
+    )
+  })
 })
