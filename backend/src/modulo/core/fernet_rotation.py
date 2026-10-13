@@ -111,6 +111,45 @@ async def _rotate_notification_endpoints(session: AsyncSession, new_fernet: Fern
     return count
 
 
+async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
+    """Re-encrypt HMAC/signing secrets inside triggers.config_json (FAR-1732).
+
+    Only Fernet-token-shaped values rotate: plaintext secrets (written before
+    encryption shipped) are the data migration's job — rotation only
+    re-encrypts values that already decrypt as Fernet tokens, so a rotation
+    run over rows the migration has not yet reached changes nothing.
+    """
+
+    from modulo.auth.secret_storage import _is_encrypted_token
+
+    rows = (
+        await session.execute(
+            text(
+                "SELECT id, config_json FROM triggers "
+                "WHERE config_json->>'hmac_secret' IS NOT NULL "
+                "OR config_json->>'signing_secret' IS NOT NULL"
+            )
+        )
+    ).all()
+    count = 0
+    for row in rows:
+        config: dict[str, Any] = row.config_json
+        changed = False
+        for key in ("hmac_secret", "signing_secret"):
+            stored = config.get(key)
+            if not isinstance(stored, str) or not _is_encrypted_token(stored):
+                continue
+            config[key] = re_encrypt_str(stored, new_fernet, old_fernet)
+            changed = True
+        if changed:
+            await session.execute(
+                text("UPDATE triggers SET config_json = :config WHERE id = :id"),
+                {"config": json.dumps(config), "id": row.id},
+            )
+            count += 1
+    return count
+
+
 async def _rotate_otel_config(session: AsyncSession, new_fernet: Fernet, old_fernet: Fernet | None) -> int:
     """Re-encrypt langsmith_api_key_ciphertext inside otel_config_json on organisations."""
     rows = (
@@ -253,7 +292,7 @@ async def rotate_all_encrypted_data(
 ) -> RotationResult:
     """Re-encrypt all Fernet-encrypted data across all stores.
 
-    Iterates all 8 data stores and re-encrypts each row with *new_key*,
+    Iterates all 9 data stores and re-encrypts each row with *new_key*,
     falling back to *old_key* for decryption of existing data.
 
     Args:
@@ -275,12 +314,13 @@ async def rotate_all_encrypted_data(
     old_fernet = Fernet(old_key.encode()) if old_key else None
 
     # Ordered: secrets first (most critical), then connectors/backends,
-    # then notifications, then observability, then checkpoints.
+    # then notifications, then triggers, then observability, then checkpoints.
     rotators: list[tuple[str, Any]] = [
         ("secrets", _rotate_secrets_table),
         ("connector_instances", _rotate_connector_instances),
         ("model_backends", _rotate_model_backends),
         ("notification_endpoints", _rotate_notification_endpoints),
+        ("triggers", _rotate_triggers),
         ("observability_config", _rotate_otel_config),
         ("checkpoints", _rotate_checkpoints),
         ("checkpoint_blobs", _rotate_checkpoint_blobs),

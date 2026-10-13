@@ -3,7 +3,7 @@
 Structural contract (no Postgres needed):
 
 * **Revision chain** — 0304 revises ``0303_feedback_records_lookup_indexes``; the
-  migrations directory has exactly one head (``0304_metrics_staging_recorded_at_index``,
+  migrations directory has exactly one head (``0305_trigger_secret_encryption``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -41,7 +41,7 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "mig
 _MIGRATION_NAME = "0304_metrics_staging_recorded_at_index"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 _DOWN_REVISION = "0303_feedback_records_lookup_indexes"
-_CHAIN_HEAD_MIGRATION = "0304_metrics_staging_recorded_at_index"
+_CHAIN_HEAD_MIGRATION = "0305_trigger_secret_encryption"
 _INDEX_NAME = "ix_metrics_staging_recorded_at"
 
 

@@ -82,6 +82,7 @@ from modulo.api.routes.api_keys import enforce_grants_mint_cap_for
 from modulo.api.routes.evals import _EVAL_TYPE_PATTERN
 from modulo.api.routes.oauth_metadata import protected_resource_metadata_url
 from modulo.api.routes.triggers import (
+    _encrypt_trigger_config_secrets,
     _streak_status_for,
     _validate_connector_instance_team_scope,
     _validate_trigger_config_keys,
@@ -7231,6 +7232,12 @@ def _build_trigger_record(
 ) -> tuple[Any, dict[str, Any] | None]:
     from modulo.db.models.trigger import Trigger
 
+    # FAR-1732: encrypt webhook/HMAC secrets BEFORE persisting — the same
+    # shared helper REST's create route uses, so MCP-created triggers store
+    # ``hmac_secret``/``signing_secret`` under Fernet tokens identical to the
+    # REST path (read paths decrypt with plaintext fallback, so nothing that
+    # consumed plaintext breaks).
+    encrypted_config = _encrypt_trigger_config_secrets(config_json, get_settings().fernet_key)
     trigger = Trigger(
         organisation_id=org_id,
         pipeline_id=pid,
@@ -7238,7 +7245,7 @@ def _build_trigger_record(
         active=active,
         max_concurrent_runs=max_concurrent_runs,
         daily_spend_limit=Decimal(str(daily_spend_limit)) if daily_spend_limit is not None else None,
-        config_json=config_json or {},
+        config_json=encrypted_config or {},
         account_id=account_id,
         next_fire_at=next_fire_at,
         # FAR-190: creation anchors the no-delivery streak epoch (the
@@ -7579,7 +7586,11 @@ def _merge_trigger_config_json(trigger: Any, config_json: dict[str, Any] | None)
     # MERGE into the existing blob — never wholesale replace.
     # A masked placeholder must never clobber the stored secret
     # (read-modify-write round-trip guard). Keep the existing value.
-    trigger.config_json = merge_masked_config(trigger.config_json, config_json)
+    merged = merge_masked_config(trigger.config_json, config_json)
+    # FAR-1732: encrypt webhook/HMAC secrets after the masked merge — the same
+    # shared helper REST's PUT route uses. Idempotent: values already stored
+    # under Fernet tokens (or mask sentinels) pass through untouched.
+    trigger.config_json = _encrypt_trigger_config_secrets(merged, get_settings().fernet_key)
 
 
 async def _apply_trigger_field_updates(

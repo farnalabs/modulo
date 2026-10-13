@@ -501,6 +501,11 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
     Only encrypts values that are plaintext strings (not already encrypted
     bytes/base64 strings or masked placeholders). Existing encrypted values
     are left unchanged so updates are idempotent.
+
+    FAR-1732: encryption failure FAILS CLOSED — it re-raises (after a
+    structured log) rather than silently persisting the plaintext secret
+    under a failed key. A misconfigured ``fernet_key`` therefore aborts the
+    write instead of storing the secret in the clear.
     """
     if not config:
         return {}
@@ -512,6 +517,7 @@ def _encrypt_trigger_config_secrets(config: dict[str, Any] | None, fernet_key: s
                 result[key] = encrypt_stored_secret(val, fernet_key).decode()
             except Exception:
                 _log.exception("trigger_config_encrypt_failed key=%s", key)
+                raise
     return result
 
 

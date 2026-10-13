@@ -1,15 +1,34 @@
 """Unit tests for the get_trigger / update_trigger / delete_trigger MCP tools."""
 
+import base64
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from cryptography.fernet import Fernet
 
 from modulo.api.mcp_server import create_trigger, delete_trigger, get_trigger, update_trigger
 from modulo.api.middleware.sensitive_mask import SENSITIVE_VALUE_MASK
 
 _PLACEHOLDER_ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
+# FAR-1732: the tests patch ``modulo.api.mcp_server.get_settings`` (the MCP
+# conftest's default FERNET_KEY is not a valid Fernet key), so they need a
+# REAL one to round-trip tokens through.
+_VALID_FERNET_KEY = base64.urlsafe_b64encode(b"s" * 32).decode()
+
+
+def _patch_fernet_settings():
+    """Patch ``get_settings`` in the MCP namespace to a fake with a valid key."""
+    fake_settings = MagicMock()
+    fake_settings.fernet_key = _VALID_FERNET_KEY
+    return patch("modulo.api.mcp_server.get_settings", return_value=fake_settings)
+
+
+def _decrypt_stored(value: str) -> str:
+    fern = Fernet(_VALID_FERNET_KEY.encode())
+    return fern.decrypt(value.encode()).decode()
 
 
 def _full_streak_status(**overrides: object) -> dict[str, object]:
@@ -684,10 +703,14 @@ class TestUpdateTriggerSuccess(_AuthContext):
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": SENSITIVE_VALUE_MASK})
+        with _patch_fernet_settings():
+            result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": SENSITIVE_VALUE_MASK})
 
         assert result.get("error") is None
-        assert trigger.config_json["hmac_secret"] == "real-secret"
+        # FAR-1732: the stored value survives the masked round-trip — but is
+        # now persisted under a Fernet token, decryptable to the original.
+        assert trigger.config_json["hmac_secret"].startswith("gAAAA")
+        assert _decrypt_stored(trigger.config_json["hmac_secret"]) == "real-secret"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -696,15 +719,20 @@ class TestUpdateTriggerSuccess(_AuthContext):
         mock_session: AsyncMock,
         mock_validate_auth: AsyncMock,
     ) -> None:
+        """FAR-1732: a plainly-submitted secret is stored as a Fernet token
+        (never plaintext) and still decrypts to the submitted value."""
         trigger = _make_mock_trigger(config_json={"hmac_secret": "old-secret"})
         mock_sesh = AsyncMock()
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": "new-secret"})
+        with _patch_fernet_settings():
+            result = await update_trigger(trigger_id=str(trigger.id), config_json={"hmac_secret": "new-secret"})
 
         assert result.get("error") is None
-        assert trigger.config_json["hmac_secret"] == "new-secret"
+        stored = trigger.config_json["hmac_secret"]
+        assert stored.startswith("gAAAA"), f"secret must be encrypted at rest, got {stored!r}"
+        assert _decrypt_stored(stored) == "new-secret"
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")
@@ -735,13 +763,17 @@ class TestUpdateTriggerSuccess(_AuthContext):
         mock_sesh.execute = AsyncMock(return_value=_make_execute_result(trigger))
         mock_session.return_value = _make_session_context(mock_sesh)
 
-        result = await update_trigger(
-            trigger_id=str(trigger.id),
-            config_json={"hmac_secret": SENSITIVE_VALUE_MASK, "work_item_ref_paths": ["backend", "frontend"]},
-        )
+        with _patch_fernet_settings():
+            result = await update_trigger(
+                trigger_id=str(trigger.id),
+                config_json={"hmac_secret": SENSITIVE_VALUE_MASK, "work_item_ref_paths": ["backend", "frontend"]},
+            )
 
         assert result.get("error") is None
-        assert trigger.config_json["hmac_secret"] == "real-secret"
+        # FAR-1732: the stored secret survives the merge but is persisted
+        # encrypted; the other keys merge through untouched.
+        assert trigger.config_json["hmac_secret"].startswith("gAAAA")
+        assert _decrypt_stored(trigger.config_json["hmac_secret"]) == "real-secret"
         assert trigger.config_json["work_item_ref_paths"] == ["backend", "frontend"]
 
 

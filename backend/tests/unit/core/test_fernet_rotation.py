@@ -441,6 +441,7 @@ class TestRotateAllEncryptedData:
         "connector_instances",
         "model_backends",
         "notification_endpoints",
+        "triggers",
         "observability_config",
         "checkpoints",
         "checkpoint_blobs",
@@ -451,6 +452,7 @@ class TestRotateAllEncryptedData:
         "connector_instances": "_rotate_connector_instances",
         "model_backends": "_rotate_model_backends",
         "notification_endpoints": "_rotate_notification_endpoints",
+        "triggers": "_rotate_triggers",
         "observability_config": "_rotate_otel_config",
         "checkpoints": "_rotate_checkpoints",
         "checkpoint_blobs": "_rotate_checkpoint_blobs",
@@ -466,7 +468,7 @@ class TestRotateAllEncryptedData:
         new_key = _new_key()
         old_key = _new_key()
         session = _make_session()
-        counts = dict(zip(self._TABLES, range(1, 9), strict=True))
+        counts = dict(zip(self._TABLES, range(1, 10), strict=True))
         mocks = {table: AsyncMock(return_value=count) for table, count in counts.items()}
 
         with ExitStack() as stack:
@@ -499,8 +501,8 @@ class TestRotateAllEncryptedData:
             result = await rotate_all_encrypted_data(session, new_key, old_key="")
 
         assert result.total_rows_reencrypted == 0
-        assert len(captured["new_fernet"]) == 8
-        assert len(captured["old_fernet"]) == 8
+        assert len(captured["new_fernet"]) == 9
+        assert len(captured["old_fernet"]) == 9
         assert all(fn is None for fn in captured["old_fernet"])
 
     @pytest.mark.asyncio
@@ -522,7 +524,7 @@ class TestRotateAllEncryptedData:
             self._enter_rotator_patches(stack, rotators)
             await rotate_all_encrypted_data(session, new_key, old_key=old_key)
 
-        assert len(captured["old_fernet"]) == 8
+        assert len(captured["old_fernet"]) == 9
         assert all(isinstance(fn, Fernet) for fn in captured["old_fernet"])
         plaintext = b"roundtrip"
         ct = captured["old_fernet"][0].encrypt(plaintext)
