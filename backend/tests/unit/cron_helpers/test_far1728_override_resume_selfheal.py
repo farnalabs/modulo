@@ -1,13 +1,13 @@
 """FAR-1728: the guardrail-override resume flip gets a reconcile self-heal.
 
 FAR-1711 flips a node-started ``eval_blocked`` run to ``running`` (keeping the
-durable ``dispatch_phase='first_node_dispatched'``, stamping
-``error_detail`` with the flip's ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` sentinel
-and ``heartbeat_at`` one claim-stale window into the past) and re-dispatches it
-as ``resume_run``. If that job is LOST — a worker crash before claim, or
-``dispatch_run`` returning ``deferred``/``enqueue_failed`` (the override
-route's 500 leaves the committed flip behind) — no reconcile re-dispatch leg
-matched the row:
+durable ``dispatch_phase='first_node_dispatched'``, setting the DEDICATED
+``guardrail_override_resume_pending`` marker column (migration 0305) and
+stamping ``heartbeat_at`` one claim-stale window into the past) and
+re-dispatches it as ``resume_run``. If that job is LOST — a worker crash before
+claim, or ``dispatch_run`` returning ``deferred``/``enqueue_failed`` (the
+override route's 500 leaves the committed flip behind) — no reconcile
+re-dispatch leg matched the row:
 
 * the generic stale-heartbeat leg excludes ``first_node_dispatched`` (FAR-1649);
 * the pending legs require ``status='pending'``;
@@ -18,27 +18,30 @@ matched the row:
 The only collector was the mid-graph age gate (``no_progress`` at ~135 min) —
 fail-closed and truthful, but never retried.
 
-The class discriminator is the SENTINEL, not ``is_replay``: ``is_replay`` is
-also written by webhook replay (``trigger_engine._create_webhook_run``) and by
-a manual replay, so ``first_node_dispatched`` + ``is_replay`` is NOT the flip's
-shape (the original QA finding on this branch — selecting on ``is_replay``
-lifted the FAR-1649 belt for every replay-shaped row).
+The class discriminator is the DEDICATED marker column
+(``runs.guardrail_override_resume_pending``), not ``is_replay``: ``is_replay``
+is also written by webhook replay (``trigger_engine._create_webhook_run``) and
+by a manual replay, so ``first_node_dispatched`` + ``is_replay`` is NOT the
+flip's shape (the original QA finding on this branch — selecting on ``is_replay``
+lifted the FAR-1649 belt for every replay-shaped row). The pre-0305 design used
+a sentinel string in ``error_detail``; the dedicated boolean column replaces it
+— an observation column must not carry a control-flow marker.
 
 This file pins the self-heal leg (mirror of the F6a leg's shape):
 
-* a ``running`` + ``first_node_dispatched`` + sentinel row with NO SAQ job is
+* a ``running`` + ``first_node_dispatched`` + marker row with NO SAQ job is
   re-enqueued as ``resume_run`` (checkpoint resume, never ``execute_run``
   re-execution) — THE regression test; without the leg the row is held back by
   the node-started belt and only the age gate ever sees it;
-* a webhook-replay-shaped row (``is_replay=True``, NO sentinel) is NOT
+* a webhook-replay-shaped row (``is_replay=True``, marker FALSE) is NOT
   selected/re-enqueued — the over-match regression (it fails on the pre-fix
   tree, where the leg selected on ``is_replay``);
-* the belt still holds the same row shape WITHOUT the sentinel (the carve-out
+* the belt still holds the same row shape WITHOUT the marker (the carve-out
   is class-scoped — the 2026-10-10 storm does not come back);
 * a row whose thread carries no root checkpoint is deferred (FAR-1711 M1 —
   resuming it would silently re-execute it; the age gate keeps collecting it);
 * an EXISTING SAQ job suppresses the re-enqueue (the job-absent gate);
-* the SQL predicate itself selects the class (sentinel + phase + stale
+* the SQL predicate itself selects the class (marker + phase + stale
   heartbeat, and never ``is_replay``), so the shared
   ``reconciler_recovery_predicate`` (D8 marker sweep) judges the row
   recoverable in lockstep.
@@ -58,14 +61,6 @@ from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine import recovery as recovery_module
 
 ORG = uuid.uuid4()
-
-# The sentinel LITERAL, resolved against the production constant by
-# ``test_production_marker_constant_matches_this_literal`` below (a drift pin:
-# two copies, CI fails if they ever diverge). Kept literal — not imported at
-# module scope — so this module still IMPORTS against a pre-fix tree: the
-# FAIL-without-fix evidence run for the over-match test executes against
-# production code that does not define ``GUARDRAIL_OVERRIDE_RESUME_MARKER``.
-_OVERRIDE_MARKER = "guardrail override applied (FAR-1728 resume self-heal marker)"
 
 
 class _MockBegin:
@@ -178,18 +173,11 @@ def _override_row(
     """A reconcile-scan row shaped like a guardrail-override resume flip.
 
     Mirrors ``test_node_started_redispatch_guard._run_row`` plus the columns
-    FAR-1728's leg needs: ``error_detail`` (the flip's single-writer sentinel —
-    present only when *override_marker* is True; a webhook/manual-replay row
-    carries ``is_replay=True`` but NO sentinel) and ``langgraph_thread_id``
-    (the resumable-checkpoint guard's probe key).
-
-    The sentinel value is the test-file literal ``_OVERRIDE_MARKER`` — pinned
-    to the production constant by
-    ``test_production_marker_constant_matches_this_literal`` — so this module
-    still IMPORTS against a pre-fix tree: the FAIL-without-fix evidence run
-    for the over-match test executes against production code that does not
-    define ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` yet, and must fail on its
-    ASSERTION, not on an AttributeError.
+    FAR-1728's leg needs: ``guardrail_override_resume_pending`` (the flip's
+    single-writer dedicated marker column — True only when *override_marker*;
+    a webhook/manual-replay row carries ``is_replay=True`` but the marker
+    FALSE) and ``langgraph_thread_id`` (the resumable-checkpoint guard's probe
+    key).
     """
     heartbeat = datetime.now(UTC) - timedelta(minutes=30) if stale else datetime.now(UTC)
     row = SimpleNamespace(
@@ -204,12 +192,12 @@ def _override_row(
         checkpoints_absent=False,
         started_at=datetime.now(UTC) - timedelta(minutes=60),
         error_code=None,
-        error_detail=_OVERRIDE_MARKER if override_marker else None,
         dispatcher="saq",
         enqueue_failed_at=None,
         claim_count=claim_count,
         retry_policy=None,
         dispatch_phase=dispatch_phase,
+        guardrail_override_resume_pending=override_marker,
         langgraph_thread_id=f"thread-{run_id}",
         sandbox_dispatch_state=None,
     )
@@ -307,7 +295,7 @@ class TestLostOverrideResumeJobIsReEnqueued:
     async def test_lost_override_resume_job_is_reenqueued_as_resume_run(self, monkeypatch: Any) -> None:
         """THE regression test (fails without the FAR-1728 leg).
 
-        A ``running`` + ``first_node_dispatched`` + sentinel row with a stale
+        A ``running`` + ``first_node_dispatched`` + marker row with a stale
         heartbeat and NO SAQ job — exactly the shape the guardrail-
         override flip leaves behind when its ``resume_run`` job is lost — is
         re-enqueued as ``resume_run`` (checkpoint resume, never
@@ -336,7 +324,7 @@ class TestLostOverrideResumeJobIsReEnqueued:
         self, monkeypatch: Any
     ) -> None:
         """The belt's scope is UNCHANGED for every other node-started row: the
-        same shape WITHOUT the flip's sentinel (the 2026-10-10 storm class —
+        same shape WITHOUT the flip's marker (the 2026-10-10 storm class —
         no replay flag either) is still held back — no enqueue, counted
         deferred — so the carve-out is strictly class-scoped and the storm
         does not come back."""
@@ -398,7 +386,7 @@ class TestWebhookReplayIsNotOverMatched:
     re-enqueued it as ``resume_run``: a checkpoint resume that re-executes an
     in-progress, possibly non-idempotent super-step (the exact hazard the
     FAR-1649 node-started belt exists to prevent). The discriminator is now
-    the flip's single-writer sentinel.
+    the flip's single-writer dedicated marker column.
     """
 
     async def test_webhook_replay_row_is_not_selected_or_reenqueued(self, monkeypatch: Any) -> None:
@@ -406,21 +394,21 @@ class TestWebhookReplayIsNotOverMatched:
 
         A webhook-replay-shaped row (``status='running'``,
         ``dispatch_phase='first_node_dispatched'``, ``is_replay=True``, stale
-        heartbeat, no SAQ job, ``error_detail=NULL`` — replay rows never carry
-        the flip's sentinel) must NOT be selected/re-enqueued by the leg: it
+        heartbeat, no SAQ job, marker FALSE — replay rows never carry the
+        flip's marker) must NOT be selected/re-enqueued by the leg: it
         is held back by the node-started belt and left to the watchdogs / age
         gate, exactly like every other non-override node-started row.
 
         Pre-fix, the leg's ``Run.is_replay IS true`` condition matched this
         row and re-enqueued it ``resume_run`` (``repaired == 1``,
         ``node_started_deferred == 0``) — both assertions below fail. Post-fix
-        the sentinel condition cannot match it.
+        the marker condition cannot match it.
         """
         run_id = uuid.uuid4()
         row = _override_row(run_id, override_marker=False, is_replay=True)
         # The row is genuinely a REPLAY row, not a marker-less storm row.
         assert row.is_replay is True
-        assert row.error_detail is None
+        assert row.guardrail_override_resume_pending is False
 
         summary, reenqueue, _session = await _run_reconcile(monkeypatch, [row])
 
@@ -428,11 +416,6 @@ class TestWebhookReplayIsNotOverMatched:
         assert summary["repaired"] == 0
         # Falls through to the belt — held back, never re-executed.
         assert summary["node_started_deferred"] == 1
-
-    def test_production_marker_constant_matches_this_literal(self) -> None:
-        """Drift pin: the test-side sentinel literal IS the production
-        constant (two copies; this assertion is what keeps them identical)."""
-        assert recovery_module.GUARDRAIL_OVERRIDE_RESUME_MARKER == _OVERRIDE_MARKER
 
 
 class TestPredicateSelectsTheOverrideResumeClass:
@@ -451,11 +434,14 @@ class TestPredicateSelectsTheOverrideResumeClass:
         compiled = sa.select(Run.id).where(predicate).compile()
         sql = str(compiled)
         # The leg's discriminators: running + the durable node-start phase
-        # (bound, never a bare literal) + the flip's sentinel in error_detail
-        # + the SAQ dispatcher. ``is_replay`` must NOT appear anywhere in the
-        # predicate — webhook/manual replay share it, so it cannot identify
-        # the flip (the over-match finding).
-        assert "error_detail" in sql
+        # (bound, never a bare literal) + the DEDICATED marker column
+        # (migration 0305) + the SAQ dispatcher. ``is_replay`` must NOT appear
+        # anywhere in the predicate — webhook/manual replay share it, so it
+        # cannot identify the flip (the over-match finding). ``error_detail``
+        # must NOT appear either — the pre-0305 sentinel-in-error_detail
+        # design is retired.
+        assert "guardrail_override_resume_pending" in sql
+        assert "error_detail" not in sql
         assert "is_replay" not in sql
         assert sql.count("dispatch_phase IS NULL") == 1  # still exactly ONE exclusion leg
         assert PHASE_FIRST_NODE_DISPATCHED in dict(compiled.params).values()
@@ -478,7 +464,6 @@ class TestPredicateSelectsTheOverrideResumeClass:
         sql = str(compiled)
         assert "runs.dispatch_phase IS NULL OR runs.dispatch_phase != " in sql
         assert "runs.is_replay" not in sql
-        # The new leg's positive match (never an exclusion): the sentinel
-        # equality, inlined as a literal here so the exact discriminator value
-        # is pinned, and the phase constant bound beside it.
-        assert f"runs.dispatch_phase = 'first_node_dispatched' AND runs.error_detail = '{_OVERRIDE_MARKER}'" in sql
+        # The new leg's positive match (never an exclusion): the dedicated
+        # marker column's IS-true, beside the phase constant's inlined literal.
+        assert "runs.dispatch_phase = 'first_node_dispatched' AND runs.guardrail_override_resume_pending IS true" in sql

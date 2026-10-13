@@ -5,9 +5,10 @@ runs: pipeline FOR UPDATE lock, optimistic status UPDATE (single-flight by
 run_id), re-block safe default (the supplied input is re-run through the
 guardrail pass; a still-violating input never flips the run back to pending),
 post-redaction payload persisted, ``is_replay=True`` (journey increments once),
-the ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` sentinel stamped into ``error_detail``
-(FAR-1728: the reconcile self-heal leg's single-writer discriminator), and a
-``guardrail.override`` audit event.
+the dedicated ``guardrail_override_resume_pending`` marker set on the
+node-started flip (FAR-1728: the reconcile self-heal leg's single-writer
+discriminator — a boolean column, never a sentinel in the observation column
+``error_detail``), and a ``guardrail.override`` audit event.
 """
 
 import uuid
@@ -19,7 +20,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.core.pipeline_engine.recovery import (
-    GUARDRAIL_OVERRIDE_RESUME_MARKER,
     ConcurrentRecoveryError,
     GuardrailOverrideError,
     GuardrailOverrideNoCheckpointError,
@@ -55,6 +55,9 @@ def _make_run(
     run.input_hash = "stale-hash-of-original-blocked-payload"
     run.completed_at = "2026-01-01T00:00:00+00:00"
     run.is_replay = False
+    # FAR-1728: the dedicated self-heal marker starts false (server default);
+    # only the node-started flip sets it.
+    run.guardrail_override_resume_pending = False
     # FAR-1711: explicit None = the genuine zero-node block (run-level
     # interception at creation). Node-started fixtures pass
     # PHASE_FIRST_NODE_DISPATCHED instead.
@@ -142,10 +145,13 @@ async def test_guardrail_override_clean_input_flips_to_pending():
 
     assert result.status == "pending"
     assert result.error_code is None
-    # FAR-1728: the flip stamps its single-writer sentinel — the reconcile
-    # self-heal leg's discriminator (error_code stays None, so no failure
-    # surface renders the detail).
-    assert result.error_detail == GUARDRAIL_OVERRIDE_RESUME_MARKER
+    # FAR-1728: the ZERO-NODE flip does NOT set the marker — nothing is
+    # resumable there (re-dispatched ``execute_run``, recovered by the
+    # pending-class legs), and a "resume pending" flag would linger forever.
+    # ``error_detail`` is an observation column and is left untouched (the
+    # pre-0305 sentinel-string design is retired).
+    assert result.guardrail_override_resume_pending is False
+    assert result.error_detail == "Guardrail 'no-secrets' blocked"
     assert result.is_replay is True
     assert result.input_payload == {"body": "clean replacement text"}
     # The stored payload changed, so the persisted input_hash must be recomputed
@@ -354,11 +360,13 @@ async def test_guardrail_override_node_started_run_flips_to_running_for_resume()
 
     assert result.status == "running"
     assert result.error_code is None
-    # FAR-1728: the node-started flip carries the sentinel too — it is what
-    # the reconcile self-heal leg selects on (``is_replay`` cannot: webhook
+    # FAR-1728: the node-started flip sets the DEDICATED marker column — it is
+    # what the reconcile self-heal leg selects on (``is_replay`` cannot: webhook
     # replay shares it), so a lost ``resume_run`` job re-dispatches from THIS
-    # row and never from a replay-shaped one.
-    assert result.error_detail == GUARDRAIL_OVERRIDE_RESUME_MARKER
+    # row and never from a replay-shaped one. ``error_detail`` is an observation
+    # column and is left untouched (never a control-flow marker).
+    assert result.guardrail_override_resume_pending is True
+    assert result.error_detail == "Guardrail 'no-secrets' blocked"
     assert result.is_replay is True
     # The phase is preserved through the flip — the resume machinery resets it
     # atomically with its claim, and reconcile belts still recognise the row.

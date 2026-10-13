@@ -407,7 +407,7 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         # EXCLUSION leg above (the running stale-heartbeat leg, pinned at
         # exactly one "IS NULL") and once by the guardrail-override resume
         # leg's POSITIVE match (``dispatch_phase = ...`` + the flip's
-        # ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` sentinel in ``error_detail`` —
+        # dedicated ``guardrail_override_resume_pending`` marker column —
         # NOT ``is_replay``, which webhook/manual replay also set).
         # A third binding would mean another leg started binding the phase —
         # inspect before relaxing this.
