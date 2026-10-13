@@ -3395,7 +3395,7 @@ export default {
       "waitingForRuns": "Waiting for runs to complete…",
       "summary": "Summary",
       "pass": "pass",
-      "cost": "${cost}",
+      "cost": "{cost}",
       "tokens": "{count} tokens",
       "approved": "+{count}",
       "rejected": "-{count}",
@@ -3412,7 +3412,12 @@ export default {
       "failedToLoadGroup": "Failed to load variant group:",
       "runFailed": "Run failed:",
       "failedToRunVariants": "Failed to run variants:",
-      "runFailedStatus": "Run failed with status:"
+      "runFailedStatus": "Run failed with status:",
+      "compareGroupLabel": "Compare group",
+      "diffNodeLabel": "Diff node",
+      "selectNode": "Select node",
+      "selectVariant": "Select variant",
+      "selectGroupFirst": "Select a variant group from the dropdown above to compare model outputs."
     },
     "variantBatch": {
       "title": "Variant Batch Compare",
