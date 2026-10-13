@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TypeGuard
 
 from alembic import op
 from sqlalchemy import text
@@ -90,27 +90,55 @@ def _candidate_rows(bind: Any) -> list[Any]:
     return list(bind.execute(stmt).all())
 
 
-def upgrade() -> None:
-    from modulo.auth.secret_storage import _is_encrypted_token, encrypt_stored_secret
+def _secret_needs_encryption(value: Any) -> TypeGuard[str]:
+    """True (and narrows to ``str``) when *value* is a plaintext secret.
+
+    Mirrors the canonical write-path helper exactly: only a non-empty plaintext
+    string that is neither the sensitive-value mask sentinel nor an existing
+    Fernet token needs encryption. Anything else (non-strings, empty strings,
+    the mask, already-encrypted tokens) passes through untouched — which is
+    what makes a second run write nothing (idempotency).
+    """
+    from modulo.auth.secret_storage import _is_encrypted_token
     from modulo.core.secret_patterns import SENSITIVE_VALUE_MASK
 
+    return isinstance(value, str) and bool(value) and value != SENSITIVE_VALUE_MASK and not _is_encrypted_token(value)
+
+
+def _config_needs_encryption(config: dict[str, Any]) -> bool:
+    """True when *config* carries at least one plaintext secret key."""
+    return any(_secret_needs_encryption(config.get(key)) for key in _SECRET_CONFIG_KEYS)
+
+
+def _encrypt_config(config: dict[str, Any], fernet_key: str) -> dict[str, Any]:
+    """Return *config* with every plaintext secret key replaced by a token.
+
+    Fail closed: an encryptor rejection raises out of here, and because the
+    caller encrypts every pending row in memory before writing any, the abort
+    happens before a single UPDATE — a half-encrypted store is never persisted.
+    """
+    from modulo.auth.secret_storage import encrypt_stored_secret
+
+    updated = dict(config)
+    for key in _SECRET_CONFIG_KEYS:
+        value = updated.get(key)
+        if _secret_needs_encryption(value):
+            updated[key] = encrypt_stored_secret(value, fernet_key).decode()
+    return updated
+
+
+def upgrade() -> None:
     bind = op.get_bind()
     rows = _candidate_rows(bind)
 
     # Filter to rows that actually need encryption. Python-side filtering is
     # the idempotency mechanism: second run, every candidate's secret keys are
     # already tokens/masked/absent → nothing is written.
-    pending: list[tuple[Any, dict[str, Any]]] = []
-    for row in rows:
-        if not isinstance(row.config_json, dict):
-            continue
-        needs = False
-        for key in _SECRET_CONFIG_KEYS:
-            val = row.config_json.get(key)
-            if isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not _is_encrypted_token(val):
-                needs = True
-        if needs:
-            pending.append((row.id, row.config_json))
+    pending: list[tuple[Any, dict[str, Any]]] = [
+        (row.id, row.config_json)
+        for row in rows
+        if isinstance(row.config_json, dict) and _config_needs_encryption(row.config_json)
+    ]
     if not pending:
         return
 
@@ -119,16 +147,9 @@ def upgrade() -> None:
     # Phase 1 — encrypt every pending row's payload in memory. Any failure
     # here aborts BEFORE a single write, so a partially-encrypted store can
     # never be left behind.
-    updated_payloads: list[tuple[Any, dict[str, Any]]] = []
-    for row_id, config in pending:
-        updated = dict(config)
-        for key in _SECRET_CONFIG_KEYS:
-            val = updated.get(key)
-            if not (isinstance(val, str) and val and val != SENSITIVE_VALUE_MASK and not _is_encrypted_token(val)):
-                continue
-            # Fail closed: raise so the plaintext secret is never half-persisted.
-            updated[key] = encrypt_stored_secret(val, fernet_key).decode()
-        updated_payloads.append((row_id, updated))
+    updated_payloads: list[tuple[Any, dict[str, Any]]] = [
+        (row_id, _encrypt_config(config, fernet_key)) for row_id, config in pending
+    ]
 
     # Phase 2 — write the already-validated payloads.
     for row_id, updated in updated_payloads:
