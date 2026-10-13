@@ -31,9 +31,11 @@ or any payload column — those shipped in ``0261_decision_record_payload``
 
 Dialect-guarded (0274/0305 pattern): the CHECK is added NOT VALID then
 VALIDATEd on Postgres (existence-gated, table-qualified); SQLite uses batch
-mode (it has no ``ALTER TABLE ... ADD CONSTRAINT``). Columns are
-existence-gated (``IF NOT EXISTS``). The downgrade drops the CHECK then the
-column.
+mode (it has no ``ALTER TABLE ... ADD CONSTRAINT``). The column follows the
+0265 pattern: raw ``ADD COLUMN IF NOT EXISTS`` under ``_is_postgres()``,
+because SQLite has no ``ADD COLUMN IF NOT EXISTS`` either — SQLite gets the
+column through ``batch_alter_table`` (table recreate from the reflected
+schema). The downgrade drops the CHECK then the column.
 """
 
 from __future__ import annotations
@@ -91,13 +93,23 @@ def _is_sqlite() -> bool:
 
 
 def upgrade() -> None:
-    # 1. Column (existence-gated). NOT NULL DEFAULT 'automatic': every
-    #    pre-existing row reads 'automatic' (today's behaviour), and an OLD
-    #    container INSERT that omits the column during a rolling deploy
-    #    stores 'automatic' rather than failing NOT NULL.
-    op.execute(
-        sa.text("ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS evaluation_mode TEXT NOT NULL DEFAULT 'automatic'")
-    )
+    # 1. Column. Postgres: existence-gated raw DDL. NOT NULL DEFAULT
+    #    'automatic': every pre-existing row reads 'automatic' (today's
+    #    behaviour), and an OLD container INSERT that omits the column
+    #    during a rolling deploy stores 'automatic' rather than failing
+    #    NOT NULL. SQLite has NO ``ADD COLUMN IF NOT EXISTS`` (it would
+    #    raise a syntax error), so the SQLite path adds the column through
+    #    batch mode — table recreate from the reflected schema, the 0265
+    #    pattern; the server default backfills existing rows.
+    if _is_postgres():
+        op.execute(
+            sa.text(
+                "ALTER TABLE policy_gates ADD COLUMN IF NOT EXISTS evaluation_mode TEXT NOT NULL DEFAULT 'automatic'"
+            )
+        )
+    elif _is_sqlite():
+        with op.batch_alter_table(_TABLE) as batch_op:
+            batch_op.add_column(sa.Column(_COLUMN, sa.Text(), nullable=False, server_default="automatic"))
 
     # 2. CHECK — Postgres: NOT VALID + VALIDATE (0274 pattern); SQLite: batch.
     if _is_postgres():

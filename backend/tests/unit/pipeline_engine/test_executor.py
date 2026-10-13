@@ -852,10 +852,18 @@ def _make_resume_session(snapshot: MagicMock, retry_policy: dict[str, Any] | Non
     # retry_policy) regardless of which iterator slot resume() consumes it from.
     eval_result.scalar_one_or_none.return_value = pipeline
 
+    # FAR-939 M4: the fire-time evaluation-mode stamp read (one
+    # gate_config_json select per fired claim) sits between the eval load and
+    # the second session block.
+    claim_stamp_result = MagicMock()
+    claim_stamp_result.scalars.return_value = []
+
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
-    execute_results = iter([graph_json_result, snapshot_result, pipeline_result, eval_result, count_result])
+    execute_results = iter(
+        [graph_json_result, snapshot_result, pipeline_result, claim_stamp_result, eval_result, count_result]
+    )
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:

@@ -31,7 +31,7 @@ import random
 import socket
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -133,7 +133,11 @@ from modulo.core.run_context.autonomy import (
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.spend_ceiling import ORG_CEILING_EXCEEDED, evaluate_org_spend_ceiling
 from modulo.core.trigger_engine.agent_signal import fire_agent_signal
-from modulo.db.crud.hitl_review_config import resolve_hitl_review_config, resolve_review_window_for_gate
+from modulo.db.crud.hitl_review_config import (
+    parse_hitl_review_id,
+    resolve_hitl_review_config,
+    resolve_review_window_for_gate,
+)
 from modulo.db.crud.pipeline import get_pipeline
 from modulo.db.crud.row_lock import set_mutation_row_lock_timeout
 from modulo.db.crud.run import (
@@ -249,6 +253,13 @@ GUARDRAIL_EVAL_TYPE = "guardrail"
 #                 already-delivered node on re-execution.
 _RETRY_POLICY_EVENTS = frozenset({"stall", "timeout", "failure", "eval_failed"})
 _RETRY_POLICY_MAX_RETRIES = 5
+
+# FAR-939 chunk 12 (M4, §3.3 run-frozen): key under which the fire-time
+# evaluation modes of the gate's source node are stamped onto the claim's
+# ``gate_config_json`` (the FAR-634 fire-time review-config column), then
+# read back by ``resume()`` to re-freeze the DTO universe. Single name for
+# the write site and the read site so the stamp cannot drift.
+_GATED_EVAL_MODES_KEY = "gated_eval_modes"
 
 # Canonical dotted error codes written at terminalization (agent-failure UX) and
 # matched by the retry policy. Constants are pure aliases so the retry policy,
@@ -2915,6 +2926,95 @@ class PipelineExecutor:
             )
         return eval_defs_by_node
 
+    @staticmethod
+    def _frozen_gated_eval_modes(
+        eval_definitions_by_node: dict[str, list[EvalDefDTO]] | None,
+        review_id: str,
+    ) -> list[dict[str, Any]]:
+        """The evaluation modes of the fired gate's source node, as of FIRE time.
+
+        FAR-939 chunk 12 (M4, §3.3 / §10): the mode is run-frozen — resolved
+        when the run starts and unchanged for the run's duration. The
+        interrupt handler stamps this list onto the claim row's
+        ``gate_config_json`` when the gate fires; ``resume()`` reads it back
+        and re-applies the modes to the freshly built DTO universe, so a
+        mid-run flip of ``policy_gates.evaluation_mode`` between pause and
+        resume cannot change the resumed run's behaviour (neither the
+        human-governed eval skip nor the Evidence grounding can drift).
+
+        Returns ``[]`` for an unparseable gate id (manual nodes have no
+        claim row) or when no eval defs were built for the run.
+        """
+        if not eval_definitions_by_node:
+            return []
+        parsed = parse_hitl_review_id(review_id)
+        if parsed is None:
+            return []
+        source, _target = parsed
+        frozen: list[dict[str, Any]] = []
+        for dto in eval_definitions_by_node.get(source, []):
+            if dto.policy_gate_id is None:
+                # No governing gate at fire time — nothing to freeze.
+                continue
+            frozen.append(
+                {
+                    "eval_id": str(dto.id),
+                    "policy_gate_id": str(dto.policy_gate_id),
+                    # A governing gate always resolves a mode; the fallback
+                    # keeps a legacy/stand-in DTO on today's behaviour.
+                    "evaluation_mode": dto.policy_gate_evaluation_mode or "automatic",
+                }
+            )
+        return frozen
+
+    @staticmethod
+    def _overlay_frozen_gated_eval_modes(
+        eval_defs_by_node: dict[str, list[EvalDefDTO]],
+        fired_gate_configs: Sequence[dict[str, Any] | None] | None,
+    ) -> int:
+        """Re-apply fire-time evaluation modes to a freshly built DTO universe.
+
+        FAR-939 chunk 12 (M4): called by ``resume()`` AFTER
+        ``_build_eval_defs_by_node`` and BEFORE the graph compile, so the
+        compile cache key, the shared-helper skip and the Evidence grounding
+        all see the modes the run STARTED with. Returns the number of
+        entries applied (a pure no-op when no gate ever fired — every
+        pre-M4 claim row carries no stamp).
+
+        A stamp whose ``policy_gate_id`` no longer matches the live DTO's
+        governing gate (disabled / soft-deleted / replaced since fire) is
+        SKIPPED — operator control and gate identity win over the freeze;
+        only the mode of the SAME governing gate is restored.
+        """
+        if not fired_gate_configs:
+            return 0
+        by_eval_id: dict[str, EvalDefDTO] = {}
+        for dtos in eval_defs_by_node.values():
+            for dto in dtos:
+                by_eval_id[str(dto.id)] = dto
+        applied = 0
+        for config in fired_gate_configs:
+            if not isinstance(config, dict):
+                continue
+            entries = config.get(_GATED_EVAL_MODES_KEY)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                eval_id = entry.get("eval_id")
+                mode = entry.get("evaluation_mode")
+                if not eval_id or mode not in ("automatic", "human"):
+                    continue
+                target_dto = by_eval_id.get(str(eval_id))
+                if target_dto is None or target_dto.policy_gate_id is None:
+                    continue
+                if str(target_dto.policy_gate_id) != str(entry.get("policy_gate_id")):
+                    continue
+                target_dto.policy_gate_evaluation_mode = str(mode)
+                applied += 1
+        return applied
+
     async def _run_post_node_evals(
         self,
         node_id: str,
@@ -4040,6 +4140,30 @@ class PipelineExecutor:
                 run.pipeline_id,
                 snapshot.policy_gate_pins_json,
             )
+            # FAR-939 chunk 12 (M4, §3.3): RUN-FROZEN evaluation modes. The
+            # build above reads the LIVE gate rows; every gate this run has
+            # already FIRED carries its fire-time modes on the claim row, so
+            # re-apply them before the graph compile — otherwise a mid-run
+            # flip of policy_gates.evaluation_mode would silently change the
+            # resumed run (the skip would stop matching, and the human
+            # decision's Evidence grounding would be keyed on a mode the run
+            # never started with). No fired gate ⇒ no stamp ⇒ no-op.
+            fired_gate_configs = list(
+                (
+                    await session.execute(
+                        select(HitlClaim.gate_config_json).where(
+                            HitlClaim.run_id == run_id,
+                            HitlClaim.organisation_id == org_id,
+                        )
+                    )
+                ).scalars()
+            )
+            frozen_applied = self._overlay_frozen_gated_eval_modes(eval_defs_by_node, fired_gate_configs)
+            if frozen_applied:
+                _log.info(
+                    "eval_defs.frozen_modes_reapplied",
+                    extra={"run_id": str(run_id), "entries": frozen_applied},
+                )
 
         pipeline_id = run.pipeline_id
         snapshot_id = run.snapshot_id
@@ -6360,6 +6484,7 @@ class PipelineExecutor:
         subject: str | None = None,
         subject_parent: dict[str, Any] | None = None,
         subject_leaf_key: str | None = None,
+        frozen_gated_eval_modes: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, bool]:
         """Create the HITL gate row (or reuse a coalescing open gate).
 
@@ -6385,6 +6510,11 @@ class PipelineExecutor:
         so the bundle records the matched value as PRIMARY evidence. The
         FAR-604 coalescing hash is over ``Run.input_hash`` — never this
         payload — so the extra member cannot change reuse/supersede outcomes.
+
+        FAR-939 chunk 12 (M4): ``frozen_gated_eval_modes`` is the source
+        node's evaluation-mode snapshot as of THIS fire — stamped onto
+        ``gate_config_json`` so a resume re-freezes the DTO universe
+        (§3.3 run-frozen).
 
         Returns ``(pipeline_name, coalesce_reused)`` — the name is ``None``
         when the gate was reused or the lookup failed (logged, best-effort).
@@ -6504,6 +6634,15 @@ class PipelineExecutor:
                         exc_info=True,
                     )
                     terminalize_at = None
+                # FAR-939 chunk 12 (M4): stamp the fire-time evaluation modes
+                # onto the fire-time review-config column (the same
+                # failure-isolated stamp FAR-634 established). Only merged
+                # onto a RESOLVED config — a NULL stamp stays NULL so the
+                # resolver's snapshot/live walk fallback is untouched, and
+                # every reader of gate_config_json reads members by key, so
+                # the extra member is inert to them.
+                if frozen_gated_eval_modes and isinstance(gate_config, dict):
+                    gate_config = {**gate_config, _GATED_EVAL_MODES_KEY: frozen_gated_eval_modes}
                 await mgr.create_gate(
                     session,
                     run_id=run_id,
@@ -6566,6 +6705,14 @@ class PipelineExecutor:
             )
 
         if pipeline_id is not None and org_id is not None:
+            # FAR-939 chunk 12 (M4, §3.3): capture the source node's
+            # evaluation modes AS OF THIS FIRE — stamped onto the claim row
+            # inside _create_interrupt_gate so resume() can re-freeze the
+            # DTO universe even when a mode flips mid-run.
+            frozen_gated_eval_modes = self._frozen_gated_eval_modes(
+                ctx.eval_definitions_by_node,
+                review_id,
+            )
             pipeline_name, coalesce_reused = await self._create_interrupt_gate(
                 org_id=org_id,
                 run_id=run_id,
@@ -6577,6 +6724,7 @@ class PipelineExecutor:
                 subject=subject,
                 subject_parent=subject_parent,
                 subject_leaf_key=subject_leaf_key,
+                frozen_gated_eval_modes=frozen_gated_eval_modes,
             )
             if coalesce_reused:
                 detail = (

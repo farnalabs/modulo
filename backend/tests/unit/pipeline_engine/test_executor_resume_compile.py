@@ -19,7 +19,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.pipeline_engine import graph_cache as graph_cache_module
+from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
 from modulo.core.pipeline_engine.executor import (
+    _GATED_EVAL_MODES_KEY,
     PipelineExecutor,
     compute_retry_aware_topology_hash,
 )
@@ -126,13 +128,21 @@ def _make_resume_session(snapshot: MagicMock, pipeline: MagicMock) -> AsyncMock:
     scalars_mock.all.return_value = []
     eval_result.scalars.return_value = scalars_mock
 
+    # FAR-939 M4: the fire-time evaluation-mode stamp read (one
+    # gate_config_json select per fired claim) sits between the eval load and
+    # the second session block.
+    claim_stamp_result = MagicMock()
+    claim_stamp_result.scalars.return_value = []
+
     count_result = MagicMock()
     count_result.scalar.return_value = 0
 
     # True resume() query order: sandbox-capacity graph_json probe, snapshot
-    # select, eval-definitions load (first session block), THEN the pipeline
-    # select (second session block).
-    execute_results = iter([graph_json_result, snapshot_result, eval_result, pipeline_result, count_result])
+    # select, eval-definitions load, claim evaluation-mode stamp read (first
+    # session block), THEN the pipeline select (second session block).
+    execute_results = iter(
+        [graph_json_result, snapshot_result, eval_result, claim_stamp_result, pipeline_result, count_result]
+    )
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:
@@ -362,3 +372,149 @@ async def test_execute_then_resume_hits_same_cache_entry_with_retry_policy():
         assert build_mock.call_count == 1
     finally:
         graph_cache_module._CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# FAR-939 chunk 12 (M4) — run-frozen evaluation modes on the resume compile
+# ---------------------------------------------------------------------------
+
+
+def _mode_dto(
+    node_id: str,
+    *,
+    mode: str | None,
+    governed: bool = True,
+    gate_id: uuid.UUID | None = None,
+    eval_id: uuid.UUID | None = None,
+) -> EvalDefDTO:
+    return EvalDefDTO(
+        id=eval_id or uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        pipeline_id=uuid.uuid4(),
+        node_id=node_id,
+        name="mode-dto",
+        eval_type="regex",
+        config={},
+        failure_behaviour="block",
+        policy_gate_id=(gate_id or uuid.uuid4()) if governed else None,
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.UUID(node_id) if governed else None,
+        policy_gate_evaluation_mode=mode,
+    )
+
+
+def test_frozen_capture_records_only_governed_evals_of_the_fired_source() -> None:
+    """The fire-time stamp carries the source node's GOVERNED evals and their
+    modes (§3.3 run-frozen) — ungoverned evals have no mode to freeze."""
+    node = str(uuid.uuid4())
+    target = str(uuid.uuid4())
+    human_dto = _mode_dto(node, mode="human")
+    automatic_dto = _mode_dto(node, mode="automatic")
+    ungoverned = _mode_dto(node, mode=None, governed=False)
+    by_node = {node: [human_dto, automatic_dto, ungoverned]}
+
+    frozen = PipelineExecutor._frozen_gated_eval_modes(by_node, f"hitl_review_{node}_{target}")
+
+    assert frozen == [
+        {
+            "eval_id": str(human_dto.id),
+            "policy_gate_id": str(human_dto.policy_gate_id),
+            "evaluation_mode": "human",
+        },
+        {
+            "eval_id": str(automatic_dto.id),
+            "policy_gate_id": str(automatic_dto.policy_gate_id),
+            "evaluation_mode": "automatic",
+        },
+    ]
+
+
+def test_frozen_capture_is_empty_for_an_unparseable_gate_id() -> None:
+    """Manual-node ids (and anything else that is not
+    ``hitl_review_<source>_<target>``) have no claim row to stamp."""
+    node = str(uuid.uuid4())
+    assert not PipelineExecutor._frozen_gated_eval_modes({node: [_mode_dto(node, mode="human")]}, "manual_step_1")
+    assert not PipelineExecutor._frozen_gated_eval_modes(None, f"hitl_review_{node}_{uuid.uuid4()!s}")
+
+
+def test_overlay_restores_the_run_start_mode_after_a_mid_run_flip() -> None:
+    """THE M4 defect: the resume build reads the LIVE gate, so a human→
+    automatic flip between pause and resume changed the resumed run's DTO
+    universe (the Evidence grounding keyed on the mode stopped matching).
+    The fire-time stamp puts the run-start mode back."""
+    node = str(uuid.uuid4())
+    live_dto = _mode_dto(node, mode="automatic")  # built from the FLIPPED live row
+    by_node = {node: [live_dto]}
+    stamp = [
+        {
+            "eval_id": str(live_dto.id),
+            "policy_gate_id": str(live_dto.policy_gate_id),
+            "evaluation_mode": "human",
+        }
+    ]
+
+    applied = PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, [{_GATED_EVAL_MODES_KEY: stamp}])
+
+    assert applied == 1
+    assert live_dto.policy_gate_evaluation_mode == "human"
+
+
+def test_overlay_restores_automatic_when_the_flip_went_the_other_way() -> None:
+    """automatic→human mid-run must NOT make a run that started automatic
+    ground a human Evidence row (provenance lie) — the stamp freezes it back
+    to automatic."""
+    node = str(uuid.uuid4())
+    live_dto = _mode_dto(node, mode="human")
+    by_node = {node: [live_dto]}
+    config = {
+        _GATED_EVAL_MODES_KEY: [
+            {
+                "eval_id": str(live_dto.id),
+                "policy_gate_id": str(live_dto.policy_gate_id),
+                "evaluation_mode": "automatic",
+            }
+        ]
+    }
+
+    applied = PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, [config])
+
+    assert applied == 1
+    assert live_dto.policy_gate_evaluation_mode == "automatic"
+
+
+def test_overlay_skips_when_the_governing_gate_changed() -> None:
+    """A stamp whose ``policy_gate_id`` no longer matches the live DTO's
+    governing gate (disabled / soft-deleted / replaced) must not override
+    operator control — the live-built DTO stands."""
+    node = str(uuid.uuid4())
+    live_dto = _mode_dto(node, mode="human", gate_id=uuid.uuid4())
+    replaced_gate_id = uuid.uuid4()
+    assert replaced_gate_id != live_dto.policy_gate_id
+    by_node = {node: [live_dto]}
+    config = {
+        _GATED_EVAL_MODES_KEY: [
+            {
+                "eval_id": str(live_dto.id),
+                "policy_gate_id": str(replaced_gate_id),
+                "evaluation_mode": "automatic",
+            }
+        ]
+    }
+
+    applied = PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, [config])
+
+    assert applied == 0
+    assert live_dto.policy_gate_evaluation_mode == "human"
+
+
+def test_overlay_is_a_noop_without_a_stamp() -> None:
+    """No fired gate (or a legacy claim row without the stamp) ⇒ no
+    behaviour change — the resume build stands as-is."""
+    node = str(uuid.uuid4())
+    live_dto = _mode_dto(node, mode="human")
+    by_node = {node: [live_dto]}
+
+    assert PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, None) == 0
+    assert PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, [None]) == 0
+    assert PipelineExecutor._overlay_frozen_gated_eval_modes(by_node, [{}]) == 0
+    assert live_dto.policy_gate_evaluation_mode == "human"

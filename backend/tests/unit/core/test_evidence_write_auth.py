@@ -94,12 +94,22 @@ def test_w2_boundary_exact_key_without_suffix_is_rejected() -> None:
         assert_write_authorisation("eval", "eval")
 
 
-@pytest.mark.parametrize("producer_type", ["policy_gate", "derived"])
-def test_w2_reserved_producers_write_nothing(producer_type: str) -> None:
-    """Reserved producers have an empty namespace: any key is unauthorised."""
-    assert not KEY_NAMESPACE_OWNERSHIP[producer_type]
+def test_w2_reserved_producer_derived_writes_nothing() -> None:
+    """``derived`` remains reserved with an empty namespace: any key is
+    unauthorised (chunk 7 contract)."""
+    assert not KEY_NAMESPACE_OWNERSHIP["derived"]
     with pytest.raises(EvidenceWriteAuthorisationError):
-        assert_write_authorisation(producer_type, "eval_passed")
+        assert_write_authorisation("derived", "eval_passed")
+
+
+def test_w2_policy_gate_namespace_opened_to_the_gate_prefix_only() -> None:
+    """FAR-939 chunk 12 (CO-6): ``policy_gate`` was opened — but ONLY to the
+    ``gate_`` prefix, for the human-decision grounding rows (§3.4 key
+    ``gate_decision_<policy_gate_id>``, shipped with the opening). Any other
+    key for this producer is still unauthorised."""
+    assert KEY_NAMESPACE_OWNERSHIP["policy_gate"] == {"gate_"}
+    with pytest.raises(EvidenceWriteAuthorisationError):
+        assert_write_authorisation("policy_gate", "eval_passed")
 
 
 # ---------------------------------------------------------------------------

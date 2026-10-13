@@ -576,6 +576,26 @@ class TestResolveHumanEvaluation:
         assert outcome.eval_result_id is None
         assert outcome.error is None
 
+    @pytest.mark.parametrize("gate_action", ["escalate", "retry", ""])
+    def test_m3_out_of_set_gate_action_fails_closed_to_block(self, gate_action: str) -> None:
+        """M3: the live ``policy_gates.action`` CHECK admits ``escalate``
+        (FAR-1694/0305) but chunk 12's Outcome contract is the terminal
+        ``continue|warn|block`` set — an out-of-set gate action must never
+        reach the Outcome. It fail-closes to ``block`` (the module's
+        halt action), on BOTH the rejected and the undefined branch."""
+        rejected = resolve_human_evaluation(_human_gate_view(action=gate_action), HumanDecision(action="rejected"))
+        assert rejected.result is False
+        assert rejected.action == "block"
+        assert rejected.action != "escalate"
+
+        undefined = resolve_human_evaluation(
+            _human_gate_view(action=gate_action),
+            HumanDecision(action="exploded"),  # type: ignore[arg-type]
+        )
+        assert undefined.result is None
+        assert undefined.action == "block"
+        assert undefined.error == "unrecognized_human_action"
+
     def test_c4_deliver_manual_yields_pass_continue(self) -> None:
         """Criterion 4: deliver_manual -> result=True, action='continue'
         (manual delivery is a form of approval)."""

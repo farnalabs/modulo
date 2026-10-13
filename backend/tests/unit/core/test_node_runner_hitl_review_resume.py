@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -173,3 +174,127 @@ async def test_deliver_manual_decision_resumes() -> None:
     assert result is not None
     assert result["artifacts"][0]["result"] == "delivered_manual"
     assert result["output"] == manual_output
+
+
+# --- M6: one human-decision vocabulary, no dead constant -------------------
+
+
+def test_human_decision_vocabulary_has_a_single_source() -> None:
+    """``_HUMAN_DECISION_ACTIONS`` (the resume path's membership check) must
+    be exactly the closed ``HumanDecision.action`` literal the resolver
+    consumes — the constant previously had NO call site while the resume path
+    inlined the same set, so the two could drift. Pinned in lockstep here."""
+    from typing import get_args, get_type_hints
+
+    from modulo.core.eval_engine.policy_gate import HumanDecision
+
+    resolver_vocabulary = set(get_args(get_type_hints(HumanDecision)["action"]))
+    assert set(nr._HUMAN_DECISION_ACTIONS) == resolver_vocabulary
+    assert resolver_vocabulary == {"approved", "rejected", "deliver_manual"}
+
+
+# --- M8 (criterion 12): the grounding fail-open guard covers the WHOLE body -
+
+
+async def test_grounding_constructor_failure_is_fail_open(caplog: pytest.LogCaptureFixture) -> None:
+    """Pre-M8 the lazy imports and ``HumanDecision(...)`` executed BEFORE the
+    ``try``, so a failure there escaped ``resume`` after the human's decision
+    had already committed — violating §3.4 / criterion 12. The whole
+    post-decision body now sits inside the guard: the failure is logged with
+    its structured event name and swallowed (only ``CancelledError``
+    propagates).
+    """
+    import uuid
+
+    from modulo.core.eval_engine import policy_gate as policy_gate_module
+    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+
+    dto = EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        name="human-gate-eval",
+        eval_type="regex",
+        config={},
+        failure_behaviour="block",
+        node_id="node-a",
+        policy_gate_id=uuid.uuid4(),
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.uuid4(),
+        policy_gate_evaluation_mode="human",
+    )
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("resolver construction exploded")
+
+    class _SessionNeverOpens:
+        """``session_factory()`` must yield an async CM — never entered here."""
+
+        async def __aenter__(self) -> object:
+            raise AssertionError("the session must never open when construction fails")
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+    def _session_factory() -> object:
+        return _SessionNeverOpens()
+
+    with (
+        patch.object(policy_gate_module, "HumanDecision", _boom),
+        caplog.at_level(logging.WARNING, logger="modulo.core.pipeline_engine.node_runner"),
+    ):
+        # No pytest.raises: the point is that NOTHING escapes.
+        await nr._ground_human_gate_evidence(
+            {"action": "approved", "review_id": _REVIEW_ID},
+            [dto],
+            session_factory=_session_factory,
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            review_id=_REVIEW_ID,
+        )
+
+    failures = [r for r in caplog.records if r.getMessage() == "hitl_review.human_gate_evidence_grounding_failed"]
+    assert failures, "the construction failure must be logged with its structured event name"
+    assert failures[0].human_action == "approved"
+
+
+async def test_grounding_cancelled_error_propagates() -> None:
+    """``CancelledError`` is the one exception that must NOT be swallowed by
+    the fail-open guard."""
+    import asyncio
+    import uuid
+
+    from modulo.core.pipeline_engine.eval_persist_order import EvalDefDTO
+
+    dto = EvalDefDTO(
+        id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        name="human-gate-eval",
+        eval_type="regex",
+        config={},
+        failure_behaviour="block",
+        node_id="node-a",
+        policy_gate_id=uuid.uuid4(),
+        policy_gate_version=1,
+        policy_gate_node_id=uuid.uuid4(),
+        policy_gate_evaluation_mode="human",
+    )
+
+    class _CancelledSession:
+        async def __aenter__(self) -> object:
+            raise asyncio.CancelledError
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+    def _session_factory() -> object:
+        return _CancelledSession()
+
+    with pytest.raises(asyncio.CancelledError):
+        await nr._ground_human_gate_evidence(
+            {"action": "approved", "review_id": _REVIEW_ID},
+            [dto],
+            session_factory=_session_factory,
+            org_id=uuid.uuid4(),
+            run_id=uuid.uuid4(),
+            review_id=_REVIEW_ID,
+        )

@@ -208,7 +208,7 @@ async def create_or_update_eval(
     suite_id: str | None,
     eval_suite_id: uuid.UUID | None = None,
     existing_eval_id: uuid.UUID | None = None,
-    evaluation_mode: str = "automatic",
+    evaluation_mode: str | None = None,
 ) -> Any:
     """Persist an ``Eval`` row and optionally a ``PolicyGate`` row.
 
@@ -220,9 +220,9 @@ async def create_or_update_eval(
        a row is enforced by no seam and would fire silently never);
        persist ``Eval`` row only (no ``PolicyGate``, never call ``validate_binding``).
     2. Else ``node_id is not None`` → call ``validate_binding``;
-       on ``PolicyGateBindingViolationError`` re-raise for the caller.
+       on        ``PolicyGateBindingViolationError`` re-raise for the caller.
        Persist ``Eval`` + ``PolicyGate(action=failure_behaviour,
-       evaluation_mode=evaluation_mode)``.
+       evaluation_mode=<see the preserve-or-default rule below>)``.
     3. Else (suite-scoped non-guardrail) → persist ``Eval`` row only
        (no ``PolicyGate``).
 
@@ -230,11 +230,20 @@ async def create_or_update_eval(
     since FAR-1103 chunk 5a retired the public surface.
 
     ``evaluation_mode`` (FAR-939 chunk 12) is persisted on BOTH gate
-    upsert paths (create and update), so it must be forwarded by every
-    caller that wants to preserve or set a non-default mode: the REST
-    update route resolves the live gate's current mode and forwards it
-    (mirroring ``failure_behaviour``); callers that do not forward it —
-    including the MCP write seam — inherit the ``'automatic'`` default.
+    upsert paths, with preserve-or-default semantics (§3.1 — every update
+    surface must carry OR preserve the field):
+
+      - **CREATE** (no live gate): ``evaluation_mode or "automatic"`` — a
+        fresh gate is automatic (current behaviour) unless the caller
+        passes a mode explicitly.
+      - **UPDATE** (live gate): assigned ONLY when the caller passes a
+        non-``None`` value; ``None`` means *preserve the live gate's
+        mode*. This is what makes an MCP (or any partial) eval edit
+        unable to silently reset a ``human`` gate to ``automatic`` —
+        mirroring ``failure_behaviour`` preservation.
+
+    REST callers forward the live value; callers that do not carry the
+    field pass ``None`` and preserve on update / default on create.
 
     Version stamping lives inside the helper:
       - create → ``version=1``
@@ -355,18 +364,25 @@ async def create_or_update_eval(
         ).scalar_one_or_none()
 
         if existing_gate is not None:
-            # Update existing gate
+            # Update existing gate.
             existing_gate.action = pg_action
             existing_gate.node_id = node_id
-            existing_gate.evaluation_mode = evaluation_mode
+            # FAR-939 chunk 12 §3.1: ``None`` means *preserve the live
+            # mode* — an update surface that does not carry the field
+            # (the MCP write seam) must never reset a human-approval gate
+            # to automatic. Callers that carry it (the REST update route)
+            # pass the resolved live value, so an explicit write lands.
+            if evaluation_mode is not None:
+                existing_gate.evaluation_mode = evaluation_mode
         else:
-            # Create new gate
+            # Create new gate — fresh gates are automatic unless the
+            # caller passes a mode explicitly.
             gate = PolicyGate(
                 organisation_id=org_id,
                 eval_id=eval_row.id,
                 node_id=node_id,
                 action=pg_action,
-                evaluation_mode=evaluation_mode,
+                evaluation_mode=evaluation_mode or "automatic",
                 version=1,
             )
             session.add(gate)

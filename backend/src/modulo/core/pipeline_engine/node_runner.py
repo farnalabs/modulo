@@ -64,7 +64,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeGuard, cast, get_args
 
 import httpx
 import jinja2
@@ -5171,6 +5171,13 @@ def _hitl_review_approve_reject_result(
     return gate_result
 
 
+#: The closed human-decision vocabulary the resume path resolves (FAR-541).
+#: Defined ABOVE its first consumer (``_hitl_review_resume_result``) so the
+#: vocabulary has exactly one home — the resume path checks membership here
+#: instead of inlining the set.
+_HUMAN_DECISION_ACTIONS = ("approved", "rejected", "deliver_manual")
+
+
 async def _hitl_review_resume_result(
     decision: Any,
     review_id: str,
@@ -5217,16 +5224,20 @@ async def _hitl_review_resume_result(
             extra={"review_id": review_id, "decision_review_id": stamped_gate},
         )
         return (False, None)
-    if action == "deliver_manual":
-        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
-        _inject_answer_state(review_id, decision, gate_result[1])
-        return gate_result
-    if action not in ("approved", "rejected"):
+    # FAR-541 / M6: the closed vocabulary lives in exactly ONE place
+    # (``_HUMAN_DECISION_ACTIONS``) so this path and the Evidence grounding
+    # path can never drift apart. Anything outside it fails closed here —
+    # a missing action, an empty ``{}``, an unknown action value.
+    if action not in _HUMAN_DECISION_ACTIONS:
         _log.warning(
             "hitl_review.malformed_decision_ignored",
             extra={"review_id": review_id, "decision_type": type(decision).__name__, "action": action},
         )
         return (False, None)
+    if action == "deliver_manual":
+        gate_result = _hitl_review_deliver_manual_result(review_id, decision)
+        _inject_answer_state(review_id, decision, gate_result[1])
+        return gate_result
     is_rejected = action == "rejected"
     await _dispatch_reject_correction_best_effort(
         state, decision, review_id, hitl_review_config, session_factory, org_id
@@ -5236,14 +5247,6 @@ async def _hitl_review_resume_result(
     )
     _inject_answer_state(review_id, decision, ar_result)
     return (True, ar_result)
-
-
-#: The closed human-decision vocabulary the resume path resolves (FAR-541).
-_HUMAN_DECISION_ACTIONS = ("approved", "rejected", "deliver_manual")
-
-#: The gate-action vocabulary a human-mode gate may carry (the live
-#: ``policy_gates.action`` CHECK — ``escalate`` added by FAR-1694/0305).
-_HUMAN_GATE_ACTIONS = ("warn", "block", "escalate")
 
 
 async def _ground_human_gate_evidence(
@@ -5275,7 +5278,9 @@ async def _ground_human_gate_evidence(
     before resume runs, so the grounding write is **fail-open with a
     structured log** — it must never retro-fail an already-committed
     decision (mirrors chunk 4's fail-open decision-record philosophy).
-    ``CancelledError`` propagates.
+    The guard covers the WHOLE post-decision body: the DTO scan, the lazy
+    imports, the ``HumanDecision`` construction, the session and the
+    Evidence write (criterion 12 / §3.4). ``CancelledError`` propagates.
 
     Called from the gate node's RESUME path only — the write happens after
     the human's decision exists, never before. No ``PolicyGateDecision``
@@ -5284,44 +5289,55 @@ async def _ground_human_gate_evidence(
     """
     if not eval_definitions:
         return
-    human_dtos = [
-        dto
-        for dto in eval_definitions
-        if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
-    ]
-    if not human_dtos:
-        return
-
-    if session_factory is None or org_id is None or run_id is None:
-        _log.warning(
-            "hitl_review.human_gate_evidence_grounding_skipped",
-            extra={
-                "review_id": review_id,
-                "run_id": str(run_id),
-                "human_action": decision.get("action") if isinstance(decision, dict) else None,
-                "reason": "missing_session_org_or_run",
-            },
-        )
-        return
-
-    from modulo.core.eval_engine.evidence_layer import append_evidence
-    from modulo.core.eval_engine.policy_gate import (
-        HumanDecision,
-        HumanGateView,
-        resolve_human_evaluation,
-    )
-
     action = decision.get("action") if isinstance(decision, dict) else None
-    human_decision = HumanDecision(
-        # The resume path only resolves the three recognised actions
-        # (anything else fails closed before this call); the cast carries a
-        # stray value through to the resolver's fail-closed branch.
-        action=cast("Any", action),
-        decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
-        reason=decision.get("reason") if isinstance(decision, dict) else None,
-    )
-
+    # M8 (criterion 12): EVERYTHING that can raise after the human's
+    # decision committed lives INSIDE this fail-open guard — including the
+    # lazy imports and the HumanDecision construction, which previously
+    # sat above the ``try`` and could escape ``resume`` with the decision
+    # already durable.
     try:
+        human_dtos = [
+            dto
+            for dto in eval_definitions
+            if getattr(dto, "policy_gate_evaluation_mode", None) == "human" and dto.policy_gate_id is not None
+        ]
+        if not human_dtos:
+            return
+
+        if session_factory is None or org_id is None or run_id is None:
+            _log.warning(
+                "hitl_review.human_gate_evidence_grounding_skipped",
+                extra={
+                    "review_id": review_id,
+                    "run_id": str(run_id),
+                    "human_action": action,
+                    "reason": "missing_session_org_or_run",
+                },
+            )
+            return
+
+        from modulo.core.eval_engine.evidence_layer import append_evidence
+        from modulo.core.eval_engine.policy_gate import (
+            HumanDecision,
+            HumanGateAction,
+            HumanGateView,
+            resolve_human_evaluation,
+        )
+
+        human_decision = HumanDecision(
+            # The resume path only resolves the three recognised actions
+            # (anything else fails closed before this call); the cast carries a
+            # stray value through to the resolver's fail-closed branch.
+            action=cast("Any", action),
+            decided_by=decision.get("decided_by") if isinstance(decision, dict) else None,
+            reason=decision.get("reason") if isinstance(decision, dict) else None,
+        )
+
+        # M6: the gate-action vocabulary is DERIVED from the policy_gate
+        # module's HumanGateAction literal — never restated here, so the
+        # two cannot drift.
+        gate_actions_in_set = set(get_args(HumanGateAction))
+
         async with session_factory() as session, session.begin():
             await set_rls_org(session, org_id)
             await set_rls_execution_context(session)
@@ -5330,22 +5346,27 @@ async def _ground_human_gate_evidence(
                 # comprehension filter above does not narrow the element type).
                 if dto.policy_gate_id is None:
                     continue
-                gate_action = dto.failure_behaviour
-                if gate_action not in _HUMAN_GATE_ACTIONS:
+                if dto.failure_behaviour not in gate_actions_in_set:
+                    # Loud, but deliberately NOT a skip: the live row's CHECK
+                    # admits ``escalate`` (FAR-1694/0305) while the Outcome
+                    # contract does not, so the resolver fail-closes the
+                    # out-of-set action to ``block`` (M3) and the decision is
+                    # still grounded (criterion 9).
                     _log.warning(
-                        "hitl_review.human_gate_evidence_invalid_gate_action",
+                        "hitl_review.human_gate_action_out_of_set",
                         extra={
                             "review_id": review_id,
                             "policy_gate_id": str(dto.policy_gate_id),
-                            "action": gate_action,
+                            "action": dto.failure_behaviour,
                         },
                     )
-                    continue
                 outcome = resolve_human_evaluation(
                     HumanGateView(
                         policy_gate_id=dto.policy_gate_id,
                         eval_id=dto.id,
-                        action=cast("Any", gate_action),
+                        # Live rows carry a plain `str` action (the CHECK
+                        # admits escalate); the resolver narrows it.
+                        action=cast("Any", dto.failure_behaviour),
                         version=dto.policy_gate_version or 1,
                     ),
                     human_decision,

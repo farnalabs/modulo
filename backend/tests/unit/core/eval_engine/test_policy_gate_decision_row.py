@@ -150,7 +150,16 @@ class TestResolvedActionVocabularyUnchanged:
     def test_human_resolver_never_emits_timeout_or_escalate(self) -> None:
         """Every action ``resolve_human_evaluation`` can return is inside the
         shipped vocabulary — and never ``'timeout'`` (a run-level record, not
-        a decision-row action, per chunk 12 §3.5)."""
+        a decision-row action, per chunk 12 §3.5) and never ``'escalate'``
+        (RQ1 — a routing transition, not a terminal resolution).
+
+        The guard is exercised against an **escalate-shaped** gate view: the
+        live ``policy_gates.action`` CHECK admits ``escalate`` since
+        FAR-1694/0305, so that is the input which can actually leak. The
+        version of this test this replaces only ever built ``action="block"``
+        views, so no input could produce an escalate Outcome — an assertion
+        that cannot fail is not coverage.
+        """
         import uuid as _uuid
 
         from modulo.core.eval_engine.policy_gate import (
@@ -159,14 +168,35 @@ class TestResolvedActionVocabularyUnchanged:
             resolve_human_evaluation,
         )
 
-        view = HumanGateView(
+        block_view = HumanGateView(
             policy_gate_id=_uuid.uuid4(),
             eval_id=_uuid.uuid4(),
             action="block",
             version=1,
         )
+        # Built with a deliberate type ignore: the VIEW's contract is
+        # warn|block, but a live row can carry escalate — this is the
+        # runtime-shaped input the resolver must fail closed on.
+        escalate_view = HumanGateView(
+            policy_gate_id=_uuid.uuid4(),
+            eval_id=_uuid.uuid4(),
+            action="escalate",  # type: ignore[arg-type]
+            version=1,
+        )
         for action in ("approved", "rejected", "deliver_manual", "timeout", "escalated", ""):
-            outcome = resolve_human_evaluation(view, HumanDecision(action=action))  # type: ignore[arg-type]
-            assert outcome.action in ("continue", "warn", "block")
-            assert outcome.action != "timeout"
-            assert outcome.action != "escalate"
+            for view in (block_view, escalate_view):
+                outcome = resolve_human_evaluation(view, HumanDecision(action=action))  # type: ignore[arg-type]
+                assert outcome.action in ("continue", "warn", "block")
+                assert outcome.action != "timeout"
+                assert outcome.action != "escalate"
+
+        # Fail-closed proof (M3): a REJECTED decision on an escalate-shaped
+        # gate resolves to `block`, never to `escalate`.
+        rejected = resolve_human_evaluation(escalate_view, HumanDecision(action="rejected"))
+        assert rejected.result is False
+        assert rejected.action == "block"
+        # ...and so does the undefined/unrecognised branch.
+        undefined = resolve_human_evaluation(escalate_view, HumanDecision(action="wobble"))  # type: ignore[arg-type]
+        assert undefined.result is None
+        assert undefined.action == "block"
+        assert undefined.error == "unrecognized_human_action"

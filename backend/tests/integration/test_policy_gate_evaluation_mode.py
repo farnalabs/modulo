@@ -116,6 +116,12 @@ async def _run_query(engine: AsyncEngine, sql: str, params: dict[str, object] | 
         return [tuple(row) for row in result.all()]
 
 
+async def _exec(engine: AsyncEngine, sql: str, params: dict[str, object] | None = None) -> None:
+    """Run a row-return-less statement (UPDATE/INSERT/DELETE)."""
+    async with engine.begin() as conn:
+        await conn.execute(text(sql), params or {})
+
+
 async def _count(engine: AsyncEngine, sql: str, params: dict[str, object]) -> int:
     rows = await _run_query(engine, sql, params)
     return int(rows[0][0])
@@ -419,7 +425,8 @@ def test_c8_automatic_mode_gates_are_unaffected() -> None:
     (today's behaviour byte-identical)."""
     graph, node_a, _node_b = _two_node_graph()
     graph["edges"][0].pop("hitl_review_config")
-    _build(graph, {node_a: [_human_dto(node_a, mode="automatic")]})
+    compiled = _build(graph, {node_a: [_human_dto(node_a, mode="automatic")]})
+    assert compiled is not None
 
 
 # ---------------------------------------------------------------------------
@@ -597,3 +604,137 @@ async def test_c18_cancellation_while_pending_is_clean(
         {"rid": str(run_id)},
     )
     assert pending == 0
+
+
+# ---------------------------------------------------------------------------
+# M5 — the §3.3 human_only guard uses RUNTIME (falsy) semantics, not `is False`
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("falsy_value", [False, 0, ""])
+def test_c8_falsy_human_only_on_the_pause_edge_raises(falsy_value: object) -> None:
+    """M5: the runtime resolves ``human_only`` through
+    ``human_only_effective`` → ``bool(value)``, so ``0`` and ``""`` opt out
+    just like ``false``. A node-level ``hitl_config`` bypasses the Pydantic
+    model, so all three shapes can persist — the graph-build guard must
+    reject them all. The identity check this replaces
+    (``... is False``) let ``0``/``""`` through: validation passed while
+    runtime silently opted the gate out (§3.3 fail-closed bypass)."""
+    graph, node_a, _node_b = _two_node_graph({"human_only": falsy_value})
+    with pytest.raises(ValueError, match="human_only"):
+        _build(graph, {node_a: [_human_dto(node_a)]})
+
+
+def test_c8_falsy_human_only_on_a_node_level_hitl_config_raises() -> None:
+    """The same guard for the NODE-level ``hitl_config`` — the shape the
+    finding calls out (node-level config bypasses the Pydantic model, so
+    ``human_only: 0`` persists unvalidated)."""
+    node_a, node_b = str(uuid.uuid4()), str(uuid.uuid4())
+    graph = {
+        "nodes": [
+            {
+                "id": node_a,
+                "node_type": "hitl",
+                "hitl_config": {"label": "review", "human_only": 0},
+            },
+            {
+                "id": node_b,
+                "agent_id": str(uuid.uuid4()),
+                "node_type": "agent",
+                "prompt_template": "Third",
+                "model_backend_id": str(uuid.uuid4()),
+            },
+        ],
+        "edges": [{"id": "e1", "source": node_a, "target": node_b, "type": "normal"}],
+    }
+    with pytest.raises(ValueError, match="human_only"):
+        _build(graph, {node_a: [_human_dto(node_a)]})
+
+
+def test_c8_truthy_human_only_variants_still_compile() -> None:
+    """The guard is falsy-based, not presence-based: ``True``/``1``/absent
+    remain valid (no false positives from the M5 fix)."""
+    for value in (True, 1, None):
+        graph, node_a, _node_b = _two_node_graph({"human_only": value})
+        assert _build(graph, {node_a: [_human_dto(node_a)]}) is not None
+
+
+# ---------------------------------------------------------------------------
+# M4 — the evaluation mode is RUN-FROZEN across pause/resume (§3.3 / §10)
+# ---------------------------------------------------------------------------
+
+
+async def test_m4_human_mode_flip_after_pause_still_grounds_the_decision(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """THE M4 defect: ``executor.resume()`` re-builds the eval DTOs from the
+    LIVE gate rows, so flipping ``evaluation_mode`` between pause and resume
+    changed the resumed run — the Evidence grounding (keyed on the mode)
+    silently stopped matching and the human decision went unrecorded.
+
+    The fire-time stamp on the claim row re-freezes the mode, so the resumed
+    run behaves as it STARTED: the decision is still grounded, and no
+    automatic eval/decision row appears for a run that started ``human``."""
+    ctx = await _seed_human_gate_run(db_engine, "M4FlipAuto")
+    run_id = ctx["run_id"]
+    gate_id = ctx["gate_id"]
+
+    review_id = await _interrupt(db_engine, migrated_db_url, ctx)
+
+    # Mid-run flip: human -> automatic (an operator edits the live gate row).
+    await _exec(
+        db_engine,
+        "UPDATE policy_gates SET evaluation_mode = 'automatic' WHERE id = :gid",
+        {"gid": str(gate_id)},
+    )
+
+    await _resume_with_decision(
+        db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
+    )
+
+    rows = await _run_query(
+        db_engine,
+        "SELECT value FROM evidence WHERE subject_type = 'run' AND subject_id = :sid AND key = :key",
+        {"sid": str(run_id), "key": f"gate_decision_{gate_id}"},
+    )
+    assert len(rows) == 1, "the human decision must still be grounded after a mid-run mode flip"
+    assert rows[0][0] is True
+
+    counts = await _decision_counts(db_engine, run_id)  # type: ignore[arg-type]
+    assert counts["eval_results"] == 0, "a run that started human must never evaluate the gate automatically"
+    assert counts["policy_gate_decisions"] == 0
+
+
+async def test_m4_automatic_mode_flip_after_pause_grounds_nothing(
+    db_engine: AsyncEngine,
+    migrated_db_url: str,
+) -> None:
+    """The reverse flip (automatic -> human mid-run): a run that STARTED
+    ``automatic`` computed its eval before the pause and must NOT ground a
+    human Evidence row just because the live mode changed — provenance would
+    claim a human evaluation that never happened. The freeze keeps the resume
+    build on ``automatic``: no Evidence row, and the pre-pause row counts are
+    unchanged."""
+    ctx = await _seed_human_gate_run(db_engine, "M4FlipHuman", evaluation_mode="automatic")
+    run_id = ctx["run_id"]
+    gate_id = ctx["gate_id"]
+
+    review_id = await _interrupt(db_engine, migrated_db_url, ctx)
+    before = await _decision_counts(db_engine, run_id)  # type: ignore[arg-type]
+    assert before["evidence"] == 0
+
+    await _exec(
+        db_engine,
+        "UPDATE policy_gates SET evaluation_mode = 'human' WHERE id = :gid",
+        {"gid": str(gate_id)},
+    )
+
+    await _resume_with_decision(
+        db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
+    )
+
+    after = await _decision_counts(db_engine, run_id)  # type: ignore[arg-type]
+    assert after["evidence"] == 0, "a run that started automatic must never ground human Evidence"
+    assert after["eval_results"] == before["eval_results"], "resume must not re-evaluate the gate"
+    assert after["policy_gate_decisions"] == before["policy_gate_decisions"]
