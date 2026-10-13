@@ -149,7 +149,7 @@ async def test_guardrail_override_clean_input_flips_to_pending():
     # resumable there (re-dispatched ``execute_run``, recovered by the
     # pending-class legs), and a "resume pending" flag would linger forever.
     # ``error_detail`` is an observation column and is left untouched (the
-    # pre-0305 sentinel-string design is retired).
+    # pre-0307 sentinel-string design is retired).
     assert result.guardrail_override_resume_pending is False
     assert result.error_detail == "Guardrail 'no-secrets' blocked"
     assert result.is_replay is True

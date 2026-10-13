@@ -20,7 +20,7 @@ guardrail rows, real create_run to produce the blocked run):
 
 Plus a REAL-POSTGRES (testcontainers) leg — ``TestRealPostgresMarkerDurability``
 — proving the FAR-1728 dedicated marker column
-(``runs.guardrail_override_resume_pending``, migration 0305) is DURABLY
+(``runs.guardrail_override_resume_pending``, migration 0307) is DURABLY
 persisted on read-back after a node-started ``eval_blocked`` flip, that the
 reconcile leg's SQL predicate + row-side recheck re-select the row, and that
 the resume claim clears the marker — never an in-memory ORM assertion alone.
@@ -314,7 +314,7 @@ async def test_override_node_started_run_flips_to_running_for_resume(session: As
     # FAR-1728: the node-started flip sets the DEDICATED marker column (the
     # reconcile self-heal leg's discriminator), and leaves ``error_detail``
     # untouched — an observation column must never carry a control-flow
-    # marker (the pre-0305 sentinel-string design is retired).
+    # marker (the pre-0307 sentinel-string design is retired).
     assert override_run.guardrail_override_resume_pending is True
     assert override_run.error_detail == block_detail
     # Preserved through the flip — the resume claim resets it atomically.
@@ -551,7 +551,7 @@ class TestRealPostgresMarkerDurability:
     ``PostgresContainer`` spun up on demand — capability-gated (skipped where
     Docker is absent), never coverage-gated. The schema comes from the REAL
     ORM metadata (``Base.metadata.create_all``), so the model column this test
-    exercises is the same one migration 0305 adds.
+    exercises is the same one migration 0307 adds.
     """
 
     async def test_marker_is_durable_reselected_and_cleared_on_claim(self, pg_engine: AsyncEngine) -> None:

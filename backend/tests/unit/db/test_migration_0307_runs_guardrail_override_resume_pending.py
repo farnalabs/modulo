@@ -1,10 +1,10 @@
-"""Unit tests for migration 0305_runs_guardrail_override_resume_pending (FAR-1728).
+"""Unit tests for migration 0307_runs_guardrail_override_resume_pending (FAR-1728).
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0305 revises ``0304_metrics_staging_recorded_at_index``;
+* **Revision chain** — 0307 revises ``0306_trigger_secret_encryption``;
   the migrations directory has exactly one head
-  (``0305_runs_guardrail_override_resume_pending``, pinned by all sibling chain
+  (``0307_runs_guardrail_override_resume_pending``, pinned by all sibling chain
   tests), the revision id matches the filename, and neither ``branch_labels``
   nor ``depends_on`` is set (the pre-commit check-migration-heads hook and
   every ``test_single_head_*`` pin depend on that shape).
@@ -16,7 +16,7 @@ Structural contract (no Postgres needed):
   database.md rule: a migration touching a column must update the model in
   the same change, and vice versa).
 
-The dedicated column replaces the pre-0305 sentinel STRING that the
+The dedicated column replaces the pre-0307 sentinel STRING that the
 guardrail-override resume flip stuffed into ``runs.error_detail`` — a
 control-flow marker in an observation/error column that is exposed on
 REST/MCP responses. See the migration docstring for the full rationale.
@@ -37,10 +37,10 @@ from sqlalchemy.sql.sqltypes import NullType
 from modulo.db.models.run import Run
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0305_runs_guardrail_override_resume_pending"
+_MIGRATION_NAME = "0307_runs_guardrail_override_resume_pending"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_CHAIN_HEAD_MIGRATION = "0305_runs_guardrail_override_resume_pending"
+_DOWN_REVISION = "0306_trigger_secret_encryption"
+_CHAIN_HEAD_MIGRATION = "0307_runs_guardrail_override_resume_pending"
 _COLUMN_NAME = "guardrail_override_resume_pending"
 
 
@@ -76,11 +76,11 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0305_runs_guardrail_override_resume_pending(self) -> None:
+    def test_single_head_is_0307_runs_guardrail_override_resume_pending(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0304_metrics_staging_recorded_at_index(self) -> None:
+    def test_down_revision_is_0306_trigger_secret_encryption(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:
@@ -123,7 +123,7 @@ class TestModelParity:
         """Model and migration ship the column in the SAME change."""
         column = Run.__table__.columns.get(_COLUMN_NAME)
         assert column is not None, (
-            f"Run must declare {_COLUMN_NAME} to stay in parity with migration 0305 — "
+            f"Run must declare {_COLUMN_NAME} to stay in parity with migration 0307 — "
             "a migration/model column drift is a review block"
         )
         # NullType is the generic stand-in SQLAlchemy uses before dialect

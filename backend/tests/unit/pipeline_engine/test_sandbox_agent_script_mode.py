@@ -31,7 +31,7 @@ from modulo.core.pipeline_engine.node_runner import (
     ScriptBudgetKilledError,
     ScriptFailedError,
     ScriptInvalidOutputError,
-    _sandbox_mint_run_api_key_for_sandbox,
+    _sandbox_issue_run_credential_for_sandbox,
     make_sandbox_agent_fn,
 )
 from modulo.core.pipeline_engine.sandbox_mode import (
@@ -803,7 +803,7 @@ def test_shared_validator_rejects_unknown_resource_limit_keys():
 
 
 # ---------------------------------------------------------------------------
-# 6. FAR-296 Phase 3b: per-run runner-role API-key minting for script mode
+# 6. FAR-296 Phase 3b / FAR-1690 A1: run-scoped API-key minting for EVERY mode
 # ---------------------------------------------------------------------------
 
 _RUN_ID = str(uuid.UUID("11111111-2222-3333-4444-666666666666"))
@@ -862,6 +862,8 @@ async def test_script_mode_injects_run_api_key_env():
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert envs["MODULO_API_KEY"] == _FAKE_RUN_KEY
+    # FAR-1690 A1: the issuance provenance is stamped alongside the key.
+    assert envs["MODULO_CREDENTIAL_PROVENANCE"] == "modulo_minted"
 
 
 async def test_script_mode_mint_failure_fails_open():
@@ -900,6 +902,8 @@ async def test_script_mode_mint_none_fails_open():
     assert result["output"]["status"] == "completed"
     envs = sandbox.commands.run.call_args.kwargs["envs"]
     assert "MODULO_API_KEY" not in envs
+    # Provenance is stamped only when a credential was actually issued.
+    assert "MODULO_CREDENTIAL_PROVENANCE" not in envs
 
 
 async def test_script_mode_mint_skipped_without_session_factory():
@@ -940,7 +944,7 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
         patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
         patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
-        full_key = await _sandbox_mint_run_api_key_for_sandbox(
+        issued = await _sandbox_issue_run_credential_for_sandbox(
             session_factory=factory,
             org_id=_ORG_ID,
             run_id=_RUN_ID,
@@ -948,7 +952,10 @@ async def test_sandbox_mint_helper_binds_the_run_account_id():
             sandbox_timeout=300,
         )
 
-    assert full_key == _FAKE_RUN_KEY
+    assert issued is not None
+    assert issued.secret == _FAKE_RUN_KEY
+    assert issued.provenance == "modulo_minted"
+    assert issued.provenance_kind == "attested"
     assert captured["account_id"] == _ACCOUNT_ID
 
 
@@ -978,7 +985,7 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
         patch("modulo.auth.api_key.mint_run_api_key", new=_capture_mint),
         patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
-        full_key = await _sandbox_mint_run_api_key_for_sandbox(
+        issued = await _sandbox_issue_run_credential_for_sandbox(
             session_factory=factory,
             org_id=_ORG_ID,
             run_id=_RUN_ID,
@@ -986,15 +993,17 @@ async def test_sandbox_mint_helper_falls_back_to_first_active_admin():
             sandbox_timeout=300,
         )
 
-    assert full_key == _FAKE_RUN_KEY
+    assert issued is not None
+    assert issued.secret == _FAKE_RUN_KEY
     assert captured["account_id"] == _admin_id
 
 
-async def test_llm_mode_does_not_inject_run_api_key():
-    """LLM mode never mints/injects MODULO_API_KEY — even with a session_factory.
+async def test_llm_mode_injects_run_api_key():
+    """FAR-1690 A1: LLM mode ALSO mints/injects the run-scoped MODULO_API_KEY.
 
-    The per-run key is a script-mode-only facility; LLM mode keeps the existing
-    long-lived host credential injection.
+    Every sandbox dispatch issues a run-scoped credential; the issuance
+    provenance ``modulo_minted`` is stamped alongside the key. This is the
+    inverse of the pre-A1 script-only behaviour.
     """
     node_def: dict[str, Any] = {
         "id": str(uuid.uuid4()),
@@ -1010,15 +1019,14 @@ async def test_llm_mode_does_not_inject_run_api_key():
 
     with (
         patch("e2b.AsyncSandbox.create", new=AsyncMock(return_value=sandbox)),
-        patch(
-            "modulo.auth.api_key.mint_run_api_key",
-            side_effect=AssertionError("must not be called in llm mode"),
-        ),
+        patch("modulo.auth.api_key.mint_run_api_key", new=AsyncMock(return_value=(MagicMock(), _FAKE_RUN_KEY))),
+        patch("modulo.db.crud.run.get_run_api_key_ttl_seconds", new=AsyncMock(return_value=1800)),
     ):
         await fn(_run_state_with_run_id())
 
     envs = sandbox.commands.run.call_args.kwargs["envs"]
-    assert "MODULO_API_KEY" not in envs
+    assert envs["MODULO_API_KEY"] == _FAKE_RUN_KEY
+    assert envs["MODULO_CREDENTIAL_PROVENANCE"] == "modulo_minted"
 
 
 # ---------------------------------------------------------------------------

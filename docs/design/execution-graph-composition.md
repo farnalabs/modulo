@@ -171,6 +171,3 @@ Ran 7 antagonistic lenses × 5 iterations (30 lens runs). v1 had ~12 criticals; 
 - **O7 – UNKNOWN drain fallback.** If `dispatcher_reconcile` cannot resolve a stuck `UNKNOWN`, add a terminal fallback (analogous to `age_terminalized`) so it does not hold a concurrency slot forever.
 
 **Disposition:** design is approved-in-substance; the above are implementation-phase risks with known mitigations. No design contradiction remains.
-
-## 12. Report
-Return: branch name, commit SHA, PR URL/number, and confirm the file exists at `docs/design/execution-graph-composition.md`.

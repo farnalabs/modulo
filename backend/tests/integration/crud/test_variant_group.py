@@ -26,6 +26,7 @@ from modulo.db.crud.variant_group import (
 )
 from modulo.db.models.run import Run
 from modulo.db.models.variant_group import VariantGroup
+from tests.integration.conftest import EvalMirrorDefinition, insert_evals_mirror
 
 pytestmark = [
     pytest.mark.integration,
@@ -308,7 +309,7 @@ async def test_coverage_gaps_detects_missing_evals(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions "
+                "INSERT INTO evals "
                 "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
                 "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', '{}'::json, :uid)",
             ),
@@ -319,6 +320,19 @@ async def test_coverage_gaps_detects_missing_evals(
                 "name": "test-eval",
                 "uid": str(test_user),
             },
+        )
+        # FAR-1729: coverage reads the live ``evals`` table post-cutover, so the
+        # legacy ``eval_definitions`` row needs its same-UUID ``evals`` mirror.
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=test_org,
+                pipeline_id=pipeline_id,
+                name="test-eval",
+                eval_type="llm_judge",
+                account_id=test_user,
+            ),
         )
 
     variants_with_gap = [
@@ -354,7 +368,7 @@ async def test_no_coverage_gaps_when_all_evals_present(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO eval_definitions "
+                "INSERT INTO evals "
                 "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
                 "VALUES (:id, :org_id, :pipeline_id, :name, 'llm_judge', '{}'::json, :uid)",
             ),
@@ -365,6 +379,19 @@ async def test_no_coverage_gaps_when_all_evals_present(
                 "name": "test-eval",
                 "uid": str(test_user),
             },
+        )
+        # FAR-1729: coverage reads the live ``evals`` table post-cutover, so the
+        # legacy ``eval_definitions`` row needs its same-UUID ``evals`` mirror.
+        await insert_evals_mirror(
+            conn,
+            EvalMirrorDefinition(
+                id=eval_id,
+                organisation_id=test_org,
+                pipeline_id=pipeline_id,
+                name="test-eval",
+                eval_type="llm_judge",
+                account_id=test_user,
+            ),
         )
 
     variants_covered = [

@@ -5268,13 +5268,13 @@ def _build_re_dispatch_predicate(
     FAR-1728 (guardrail-override resume self-heal): a RUNNING branch admits the
     guardrail-override resume flip's lost-job shape — ``first_node_dispatched``
     + ``guardrail_override_resume_pending`` (the DEDICATED marker column,
-    migration 0305) + stale heartbeat. The dedicated column is the flip's
+    migration 0307) + stale heartbeat. The dedicated column is the flip's
     discriminator because it is written by exactly one site in the product
     (``recovery.guardrail_override``'s flip — node-started branch only) —
     ``is_replay`` is NOT: webhook replay and manual replay set it too, so a
     ``first_node_dispatched`` + ``is_replay`` row is not necessarily the flip
     and selecting on it would lift the FAR-1649 node-started belt for every
-    wedged replay row. (The pre-0305 design stuffed a sentinel string into
+    wedged replay row. (The pre-0307 design stuffed a sentinel string into
     ``error_detail``; the dedicated boolean column replaces it — an
     observation column must not carry a control-flow marker.) No other branch
     of this OR can match a row carrying the marker and the ``running``+phase
@@ -5448,7 +5448,7 @@ def _build_re_dispatch_predicate(
         # path has none). Only the age gate collected it (~135 min,
         # ``no_progress``) — truthful but never retried.
         #
-        # The discriminator is the DEDICATED marker COLUMN (migration 0305),
+        # The discriminator is the DEDICATED marker COLUMN (migration 0307),
         # not ``is_replay``: ``is_replay`` is also set by webhook replay
         # (``trigger_engine._create_webhook_run``) and by a manual replay, so
         # ``first_node_dispatched`` + ``is_replay`` is NOT the flip's shape —
@@ -5456,7 +5456,7 @@ def _build_re_dispatch_predicate(
         # wedged REPLAY row and auto-resume it from checkpoint (re-executing
         # an in-progress, possibly non-idempotent super-step). The column has
         # one writer (``recovery.guardrail_override``'s flip), so this leg
-        # selects the flip and only the flip. (The pre-0305 sentinel string in
+        # selects the flip and only the flip. (The pre-0307 sentinel string in
         # ``error_detail`` is retired: an observation column must not carry a
         # control-flow marker.)
         #
@@ -7806,7 +7806,7 @@ async def _reconcile_org(
                 # the guardrail-override self-heal leg. (``is_replay`` is NOT
                 # selected: webhook/manual replay also set it, so it cannot
                 # identify the flip; ``error_detail`` is NOT selected either —
-                # pre-0305 it carried the sentinel string, but an observation
+                # pre-0307 it carried the sentinel string, but an observation
                 # column must not hold a control-flow marker.)
                 Run.guardrail_override_resume_pending,
                 Run.langgraph_thread_id,
@@ -8651,7 +8651,7 @@ def _is_override_resume_row(row: Any, stale_window: int) -> bool:
     convention, mirroring :func:`_is_nodeless_zombie_row` taking its own
     window): ``running`` + ``dispatcher='saq'`` + the durable
     ``first_node_dispatched`` phase + the DEDICATED
-    ``guardrail_override_resume_pending`` marker column (migration 0305 —
+    ``guardrail_override_resume_pending`` marker column (migration 0307 —
     written only by ``recovery.guardrail_override``'s flip) + a heartbeat
     stale past *stale_window*. The marker column — not ``is_replay`` —
     identifies the class, because ``is_replay`` is written by webhook/manual

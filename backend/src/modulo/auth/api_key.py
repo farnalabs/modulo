@@ -267,6 +267,93 @@ async def revoke_run_api_key(
     return result.rowcount or 0
 
 
+async def _seal_one_terminal_run(
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    session_factory: Callable[..., Any],
+) -> tuple[int, int, bool]:
+    """Seal ONE terminal run through the single shared choke point.
+
+    Returns ``(keys_revoked, workspaces_destroyed, ok)``. ``ok`` is False when
+    the seal raised (fail-closed: revoke unconfirmed, or the fact could not be
+    written) — the caller counts it and continues to the next run rather than
+    abandoning the org's leak set. A cancellation is re-raised untouched.
+    """
+    from modulo.core.run_teardown import seal_run_teardown
+
+    try:
+        seal_result = await seal_run_teardown(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=session_factory,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "api_key.revoke_run_sweep_seal_failed",
+            extra={"run_id": str(run_id), "org_id": str(org_id)},
+        )
+        return 0, 0, False
+    return seal_result.keys_revoked, seal_result.workspaces_destroyed, True
+
+
+async def _seal_terminal_run_keys_for_org(
+    org_id: uuid.UUID,
+    session_factory: Callable[..., Any],
+    *,
+    batch_size: int,
+    deadline: float,
+) -> dict[str, int]:
+    """Select and seal one org's terminal-run keys. Never raises (except cancel).
+
+    Returns per-org counts ``{"scanned", "revoked", "errors", "sealed",
+    "destroyed"}``. The candidate runs are selected in ONE short transaction,
+    then each run is sealed OUTSIDE it: the seal opens its OWN sessions for the
+    revoke leg and the audit fact, and holds a transaction only across DB work —
+    never across the remote workspace destroy.
+    """
+    scanned = revoked = errors = sealed = destroyed = 0
+    try:
+        async with session_factory() as session, session.begin():
+            await set_rls_org(session, org_id)
+            key_rows = (
+                await session.execute(
+                    select(OrgApiKey.id, OrgApiKey.run_id)
+                    .join(Run, Run.id == OrgApiKey.run_id)
+                    .where(
+                        OrgApiKey.organisation_id == org_id,
+                        OrgApiKey.run_id.is_not(None),
+                        OrgApiKey.revoked_at.is_(None),
+                        Run.status.in_(sorted(TERMINAL_STATUSES)),
+                    )
+                    .limit(batch_size)
+                )
+            ).all()
+        for _key_id, key_run_id in key_rows:
+            if time.monotonic() > deadline:
+                break
+            scanned += 1
+            keys_revoked, workspaces_destroyed, ok = await _seal_one_terminal_run(
+                run_id=key_run_id,
+                org_id=org_id,
+                session_factory=session_factory,
+            )
+            if not ok:
+                errors += 1
+                continue
+            revoked += keys_revoked
+            destroyed += workspaces_destroyed
+            sealed += 1
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        errors += 1
+        _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
+    return {"scanned": scanned, "revoked": revoked, "errors": errors, "sealed": sealed, "destroyed": destroyed}
+
+
 async def revoke_run_api_key_sweep(
     session_factory: Callable[..., Any],
     *,
@@ -274,18 +361,24 @@ async def revoke_run_api_key_sweep(
     batch_size: int = 50,
     budget_seconds: float = 30.0,
 ) -> dict[str, int]:
-    """Compensating revocation sweep for per-run runner-role API keys (FAR-296 Phase 3b-2).
+    """Sealed compensating sweep for per-run runner-role API keys (FAR-296 3b-2 + FAR-1690 A3).
 
     Finds per-run keys (``run_id`` NOT NULL, ``revoked_at`` IS NULL) whose runs
     are TERMINAL but were terminalized by a NON-executor path (dispatcher_reconcile
     raw-SQL terminalizers, saq_hooks._mark_run_failed, transition_run,
-    request_cancellation) and revokes them. The executor path already revokes at
-    finalization; this sweep is the compensating backstop so keys don't leak.
+    request_cancellation). For each such run it drives the single sealed terminal
+    step :func:`modulo.core.run_teardown.seal_run_teardown` — revoke the run's
+    credential(s), destroy every workspace labelled ``modulo.run.id``, and write
+    ONE ``run.teardown_sealed`` fact — so the compensating path seals exactly as
+    the executor path does (FAR-1690 D2: one choke point, one sweep, not two).
+    The executor path already seals at finalization; this sweep is the backstop.
 
     Bounded: ``batch_size`` keys per org, ``budget_seconds`` wall-clock budget,
     never raises. Runs system-scoped (modulo_system role, LOGIN, BYPASSRLS — the
     dedicated cross-org system cron role); the sweep processes each org under its
-    own RLS context when ``org_ids`` is None (self-selects all orgs).
+    own RLS context when ``org_ids`` is None (self-selects all orgs). Each run's
+    seal is isolated: a fail-closed stop on one run (credential revoke could not
+    be confirmed) is counted in ``errors`` and the sweep continues.
 
     Returns ``{"scanned", "revoked", "errors"}``.
     """
@@ -293,6 +386,8 @@ async def revoke_run_api_key_sweep(
     scanned = 0
     revoked = 0
     errors = 0
+    sealed = 0
+    destroyed = 0
     try:
         if org_ids is None:
             # Org self-selection runs system-scoped, but the factory's sessions
@@ -320,35 +415,27 @@ async def revoke_run_api_key_sweep(
             # the job-level ``api_key.revoke_run_sweep_failed`` below runs
             # OUTSIDE this loop and keeps the announced drop.
             async with _bound_org(org_id):
-                try:
-                    async with session_factory() as session, session.begin():
-                        await set_rls_org(session, org_id)
-                        key_rows = (
-                            await session.execute(
-                                select(OrgApiKey.id, OrgApiKey.run_id)
-                                .join(Run, Run.id == OrgApiKey.run_id)
-                                .where(
-                                    OrgApiKey.organisation_id == org_id,
-                                    OrgApiKey.run_id.is_not(None),
-                                    OrgApiKey.revoked_at.is_(None),
-                                    Run.status.in_(sorted(TERMINAL_STATUSES)),
-                                )
-                                .limit(batch_size)
-                            )
-                        ).all()
-                        for _key_id, key_run_id in key_rows:
-                            scanned += 1
-                            revoked += await revoke_run_api_key(session, run_id=key_run_id, org_id=org_id)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    errors += 1
-                    _log.exception("api_key.revoke_run_sweep_org_failed", extra={"org_id": str(org_id)})
+                outcome = await _seal_terminal_run_keys_for_org(
+                    org_id,
+                    session_factory,
+                    batch_size=batch_size,
+                    deadline=deadline,
+                )
+            scanned += outcome["scanned"]
+            revoked += outcome["revoked"]
+            errors += outcome["errors"]
+            sealed += outcome["sealed"]
+            destroyed += outcome["destroyed"]
     except asyncio.CancelledError:
         raise
     except Exception:
         errors += 1
         _log.exception("api_key.revoke_run_sweep_failed")
+    if sealed or destroyed:
+        _log.info(
+            "api_key.revoke_run_sweep_sealed",
+            extra={"sealed": sealed, "workspaces_destroyed": destroyed},
+        )
     return {"scanned": scanned, "revoked": revoked, "errors": errors}
 
 

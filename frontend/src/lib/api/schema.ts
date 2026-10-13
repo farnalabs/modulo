@@ -4547,6 +4547,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Logs
+         * @description Return a run's correlated, provenance-typed log view (FAR-1690 A4).
+         *
+         *     A single read endpoint joining the run's structured events, retained
+         *     workspace log tail (captured via the runtime provider's ``read_log_tail``),
+         *     and any dispatch-origin substrate entries — each stamped with its governed
+         *     class (``observed`` / ``reported`` / ``attested``). Unlike the FAR-704
+         *     ``deadline_triage`` surface, the workspace tail is available for **every**
+         *     run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
+         *     tail); no raw payload is added.
+         */
+        get: operations["get_run_logs_api_v1_runs__run_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/nodes/{node_id}/output": {
         parameters: {
             query?: never;
@@ -6120,6 +6148,82 @@ export interface paths {
         get: operations["get_collection_install_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Collection Version Endpoint
+         * @description Create the next draft version of a published, org-owned collection.
+         *
+         *     Copies the manifest pins and links both rows through ``version_group_id``
+         *     (the library's existing version machinery). The draft must then be
+         *     published via the existing publish endpoint, which back-propagates
+         *     ``update_available_version_id`` to installed orgs (FAR-759).
+         */
+        post: operations["create_collection_version_endpoint_api_v1_libraries_collections__primitive_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Collection Update Endpoint
+         * @description Surface the update-available state and per-entity delta for an install.
+         *
+         *     The delta is grouped per entity type (schemas / agents / pipelines) and
+         *     classifies every manifest pin as added / changed / unchanged / removed,
+         *     with the installed entities each pin maps to and whether each entity was
+         *     operator-modified (preserved on upgrade).
+         */
+        get: operations["get_collection_update_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__update_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/libraries/collections/{primitive_id}/installs/{install_id}/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upgrade Collection Endpoint
+         * @description Upgrade an installed collection to its newest published version.
+         *
+         *     Operator-initiated only (no auto-updates). Unmodified entities whose pin
+         *     changed are reconciled in place; operator-modified entities are preserved
+         *     and reported; added/removed pins and structural pipeline-graph changes are
+         *     reported without action. The install record then points at the new
+         *     version row.
+         */
+        post: operations["upgrade_collection_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__upgrade_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11344,6 +11448,32 @@ export interface components {
              */
             visibility: string;
         };
+        /**
+         * CollectionDeltaEntry
+         * @description Per-pin delta entry, grouped under the entity type it affects.
+         */
+        CollectionDeltaEntry: {
+            /** Entity Type */
+            entity_type: string;
+            /** Slug */
+            slug: string | null;
+            /** From Version */
+            from_version: string | null;
+            /** To Version */
+            to_version: string | null;
+            /**
+             * Change
+             * @enum {string}
+             */
+            change: "added" | "changed" | "unchanged" | "removed";
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "upgrade" | "unchanged" | "report" | "manual";
+            /** Entities */
+            entities?: components["schemas"]["CollectionUpdateEntity"][];
+        };
         /** CollectionInstallListResponse */
         CollectionInstallListResponse: {
             /** Items */
@@ -11398,6 +11528,13 @@ export interface components {
              */
             runnable: boolean;
             /**
+             * Update Available
+             * @default false
+             */
+            update_available: boolean;
+            /** Available Version */
+            available_version?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -11430,6 +11567,8 @@ export interface components {
             description: string | null;
             /** Status */
             status: string | null;
+            /** Version */
+            version?: string | null;
             /** Manifest Pins */
             manifest_pins: {
                 [key: string]: unknown;
@@ -11474,10 +11613,97 @@ export interface components {
                 [key: string]: string;
             }[];
         };
+        /** CollectionUpdateDelta */
+        CollectionUpdateDelta: {
+            /** Schemas */
+            schemas?: components["schemas"]["CollectionDeltaEntry"][];
+            /** Agents */
+            agents?: components["schemas"]["CollectionDeltaEntry"][];
+            /** Pipelines */
+            pipelines?: components["schemas"]["CollectionDeltaEntry"][];
+        };
+        /**
+         * CollectionUpdateEntity
+         * @description One installed entity a delta entry maps to.
+         */
+        CollectionUpdateEntity: {
+            /** Entity Type */
+            entity_type: string;
+            /**
+             * Entity Id
+             * Format: uuid
+             */
+            entity_id: string;
+            /** Modified */
+            modified: boolean;
+        };
         /** CollectionUpdateRequest */
         CollectionUpdateRequest: {
             /** Manifest Pins */
             manifest_pins?: components["schemas"]["CollectionPin"][];
+        };
+        /** CollectionUpdateResponse */
+        CollectionUpdateResponse: {
+            /** Update Available */
+            update_available: boolean;
+            /** Current Version */
+            current_version: string | null;
+            /** Available Version */
+            available_version: string | null;
+            /** Available Version Id */
+            available_version_id: string | null;
+            delta?: components["schemas"]["CollectionUpdateDelta"] | null;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** CollectionUpgradePreservedItem */
+        CollectionUpgradePreservedItem: {
+            /** Slug */
+            slug: string;
+            /** Entity Type */
+            entity_type: string;
+            /** Entity Id */
+            entity_id: string;
+            /**
+             * Reason
+             * @default modified
+             */
+            reason: string;
+        };
+        /** CollectionUpgradeReconciledItem */
+        CollectionUpgradeReconciledItem: {
+            /** Slug */
+            slug: string;
+            /** Entity Type */
+            entity_type: string;
+            /** Entity Id */
+            entity_id: string;
+        };
+        /** CollectionUpgradeReportedItem */
+        CollectionUpgradeReportedItem: {
+            /** Slug */
+            slug: string;
+            /** Change */
+            change: string;
+            /** Entity Type */
+            entity_type: string;
+        };
+        /** CollectionUpgradeResponse */
+        CollectionUpgradeResponse: {
+            /** Install Id */
+            install_id: string;
+            /** From Version */
+            from_version: string | null;
+            /** To Version */
+            to_version: string;
+            /** Reconciled */
+            reconciled?: components["schemas"]["CollectionUpgradeReconciledItem"][];
+            /** Preserved */
+            preserved?: components["schemas"]["CollectionUpgradePreservedItem"][];
+            /** Reported */
+            reported?: components["schemas"]["CollectionUpgradeReportedItem"][];
+            /** Warnings */
+            warnings?: string[];
         };
         /** CommunityContributeRequest */
         CommunityContributeRequest: {
@@ -17795,6 +18021,48 @@ export interface components {
              * @default 0
              */
             stderr_total_length: number;
+        };
+        /**
+         * RunLogEntryModel
+         * @description One provenance-typed entry in the run-keyed log correlation view (FAR-1690 A4).
+         */
+        RunLogEntryModel: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Node Id */
+            node_id?: string | null;
+            /** Attempt Key */
+            attempt_key?: string | null;
+            /** Source */
+            source: string;
+            /** Provenance */
+            provenance: string;
+            /** Witnessed Via */
+            witnessed_via?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Provider Ref */
+            provider_ref?: string | null;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Excerpt */
+            excerpt: string;
+        };
+        /**
+         * RunLogsResponse
+         * @description The run-keyed log correlation projection (FAR-1690 A4).
+         */
+        RunLogsResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Entries */
+            entries: components["schemas"]["RunLogEntryModel"][];
         };
         /** RunResponse */
         RunResponse: {
@@ -30899,6 +31167,39 @@ export interface operations {
             };
         };
     };
+    get_run_logs_api_v1_runs__run_id__logs_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunLogsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
     get_run_node_output_api_v1_runs__run_id__nodes__node_id__output_get: {
         parameters: {
             query?: {
@@ -33942,6 +34243,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CollectionInstallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    create_collection_version_endpoint_api_v1_libraries_collections__primitive_id__versions_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_collection_update_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__update_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+                install_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    upgrade_collection_endpoint_api_v1_libraries_collections__primitive_id__installs__install_id__upgrade_post: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                primitive_id: string;
+                install_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionUpgradeResponse"];
                 };
             };
             /** @description Validation Error */

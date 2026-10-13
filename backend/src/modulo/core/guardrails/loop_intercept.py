@@ -191,7 +191,8 @@ def serialize_tool_event(
 class LoopInterceptOutcome:
     """Decision for one intercepted tool-call/result event.
 
-    ``action`` is ``pass`` | ``block`` | ``warn`` | ``redact``. ``blocked`` is
+    ``action`` is ``pass`` | ``block`` | ``warn`` | ``redact`` | ``escalate``.
+    ``blocked`` is
     True only when the bridge client must REFUSE the call (a ``before`` block
     with ``block_on_guardrail``) — an ``after`` block is recorded but cannot
     refuse an already-executed call. ``masked_args`` carries the post-redaction
@@ -202,7 +203,7 @@ class LoopInterceptOutcome:
 
     tool_name: str
     direction: str
-    action: Literal["pass", "block", "warn", "redact"]
+    action: Literal["pass", "block", "warn", "redact", "escalate"]
     blocked: bool
     guardrail_name: str = ""
     masked_args: dict[str, Any] | None = None

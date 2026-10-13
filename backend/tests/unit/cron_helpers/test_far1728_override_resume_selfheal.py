@@ -2,7 +2,7 @@
 
 FAR-1711 flips a node-started ``eval_blocked`` run to ``running`` (keeping the
 durable ``dispatch_phase='first_node_dispatched'``, setting the DEDICATED
-``guardrail_override_resume_pending`` marker column (migration 0305) and
+``guardrail_override_resume_pending`` marker column (migration 0307) and
 stamping ``heartbeat_at`` one claim-stale window into the past) and
 re-dispatches it as ``resume_run``. If that job is LOST — a worker crash before
 claim, or ``dispatch_run`` returning ``deferred``/``enqueue_failed`` (the
@@ -23,7 +23,7 @@ The class discriminator is the DEDICATED marker column
 is also written by webhook replay (``trigger_engine._create_webhook_run``) and
 by a manual replay, so ``first_node_dispatched`` + ``is_replay`` is NOT the
 flip's shape (the original QA finding on this branch — selecting on ``is_replay``
-lifted the FAR-1649 belt for every replay-shaped row). The pre-0305 design used
+lifted the FAR-1649 belt for every replay-shaped row). The pre-0307 design used
 a sentinel string in ``error_detail``; the dedicated boolean column replaces it
 — an observation column must not carry a control-flow marker.
 
@@ -436,10 +436,10 @@ class TestPredicateSelectsTheOverrideResumeClass:
         sql = str(compiled)
         # The leg's discriminators: running + the durable node-start phase
         # (bound, never a bare literal) + the DEDICATED marker column
-        # (migration 0305) + the SAQ dispatcher. ``is_replay`` must NOT appear
+        # (migration 0307) + the SAQ dispatcher. ``is_replay`` must NOT appear
         # anywhere in the predicate — webhook/manual replay share it, so it
         # cannot identify the flip (the over-match finding). ``error_detail``
-        # must NOT appear either — the pre-0305 sentinel-in-error_detail
+        # must NOT appear either — the pre-0307 sentinel-in-error_detail
         # design is retired.
         assert "guardrail_override_resume_pending" in sql
         assert "error_detail" not in sql

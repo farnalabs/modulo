@@ -1,7 +1,7 @@
 """Dedicated marker column for the guardrail-override resume self-heal (FAR-1728).
 
-Revision ID: 0305_runs_guardrail_override_resume_pending
-Revises: 0304_metrics_staging_recorded_at_index
+Revision ID: 0307_runs_guardrail_override_resume_pending
+Revises: 0306_trigger_secret_encryption
 Create Date: 2026-10-13
 
 Before this migration the guardrail-override resume flip's self-heal
@@ -64,8 +64,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0305_runs_guardrail_override_resume_pending"
-down_revision: str | None = "0304_metrics_staging_recorded_at_index"
+revision: str = "0307_runs_guardrail_override_resume_pending"
+down_revision: str | None = "0306_trigger_secret_encryption"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

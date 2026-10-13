@@ -281,7 +281,7 @@ def _immediately_claimable_heartbeat() -> datetime:
 
 # FAR-1728: the ONE durable discriminator for the guardrail-override resume
 # self-heal leg in ``core.cron_helpers`` is the DEDICATED column
-# ``runs.guardrail_override_resume_pending`` (migration 0305) — written by
+# ``runs.guardrail_override_resume_pending`` (migration 0307) — written by
 # EXACTLY one site (:func:`guardrail_override`'s flip, in the same atomic
 # UPDATE that flips the status) and read by exactly one leg (the reconcile's
 # override-resume selection + its row-side recheck), and cleared by exactly
@@ -289,7 +289,7 @@ def _immediately_claimable_heartbeat() -> datetime:
 # family). Previously this was a sentinel string stuffed into
 # ``runs.error_detail`` — a control-flow marker in an observation/error
 # column that is exposed on REST/MCP responses; the dedicated boolean column
-# replaces it (see migration 0305's docstring for the full rationale).
+# replaces it (see migration 0307's docstring for the full rationale).
 #
 # ``runs.is_replay`` CANNOT be the discriminator, even though the flip also
 # sets it: ``is_replay`` is written by webhook replay
@@ -655,7 +655,7 @@ async def guardrail_override(
        journeys increment EXACTLY ONCE on the re-dispatch), the dedicated
        ``guardrail_override_resume_pending`` marker (FAR-1728: the reconcile
        self-heal leg's discriminator — see the column's note on the model and
-       migration 0305 for why ``is_replay`` cannot serve and why the marker is
+       migration 0307 for why ``is_replay`` cannot serve and why the marker is
        no longer a sentinel in ``error_detail``), and a
        ``guardrail.override`` audit event. The flip target branches on node
        progress (FAR-1711): a node-STARTED run — the durable
@@ -827,7 +827,7 @@ async def guardrail_override(
         # row so it is consistent for this request. ``error_detail`` is
         # DELIBERATELY left untouched: it is an observation column exposed on
         # REST/MCP responses and must never carry a control-flow marker (the
-        # pre-0305 sentinel-string design is retired). ``error_code`` stays
+        # pre-0307 sentinel-string design is retired). ``error_code`` stays
         # ``None`` so no failure surface renders anything. A lost
         # ``resume_run`` job is then re-dispatched by the reconcile leg that
         # selects on this column — and by that leg alone: ``is_replay`` (also

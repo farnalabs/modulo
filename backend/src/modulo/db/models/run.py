@@ -517,7 +517,7 @@ class Run(OrgScoped):
     # Enqueue-failure audit timestamp (migration 0074) — set when a SAQ
     # dispatch enqueue fails so dispatcher_reconcile can fail the run.
     enqueue_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # FAR-1728 (migration 0305): the guardrail-override resume self-heal's
+    # FAR-1728 (migration 0307): the guardrail-override resume self-heal's
     # DEDICATED discriminator — a BOOLEAN column, never a sentinel string in
     # the observation column ``error_detail`` (which is exposed on REST/MCP
     # responses; a healthy overridden run must not carry a control-flow marker
