@@ -113,15 +113,15 @@ class CredentialIssuer(Protocol):
         sandbox_timeout: int,
     ) -> IssuedRunCredential | None:
         """Issue a run-scoped credential, or ``None`` (fail-open — never raises)."""
-        ...
+        ...  # pragma: no cover - Protocol stub body, never executed
 
     async def revoke_for_run(self, session: Any, *, run_id: uuid.UUID, org_id: uuid.UUID) -> int:
         """Revoke every credential linked to *run_id*; returns the count revoked."""
-        ...
+        ...  # pragma: no cover - Protocol stub body, never executed
 
     def describe(self) -> Mapping[str, str]:
         """Provider metadata (name + provenance + evidence kind) for run telemetry."""
-        ...
+        ...  # pragma: no cover - Protocol stub body, never executed
 
 
 def _coerce_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:

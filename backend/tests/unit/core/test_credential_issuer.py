@@ -20,6 +20,7 @@ from modulo.core.credential_issuer import (
     ISSUANCE_PROVENANCE_MODULO_MINTED,
     IssuedRunCredential,
     ModuloCredentialIssuer,
+    _coerce_uuid,
     default_credential_issuer,
 )
 from tests.unit.api.mock_session import configure_rls_preamble
@@ -78,6 +79,22 @@ class TestIssuedRunCredentialProvenance:
         cred = _issued()
         assert "top-secret-value" not in repr(cred)
         assert "run_id" in repr(cred)
+
+
+class TestCoerceUuid:
+    def test_uuid_instance_is_returned_unchanged(self) -> None:
+        value = uuid.UUID(_RUN_ID)
+        assert _coerce_uuid(value) is value
+
+    def test_none_and_empty_string_return_none(self) -> None:
+        assert _coerce_uuid(None) is None
+        assert _coerce_uuid("") is None
+
+    def test_valid_string_is_parsed(self) -> None:
+        assert _coerce_uuid(_ORG_ID) == uuid.UUID(_ORG_ID)
+
+    def test_invalid_string_returns_none(self) -> None:
+        assert _coerce_uuid("not-a-uuid") is None
 
 
 class TestModuloCredentialIssuer:
