@@ -927,11 +927,9 @@ class _CollectionReconciler:
             if new_prim is None:
                 self._warn_unresolved(entry, slug)
                 continue
-            await self._reconcile_embedded_entity(entry, slug, ent, new_prim)
+            await self._reconcile_embedded_entity(slug, ent, new_prim)
 
-    async def _reconcile_embedded_entity(
-        self, entry: dict[str, Any], slug: str, ent: dict[str, Any], new_prim: LibraryPrimitive
-    ) -> None:
+    async def _reconcile_embedded_entity(self, slug: str, ent: dict[str, Any], new_prim: LibraryPrimitive) -> None:
         eid = uuid.UUID(ent["entity_id"])
         if ent["entity_type"] == "agent":
             ok = await self._reconcile_embedded_agent(ent, slug, eid, new_prim)
