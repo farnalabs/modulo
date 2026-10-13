@@ -65,7 +65,7 @@ jobs:
     environment: staging
     # One in-flight plan per PR: a new push cancels the previous plan job, so
     # the PR gets a single, current plan comment instead of a duplicate per
-    # push. Only the plan jobs are concurrency-scoped — the apply jobs are
+    # push. Only the plan jobs are concurrency-scoped - the apply jobs are
     # deliberately left alone so a mid-run apply is never cancelled.
     concurrency:
       group: modulo-plan-staging-${{ github.event.pull_request.number }}

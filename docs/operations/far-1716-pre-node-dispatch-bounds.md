@@ -3,7 +3,7 @@
 This note corrects a recurring wrong mental model: **"the run has a 55-minute
 cap."** It does not. The familiar `timeout_seconds` value on a `sandbox_agent`
 node (e.g. 3300 s / 55 min) is a **per-node** cap measured **from node start**.
-Before the first node starts, there is no run-level deadline at all — the
+Before the first node starts, there is no run-level deadline at all - the
 pre-node window is bounded only by separate watchdog/repair mechanisms, and a
 zero-node run therefore legitimately lives ~35–135 minutes under current
 defaults. Every claim below cites the exact code verified at HEAD.
@@ -27,7 +27,7 @@ no explicit value is capped at `MAX_NODE_TIMEOUT_SECONDS = 3300`
 (`settings.py:27`, read at `pipeline_execution.py:1934`).
 
 Consequence: a long pre-node dispatch delay (queue wait, claim churn,
-re-dispatch cycles) does **not** consume any node's `timeout_seconds` — the
+re-dispatch cycles) does **not** consume any node's `timeout_seconds` - the
 clock starts when the node actually starts.
 
 ## 2. Before the first node starts there is no deadline at all
@@ -36,33 +36,33 @@ clock starts when the node actually starts.
 that dict bounds the pre-node window. Three separate mechanisms do, none of
 which is the node timeout:
 
-### (a) `zombie_watchdog` — per attempt, at `saq_setup_grace_seconds` (default 600 s)
+### (a) `zombie_watchdog` - per attempt, at `saq_setup_grace_seconds` (default 600 s)
 
 `zombie_watchdog` (`pipeline_execution.py:1318-1373`) waits up to
-`SAQ_SETUP_GRACE_SECONDS` (default 600 s — `settings.py:32`, `settings.py:570-571`)
+`SAQ_SETUP_GRACE_SECONDS` (default 600 s, `settings.py:32`, `settings.py:570-571`)
 for first progress (first node dispatched). If the window elapses with zero node
-progress it cancels the executor and fails the run `executor_stalled` —
+progress it cancels the executor and fails the run `executor_stalled` -
 **unless** the run's retry policy covers `stall`, in which case the kill first
 consults the shared watchdog-retry mechanism and **re-dispatches** the run
 instead of terminal-failing it (`pipeline_execution.py:1349-1359`,
 `1420-1426`). This watchdog runs **per attempt** (one `execute_run` job), so a
 re-dispatched attempt gets a fresh grace window.
 
-### (b) `dispatcher_reconcile` nodeless repair — at `saq_claimed_nodeless_minutes` (default 35 min)
+### (b) `dispatcher_reconcile` nodeless repair - at `saq_claimed_nodeless_minutes` (default 35 min)
 
 The `dispatcher_reconcile` system cron's nodeless branch matches
 `running` + `dispatcher='saq'` + zero node progress older than
-`SAQ_CLAIMED_NODELESS_MINUTES` (default 35 — `settings.py:634`; predicate at
+`SAQ_CLAIMED_NODELESS_MINUTES` (default 35, `settings.py:634`; predicate at
 `cron_helpers.py:4586-4674`). The repair is **re-dispatch-first**: the
 four-way outcome in `_reconcile_nodeless_repair`
 (`cron_helpers.py:8286-8385`) terminal-fails **only** when the retry budget is
 exhausted (`_should_redispatch_nodeless` False, `cron_helpers.py:8335-8346`);
 otherwise it re-dispatches (throttled to at most one re-dispatch per 35-min
 window per run, `cron_helpers.py:8347-8357`). Re-dispatch is safe here because a
-nodeless zombie executed zero nodes by construction — enforced by both the SQL
+nodeless zombie executed zero nodes by construction - enforced by both the SQL
 predicate and the row-level recheck (`cron_helpers.py:4677-4733`).
 
-### (c) Unconditional zero-progress age bound — ~135 min
+### (c) Unconditional zero-progress age bound (~135 min)
 
 Independent of any retry policy or budget, the reconcile cron's age gate
 terminal-fails any `running` + `dispatcher='saq'` row older than
@@ -85,7 +85,7 @@ re-dispatched by (b) on a 35-minute cycle (budget `SAQ_NODELESS_REDISPATCH_BUDGE
 default 4, `cron_helpers.py:4861`), with each attempt bounded by (a)'s 600 s
 grace, until the (c) ~135-minute age bound terminal-fails it regardless. A
 zero-node run sitting in `running` for an hour is **not** a diagnosis of a
-55-minute cap being ignored — no such cap applies to it.
+55-minute cap being ignored - no such cap applies to it.
 
 ## 4. Timestamp semantics: `started_at` vs `dispatch_phase_entered_at`
 
@@ -94,7 +94,7 @@ zero-node run sitting in `running` for an hour is **not** a diagnosis of a
   docstring). The per-attempt clock is `dispatched_at`, rewritten by every
   dispatch (`cron_helpers.py:4571-4575`).
 - `dispatch_phase_entered_at` is stamped `now()` in the **same UPDATE that
-  claims the row**, on **every** claim — execute re-claim and HITL resume alike
+  claims the row**, on **every** claim - execute re-claim and HITL resume alike
   (`pipeline_execution.py:551-578`).
 
 So the measured gap `dispatch_phase_entered_at − started_at` is a
@@ -114,5 +114,5 @@ scoped to non-SAQ rows:
 as documented in the sweep's docstring ("SAQ runs never carry
 worker_lost/never_dispatched", `pipeline_execution.py:2581-2585`). The
 remaining branches concern capacity-deferred **pending** runs, not claimed
-SAQ runs. SAQ run recovery is owned entirely by (a)/(b)/(c) above — the
+SAQ runs. SAQ run recovery is owned entirely by (a)/(b)/(c) above - the
 5-minute sweep is not a bound on a stuck SAQ run and must not be cited as one.
