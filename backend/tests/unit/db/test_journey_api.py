@@ -1008,6 +1008,8 @@ class TestRoutes:
         assert body["kind"] == "github_issue"
         # FAR-1141: ``execution_origin`` is ALWAYS present on the wire — NULL
         # for a Modulo-executed run, never a repr of the mock, never omitted.
+        # The run-history ``provenance`` is the run's trigger type (here
+        # "manual"), not the run taxonomy class — FAR-1693 must not clobber it.
         assert body["runs"] == [
             {
                 "run_id": str(run.id),
@@ -1048,6 +1050,9 @@ class TestRoutes:
 
         assert resp.status_code == 200
         assert resp.json()["runs"][0]["execution_origin"] == "dispatched"
+        # The run-history ``provenance`` stays the run's trigger type even for a
+        # dispatched run — FAR-1693 composes only ``execution_origin`` here.
+        assert resp.json()["runs"][0]["provenance"] == "manual"
 
     def test_detail_empty_run_history(self, mock_session: AsyncMock) -> None:
         app = _make_app()

@@ -1588,11 +1588,19 @@ async def get_journey_endpoint(
                 run_id=r.id,
                 status=r.status,
                 completed_at=r.completed_at,
+                # This surface's `provenance` PREDATES the run-provenance
+                # taxonomy and carries the run's TRIGGER type (pinned by the
+                # journeys BDD feature), so it must NOT be overwritten by the
+                # taxonomy class the shared serializer now returns (FAR-1693).
                 provenance=r.trigger_type,
                 # FAR-1141 / ADR-042: the run's execution origin, composed from
-                # the shared serializer (FAR-1565) — a row loaded without the
-                # column reads NULL, a dispatched run reads 'dispatched'.
-                **run_provenance_fields(r),
+                # the ONE shared serializer (FAR-1565) — a row loaded without
+                # the column reads NULL, a dispatched run reads 'dispatched'.
+                # Only `execution_origin` is taken here; the serializer's
+                # taxonomy `provenance` key is dropped so it cannot clobber the
+                # trigger value above (two different meanings of "provenance" —
+                # the shared serializer must never silently pick one).
+                **{k: v for k, v in run_provenance_fields(r).items() if k != "provenance"},
             )
             for r in runs
         ],

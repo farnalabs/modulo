@@ -14,7 +14,14 @@ so the field is defined exactly once. This module is a core leaf (no imports
 beyond the stdlib): ``core`` may not import ``api``, while ``api`` may import
 ``core``, so one module here serves both layers.
 
-Wire shape is unchanged and additive/nullable: ``{"execution_origin": str | None}``.
+FAR-1693 unified the provenance vocabulary (``core.provenance``): the run's
+``execution_origin`` is the *where* and the sibling ``provenance`` class is the
+*how we know* — ``reported`` for a dispatched run (its externally-sourced data
+arrived from the customer's substrate), ``None`` for an executed / legacy run
+(there is no externally-sourced datum to type). Both keys are always present.
+
+Wire shape is additive/nullable: ``{"execution_origin": str | None,
+"provenance": str | None}``.
 
 Enforcement (``tests/unit/api/test_run_provenance_serializer.py``):
 
@@ -27,6 +34,8 @@ Enforcement (``tests/unit/api/test_run_provenance_serializer.py``):
 from __future__ import annotations
 
 from typing import Any
+
+from modulo.core.provenance import execution_origin_provenance_class
 
 __all__ = ["run_provenance_fields"]
 
@@ -43,10 +52,18 @@ def run_provenance_fields(run: Any) -> dict[str, Any]:
     projected without it) reads NULL via the ``getattr`` default; provenance
     must never break a read.
 
+    ``provenance`` is ENGINE-DERIVED from ``execution_origin`` via the unified
+    taxonomy (FAR-1693) — never a value a caller or an agent supplies — so no
+    run payload can self-assert a stronger class than the origin supports.
+
     Deliberately NO ``isinstance(value, str)`` coercion (FAR-1566): the column
     is genuinely ``str | None`` in production, and degrading a non-string
     stand-in to ``None`` was test-double tolerance, not a production rule — a
     non-string value now fails loudly at the response model instead of being
     silently rewritten.
     """
-    return {"execution_origin": getattr(run, "execution_origin", None)}
+    origin = getattr(run, "execution_origin", None)
+    return {
+        "execution_origin": origin,
+        "provenance": execution_origin_provenance_class(origin),
+    }

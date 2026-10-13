@@ -1577,6 +1577,7 @@ async def test_dispatch_fire_and_forget_completes_once_without_polling():
     assert output["execution_identity"] == "customer_substrate"
     assert output["declared_external_cost"] is None
     assert output["witnessed_via"] == node_def["connector_binding"]["instance_id"]
+    assert output["provenance"] == "reported"
 
 
 async def test_dispatch_await_completion_polls_until_terminal_then_completes(

@@ -132,11 +132,17 @@ _ARTIFACT_TELEMETRY_KEYS = (
 #: lifts these keys out of it explicitly — without a shared list the stamped
 #: provenance would silently vanish from failure inspection (the FAR-1141
 #: ``substrate_status`` hand-duplication was exactly that drift in slow motion).
+#:
+#: FAR-1693 adds ``provenance`` — the unified taxonomy class (``reported``) —
+#: alongside the ``witnessed_via`` channel stamp. Both must survive the failed
+#: branch; the conformance test ties this literal to
+#: ``modulo.core.provenance.PROVENANCE_KEY`` so the two cannot drift.
 DISPATCH_PROVENANCE_FIELDS = (
     "witnessed_via",
     "execution_identity",
     "declared_external_cost",
     "substrate_status",
+    "provenance",
 )
 
 
