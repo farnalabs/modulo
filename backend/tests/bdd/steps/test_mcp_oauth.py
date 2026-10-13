@@ -46,6 +46,14 @@ def _stub_audit_session() -> Generator[None, None, None]:
         result.first.return_value = None
         result.all.return_value = []
         session.execute = AsyncMock(return_value=result)
+        # FAR-1639 (FAR-1629 sweep): the audit emitter reached through this
+        # override runs the real set_rls_org path (audit_coverage._emit →
+        # _ensure_active_transaction at db/rls.py) and calls the SYNC session
+        # methods in_transaction()/add() (audit_logger._update_chain_head).
+        # Bare-AsyncMock children type both as async, which vacuously passes
+        # the RLS guard and leaves dangling never-awaited coroutines.
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
         begin_cm = AsyncMock()
         begin_cm.__aenter__ = AsyncMock(return_value=None)
         begin_cm.__aexit__ = AsyncMock(return_value=False)

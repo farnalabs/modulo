@@ -140,6 +140,14 @@ def _make_session() -> AsyncMock:
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
     session.begin = MagicMock(return_value=begin_cm)
+    # FAR-1639 (FAR-1629 sweep): ``in_transaction`` is a SYNC method on
+    # AsyncSession, so a bare-AsyncMock child returns a truthy un-awaited
+    # coroutine and the RLS guard in db/rls._ensure_active_transaction
+    # (``if not session.in_transaction():``) is passed vacuously — the deny
+    # branch is never exercised. The routes under test reach it via
+    # set_rls_org/set_rls_user_context (routes/triggers.py), so type it as a
+    # MagicMock returning True (the fixtures wrap in ``session.begin()``).
+    session.in_transaction = MagicMock(return_value=True)
     session.execute = AsyncMock(return_value=_trigger_result([]))
     session.get = AsyncMock(return_value=None)
     session.add = MagicMock()

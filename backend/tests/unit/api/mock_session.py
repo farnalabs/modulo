@@ -109,6 +109,10 @@ def configure_rls_preamble(session: AsyncMock) -> AsyncMock:
     ``set_config``-per-statement path stays unexercised.
     """
     session.in_transaction = MagicMock(return_value=True)
+    # FAR-1639 (FAR-1629 sweep): add() is SYNC too — audit/report emitters call
+    # session.add(...) un-awaited, which a bare-AsyncMock child turns into a
+    # dangling never-awaited coroutine.
+    session.add = MagicMock()
     bind = MagicMock()
     bind.dialect.name = "sqlite"
     session.get_bind = MagicMock(return_value=bind)

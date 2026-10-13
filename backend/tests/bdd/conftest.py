@@ -151,6 +151,14 @@ def make_settings() -> Settings:
 
 def make_mock_session() -> AsyncMock:
     session = AsyncMock()
+    # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC AsyncSession
+    # methods. Bare-AsyncMock children type them as async, so production code
+    # reaching set_rls_* (db/rls.py::_ensure_active_transaction) passes the
+    # guard vacuously (an unawaited coroutine is truthy) and leaves dangling
+    # coroutines. Tests that need the deny path override this with
+    # MagicMock(return_value=False) — see tests/bdd/steps/test_auth.py.
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
