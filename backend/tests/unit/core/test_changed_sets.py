@@ -163,6 +163,12 @@ def test_observed_with_wrong_provenance_is_rejected() -> None:
         resolve_changed_set(observed=mislabelled)
 
 
+def test_reported_with_wrong_provenance_is_rejected() -> None:
+    mislabelled = ChangedSet(files=("a.py",), provenance=PROVENANCE_OBSERVED, source="agent")
+    with pytest.raises(ChangedSetResolutionError, match="reported"):
+        resolve_changed_set(reported=mislabelled)
+
+
 def test_drift_lists_both_sides_of_the_divergence() -> None:
     observed = ChangedSet.observed(["a.py", "b.py"])
     reported = ChangedSet.reported(["a.py", "c.py"])
@@ -218,6 +224,21 @@ def test_config_rejects_non_boolean_flag() -> None:
         DiffPolicyConfig.from_mapping({"flag_agent_config": "yes"})
 
 
+def test_config_treats_explicit_none_glob_list_as_empty() -> None:
+    config = DiffPolicyConfig.from_mapping({"deny": None})
+    assert not config.deny
+
+
+def test_config_rejects_non_list_glob_container() -> None:
+    with pytest.raises(DiffPolicyConfigError, match="list of glob strings"):
+        DiffPolicyConfig.from_mapping({"allow": 5})
+
+
+def test_config_rejects_non_string_glob_entry() -> None:
+    with pytest.raises(DiffPolicyConfigError, match="entries must be strings"):
+        DiffPolicyConfig.from_mapping({"forbidden": ["ok/**", 7]})
+
+
 # ---------------------------------------------------------------------------
 # DiffPolicy evaluation
 # ---------------------------------------------------------------------------
@@ -249,6 +270,12 @@ def test_clean_set_passes() -> None:
     outcome = evaluate_diff_policy(DiffPolicyConfig(allow=("src/**",)), _resolved("src/a.py", "src/b.py"))
     assert outcome.passed
     assert outcome.evaluated_count == 2
+
+
+def test_evaluate_diff_policy_accepts_a_mapping_config() -> None:
+    outcome = evaluate_diff_policy({"forbidden": ["infra/**"]}, _resolved("src/a.py", "infra/db.py"))
+    assert not outcome.passed
+    assert outcome.forbidden_matches == ("infra/db.py",)
 
 
 def test_executable_risk_is_surfaced_but_passes_by_default() -> None:
