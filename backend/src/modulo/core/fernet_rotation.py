@@ -119,7 +119,12 @@ async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet
     Only Fernet-token-shaped values rotate: plaintext secrets (written before
     encryption shipped) are the data migration's job — rotation only
     re-encrypts values that already decrypt as Fernet tokens, so a rotation
-    run over rows the migration has not yet reached changes nothing.
+    run over rows the migration has not yet reached changes nothing. A
+    token-shaped value that NEITHER key decrypts fails LOUD (:class:`InvalidToken`
+    propagates) — an unreadable ciphertext row is a broken secret, and rotation
+    surfaces it instead of silently leaving it behind (FAR-1735: the candidate
+    check is the decryptability fallback, not the prefix alone, so a plaintext
+    value is never fed to the decryptor).
 
     The candidate keys are the CANONICAL shared set
     (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`, the same
@@ -130,6 +135,12 @@ async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet
     Every row's ``config_json`` is checked in Python against the ONE shared
     set instead; ``triggers`` is a small config table and rotation is a rare
     admin operation, so the scan costs nothing next to the drift it removes.
+
+    FAR-1735 lost-update fix: the write is NARROWED to the secret keys via
+    ``jsonb_set`` (one per rotated key) instead of rewriting the whole
+    ``config_json`` document — a concurrent trigger edit between this
+    function's SELECT and its UPDATE can no longer have its NON-secret keys
+    clobbered by rotation.
     """
 
     from modulo.auth.secret_storage import _is_encrypted_token
@@ -138,18 +149,25 @@ async def _rotate_triggers(session: AsyncSession, new_fernet: Fernet, old_fernet
     count = 0
     for row in rows:
         config: dict[str, Any] = row.config_json
-        changed = False
+        rotated: dict[str, str] = {}
         for key in TRIGGER_CONFIG_SECRET_KEYS:
             stored = config.get(key)
+            # Prefix shape-check + decrypt-with-fallback: a non-token value is
+            # legacy plaintext (the migration's job — skip); a token MUST
+            # decrypt under the new key or the old one, else fail loud.
             if not isinstance(stored, str) or not _is_encrypted_token(stored):
                 continue
-            config[key] = re_encrypt_str(stored, new_fernet, old_fernet)
-            changed = True
-        if changed:
-            await session.execute(
-                text("UPDATE triggers SET config_json = :config WHERE id = :id"),
-                {"config": json.dumps(config), "id": row.id},
-            )
+            rotated[key] = re_encrypt_str(stored, new_fernet, old_fernet)
+        if rotated:
+            for key, new_ct in rotated.items():
+                await session.execute(
+                    text(
+                        "UPDATE triggers SET config_json = "
+                        "jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(:ct::text)) "
+                        "WHERE id = :id"
+                    ),
+                    {"key": key, "ct": new_ct, "id": row.id},
+                )
             count += 1
     return count
 

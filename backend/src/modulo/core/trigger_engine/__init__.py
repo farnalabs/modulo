@@ -64,7 +64,6 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modulo.auth.secret_storage import decode_stored_secret_scoped
 from modulo.connectors.base import ConnectorQuery
 from modulo.core.connector_hub.locking import _uuid_to_lock_keys
 from modulo.core.exceptions import RateLimitConflictError
@@ -568,15 +567,27 @@ class TriggerEngine:
             hmac_secret_raw: str | None = cfg.get("hmac_secret")
             hmac_secret: str | None = None
             if hmac_secret_raw is not None:
-                try:
-                    from modulo.settings import get_settings as _get_settings
+                from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
+                from modulo.settings import get_settings as _get_settings
 
-                    hmac_secret = await decode_stored_secret_scoped(
-                        session, hmac_secret_raw, _get_settings().fernet_key, org_id=org_id
+                try:
+                    hmac_secret = await resolve_trigger_secret_scoped(
+                        session,
+                        stored_raw=hmac_secret_raw,
+                        fernet_key=_get_settings().fernet_key,
+                        org_id=org_id,
+                        trigger_id=trigger_id,
+                        config_key="hmac_secret",
+                        context="webhook_engine",
                     )
                 except Exception:
+                    # FAR-1735 fail closed: an undecryptable token-shaped
+                    # secret must never be used as the HMAC key (the shared
+                    # resolver only raises for token-shaped values — a
+                    # non-token value is legacy plaintext, returned by the
+                    # dated shim with a warning).
                     _log.exception("trigger_engine.hmac_secret_decrypt_failed trigger=%s", trigger_id)
-                    hmac_secret = hmac_secret_raw
+                    raise
             if hmac_secret is not None and not verify_hmac(raw_body, hmac_secret, hmac_signature, timestamp=ts):
                 _log.warning("Webhook HMAC validation failed for trigger %s", trigger_id)
                 await self._log_event(

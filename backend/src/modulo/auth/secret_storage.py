@@ -59,11 +59,73 @@ _FERNET_STR_PREFIX = "gAAAA"  # base64url prefix of every Fernet token
 
 
 def _is_encrypted_token(value: object) -> bool:
-    """Return True when a stored value looks like an encrypted Fernet token."""
+    """Return True when a stored value has the STRUCTURAL shape of a Fernet token.
+
+    FAR-1735: this is a **prefix shape-check only** — it is NOT a reliable
+    classification of "encrypted" for write/rotation decisions, because a
+    plaintext secret that merely begins with ``gAAAA`` also matches (and was
+    therefore left unencrypted by the write path, then failed closed on read,
+    permanently breaking the trigger). Call sites that must CLASSIFY a value
+    as plaintext-vs-ciphertext and have a Fernet key available MUST use
+    :func:`is_encrypted_secret` (the decryptability probe) instead. The
+    remaining sanctioned uses of this shape-check are:
+
+    * :func:`decode_stored_secret`'s fail-closed discrimination — a
+      shape-matching value that fails to decrypt is ciphertext that cannot be
+      read (never plaintext);
+    * the shipped migration ``0306_trigger_secret_encryption`` (a frozen
+      one-shot data migration that must not be edited — its prefix skip
+      semantics stay idempotent);
+    * ``error_tracking.alert_dispatcher``'s post-decode-failure classifier,
+      where decryption already failed and only the structural shape remains
+      to distinguish ciphertext from legacy plaintext.
+    """
     if isinstance(value, str):
         return value.startswith(_FERNET_STR_PREFIX)
     if isinstance(value, bytes):
         return value.startswith(_FERNET_STR_PREFIX.encode())
+    return False
+
+
+def is_encrypted_secret(value: object, fernet_key: str, old_fernet_key: str = "") -> bool:
+    """DECRYPTABILITY probe (FAR-1735): True iff *value* decrypts under a known key.
+
+    Replaces the ``gAAAA``-prefix heuristic on every call site that classifies
+    a stored value as plaintext-vs-ciphertext for WRITE decisions:
+
+    * a plaintext secret — even one that merely begins with ``gAAAA`` —
+      decrypts under neither key and is correctly classified as plaintext
+      (so the write path encrypts it instead of storing it in the clear);
+    * genuine ciphertext under the current key — or under *old_fernet_key*
+      during a no-downtime rotation window — is recognised without
+      double-encrypting it.
+
+    A decrypt attempt verifies the token's HMAC and timestamp, so a value
+    that "decrypts" is a genuine Fernet token by construction (every such
+    token carries the ``gAAAA`` version-byte prefix; the probe is a
+    superset of the shape-check, never a subset). An invalid configured key
+    is treated as "not encrypted" — the subsequent encrypt attempt then
+    fails closed with :class:`InvalidFernetKeyError` rather than silently
+    mis-classifying.
+    """
+    if isinstance(value, str):
+        token = value.encode()
+    elif isinstance(value, bytes):
+        token = value
+    else:
+        return False
+    if not token:
+        return False
+    candidate_keys = [fernet_key] if fernet_key else []
+    if old_fernet_key:
+        candidate_keys.append(old_fernet_key)
+    for key in candidate_keys:
+        try:
+            Fernet(key.encode()).decrypt(token)
+        except (InvalidToken, ValueError, TypeError):
+            continue
+        else:
+            return True
     return False
 
 

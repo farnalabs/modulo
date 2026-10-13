@@ -253,12 +253,17 @@ class TestRotateTriggers:
     The orchestration test below patches EVERY rotator out of
     ``rotate_all_encrypted_data``, so this body had never actually executed.
     These tests drive the real function: re-encryption under the new key,
-    byte-for-byte preservation of non-secret config keys, plaintext/mask
+    the NARROWED per-secret-key ``jsonb_set`` write (FAR-1735: non-secret
+    config keys can never be clobbered by a concurrent edit), plaintext/mask
     skip semantics, the old-key fallback, and fail-loud when no key applies.
     """
 
     @pytest.mark.asyncio
-    async def test_re_encrypts_secret_preserving_non_secret_keys(self) -> None:
+    async def test_re_encrypts_secret_via_narrow_jsonb_set_write(self) -> None:
+        """FAR-1735 lost-update fix: the UPDATE narrows to the secret key via
+        ``jsonb_set`` — it never rewrites the whole config_json document, so a
+        concurrent trigger edit to NON-secret keys between rotation's SELECT
+        and its UPDATE is preserved."""
         new_fernet = Fernet(_new_key())
         old_fernet = Fernet(_new_key())
         old_ct = old_fernet.encrypt(b"webhook-hmac").decode()
@@ -277,23 +282,26 @@ class TestRotateTriggers:
         assert "FROM triggers" in select_sql
         update_sql, params = session.calls[1]
         assert "UPDATE triggers" in update_sql
-        assert "config_json = :config" in update_sql
+        assert "jsonb_set(config_json" in update_sql
+        # The write is per-secret-key — no whole-document rewrite is possible.
+        assert ":config" not in update_sql
+        assert params["key"] == "hmac_secret"
         assert params["id"] == "t-1"
-        updated = json.loads(params["config"])
-        # Every non-secret key survives byte-for-byte (nested dicts/lists too).
-        assert {k: v for k, v in updated.items() if k != "hmac_secret"} == {
-            k: v for k, v in config.items() if k != "hmac_secret"
-        }
-        # The secret is re-encrypted under the NEW key (old key no longer applies).
-        assert updated["hmac_secret"] != old_ct
-        assert new_fernet.decrypt(updated["hmac_secret"].encode()) == b"webhook-hmac"
+        # The rotated ciphertext decrypts under the NEW key only.
+        assert new_fernet.decrypt(params["ct"].encode()) == b"webhook-hmac"
         with pytest.raises(InvalidToken):
-            old_fernet.decrypt(updated["hmac_secret"].encode())
+            old_fernet.decrypt(params["ct"].encode())
+        # The narrow write's params carry ONLY the secret key — non-secret
+        # keys are structurally out of reach of the UPDATE.
+        assert set(params) == {"key", "ct", "id"}
+        assert "url" not in params
+        assert "event_filters" not in params
 
     @pytest.mark.asyncio
     async def test_rotates_both_canonical_secret_keys(self) -> None:
         """Both keys of the shared canonical set rotate in one pass — the loop
-        is driven by ``TRIGGER_CONFIG_SECRET_KEYS``, not a partial literal."""
+        is driven by ``TRIGGER_CONFIG_SECRET_KEYS``, not a partial literal.
+        Each rotated key gets its own narrow ``jsonb_set`` UPDATE."""
         new_fernet = Fernet(_new_key())
         old_fernet = Fernet(_new_key())
         hmac_ct = old_fernet.encrypt(b"hmac-value").decode()
@@ -304,11 +312,16 @@ class TestRotateTriggers:
         count = await _rotate_triggers(session, new_fernet, old_fernet)
 
         assert count == 1
-        _, params = session.calls[1]
-        updated = json.loads(params["config"])
-        assert new_fernet.decrypt(updated["hmac_secret"].encode()) == b"hmac-value"
-        assert new_fernet.decrypt(updated["signing_secret"].encode()) == b"signing-value"
-        assert updated["max_depth"] == 3
+        updates = [(sql, params) for sql, params in session.calls if "UPDATE" in sql]
+        assert len(updates) == 2, "one narrow UPDATE per rotated secret key"
+        by_key = {params["key"]: params["ct"] for _, params in updates}
+        assert set(by_key) == {"hmac_secret", "signing_secret"}
+        assert new_fernet.decrypt(by_key["hmac_secret"].encode()) == b"hmac-value"
+        assert new_fernet.decrypt(by_key["signing_secret"].encode()) == b"signing-value"
+        # The non-secret key never appears in any UPDATE — it cannot be clobbered.
+        for sql, params in updates:
+            assert "max_depth" not in sql
+            assert "max_depth" not in params
 
     @pytest.mark.asyncio
     async def test_skips_plaintext_secret(self) -> None:
@@ -368,10 +381,12 @@ class TestRotateTriggers:
         count = await _rotate_triggers(session, new_fernet, old_fernet)
 
         assert count == 1
-        _, params = session.calls[1]
-        updated = json.loads(params["config"])
-        assert new_fernet.decrypt(updated["whatsapp_secret"].encode()) == b"third-key-value"
-        assert updated["url"] == "https://example.com"
+        update_sql, params = session.calls[1]
+        assert params["key"] == "whatsapp_secret"
+        assert new_fernet.decrypt(params["ct"].encode()) == b"third-key-value"
+        # The non-secret key is out of reach of the narrow write.
+        assert "url" not in params
+        assert "url" not in update_sql
 
     @pytest.mark.asyncio
     async def test_fails_loud_when_no_key_decrypts(self) -> None:

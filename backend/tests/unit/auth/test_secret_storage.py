@@ -184,3 +184,57 @@ async def test_decode_stored_secret_scoped_explicit_org_param_ignores_session_ga
     result = await decode_stored_secret_scoped(session, encrypted, _FERNET_KEY, org_id=_ORG_ID)
 
     assert result == plaintext
+
+
+# ---------------------------------------------------------------------------
+# is_encrypted_secret — decryptability probe (FAR-1735)
+# ---------------------------------------------------------------------------
+
+
+class TestIsEncryptedSecret:
+    """The probe replaces the gAAAA-prefix heuristic on classification sites."""
+
+    def test_current_key_token_is_encrypted(self) -> None:
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
+        assert is_encrypted_secret(token, _FERNET_KEY) is True
+        assert is_encrypted_secret(token.encode(), _FERNET_KEY) is True
+
+    def test_plaintext_is_not_encrypted(self) -> None:
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        assert is_encrypted_secret("plain-hmac-secret", _FERNET_KEY) is False
+        assert is_encrypted_secret(b"plain-bytes", _FERNET_KEY) is False
+
+    def test_gaaaa_prefixed_plaintext_is_not_encrypted(self) -> None:
+        """The prefix heuristic's false positive: a plaintext value beginning
+        ``gAAAA`` must classify as PLAINTEXT so the write path encrypts it."""
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        tricky = "gAAAA-this-is-really-just-a-plaintext-secret"
+        assert is_encrypted_secret(tricky, _FERNET_KEY) is False
+
+    def test_old_key_token_recognised_only_with_old_key(self) -> None:
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        old_key = Fernet.generate_key().decode()
+        old_token = Fernet(old_key.encode()).encrypt(b"legacy").decode()
+        assert is_encrypted_secret(old_token, _FERNET_KEY, old_key) is True
+        assert is_encrypted_secret(old_token, _FERNET_KEY) is False
+
+    def test_non_str_non_bytes_and_empty_are_not_encrypted(self) -> None:
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        assert is_encrypted_secret(None, _FERNET_KEY) is False
+        assert is_encrypted_secret(123, _FERNET_KEY) is False
+        assert is_encrypted_secret("", _FERNET_KEY) is False
+
+    def test_invalid_key_returns_false_rather_than_raising(self) -> None:
+        """An invalid configured key classifies as "not encrypted" — the
+        subsequent encrypt attempt fails closed with InvalidFernetKeyError
+        instead of the probe silently mis-classifying."""
+        from modulo.auth.secret_storage import is_encrypted_secret
+
+        token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
+        assert is_encrypted_secret(token, "a" * 32) is False

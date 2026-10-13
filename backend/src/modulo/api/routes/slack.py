@@ -42,7 +42,7 @@ from modulo.api.dependencies import (
 from modulo.api.routes.runs import pipeline_not_runnable_http
 from modulo.api.trigger_busy import BUSY_ACK_DETAIL, record_busy_delivery
 from modulo.auth.jwt import TenantPrincipal
-from modulo.auth.secret_storage import _is_encrypted_token, decode_stored_secret_scoped
+from modulo.auth.secret_storage import SecretStorageError
 from modulo.core.audit_coverage import audited_system, bind_audit_org
 from modulo.core.dispatch import dispatch_run
 from modulo.core.error_tracking import ErrorIngestionService
@@ -73,6 +73,7 @@ from modulo.core.trigger_engine.slack_app_mention import (
     verify_slack_signature,
     verify_slack_timestamp,
 )
+from modulo.core.trigger_secrets import resolve_trigger_secret_scoped
 from modulo.db.crud.pipeline_snapshot import SNAPSHOT_LOCK_ATTEMPTS, create_snapshot_from_live_graph
 from modulo.db.crud.trigger import load_trigger_and_org_global
 from modulo.db.models.organisation import Organisation
@@ -222,28 +223,32 @@ async def _verify_slack_delivery(
         # (TriggerConfigInvalidError → 400 by the shared error map), so ``.get``
         # here cannot AttributeError on external ingress.
         cfg = trigger.config_json or {}
-        # FAR-1732: the stored signing_secret may now be a Fernet token (this
-        # route's own path encrypts at write; the shared scope-bound decrypt
-        # mirrors the engine's ``_resolve_signing_secret`` — plaintext fallback
-        # keeps pre-encryption triggers delivering).
+        # FAR-1732/1735: the stored signing_secret is a Fernet token (this
+        # route's own path encrypts at write). The shared bounded resolver
+        # decrypts token-shaped values via the scope-bound helper and accepts
+        # a NON-token value as legacy pre-0306 plaintext — a genuinely
+        # plaintext value is returned UNCHANGED by the resolver; it does NOT
+        # raise (only scope/key/decrypt errors do).
         signing_secret: str | None
-        try:
-            signing_secret_raw = cfg.get("signing_secret")
-            if signing_secret_raw is None:
-                signing_secret = None
-            else:
-                signing_secret = await decode_stored_secret_scoped(
-                    session, signing_secret_raw, get_settings().fernet_key, org_id=org_id
+        signing_secret_raw = cfg.get("signing_secret")
+        if signing_secret_raw is None:
+            signing_secret = None
+        else:
+            try:
+                signing_secret = await resolve_trigger_secret_scoped(
+                    session,
+                    stored_raw=signing_secret_raw,
+                    fernet_key=get_settings().fernet_key,
+                    org_id=org_id,
+                    trigger_id=trigger_id,
+                    config_key="signing_secret",
+                    context="slack_route",
                 )
-        except Exception:
-            if _is_encrypted_token(cfg.get("signing_secret")):
+            except SecretStorageError:
                 # Fail closed: ciphertext we cannot decrypt must never be
                 # sent to Slack's signature check as if it were the secret.
                 _log.exception("slack_route.signing_secret_decrypt_failed trigger=%s", trigger_id)
                 raise SlackSignatureError("Slack signing secret decryption failed") from None
-            # Best-effort plaintext fallback — log the degradation loudly.
-            _log.exception("slack_route.signing_secret_decrypt_failed trigger=%s", trigger_id)
-            signing_secret = str(cfg.get("signing_secret"))
 
         # Route-level signature + timestamp validation (belt-and-braces ahead
         # of the engine's own check — required for the challenge handshake).
