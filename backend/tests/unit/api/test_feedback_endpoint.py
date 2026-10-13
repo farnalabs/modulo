@@ -538,11 +538,12 @@ class TestDetectEvalGap:
         assert resp.status_code == 404
 
     def test_round_trips_orm_eval_definitions_through_endpoint(self, client: TestClient) -> None:
-        """ORM EvalDefinition rows loaded by /detect-gap are converted to the DTO shape
+        """ORM ``Eval`` rows loaded by /detect-gap are converted to the DTO shape
         before EvalEngine runs (FAR-233 review MAJOR-1). A failing regex eval must report
         eval_gap=False — before the fix the ORM row raised AttributeError inside
-        evaluate(), was swallowed, and every record came back eval_gap=True."""
-        from modulo.db.models.eval_definition import EvalDefinition
+        evaluate(), was swallowed, and every record came back eval_gap=True.
+        FAR-1729: the loader reads the live ``evals`` table."""
+        from modulo.db.models.eval import Eval
 
         pipeline_id = uuid.uuid4()
         run_mock = MagicMock()
@@ -551,14 +552,14 @@ class TestDetectEvalGap:
         run_result.scalar_one_or_none.return_value = run_mock
         eval_result = MagicMock()
         eval_result.scalars.return_value.all.return_value = [
-            EvalDefinition(
+            Eval(
                 id=uuid.uuid4(),
                 organisation_id=_ORG_ID,
                 pipeline_id=pipeline_id,
                 name="answer-must-mention-42",
                 eval_type="regex",
                 config_json={"pattern": "42", "field": "answer"},
-                failure_behaviour="warn",
+                account_id=uuid.uuid4(),
             )
         ]
 
@@ -566,7 +567,7 @@ class TestDetectEvalGap:
             stmt_str = str(stmt)
             if "authz_enforce" in stmt_str:
                 return MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-            if "eval_definitions" in stmt_str:
+            if "FROM evals" in stmt_str:
                 return eval_result
             return run_result
 
@@ -1822,3 +1823,48 @@ class TestSerialiseRecord:
         assert result["rejected_by"] is None
         assert result["producing_agent_id"] is None
         assert result["correction_run_id"] is None
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pin — the feedback eval-suite loader reads ``evals`` #
+# --------------------------------------------------------------------------- #
+class TestFar1729EvalSuiteLoaderSourcePin:
+    """``_load_eval_suite`` must query ``evals``, never the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover); reading it means gap-detection never sees a
+    post-cutover definition. The pin fails if the source is reverted.
+    """
+
+    async def test_load_eval_suite_compiles_against_evals_table(self) -> None:
+        from types import SimpleNamespace
+
+        from modulo.api.routes.feedback import _load_eval_suite
+
+        org_id = uuid.uuid4()
+        pipeline_id = uuid.uuid4()
+        run = SimpleNamespace(id=uuid.uuid4(), pipeline_id=pipeline_id)
+        record = SimpleNamespace(run_id=run.id)
+
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            s = str(stmt)
+            captured.append(s)
+            result = MagicMock()
+            result.scalars = MagicMock(return_value=result)
+            result.all = MagicMock(return_value=[])
+            result.scalar_one_or_none = MagicMock(return_value=run if "FROM runs" in s else None)
+            return result
+
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=_execute)
+
+        suite = await _load_eval_suite(session, record, org_id)
+        assert suite == []
+
+        defs_reads = [s for s in captured if "FROM evals" in s or "eval_definitions" in s]
+        assert defs_reads, f"no definition read captured: {captured}"
+        stale = [s for s in defs_reads if "eval_definitions" in s]
+        assert not stale, f"_load_eval_suite must not read the frozen table: {stale}"
+        assert all("FROM evals" in s for s in defs_reads), f"loader must read evals: {defs_reads}"

@@ -41,7 +41,7 @@ from modulo.core.feedback_manager import (
     FeedbackRecordRunNotFoundError,
     InvalidTransitionError,
 )
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.feedback_record import FeedbackRecord
 from modulo.db.models.pipeline import Pipeline
 from modulo.db.models.pipeline_snapshot import PipelineSnapshot
@@ -96,8 +96,8 @@ class PublishEvalProposalRequest(BaseModel):
     node_id: uuid.UUID | None = None
 
 
-def _eval_def_to_dto(row: EvalDefinition, org_id: uuid.UUID) -> EvalDefinitionDTO:
-    """Convert an ORM ``EvalDefinition`` row to the eval-engine DTO shape.
+def _eval_def_to_dto(row: Eval, org_id: uuid.UUID) -> EvalDefinitionDTO:
+    """Convert an ORM ``Eval`` row to the eval-engine DTO shape.
 
     The engine reads ``eval_def.config`` (``EvalEngine.evaluate``), but the ORM
     model exposes ``config_json``. This mirrors the executor's
@@ -105,6 +105,10 @@ def _eval_def_to_dto(row: EvalDefinition, org_id: uuid.UUID) -> EvalDefinitionDT
     engine the same DTO shape the live run path uses — without it, every eval
     raises AttributeError inside ``evaluate()`` and gap detection reports
     ``eval_gap=True`` for everything (FAR-233 review MAJOR-1).
+
+    ``failure_behaviour`` is not an ``evals`` column (it moved to
+    ``policy_gates.action`` at the cutover) — the DTO default ``"warn"`` is
+    used, matching ``guardrails.to_engine_definition``.
     """
     return EvalDefinitionDTO(
         id=row.id,
@@ -114,7 +118,7 @@ def _eval_def_to_dto(row: EvalDefinition, org_id: uuid.UUID) -> EvalDefinitionDT
         name=row.name,
         eval_type=row.eval_type,
         config=row.config_json,
-        failure_behaviour=row.failure_behaviour,
+        failure_behaviour=getattr(row, "failure_behaviour", None) or "warn",
         pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
         suite_id=row.suite_id,
     )
@@ -467,7 +471,7 @@ async def _resolve_producing_node_uuid(
 ) -> uuid.UUID | None:
     """Resolve a FeedbackRecord's ``producing_node_id`` to a graph node UUID.
 
-    The published eval must be scoped to a pipeline node (``EvalDefinition.node_id``)
+    The published eval must be scoped to a pipeline node (``evals.node_id``)
     or it is never executed by the run-time eval loader (executor filters
     ``node_id.isnot(None)``). Resolution order: explicit request ``node_id`` is
     handled by the caller; here we parse ``producing_node_id`` as a UUID, then
@@ -568,8 +572,9 @@ async def publish_eval_proposal(
     """Publish an eval-gap proposal as a live eval definition (PRD §8.20 ¶Eval suite growth #3).
 
     A human reviews/edits the proposed eval (name, eval_type, config) and
-    publishes it. Publishing creates an ``EvalDefinition`` scoped to the
-    feedback record's pipeline and producing node — because run-time eval
+    publishes it. Publishing creates an ``evals`` row (plus its policy gate)
+    scoped to the feedback record's pipeline and producing node — because
+    run-time eval
     execution and gap detection load definitions by ``pipeline_id`` at run
     time, the published eval is immediately active for future runs of that
     pipeline — then resolves the proposal record (status -> ``resolved``).
@@ -842,9 +847,12 @@ async def _load_eval_suite(session: AsyncSession, record: Any, org_id: uuid.UUID
     eval_rows = (
         (
             await session.execute(
-                select(EvalDefinition).where(
-                    EvalDefinition.pipeline_id == run.pipeline_id,
-                    EvalDefinition.deleted_at.is_(None),
+                # FAR-1729: read live ``evals`` rows — the frozen
+                # ``eval_definitions`` snapshot stops at the cutover, so
+                # gap-detection would never see post-cutover definitions.
+                select(Eval).where(
+                    Eval.pipeline_id == run.pipeline_id,
+                    Eval.deleted_at.is_(None),
                 )
             )
         )

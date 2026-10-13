@@ -1029,3 +1029,100 @@ class TestInsertEvalDefinitionBindingViolation:
 
         assert excinfo.value.status_code == 400
         assert "PolicyGate binding violation" in excinfo.value.detail
+
+
+# --------------------------------------------------------------------------- #
+# FAR-1729: source-table pins — the evals routes read ``evals``              #
+# --------------------------------------------------------------------------- #
+class TestFar1729EvalSourcePins:
+    """These routes must look definitions up in ``evals``, not the frozen table.
+
+    ``eval_definitions`` was frozen by the 0254 cutover (no production write
+    path post-cutover): coverage would silently report every post-cutover
+    node uncovered, ``/evals/{id}/timeseries`` would 404 post-cutover evals,
+    and ``/evals/compare`` would label their results ``eval_name: "unknown"``.
+    Each pin fails if the source is reverted.
+    """
+
+    @staticmethod
+    def _install_capture(session: AsyncMock, *, eval_scalar: object = None, eval_rows: list | None = None) -> list[str]:
+        """Route ``session.execute`` on the compiled statement, capturing SQL text."""
+        captured: list[str] = []
+
+        def _execute(stmt, params=None):
+            s = str(stmt)
+            captured.append(s)
+            result = MagicMock()
+            result.scalars = MagicMock(return_value=result)
+            result.all = MagicMock(return_value=[])
+            result.scalar_one_or_none = MagicMock(return_value=None)
+            if "set_config" in s:
+                return result
+            if "FROM pipelines" in s:
+                node_id = uuid.uuid4()
+                pipeline = MagicMock()
+                pipeline.id = _PIPELINE_ID
+                pipeline.graph_nodes_json = [{"id": str(node_id)}]
+                result.scalar_one_or_none = MagicMock(return_value=pipeline)
+                return result
+            if "FROM evals" in s:
+                result.scalar_one_or_none = MagicMock(return_value=eval_scalar)
+                result.all = MagicMock(return_value=eval_rows or [])
+                return result
+            return result
+
+        session.execute = AsyncMock(side_effect=_execute)
+        return captured
+
+    @staticmethod
+    def _principal() -> MagicMock:
+        principal = MagicMock()
+        principal.organisation_id = _ORG_ID
+        principal.account_id = _USER_ID
+        principal.org_role = "admin"
+        return principal
+
+    async def test_eval_coverage_reads_evals_table(self) -> None:
+        session = _make_mock_session()
+        captured = self._install_capture(session)
+        principal = self._principal()
+
+        response = await evals_routes.eval_coverage(pipeline_id=_PIPELINE_ID, session=session, principal=principal)
+
+        assert response["summary"]["total_nodes"] == 1
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"eval_coverage must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"
+
+    async def test_eval_timeseries_exists_lookup_reads_evals_table(self) -> None:
+        """The exists/name lookup (not the FAR-1725-owned raw aggregates)."""
+        session = _make_mock_session()
+        eval_row = MagicMock()
+        eval_row.name = "post-cutover-eval"
+        captured = self._install_capture(session, eval_scalar=eval_row)
+        principal = self._principal()
+
+        response = await evals_routes.eval_timeseries(
+            eval_id=_EVAL_DEF_ID, days=7, session=session, principal=principal
+        )
+
+        assert response["eval_name"] == "post-cutover-eval"
+        # The definition lookup is the ORM select against ``evals`` (the raw
+        # aggregate queries — FAR-1725-owned — join ``evals`` as ``ed`` and
+        # never emit a ``FROM evals`` clause).
+        lookups = [s for s in captured if "FROM evals" in s]
+        assert lookups, f"no definition lookup captured: {captured}"
+        stale = [s for s in lookups if "eval_definitions" in s]
+        assert not stale, f"timeseries lookup must not read the frozen table: {stale}"
+
+    async def test_fetch_eval_definitions_reads_evals_table(self) -> None:
+        session = _make_mock_session()
+        captured = self._install_capture(session, eval_rows=[])
+        principal = self._principal()
+
+        defs = await evals_routes._fetch_eval_definitions({_EVAL_DEF_ID}, session, principal)
+
+        assert defs == {}
+        stale = [s for s in captured if "eval_definitions" in s]
+        assert not stale, f"_fetch_eval_definitions must not read the frozen table: {stale}"
+        assert any("FROM evals" in s for s in captured), f"no evals read captured: {captured}"

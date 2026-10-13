@@ -149,7 +149,8 @@ def _install_execute(
             return _make_result(all_rows=pipeline_rows or [])
         if "COUNT(*) FILTER" in s:
             return _make_result(all_rows=leaderboard_rows or [])
-        if "eval_definitions" in s:
+        # FAR-1729: the exists/name lookup reads the live ``evals`` table.
+        if "FROM evals" in s:
             return _make_result(scalar_one_or_none=eval_def)
         return _make_result(all_rows=[])
 

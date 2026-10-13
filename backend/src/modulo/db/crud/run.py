@@ -1869,21 +1869,24 @@ async def _persist_guardrail_eval_results(
     ``append_evidence`` so the key-namespace ownership check runs before any
     row is added.
     """
-    from modulo.db.models.eval_definition import EvalDefinition as _EvalDefinitionModel
+    from modulo.db.models.eval import Eval as _EvalModel
     from modulo.db.models.eval_result import EvalResult as EvalResultModel
 
     # FAR-382: stamp the definition version snapshot so a later rubric bump
     # never makes this guardrail outcome look like a regression. The engine
     # DTO carries no version, so resolve it from the (org-scoped) definition
     # rows in one batched query rather than N+1.
+    # FAR-1729: the version lives on ``evals`` (the storage source since the
+    # 0254 cutover) — the frozen ``eval_definitions`` snapshot has no row for
+    # a post-cutover guardrail, so every such result was stamped NULL.
     guardrail_eval_ids = {gr.eval_id for gr in guardrail_results}
     version_by_eval_id: dict[uuid.UUID, int] = {}
     if guardrail_eval_ids:
         def_rows = (
             await session.execute(
-                select(_EvalDefinitionModel.id, _EvalDefinitionModel.version).where(
-                    _EvalDefinitionModel.id.in_(guardrail_eval_ids),
-                    _EvalDefinitionModel.organisation_id == org_id,
+                select(_EvalModel.id, _EvalModel.version).where(
+                    _EvalModel.id.in_(guardrail_eval_ids),
+                    _EvalModel.organisation_id == org_id,
                 )
             )
         ).all()

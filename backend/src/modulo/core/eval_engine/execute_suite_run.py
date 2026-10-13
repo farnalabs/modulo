@@ -8,7 +8,7 @@ it does NOT reimplement any comparison or scoring logic.
 
 Execution path (given a resolved trigger config):
     1. Load the org-scoped ``EvalSuite``, ``EvalDataset`` (pin ``version``) and
-       its active ``EvalDefinition`` rows, plus the pinned ``ModelBackend``.
+       its active ``Eval`` rows, plus the pinned ``ModelBackend``.
     2. Refuse an empty dataset (``validate_dataset_has_cases`` == 0) -> fail
        loudly (never a silent pass).
     3. Construct the ``SuiteRun`` with the immutable baseline tuple
@@ -67,8 +67,8 @@ from modulo.core.eval_engine.suite_run import (
     record_completion,
     suite_cumulative_exceeded,
 )
+from modulo.db.models.eval import Eval as EvalRow
 from modulo.db.models.eval_dataset import EvalCase, EvalDataset
-from modulo.db.models.eval_definition import EvalDefinition as EvalDefinitionRow
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.eval_suite import EvalSuite
 from modulo.db.models.eval_suite_run import (
@@ -237,23 +237,26 @@ async def load_active_cases(session: AsyncSession, org_id: uuid.UUID, dataset_id
     )
 
 
-async def load_suite_definitions(
-    session: AsyncSession, org_id: uuid.UUID, suite_id: uuid.UUID
-) -> list[EvalDefinitionRow]:
+async def load_suite_definitions(session: AsyncSession, org_id: uuid.UUID, suite_id: uuid.UUID) -> list[EvalRow]:
+    """Load the suite's live definition rows from ``evals`` (FAR-1729).
+
+    The frozen ``eval_definitions`` snapshot stops at the 0254 cutover —
+    reading it here would execute the pre-cutover definition set forever.
+    """
     return list(
         (
             await session.execute(
-                select(EvalDefinitionRow).where(
-                    EvalDefinitionRow.eval_suite_id == suite_id,
-                    EvalDefinitionRow.organisation_id == org_id,
-                    EvalDefinitionRow.deleted_at.is_(None),
+                select(EvalRow).where(
+                    EvalRow.eval_suite_id == suite_id,
+                    EvalRow.organisation_id == org_id,
+                    EvalRow.deleted_at.is_(None),
                 )
             )
         ).scalars()
     )
 
 
-def _definition_snapshot(rows: Sequence[EvalDefinitionRow]) -> list[dict[str, Any]]:
+def _definition_snapshot(rows: Sequence[EvalRow]) -> list[dict[str, Any]]:
     """Build the immutable definition snapshot list for the checksum.
 
     ``config_json`` is snapshotted at creation so a later config edit produces a
@@ -263,8 +266,15 @@ def _definition_snapshot(rows: Sequence[EvalDefinitionRow]) -> list[dict[str, An
     return [{"id": str(r.id), "eval_type": r.eval_type, "config_json": r.config_json or {}} for r in rows]
 
 
-def _definition_dto(row: EvalDefinitionRow, org_id: uuid.UUID) -> EvalDefinition:
-    """Convert a persisted ``EvalDefinition`` row to the in-memory DTO."""
+def _definition_dto(row: EvalRow, org_id: uuid.UUID) -> EvalDefinition:
+    """Convert a persisted ``evals`` row to the in-memory DTO.
+
+    ``failure_behaviour`` is not an ``evals`` column (it moved to
+    ``policy_gates.action`` at the cutover); suite-scoped definitions get no
+    policy gate by design, and the write path pins them to ``"warn"`` — so the
+    DTO default ``"warn"`` is used, matching
+    ``guardrails.to_engine_definition``.
+    """
     return EvalDefinition(
         id=row.id,
         org_id=org_id,
@@ -273,7 +283,7 @@ def _definition_dto(row: EvalDefinitionRow, org_id: uuid.UUID) -> EvalDefinition
         name=row.name,
         eval_type=EvalType(row.eval_type),
         config=dict(row.config_json or {}),
-        failure_behaviour=row.failure_behaviour,
+        failure_behaviour=getattr(row, "failure_behaviour", None) or "warn",
         pass_threshold=float(row.pass_threshold) if row.pass_threshold is not None else None,
         suite_id=str(row.eval_suite_id) if row.eval_suite_id else None,
     )
@@ -406,9 +416,7 @@ def _resolve_suite_ceiling(run: SuiteRun, suite_ceiling: Decimal | None) -> Deci
     return None
 
 
-async def _load_suite_defs_and_cases(
-    session: AsyncSession, run: SuiteRun
-) -> tuple[list[EvalDefinitionRow], list[EvalCase]]:
+async def _load_suite_defs_and_cases(session: AsyncSession, run: SuiteRun) -> tuple[list[EvalRow], list[EvalCase]]:
     """Load the suite's eval definitions and active cases, raising the typed errors when either is empty."""
     definitions = await load_suite_definitions(session, run.organisation_id, run.suite_id)
     if not definitions:
