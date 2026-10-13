@@ -2129,11 +2129,15 @@ class TestTerminalizerSyntheticErrorDetail:
         # the code/detail: a progress-bearing row still matches the gate.
         # The statement is the production wedge template with the SHARED
         # zero-progress shape composed in as the NOT-arm — the same shape the
-        # router selects positively, so the two cannot diverge. (The shape's
-        # legs are pinned semantically at compile level by
-        # TestNodelessZombiePredicateCompiled; the raw-SQL constant is
-        # hand-typed text, so the meaningful test-side claim here is the
-        # provenance relationship, not a re-typed substring sweep.)
+        # router selects positively, so the two cannot diverge. (The raw-SQL
+        # constant is hand-typed text, so the meaningful test-side claim here
+        # is the provenance relationship, not a re-typed substring sweep.
+        # TestNodelessZombiePredicateCompiled, in this module, pins only the
+        # shape's NOT-EXISTS/final-key legs and the retired outputs_json leg.
+        # Coverage for the remaining legs (zero-attempts, no token usage,
+        # absent checkpoints) is split between the row-shape tests in
+        # test_nodeless_dispatch_phase.py and the real-Postgres wedge in
+        # test_org_sandbox_capacity.py.)
         expect_wedge_sql = ch._MID_GRAPH_WEDGE_SQL.replace(ch._ZERO_PROGRESS_SHAPE_TOKEN, ch._ZERO_PROGRESS_SHAPE_SQL)
         assert sql == expect_wedge_sql
 
