@@ -27,64 +27,16 @@ from urllib.parse import urlsplit
 
 import asyncpg
 
-from modulo.db.url_utils import derive_system_database_url, fix_database_url
+# split_postgres_sslmode is imported, not defined, here (FAR-1469): the
+# canonical helper lives in ``modulo.db.url_utils`` — a stdlib-only LEAF module
+# — so importing it adds no dependency beyond what this dependency-light boot
+# path already takes (fix_database_url / derive_system_database_url) and there
+# is no import cycle. One implementation, no interim copy.
+from modulo.db.url_utils import derive_system_database_url, fix_database_url, split_postgres_sslmode
 
 __all__ = ["main"]
 
 _TMP_NAME_ATTEMPTS = 8
-
-# sslmode values asyncpg honours FAIL-CLOSED (the connection is refused unless
-# the server negotiates TLS) vs the explicit-plaintext value. ``prefer`` /
-# ``allow`` are absent by design: asyncpg translates them to CERT_NONE with a
-# silent plaintext retry, a downgrade posture this module refuses (FAR-1441).
-_REQUIRE_TLS_SSLMODES = frozenset({"require", "verify-ca", "verify-full"})
-_PLAINTEXT_SSLMODES = frozenset({"disable"})
-
-
-def split_postgres_sslmode(url: str) -> tuple[str, bool | str]:
-    """Extract ``sslmode`` from a Postgres URL into an asyncpg ``ssl`` value.
-
-    Local copy of :func:`modulo.db.url_utils.split_postgres_sslmode` (FAR-1440
-    introduces the shared helper; this module must stay SQLAlchemy-free, so it
-    carries the stdlib-only twin until the shared one lands). Semantics:
-
-    * absent / ``disable`` → ``(url_without_sslmode, False)`` — explicit
-      plaintext, never the asyncpg ``prefer`` driver default (which fails open
-      and broke Fly's private networks with ``ConnectionResetError``);
-    * ``require`` / ``verify-ca`` / ``verify-full`` → the same string — asyncpg
-      builds an SSLContext that FAILS CLOSED when TLS is required and the
-      server cannot provide it;
-    * ``prefer`` / ``allow`` / any other value → ``ValueError`` — they would
-      silently downgrade to plaintext, which is never permitted.
-
-    The returned URL is rebuilt without the ``sslmode`` param (asyncpg rejects
-    it in the DSN). Only Postgres-family schemes are accepted — callers gate on
-    the scheme, and anything else is refused loudly rather than silently
-    passing a bogus ``ssl`` arg (FAR-1441).
-    """
-    parts = urlsplit(url)
-    if not parts.scheme.startswith("postgres"):
-        raise ValueError(f"split_postgres_sslmode expects a Postgres URL, got scheme {parts.scheme!r}")
-    ssl: bool | str = False
-    kept: list[str] = []
-    for item in parts.query.split("&") if parts.query else []:
-        key, _, value = item.partition("=")
-        if key != "sslmode":
-            kept.append(item)
-            continue
-        mode = value.strip().lower().replace("_", "-")
-        if mode in _PLAINTEXT_SSLMODES:
-            ssl = False
-        elif mode in _REQUIRE_TLS_SSLMODES:
-            ssl = mode
-        else:
-            raise ValueError(
-                f"Unsupported sslmode={value!r}: use disable, require, "
-                "verify-ca or verify-full (prefer/allow silently downgrade "
-                "to plaintext and are not permitted)"
-            )
-    query = "&".join(kept)
-    return parts._replace(query=query).geturl(), ssl
 
 
 def _write_env_file(path: str, content: str) -> None:
