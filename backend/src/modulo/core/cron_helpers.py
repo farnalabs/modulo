@@ -5466,6 +5466,29 @@ def _build_re_dispatch_predicate(
     past ``enqueue_failed_redispatch_seconds``. ``enqueue_failed_at`` is read via
     raw SQL (the column ships in a parallel migration; the ORM model on this
     branch does not yet map it).
+
+    FAR-1728 (guardrail-override resume self-heal): a RUNNING branch admits the
+    guardrail-override resume flip's lost-job shape — ``first_node_dispatched``
+    + ``guardrail_override_resume_pending`` (the DEDICATED marker column,
+    migration 0307) + stale heartbeat. The dedicated column is the flip's
+    discriminator because it is written by exactly one site in the product
+    (``recovery.guardrail_override``'s flip — node-started branch only) —
+    ``is_replay`` is NOT: webhook replay and manual replay set it too, so a
+    ``first_node_dispatched`` + ``is_replay`` row is not necessarily the flip
+    and selecting on it would lift the FAR-1649 node-started belt for every
+    wedged replay row. (The pre-0307 design stuffed a sentinel string into
+    ``error_detail``; the dedicated boolean column replaces it — an
+    observation column must not carry a control-flow marker.) No other branch
+    of this OR can match a row carrying the marker and the ``running``+phase
+    shape (the generic stale leg and the nodeless predicate EXCLUDE
+    ``first_node_dispatched``, the pending legs need ``pending``, and F6a needs
+    a HITL status + a committed decision this path has none of), so before
+    this leg the only collector was the age gate's terminal ``no_progress`` —
+    fail-closed, but never retried. The job-absent gate and the
+    resumable-checkpoint precondition are applied per-row in
+    ``_reconcile_one_row`` (same split as F6a's no-job + committed-decision
+    guards), and the re-dispatch is always ``resume_run`` — checkpoint resume,
+    never re-execution (FAR-1649).
     """
     from sqlalchemy import and_, or_
 
@@ -5578,7 +5601,9 @@ def _build_re_dispatch_predicate(
             # (one row per confirmed reset, and only once its SAQ job is
             # genuinely lost), never the RUNNING burst. The F6a leg below
             # enqueues ``resume_run`` only (checkpoint resume, no
-            # re-execution; see its comment). The D8 marker sweep composes
+            # re-execution; see its comment), and so does the FAR-1728
+            # guardrail-override resume leg (also ``resume_run`` only). The
+            # D8 marker sweep composes
             # this SAME predicate (parity by construction), so its
             # recoverability verdict moves in lockstep.
             or_(Run.dispatch_phase.is_(None), Run.dispatch_phase != PHASE_FIRST_NODE_DISPATCHED),
@@ -5607,6 +5632,48 @@ def _build_re_dispatch_predicate(
         # idempotency-gated).
         and_(
             Run.status.in_(("awaiting_human", "claimed", "hitl_parked")),
+            Run.dispatcher == "saq",
+            Run.heartbeat_at < func_now_minus(stale_window),
+        ),
+        # FAR-1728 — guardrail-override resume self-heal (the F6a leg's
+        # RUNNING counterpart). FAR-1711 flips a node-started eval-blocked run
+        # to ``running`` (phase ``first_node_dispatched`` preserved, the
+        # dedicated ``guardrail_override_resume_pending`` marker set, heartbeat
+        # stamped one claim-stale window into the past) and re-dispatches
+        # ``resume_run``. If that job is LOST — worker crash before claim, or
+        # ``dispatch_run`` returning deferred/
+        # enqueue_failed (the override route's 500 leaves the committed flip
+        # behind) — no OTHER leg matches the row: the generic stale-heartbeat
+        # leg and the nodeless predicate exclude ``first_node_dispatched``
+        # (FAR-1649), the pending legs require ``status='pending'``, and the
+        # F6a leg requires a HITL status + a committed gate decision (this
+        # path has none). Only the age gate collected it (~135 min,
+        # ``no_progress``) — truthful but never retried.
+        #
+        # The discriminator is the DEDICATED marker COLUMN (migration 0307),
+        # not ``is_replay``: ``is_replay`` is also set by webhook replay
+        # (``trigger_engine._create_webhook_run``) and by a manual replay, so
+        # ``first_node_dispatched`` + ``is_replay`` is NOT the flip's shape —
+        # selecting on it would lift the FAR-1649 node-started belt for every
+        # wedged REPLAY row and auto-resume it from checkpoint (re-executing
+        # an in-progress, possibly non-idempotent super-step). The column has
+        # one writer (``recovery.guardrail_override``'s flip), so this leg
+        # selects the flip and only the flip. (The pre-0307 sentinel string in
+        # ``error_detail`` is retired: an observation column must not carry a
+        # control-flow marker.)
+        #
+        # Re-dispatched as ``resume_run`` (checkpoint resume, never
+        # ``execute_run`` — FAR-1649) after the per-row job-absent gate +
+        # resumable-checkpoint guard in ``_reconcile_one_row``; a successful
+        # claim stamps ``dispatch_phase='claimed'`` AND clears the marker (the
+        # resume-claim UPDATE names the column — single clearer), so the row
+        # leaves this branch, and a genuinely-wedged row is still bounded by
+        # the claim-cap terminalizer and the age gate (both run BEFORE the row
+        # select each tick).
+        and_(
+            Run.status == "running",
+            Run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED,
+            Run.guardrail_override_resume_pending.is_(True),
             Run.dispatcher == "saq",
             Run.heartbeat_at < func_now_minus(stale_window),
         ),
@@ -6764,7 +6831,12 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         'first_node_dispatched'``, FAR-1649): re-dispatch would re-execute the
         started node, so such rows are left for the in-process watchdogs and
         the age gate's truthful ``run.no_progress`` (the row-level guard in
-        ``_reconcile_one_row`` carries the same exclusion).
+        ``_reconcile_one_row`` carries the same exclusion). The ONE
+        node-started exception has its OWN leg below — the guardrail-override
+        resume flip (``guardrail_override_resume_pending`` true, the flip's
+        single-writer dedicated marker column — NOT ``is_replay``, which
+        webhook/manual replay also set), re-dispatched ``resume_run`` only
+        (FAR-1728).
       * running + ``dispatcher='saq'`` + FRESH heartbeat but zero node
         progress after SAQ_CLAIMED_NODELESS_MINUTES (node_token_usage/out-
         puts_json both NULL + no LangGraph checkpoint for the thread):
@@ -6809,6 +6881,29 @@ async def dispatcher_reconcile() -> dict[str, Any]:
         Resume ``resume_data`` is reconstructed from the persisted
         ``hitl_claims.decision_payload`` (B1-reconcile) — a recovered
         rejection resumes as rejected, never as an empty ``{}``.
+      * running + ``dispatcher='saq'`` + ``dispatch_phase=
+        'first_node_dispatched'`` + ``guardrail_override_resume_pending``
+        true + heartbeat stale by
+        2*SAQ_JOB_HEARTBEAT (FAR-1728 guardrail-override resume self-heal):
+        the guardrail-override flip (FAR-1711) whose ``resume_run`` job was
+        lost — worker crash before claim, or ``dispatch_run`` deferred/
+        enqueue-failed (the override route's 500 leaves the committed flip
+        behind). The dedicated marker column is written ONLY by that flip, so
+        this branch selects the flip and only the flip — a webhook/manual-replay
+        row (``is_replay=True``, marker false) never reaches it — and no other
+        branch matches a marker row (before this leg only the age gate's
+        ``no_progress`` collected it). Re-enqueued as
+        ``resume_run`` (checkpoint resume, never ``execute_run`` — FAR-1649)
+        after BOTH per-row guards: the shared ``q.job()`` job-absent reads and
+        the resumable-checkpoint precondition (FAR-1711 M1 — a thread with no
+        root checkpoint is refused and left to the age gate, because a resume
+        there would re-execute the run). ``resume_data`` stays unset — this
+        path has no HITL decision. Bounded: a successful claim stamps
+        ``dispatch_phase='claimed'`` AND clears the marker (row leaves the
+        branch) and each cycle
+        costs a claim, so the claim-cap terminalizer (B5) and the mid-graph
+        age gate (B4 — ``started_at`` is never refreshed), both running
+        BEFORE the row select, collect a genuinely-wedged row.
 
     Per-org DB-only terminalizers (before the row select):
       * FAR-1329 nodeless router: any ``running`` + ``dispatcher='saq'`` row
@@ -6845,8 +6940,13 @@ async def dispatcher_reconcile() -> dict[str, Any]:
     (``claim_run_async``) is the real at-most-once dedupe.
 
     Re-dispatch type (discriminator): awaiting_human/claimed/hitl_parked ->
-    ``resume_run``; pending/running -> ``execute_run``. Capacity-deferred runs
-    are re-dispatched only when their pipeline has free capacity.
+    ``resume_run``; pending/running -> ``execute_run`` — EXCEPT the
+    guardrail-override resume class (FAR-1728: running + ``first_node_dispatched``
+    + the flip's ``guardrail_override_resume_pending`` marker), which is
+    re-dispatched ``resume_run`` explicitly by its
+    own leg before the discriminator (a bare ``running`` status would otherwise
+    choose ``execute_run`` and re-execute the started node). Capacity-deferred
+    runs are re-dispatched only when their pipeline has free capacity.
 
     Every run terminalised this tick (``executor_stalled`` / ``no_progress`` /
     ``claim_cap_exhausted`` / ``dispatch_failed`` / ``hitl_review_expired``) gets
@@ -7906,6 +8006,18 @@ async def _reconcile_org(
                 # as a zero-node zombie (no safe re-dispatch, no
                 # "dispatched no node" mislabel).
                 Run.dispatch_phase,
+                # FAR-1728: the override-resume class discriminator — the
+                # flip's single-writer dedicated marker column
+                # (_is_override_resume_row) — plus the row's
+                # resumable-checkpoint probe key
+                # (_override_resume_checkpoint_present): the per-row half of
+                # the guardrail-override self-heal leg. (``is_replay`` is NOT
+                # selected: webhook/manual replay also set it, so it cannot
+                # identify the flip; ``error_detail`` is NOT selected either —
+                # pre-0307 it carried the sentinel string, but an observation
+                # column must not hold a control-flow marker.)
+                Run.guardrail_override_resume_pending,
+                Run.langgraph_thread_id,
                 # FAR-1088 W-B: consumed by the row-level nodeless
                 # recheck (_is_nodeless_zombie_row) — a live dispatch
                 # marker shields the row from the nodeless repair
@@ -8042,6 +8154,7 @@ async def _reconcile_org(
                 terminalized_run_ids,
                 early_detect_minutes=row_early_detect_minutes,
                 floor_nodeless_window=tuning.nodeless_window,
+                stale_window=tuning.stale_window,
             )
         # FAR-1425: the fetch above returned one row beyond the budget when
         # (and only when) matching rows remain. Count the org as deferred so
@@ -8770,6 +8883,73 @@ async def _redispatch_nodeless(
         )
 
 
+def _is_override_resume_row(row: Any, stale_window: int) -> bool:
+    """FAR-1728: does this scan row belong to the guardrail-override resume class?
+
+    Exactly the SQL leg's discriminators re-checked row-side (the belt/recheck
+    convention, mirroring :func:`_is_nodeless_zombie_row` taking its own
+    window): ``running`` + ``dispatcher='saq'`` + the durable
+    ``first_node_dispatched`` phase + the DEDICATED
+    ``guardrail_override_resume_pending`` marker column (migration 0307 —
+    written only by ``recovery.guardrail_override``'s flip) + a heartbeat
+    stale past *stale_window*. The marker column — not ``is_replay`` —
+    identifies the class, because ``is_replay`` is written by webhook/manual
+    replay too, so a replay-shaped row must fall through to the node-started
+    belt rather than be resumed from checkpoint (the FAR-1649 hazard the belt
+    guards). The staleness recheck matters because the combined predicate is
+    an OR — a row can be selected via another branch (or the heartbeat can be
+    refreshed between SELECT and this loop), and a fresh-heartbeat row is a
+    LIVE attempt this leg must never touch. FAILS CLOSED on a row source that
+    does not expose ``guardrail_override_resume_pending`` at all — missing
+    evidence is never "this is the override flip" evidence, so such a row
+    falls through to the node-started belt and is held back exactly like
+    today.
+    """
+    if getattr(row, "status", None) != "running":
+        return False
+    if getattr(row, "dispatcher", None) != "saq":
+        return False
+    if getattr(row, "dispatch_phase", None) != PHASE_FIRST_NODE_DISPATCHED:
+        return False
+    # ``is not True`` (not a truthiness check): a row source missing the
+    # attribute, or carrying None/False, is never the flip — fail closed.
+    if getattr(row, "guardrail_override_resume_pending", None) is not True:
+        return False
+    heartbeat = getattr(row, "heartbeat_at", None)
+    # isinstance both narrows for mypy (no Any-typed arithmetic) and FAILS
+    # CLOSED: a row whose heartbeat is not a datetime carries no verifiable
+    # staleness evidence, so it falls through to the belt.
+    if not isinstance(heartbeat, datetime):
+        return False
+    return (datetime.now(UTC) - heartbeat).total_seconds() > stale_window
+
+
+async def _override_resume_checkpoint_present(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    row: Any,
+) -> bool:
+    """FAR-1728 per-row precondition: the row's thread carries a root checkpoint.
+
+    The SAME predicate :func:`modulo.core.pipeline_engine.recovery
+    ._run_has_resumable_checkpoint` enforces at override-flip time (FAR-1711
+    M1) — one definition of "resumable", so the flip and the self-heal can
+    never disagree. A ``first_node_dispatched`` thread with no root checkpoint
+    stays that way (nothing writes one retroactively), and resuming it would
+    silently RE-EXECUTE the run from the start (LangGraph seeds a fresh
+    checkpoint and streams every node again — the exact FAR-1649/FAR-1711
+    sin). Such a row is left to the mid-graph age gate's truthful
+    ``run.no_progress``, exactly as before this leg existed. Lazily imported
+    (the reconcile tick must not pull the recovery module at import time).
+    """
+    from modulo.core.pipeline_engine.recovery import _run_has_resumable_checkpoint
+
+    thread_id = getattr(row, "langgraph_thread_id", None)
+    if not thread_id:
+        return False
+    return bool(await _run_has_resumable_checkpoint(session, org_id=org_id, thread_id=thread_id))
+
+
 async def _reconcile_one_row(
     session: AsyncSession,
     q: RedisQueue,
@@ -8783,12 +8963,14 @@ async def _reconcile_one_row(
     *,
     early_detect_minutes: int | None = None,
     floor_nodeless_window: int | None = None,
+    stale_window: int,
 ) -> int:
     """Reconcile ONE matched run row; returns the updated enqueue-failed counter.
 
     Handles the nodeless zombie (via ``_reconcile_nodeless_repair``), FAR-873
-    early-detect, B3 enqueue-failed branch, F6a resume guard, capacity check,
-    the job re-check, and the re-dispatch decision for a single row.
+    early-detect, B3 enqueue-failed branch, F6a resume guard, the FAR-1728
+    guardrail-override resume self-heal, capacity check, the job re-check, and
+    the re-dispatch decision for a single row.
     ``summary`` and ``terminalized_run_ids`` are mutated in place.
 
     FAR-1740: *nodeless_window* is the row's PER-PIPELINE window (derived by the
@@ -8796,6 +8978,8 @@ async def _reconcile_one_row(
     the global floor it was derived from — a WIDENED window (floor < window)
     additionally arms the tail guard below, so a zero-progress running row is
     never re-dispatched by the generic recovery path before its window elapses.
+    ``stale_window`` (the SAME value the SQL stale-heartbeat legs bind, from
+    ``ReconcileTuning``) feeds the override-resume row recheck.
     """
     # FAR-873: early-detect for fresh-heartbeat nodeless zombies.  Fire BEFORE
     # the full nodeless repair so a wedged-worker zombie is re-dispatched ~20
@@ -8941,9 +9125,72 @@ async def _reconcile_one_row(
         summary["skipped"] += 1
         return enqueue_failed_redispatched
 
+    # FAR-1728 — guardrail-override resume self-heal (mirror of the F6a leg).
+    # Reached ONLY for a row the SQL leg selected AND whose SAQ job is absent
+    # (both ``q.job()`` reads above), before the node-started belt would hold
+    # it back: a ``running`` + ``first_node_dispatched`` row carrying the
+    # flip's dedicated ``guardrail_override_resume_pending`` marker
+    # IS the guardrail-override flip (FAR-1711) — the marker has exactly one
+    # production writer, so unlike ``is_replay`` (webhook/manual replay also
+    # set it) it cannot be a replay-shaped row wearing the flip's costume —
+    # whose lost ``resume_run`` job no other leg can re-dispatch. Re-enqueued
+    # as ``resume_run`` — checkpoint resume, never ``execute_run``
+    # re-execution (FAR-1649) — with resume_data unset, exactly what the
+    # override route's own dispatch passes (this path has no HITL decision to
+    # reconstruct).
+    #
+    # No double-dispatch: the job-absent gate above (+ its re-check) skips a
+    # live job under the deterministic key, and the atomic resume CLAIM is the
+    # real at-most-once fence — a duplicate job a later tick may enqueue finds
+    # the row already claimed (fresh heartbeat + ``dispatch_phase='claimed'``)
+    # and no-ops as ``not_claimed``. Same fencing the sibling legs rely on.
+    #
+    # Bounded (never resurrects a wedged run forever): a successful claim takes
+    # the row OUT of this class (phase stamps ``'claimed'`` and the resume
+    # claim clears ``guardrail_override_resume_pending`` in the same UPDATE),
+    # and each further
+    # cycle costs a claim — so the claim-cap terminalizer (``claim_count`` at
+    # the SAQ cap, stale heartbeat) and the mid-graph age gate (``started_at``
+    # is never refreshed), both batch terminalizers that run BEFORE the row
+    # select, collect a genuinely-wedged row. A no-checkpoint row is refused
+    # per-row below (FAR-1711 M1) and left to the same age gate.
+    if _is_override_resume_row(row, stale_window):
+        if not await _override_resume_checkpoint_present(session, org_id, row):
+            summary["skipped"] += 1
+            _log.info(
+                "dispatcher_reconcile: override-resume run %s has no root checkpoint — "
+                "not re-dispatched (a resume would re-execute it); left for the age gate",
+                row.id,
+            )
+            return enqueue_failed_redispatched
+        _log.info(
+            "dispatcher_reconcile.override_resume_redispatched run=%s org=%s "
+            "dispatch_phase=%s claim_count=%s — lost guardrail-override resume_run job re-enqueued",
+            row.id,
+            org_id,
+            getattr(row, "dispatch_phase", None),
+            getattr(row, "claim_count", None),
+        )
+        key_suffix = uuid.uuid4().hex
+        return await _re_dispatch_reconciled_run(
+            session,
+            q,
+            org_id,
+            row,
+            "resume_run",
+            key_suffix,
+            None,
+            is_enqueue_failed,
+            enqueue_failed_redispatched,
+            summary,
+        )
+
     # FAR-1649 qa iteration 3 — row-level belt for the RUNNING SQL exclusions
     # (the scan's predicate can only reach such a row via another branch, or
-    # via a phase that transitioned between SELECT and now). RUNNING-ONLY by
+    # via a phase that transitioned between SELECT and now). The FAR-1728
+    # guardrail-override resume class exits through its own leg ABOVE and
+    # never reaches this belt; every other RUNNING node-started row is held
+    # back here. RUNNING-ONLY by
     # design: a ``pending`` node-started row is the fenced pending-reset
     # signature and is DELIBERATELY re-dispatched by the reenqueue-window leg
     # (idempotency-gated producer — see ``_build_re_dispatch_predicate``), so

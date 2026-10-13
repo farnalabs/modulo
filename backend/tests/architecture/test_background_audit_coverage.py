@@ -240,6 +240,15 @@ INVENTORY: dict[str, PathRecord] = {
     "connector_health_checks": _exempt("derived_cache"),
     "health_readiness_alert": _exempt("notification_only"),
     "memory_monitor_cron": _exempt("liveness"),
+    # FAR-1707: the kill-switch drill appends exactly one system_audit_events
+    # fact per run (event_type="kill_switch_drill"). It is a non-mutating
+    # self-test — the downgrade check is in-memory and the fail-closed check
+    # drives the reader with a raising stub, so no org-owned row changes; the
+    # audit record is the deliberate, durable evidence.
+    "run_kill_switch_drill": _audited(
+        ("src/modulo/core/guardrails/kill_switch_drill.py", "append_system_audit_event("),
+        ("src/modulo/core/guardrails/kill_switch_drill.py", '_KILL_SWITCH_DRILL_EVENT_TYPE = "kill_switch_drill"'),
+    ),
     # --- reconcilers / sweep helpers declared under core/ -----------------
     "reconcile_facts": _exempt("derived_analytics"),
     "reconcile_runner_workspaces": _exempt("infra_container_gc"),

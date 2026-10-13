@@ -2231,7 +2231,7 @@ async def test_reconcile_one_row_recheck_variants():
         patch.object(ch, "_reconcile_enqueue_failed", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_read_reconcile_job", new_callable=AsyncMock, side_effect=[(None, True), (None, False)]),
     ):
-        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary, [])
+        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary, [], stale_window=600)
     assert got == 0
     # Re-check finds a job -> skipped.
     summary2: dict[str, Any] = {
@@ -2247,7 +2247,7 @@ async def test_reconcile_one_row_recheck_variants():
         patch.object(ch, "_reconcile_enqueue_failed", new_callable=AsyncMock, return_value=None),
         patch.object(ch, "_read_reconcile_job", new_callable=AsyncMock, side_effect=[(None, True), ("job-1", True)]),
     ):
-        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary2, [])
+        got = await ch._reconcile_one_row(session, q, _redis(), ORG, row, 20, 0, summary2, [], stale_window=600)
     assert got == 0
     assert summary2["skipped"] == 1
 

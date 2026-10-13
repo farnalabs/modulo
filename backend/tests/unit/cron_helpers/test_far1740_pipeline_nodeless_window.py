@@ -306,6 +306,7 @@ class TestReconcileOneRowTailGuard:
             summary,
             [],
             floor_nodeless_window=35,
+            stale_window=600,
         )
         assert got == 0
         assert summary["skipped"] == 1
@@ -339,6 +340,7 @@ class TestReconcileOneRowTailGuard:
                 summary,
                 [],
                 floor_nodeless_window=35,
+                stale_window=600,
             )
         assert got == 7
         assert summary["skipped"] == 0

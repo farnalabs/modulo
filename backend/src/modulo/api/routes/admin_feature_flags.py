@@ -27,7 +27,7 @@ from modulo.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from modulo.core.audit_coverage import audited
 from modulo.core.audit_logger import append_audit_event_isolated
 from modulo.core.feature_flags import FeatureFlagRegistry, resolve_plan_context
-from modulo.core.license import get_license
+from modulo.core.license import get_license, verify_license_key
 from modulo.db.crud.organisation import get_organisation
 from modulo.settings import Settings, get_settings
 
@@ -74,7 +74,9 @@ async def _build_registry(
 ) -> FeatureFlagRegistry:
     tier = await _resolve_tier(settings, session, current_user)
     lic = get_license()
-    has_key = bool(settings.modulo_license_key) or lic is not None
+    # FAR-1733: the env-var key is only counted after verification — never on
+    # mere presence (mirrors rung 3 of the canonical licence ladder).
+    has_key = verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None or lic is not None
 
     if not has_key and current_user.organisation_id is not None:
         async with session.begin():
@@ -88,6 +90,35 @@ async def _build_registry(
             current_tier=tier,
             has_license_key=has_key,
         )
+
+
+async def _license_is_valid(settings: Settings, session: AsyncSession, org_id: uuid.UUID | None) -> bool:
+    """Whether the licence ladder resolves a VALID licence for this deployment/org.
+
+    FAR-1733: replaces the hardcoded ``is_valid: True``. The rungs mirror the
+    canonical ``feature_flags._resolve_paid_plan`` order — the in-memory
+    licence, then a verified env-var key, then the org-level key — and every
+    key rung is verified via ``verify_license_key`` (signature + expiry),
+    never trusted on presence. A failed org read is best-effort: logged and
+    treated as "could not confirm" (reports False) so the endpoint still
+    answers rather than 500ing on a reporting field.
+    """
+    if get_license() is not None:
+        return True
+    if verify_license_key(getattr(settings, "modulo_license_key", "") or "") is not None:
+        return True
+    if org_id is None:
+        return False
+    try:
+        async with session.begin():
+            org = await get_organisation(session, org_id)
+    except Exception:
+        logger.warning("feature-flags.license_validity_org_read_failed", exc_info=True)
+        return False
+    if org is None or not isinstance(getattr(org, "settings_json", None), dict):
+        return False
+    org_key = org.settings_json.get("license_key")
+    return bool(org_key) and verify_license_key(str(org_key)) is not None
 
 
 async def _invalidate_cache(settings: Settings, org_id: str | uuid.UUID) -> None:
@@ -305,7 +336,7 @@ async def list_feature_flags(
             "license": {
                 "tier": registry.current_tier,
                 "has_license_key": registry.has_license_key,
-                "is_valid": True,
+                "is_valid": await _license_is_valid(settings, session, current_user.organisation_id),
             },
             "dev_mode": settings.modulo_dev_mode,
             "flags": [

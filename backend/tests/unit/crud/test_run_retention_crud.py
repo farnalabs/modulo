@@ -50,9 +50,16 @@ def _compile_with_literal_binds(conditions: list[object]) -> str:
     (``in_`` renders as a POSTCOMPILE bind name), so the conditions are
     compiled against a real dialect with ``literal_binds`` — the resulting SQL
     contains the actual status literals, which is what these tests assert.
+
+    The projection is deliberately a single non-colliding column rather than
+    the whole ``Run`` entity, so the negative substring assertions below
+    (e.g. ``"pending" not in sql``) scope to the WHERE-clause status literals
+    and never false-positive on a column NAME. A full ``select(Run)`` emits
+    every column, and ``runs.guardrail_override_resume_pending`` (the FAR-1728
+    marker) contains "pending" — a status the whitelist must exclude.
     """
 
-    stmt = select(Run).where(*conditions)  # type: ignore[arg-type]
+    stmt = select(Run.id).where(*conditions)  # type: ignore[arg-type]
     return compile_sql(stmt, sqlite.dialect())
 
 

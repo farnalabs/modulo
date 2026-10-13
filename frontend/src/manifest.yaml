@@ -2005,6 +2005,39 @@ elements:
       - testid: paramschema-set-save
         type: button
         dynamic_testid: false
+      - testid: paramschema-save
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-param
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-option
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-set-desc
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-validate
+        type: button
+        dynamic_testid: false
     /admin/plugins:
       - testid: admin-plugins-refresh
         type: button
@@ -3379,6 +3412,27 @@ elements:
         dynamic_testid: false
       - testid: pipeline-editor-max-autonomy
         type: select
+        dynamic_testid: false
+      - testid: progressive-autonomy-panel
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-earned
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-demote
+        type: button
+        dynamic_testid: false
+      - testid: progressive-autonomy-promote
+        type: button
+        dynamic_testid: false
+      - testid: progressive-autonomy-reason
+        type: input
+        dynamic_testid: false
+      - testid: progressive-autonomy-status
+        type: element
+        dynamic_testid: false
+      - testid: progressive-autonomy-error
+        type: element
         dynamic_testid: false
       - testid: pipeline-editor-environment-profile
         type: select
@@ -5575,6 +5629,9 @@ features:
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
             - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
 
+            # Offline-verifiable evidence (FAR-1697)
+            - "[x] An audit export can be emitted as offline-verifiable evidence: GET /api/v1/admin/audit/evidence-pack (audit_viewer + audit.manage) returns a self-contained pack - the audit events as audit-events.ndjson, a canonical manifest (organisation id, exporter identity, created_at, run ids, per-file SHA-256 + size, and the re-derived chain summary valid/event_count/head_hash/first_gap_index/first_tampered_id/truncated), an Ed25519 signature over the canonical manifest, and the PEM verification key as an artefact - while GET /api/v1/admin/audit/verification-key publishes the org's public key + key_id fingerprint; a party holding ONLY the artefact + the pre-published key verifies authorship, re-derives every file digest and re-derives the embedded audit chain with no Modulo service and no login (the `modulo evidence verify` CLI), and any tampered file, mutated event, falsified chain claim or swapped key fails as valid=false (backend/src/modulo/core/evidence_pack/, backend/src/modulo/api/routes/audit.py evidence_pack_endpoint + verification_key_endpoint, backend/src/modulo/cli/evidence.py, test_evidence_pack.py)"
+
             # Pipeline graph mutation audit (FAR-1471)
             - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
 
@@ -5591,6 +5648,7 @@ features:
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
             - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
+            - "Evidence-pack signing is instance-scoped with no key rotation or revocation: the published verification key is derived from the single configured MODULO_EVIDENCE_SIGNING_KEY, and per-org keys are not implemented (FAR-1697 out of scope)"
     feat-connectors:
         description: External tool connectors
         status: covered
@@ -5810,6 +5868,8 @@ features:
             # FAR-1175: earned autonomy + manual promote/demote (ADR 043 slice S1)
             - "[x] Behind the default-off autonomy_gating flag, each HITL gate resolves its base level from the pipeline's runtime earned autonomy level (pipelines.earned_autonomy_level, stored outside the snapshot, NULL until set): a demotion is read LIVE and bites an in-flight run at its next gate, while a promotion never loosens an in-flight run because the gate resolves min(pinned-at-run-start, live earned); the ceiling always clamps the earned base, and with the flag off resolution is byte-identical to S0"
             - "[x] Manual autonomy changes ship on REST and MCP: POST /api/v1/pipelines/{id}/autonomy/demote and .../promote (and the MCP demote_pipeline_autonomy / promote_pipeline_autonomy tools) are admin/owner gated (org admin, or a member of the pipeline's owner team), promote is capped at max_autonomy_level, and each writes a pipeline.autonomy_demoted / pipeline.autonomy_promotion_decided audit event carrying actor, previous/new level and reason (backend/tests/unit/api/test_pipeline_autonomy_endpoints.py)"
+            # FAR-1696 slice (b): progressive-autonomy visibility panel (ADR 043 slice S5 frontend surface)
+            - "[x] The pipeline editor renders a progressive-autonomy panel showing the pipeline default, the ceiling and the earned level plus its updated_at stamp, with manual promote/demote (one rung, optional reason) wired to POST /api/v1/pipelines/{id}/autonomy/promote|demote; each button is disabled when it would violate direction or the ceiling, an unset earned level renders an explicit 'not set - using pipeline default' state, and a 403 (not admin/owner) or 422 (direction/ceiling) surfaces the server detail inline; on success the panel emits changed and the editor refetches the pipeline so the earned display reflects the server response (frontend/src/components/pipeline/ProgressiveAutonomyPanel.vue, frontend/src/__tests__/ProgressiveAutonomyPanel.spec.ts)"
             - "[x] run_daily_facts gains an autonomy_level column populated at fact-write time from the run's latest run.autonomy_level_applied audit event, so the analytics surface can bucket by autonomy without re-joining the audit chain"
             # FAR-1257 + FAR-1269: the configurable review window
             - "[x] The HITL review window is configurable at three levels (FAR-1257): a per-pipeline override, an org default (GET/PUT /api/v1/admin/org/hitl-review-window - whole seconds, 60 to 604800, explicit null clears back to inheritance) and the instance default (HITL_REVIEW_CANCEL_GRACE_SECONDS); the resolved window is stamped ONCE at gate fire time as an absolute hitl_claims.terminalize_at, so stamped rows ignore the env knob while legacy rows keep it verbatim"
@@ -5819,7 +5879,7 @@ features:
             - "[x] Three reject dispositions share one resolver (resolve_reject_disposition): `route` when a reject target/edge exists, `terminate` (the default) otherwise, and `proceed` only when the gate explicitly sets `on_reject: proceed` (validated at graph save, edge-level and node-level); an automated correction_target wins over terminate, and the reviewer briefing (HitlBriefing, HitlReviewCard banners) states the reject consequence in all three states"
             - "[x] A coalesced-supersede system rejection (a newer version of the work item replaced a still-waiting review) with no reject route ends `rejected` with error_code `hitl.superseded` (detected from the committed claim's system reason with no deciding account): silent (no failure alert), excluded from failure analytics and the human-reject count, never advances a lifecycle journey, and labelled 'Superseded by a newer version' on the run list and run detail - never 'Rejected by reviewer'"
         deferrals:
-            - "The pipeline-detail UI for manual promote/demote and the earned/ceiling/default history (ADR 043 slice S5) is not yet built; the REST and MCP surfaces are live and the earned level is exposed on the pipeline response (earned_autonomy_level, earned_autonomy_updated_at)."
+            - "The pipeline-editor progressive-autonomy panel ships the live levels plus manual promote/demote (ADR 043 slice S5); the earned/ceiling/default history-with-reasons remains deferred because it needs a pipeline-scoped audit read that does not exist (/api/v1/admin/audit is org-wide and admin-only)."
             - "Automatic demotion (S3) and promotion proposals as human_only HITL gates (S4) are not yet built; the earned level can only be moved manually today."
     feat-router:
         description: Router decision nodes and branching in the execution graph (FAR-402 P1 / F2-A)
