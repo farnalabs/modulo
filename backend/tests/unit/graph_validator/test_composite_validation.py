@@ -101,6 +101,7 @@ async def test_template_not_found_reports_node_and_ref():
     issue = next(i for i in result.issues if i.code == "COMPOSITE_TEMPLATE_NOT_FOUND")
     assert issue.node_id == "n1"
     assert str(ref) in issue.message
+    assert not result.is_valid
 
 
 # ---------------------------------------------------------------------------

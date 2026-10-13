@@ -1,6 +1,6 @@
 """Shared test helpers for the ``graph_validator`` unit package.
 
-``codes_of`` was defined byte-identically in nine test modules; it is defined
+``codes_of`` was defined near-identically in nine test modules; it is defined
 once here so the issue-code extraction has a single source.
 """
 

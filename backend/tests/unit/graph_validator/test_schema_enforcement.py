@@ -481,7 +481,7 @@ async def test_pre_existing_pipeline_logs_degraded_mode(caplog: pytest.LogCaptur
 
     assert not result.is_valid
     assert any(i.code == "SCHEMA_FIELD_INCOMPATIBLE" for i in result.issues)
-    assert any("Run proceeds in degraded mode" in r.getMessage() for r in caplog.records)
+    assert any("Schema incompatibility in pipeline" in r.getMessage() for r in caplog.records)
 
 
 async def test_non_pre_existing_pipeline_blocks_on_incompatible():

@@ -58,6 +58,7 @@ def test_duplicate_node_id_reports_duplicate_id():
     dup = next(i for i in result.issues if i.code == "GRAPH_DUPLICATE_NODE_ID")
     assert dup.node_id == nid
     assert nid in dup.message
+    assert not result.is_valid
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +138,7 @@ def test_sandbox_read_only_non_bool_errors():
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_READ_ONLY_INVALID" in _codes(result)
+    assert not result.is_valid
 
 
 def test_sandbox_git_credentials_unrecognised_scope_errors():
@@ -145,6 +147,7 @@ def test_sandbox_git_credentials_unrecognised_scope_errors():
     result = ValidationResult()
     GraphValidator._check_sandbox_agent_config(graph, result)
     assert "SANDBOX_GIT_CREDENTIALS_INVALID" in _codes(result)
+    assert not result.is_valid
 
 
 def test_sandbox_missing_command_errors():
