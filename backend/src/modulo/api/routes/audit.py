@@ -35,12 +35,23 @@ from modulo.core.audit_logger import (
     stream_export_chain,
     verify_chain,
 )
+from modulo.core.evidence_pack import (
+    EvidenceSigningError,
+    build_evidence_pack,
+    configured_public_key_pem,
+    key_fingerprint,
+)
 from modulo.db.rls import set_rls_org
 from modulo.settings import Settings, get_settings
 
 _CODE_AUDIT_MANAGE = "audit.manage"
 _MSG_DATABASE_CONNECTION_FAILED_PLEASE = "Database connection failed. Please try again."
 _SCAN_NDJSON_MEDIA_TYPE = "application/x-ndjson"
+
+#: Upper bound on the events embedded in one evidence pack - the same 10,000
+#: ceiling ``verify_chain`` applies. Beyond it the pack is marked truncated
+#: (honest: the offline verifier sees the flag and the signed event_count).
+_EVIDENCE_PACK_MAX_EVENTS = 10000
 
 _DESC_ACTOR_USER_ID = "Filter by actor user ID"
 _DESC_START_DATE = "Filter by start date (ISO 8601)"
@@ -389,3 +400,98 @@ async def scan_chain_endpoint(
             headers={"Content-Disposition": 'attachment; filename="audit-scan.csv"'},
         )
     return StreamingResponse(body, media_type=_SCAN_NDJSON_MEDIA_TYPE)
+
+
+async def _collect_pack_events(settings: Settings, org_id: _UUID) -> tuple[list[dict[str, Any]], bool]:
+    """Collect the org's audit events for a pack, capped at the verify ceiling.
+
+    Returns ``(events, truncated)``. Streaming keeps memory bounded for large
+    orgs; the cap mirrors ``verify_chain``'s 10,000-event window and the
+    ``truncated`` flag is carried into the signed manifest so an offline reader
+    sees exactly how much of the chain the pack covers.
+    """
+    events: list[dict[str, Any]] = []
+    truncated = False
+    stream = stream_export_chain(
+        factory=_audit_session_factory(settings), org_id=org_id, page_size=SCAN_KEYSET_PAGE_SIZE
+    )
+    async for event in stream:
+        if len(events) >= _EVIDENCE_PACK_MAX_EVENTS:
+            truncated = True
+            break
+        events.append(event)
+    return events, truncated
+
+
+@router.get("/evidence-pack", dependencies=[require_feature("audit_viewer")])
+async def evidence_pack_endpoint(
+    run_id: str | None = Query(None, max_length=128, description="Optional run id to name in the pack manifest"),
+    settings: Settings = Depends(get_settings),
+    principal: TenantPrincipal = require_permission(_CODE_AUDIT_MANAGE),
+) -> dict[str, object]:
+    """Build and sign the offline-verifiable evidence pack for the org's chain.
+
+    The response is a self-contained artefact (signed manifest + Ed25519
+    signature + published verification key + file bytes) that a third party can
+    verify with nothing but this body and the pre-published public key.
+    """
+    try:
+        events, truncated = await _collect_pack_events(settings, principal.organisation_id)
+        pack = build_evidence_pack(
+            organisation_id=str(principal.organisation_id),
+            events=events,
+            run_ids=[run_id] if run_id else [],
+            truncated=truncated,
+        )
+    except EvidenceSigningError as exc:
+        _log.warning("audit.evidence_pack_endpoint.signing_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from None
+    except ProgrammingError:
+        _log.exception("audit.evidence_pack_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=MSG_FEATURE_NOT_AVAILABLE,
+        ) from None
+    except SQLAlchemyError as exc:
+        raise_session_contract_error(exc, "audit.evidence_pack_endpoint")
+        _log.exception("evidence_pack_endpoint: database error")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_MSG_DATABASE_CONNECTION_FAILED_PLEASE,
+        ) from None
+    except HTTPException:
+        raise
+    except Exception:
+        _log.exception("Unexpected error in evidence_pack_endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=MSG_INTERNAL_SERVER_ERROR,
+        ) from None
+    return pack
+
+
+@router.get(
+    "/verification-key",
+    dependencies=[require_feature("audit_viewer"), require_permission(_CODE_AUDIT_MANAGE)],
+)
+async def verification_key_endpoint() -> dict[str, object]:
+    """Publish the org's Ed25519 evidence verification key (public, not secret).
+
+    An external auditor can fetch this once and verify any evidence pack the
+    org exports; the key is also embedded in every pack as an artefact.
+    """
+    try:
+        public_key_pem = configured_public_key_pem()
+    except EvidenceSigningError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from None
+    return {
+        "algorithm": "ed25519",
+        "public_key_pem": public_key_pem,
+        "key_id": key_fingerprint(public_key_pem),
+    }
