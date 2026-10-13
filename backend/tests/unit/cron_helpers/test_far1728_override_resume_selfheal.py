@@ -47,6 +47,7 @@ This file pins the self-heal leg (mirror of the F6a leg's shape):
 from __future__ import annotations
 
 import contextlib
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -482,3 +483,94 @@ class TestPredicateSelectsTheOverrideResumeClass:
         # equality, inlined as a literal here so the exact discriminator value
         # is pinned, and the phase constant bound beside it.
         assert f"runs.dispatch_phase = 'first_node_dispatched' AND runs.error_detail = '{_OVERRIDE_MARKER}'" in sql
+
+
+class TestOverrideResumeRowDiscriminators:
+    """The row-side recheck's fail-closed arms (``_is_override_resume_row``).
+
+    Every discriminator is re-verified row-side because the SQL predicate is an
+    OR: a row can be selected via another branch, or its phase/heartbeat can
+    change between SELECT and the loop. A row that fails ANY check must fall
+    through to the node-started belt (return ``False``), never be resumed.
+    """
+
+    def test_status_not_running_is_rejected(self) -> None:
+        row = _override_row(uuid.uuid4(), status="pending")
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_dispatcher_not_saq_is_rejected(self) -> None:
+        row = _override_row(uuid.uuid4())
+        row.dispatcher = "inproc"
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_wrong_dispatch_phase_is_rejected(self) -> None:
+        row = _override_row(uuid.uuid4(), dispatch_phase="claimed")
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_missing_sentinel_is_rejected(self) -> None:
+        row = _override_row(uuid.uuid4(), override_marker=False)
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_non_datetime_heartbeat_is_rejected(self) -> None:
+        """A row whose heartbeat is not a datetime carries no verifiable
+        staleness evidence, so the recheck FAILS CLOSED and defers to the belt
+        rather than guessing the row is stale."""
+        row = _override_row(uuid.uuid4())
+        row.heartbeat_at = "not-a-datetime"
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_fresh_marker_row_is_rejected(self) -> None:
+        """The staleness recheck: a sentinel row with a FRESH heartbeat is a
+        LIVE attempt, so the leg must not touch it."""
+        row = _override_row(uuid.uuid4(), stale=False)
+        assert ch._is_override_resume_row(row, 600) is False
+
+    def test_stale_marker_row_is_selected(self) -> None:
+        """The positive case: every discriminator holds and the heartbeat is
+        stale past the window."""
+        row = _override_row(uuid.uuid4())
+        assert ch._is_override_resume_row(row, 600) is True
+
+
+class TestOverrideResumeCheckpointPrecondition:
+    """``_override_resume_checkpoint_present`` fail-closed on a missing thread."""
+
+    async def test_false_without_a_thread_id(self) -> None:
+        """No ``langgraph_thread_id`` means there is no thread to probe, so the
+        precondition FAILS CLOSED (return ``False``) without touching the DB —
+        the row is left to the age gate."""
+        row = _override_row(uuid.uuid4())
+        row.langgraph_thread_id = None
+        assert await ch._override_resume_checkpoint_present(MagicMock(), ORG, row) is False
+
+
+class TestHeartbeatStampSlotWindowInvariant:
+    """FAR-1728 settings invariant WARN in ``_immediately_claimable_heartbeat``.
+
+    The override's stale-heartbeat stamp is ``run_claim_stale_seconds +
+    _CLAIM_STALE_SKEW_GUARD_SECONDS``; if the slot sweep's window is at or below
+    that depth the flipped run is sweep-eligible immediately, so the helper
+    WARNs (loud, but never blocks the override).
+    """
+
+    def test_warns_when_slot_window_is_not_above_the_stamp_depth(self, monkeypatch: Any, caplog: Any) -> None:
+        guard = recovery_module._CLAIM_STALE_SKEW_GUARD_SECONDS
+        settings = SimpleNamespace(
+            run_claim_stale_seconds=450,
+            slot_reconcile_stale_seconds=450 + guard,
+        )
+        monkeypatch.setattr("modulo.settings.get_settings", lambda: settings)
+        with caplog.at_level(logging.WARNING):
+            stamp = recovery_module._immediately_claimable_heartbeat()
+        assert isinstance(stamp, datetime)
+        assert "slot_sweep_window_below_heartbeat_stamp_depth" in caplog.text
+
+    def test_quiet_when_slot_window_exceeds_the_stamp_depth(self, monkeypatch: Any, caplog: Any) -> None:
+        settings = SimpleNamespace(
+            run_claim_stale_seconds=450,
+            slot_reconcile_stale_seconds=1800,
+        )
+        monkeypatch.setattr("modulo.settings.get_settings", lambda: settings)
+        with caplog.at_level(logging.WARNING):
+            recovery_module._immediately_claimable_heartbeat()
+        assert "slot_sweep_window_below_heartbeat_stamp_depth" not in caplog.text
