@@ -103,7 +103,12 @@ describe('ParameterSchemasView — list', () => {
     const wrapper = mount(ParameterSchemasView)
     await nextTick()
     expect(wrapper.find('[data-testid="paramschema-new"]').exists()).toBe(true)
-    expect(wrapper.find('table').exists()).toBe(false)
+    // STATE-3: the list renders a pulse skeleton (TableSkeleton), not a spinner
+    // and not a blank region.
+    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-testid="paramschema-delete"]').exists()).toBe(false)
   })
 
   it('renders the schema table with name, version and parameter count', async () => {
@@ -426,6 +431,39 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     return wrapper
   }
 
+  it('keeps the description row visible with an em-dash fallback (STATE-6)', async () => {
+    const wrapper = await openEditorAtSetsTab([
+      setItem({ id: 'set-1', name: 'No Desc Values', description: null }),
+      setItem({ id: 'set-2', name: 'Described Values', description: 'prod' }),
+    ])
+    expect(wrapper.text()).toContain('No Desc Values')
+    expect(wrapper.text()).toContain('Described Values')
+    // The empty description must still render its row (with '—'), not vanish.
+    const emptyRow = wrapper.find('[data-testid="paramschema-set-set-1"]')
+    expect(emptyRow.text()).toContain('—')
+    expect(wrapper.find('[data-testid="paramschema-set-set-2"]').text()).toContain('prod')
+  })
+
+  it('renders a pulse skeleton while the sets tab is still loading', async () => {
+    mockGet((url) => {
+      if (url === '/api/v1/parameter-schemas/{schema_id}/sets') return new Promise(() => {})
+      if (url === '/api/v1/parameter-schemas') return listPayload()
+      if (url === '/api/v1/schemas') return listPayload()
+      if (url === '/api/v1/model-backends') return { data: { items: [] }, error: undefined }
+      return { data: undefined, error: { detail: 'x' } }
+    })
+    const wrapper = mount(ParameterSchemasView)
+    await flush()
+    await wrapper.find('tbody tr').trigger('click')
+    await flush()
+    await switchTab(wrapper, 'Parameter Sets')
+    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.attributes('aria-label')).toBe('Loading parameter sets...')
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.text()).not.toContain('No parameter sets yet.')
+  })
+
   it('loads and lists parameter sets when the tab opens', async () => {
     const wrapper = await openEditorAtSetsTab()
     expect(api.GET).toHaveBeenCalledWith(
@@ -578,6 +616,26 @@ describe('ParameterSchemasView — references tab', () => {
     await switchTab(wrapper, 'References')
     return wrapper
   }
+
+  it('renders a pulse skeleton while the references tab is still loading', async () => {
+    mockGet((url) => {
+      if (url === '/api/v1/parameter-schemas/{schema_id}/references') return new Promise(() => {})
+      if (url === '/api/v1/parameter-schemas') return listPayload()
+      if (url === '/api/v1/schemas') return listPayload()
+      if (url === '/api/v1/model-backends') return { data: { items: [] }, error: undefined }
+      return { data: undefined, error: { detail: 'x' } }
+    })
+    const wrapper = mount(ParameterSchemasView)
+    await flush()
+    await wrapper.find('tbody tr').trigger('click')
+    await flush()
+    await switchTab(wrapper, 'References')
+    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    expect(skeleton.exists()).toBe(true)
+    expect(skeleton.attributes('aria-label')).toBe('Loading schema references...')
+    expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
+    expect(wrapper.text()).not.toContain('Agents Using This Schema')
+  })
 
   it('lists agents and sets that reference the schema', async () => {
     const wrapper = await openEditorAtRefsTab({
