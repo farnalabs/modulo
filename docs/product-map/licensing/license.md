@@ -49,8 +49,9 @@ Licensing manages Ed25519-signed license keys and the Community / Team tier gate
 the feature set for its tier, gates Team-scoped surfaces (SSO, team RBAC, audit viewer,
 admin spend limits) with a 402 when absent or expired, and backs the admin license-status,
 tier-catalogue and feature-flag inspection endpoints. (The public, unauthenticated
-`/api/v1/license` surface reports the deployment-level env-var tier only — it does not read the
-signed/org licence; see Known Gaps.)
+`/api/v1/license` surface resolves the deployment-level licence ladder — the in-memory
+licence, then a verified env-var key — and reports community / `is_valid: false` when
+neither is valid; see Behaviours.)
 
 ## Behaviours
 
@@ -67,9 +68,20 @@ signed/org licence; see Known Gaps.)
       a valid license; expiry degrades those surfaces back to community; community
       features stay accessible without a license (`team_gates.feature`)
 - [x] Feature-flag inspection returns the `license` object plus the active `flags` array,
-      supports per-flag detail and override toggles, and 404s unknown flags; the public
-      `/api/v1/license` surface reports a `tier` and `features` list
+      supports per-flag detail and override toggles, and 404s unknown flags
       (`test_admin_feature_flags.py` + `feature_flag_inspection.feature`)
+- [x] The public, unauthenticated `/api/v1/license` surface resolves the REAL
+      deployment-level licence through the canonical ladder (rungs 2-3 of
+      `feature_flags._resolve_paid_plan`; the endpoint is org-less so the
+      org-level rung does not apply): an in-memory licence (`store_license`)
+      reports its own tier/features with `is_valid: true`; otherwise a
+      present env-var key is only trusted after `parse_and_verify`
+      (Ed25519 signature + expiry) and an unverifiable key falls through;
+      with no valid licence the response is community / no features /
+      `is_valid: false`. The response shape stays exactly
+      `tier`/`features`/`is_valid` and never exposes the raw key
+      (`test_viewmodel_license.py`, `feature_flag_inspection.feature`;
+      FAR-1720)
 - [x] Keys are cryptographically verified (`core/license_signing.py`) and exercised
       adversarially (`test_license_adversarial.py`, `test_license_key.py`)
 - [x] Tier activation feeds licensing/feature parity for team surfaces
@@ -123,16 +135,37 @@ signed/org licence; see Known Gaps.)
   coverage (`admin/tier_catalog.feature`) and the Stripe purchase webhook ships
   a dedicated executing BDD surface (`licensing/stripe_billing.feature`), both
   cited above.
-- **The public `/api/v1/license` surface does not read the signed licence** —
-  `viewmodel.license_info` reports `tier = "team"` iff `settings.modulo_license_key`
-  is non-empty, returns a hardcoded `features: ["notifications"]`, and always
-  reports `is_valid: True`; it never consults `get_license()` or the org-level key.
-  The admin and feature-flag endpoints resolve the real licence, so the public
-  surface can disagree with them. `admin_feature_flags.list_feature_flags` likewise
-  hardcodes `license.is_valid = True` regardless of whether a key exists or has
-  expired. Unifying these is a product decision, not a mechanical fix.
+- **`admin_feature_flags.list_feature_flags` hardcodes `license.is_valid = True`**
+  regardless of whether a key exists, verifies, or has expired (the MCP
+  `list_feature_flags` tool mirrors the same hardcode in `mcp_server.py`).
+  The public `/api/v1/license` surface was unified with the real licence
+  resolution by FAR-1720; this admin/MCP surface still reports a constant
+  `is_valid: true` and is a follow-up, not part of that fix.
 
 ## QA History
+
+- 2026-10-13: **FAR-1720** — unified the public `/api/v1/license` surface
+  with the real licence resolution. `viewmodel.license_info` previously
+  reported `tier = "team"` iff `settings.modulo_license_key` was non-empty,
+  hardcoded `features: ["notifications"]`, and always answered
+  `is_valid: True` — it trusted the env-var key on mere presence and never
+  consulted `get_license()`, so it could disagree with every other licence
+  surface. It now mirrors rungs 2-3 of the canonical ladder
+  (`feature_flags._resolve_paid_plan`): the in-memory licence
+  (`store_license`) wins with its own tier/features and `is_valid: true`; a
+  present env-var key is verified via `parse_and_verify` and an unverifiable
+  key falls through; with no valid licence the response is community / no
+  features / `is_valid: false`. The `LicenseInfo` response shape is
+  unchanged (no new fields, no raw key). Proved by new regression tests in
+  `test_viewmodel_license.py` (stored-licence precedence, invalid-env-key
+  fall-through, unlicensed `is_valid: false`, exact response-shape pin) and
+  two new `feature_flag_inspection.feature` scenarios (unlicensed public
+  endpoint, stored-licence public endpoint). The previously-tracked "public
+  `/api/v1/license` is_valid/tier inconsistent with the real licence
+  resolution" gap is resolved; the narrower `admin_feature_flags` /
+  MCP `list_feature_flags` hardcoded `is_valid: true` residue stays tracked
+  under Known Gaps (out of scope here). Status stays `partial` (the
+  manifest's universal-gating deferral is unchanged).
 
 - 2026-10-12: **Improve Architecture product-map walk** — Stripe fulfilment
   error-path hardening. `core/stripe_fulfilment.py::fulfil_team_purchase`

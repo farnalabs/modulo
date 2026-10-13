@@ -199,21 +199,50 @@ async def license_info(
     settings: Settings = Depends(get_settings),
 ) -> LicenseInfo:
     try:
-        has_license_key = bool(settings.modulo_license_key)
-        features: list[str] = []
-        if has_license_key:
-            features = ["notifications"]
-        return LicenseInfo(
-            tier="team" if has_license_key else "community",
-            features=features,
-            is_valid=True,
-        )
+        return _resolve_license_info(settings)
     except Exception:
         logger.exception("license_info")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve license information",
         ) from None
+
+
+def _resolve_license_info(settings: Settings) -> LicenseInfo:
+    """Resolve the public licence view from the deployment-level licence ladder.
+
+    FAR-1720: this endpoint is unauthenticated and org-less, so it mirrors
+    rungs 2 and 3 of ``core.feature_flags._resolve_paid_plan`` (the canonical
+    ladder) exactly — the org-level rung does not apply:
+
+    1. System-level in-memory licence (``store_license()``) — its tier and
+       features are reported, ``is_valid=True``.
+    2. System-level env-var licence (``settings.modulo_license_key``) — only
+       reported when ``parse_and_verify`` confirms it; an unverifiable key
+       falls through (never trusted on mere presence).
+    3. No valid licence — ``tier="community"``, no features,
+       ``is_valid=False``.
+
+    The response shape stays ``LicenseInfo`` (tier / features / is_valid);
+    neither the raw key nor org-scoped fields are exposed.
+    """
+    from modulo.core.license import get_license, parse_and_verify
+
+    lic = get_license()
+    if lic is not None:
+        return LicenseInfo(tier=lic.tier, features=list(lic.features), is_valid=True)
+
+    raw_key: str = getattr(settings, "modulo_license_key", "") or ""
+    if raw_key:
+        validation = parse_and_verify(raw_key)
+        if validation.valid and validation.license_data is not None:
+            return LicenseInfo(
+                tier=validation.license_data.tier,
+                features=list(validation.license_data.features),
+                is_valid=True,
+            )
+
+    return LicenseInfo(tier="community", features=[], is_valid=False)
 
 
 @router.get("/api/v1/me")
