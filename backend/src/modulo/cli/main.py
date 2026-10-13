@@ -149,6 +149,19 @@ def _init_once_register_users_command() -> None:
 _init_once_register_users_command()
 
 
+def _init_once_register_evidence_command() -> None:
+    """Register the FAR-1697 ``evidence`` command group (lazy module import)."""
+    from modulo.cli.evidence import evidence as evidence_command
+
+    existing = cli.commands.get("evidence")
+    if existing is not None and existing is not evidence_command:
+        raise RuntimeError("command 'evidence' is already registered on the modulo group")
+    cli.add_command(evidence_command, name="evidence")
+
+
+_init_once_register_evidence_command()
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------

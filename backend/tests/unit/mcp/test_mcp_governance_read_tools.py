@@ -16,10 +16,15 @@ credential-bearing node fields (FAR-1181 parity with the REST route), and the
 SSO listing must never surface client secrets.
 """
 
+import base64
+import json
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from sqlalchemy.exc import ProgrammingError
 
 from modulo.api.mcp_server import (
@@ -38,10 +43,47 @@ from modulo.api.mcp_server import (
     list_users,
     mcp,
 )
+from modulo.core.license import _LICENSE_PUBLIC_KEY_HEX, clear_license, set_public_key
+from modulo.core.registry.crypto import generate_keypair, sign_primitive
 from modulo.db.crud.base import PageResult
 from tests.unit.mcp.helpers import ORG_ID, USER_ID, AuthContext, make_session_context
 
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
+
+# FAR-1733: known test keypair — a signed payload verifies only while
+# set_public_key(_TEST_PUB) is in effect (the autouse fixture below manages
+# that per test), so the env-key verification paths run for real.
+_TEST_KP = generate_keypair()
+_TEST_PRIV = _TEST_KP["private_key"]
+_TEST_PUB = _TEST_KP["public_key"]
+
+
+def _valid_license_key(tier: str = "team") -> str:
+    payload: dict[str, Any] = {
+        "tier": tier,
+        "features": ["sso", "team_rbac", "audit_viewer"],
+        "expires_at": (datetime.now(UTC) + timedelta(days=365)).isoformat(),
+        "org_id": "test-org",
+    }
+    sig_hex = sign_primitive(payload, _TEST_PRIV)
+    payload_b64 = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
+        .decode()
+        .rstrip("=")
+    )
+    sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
+    return f"{payload_b64}.{sig_b64}"
+
+
+@pytest.fixture(autouse=True)
+def _reset_license_state() -> Generator[None, None, None]:
+    """FAR-1733: in-memory licence + configured public key are module globals."""
+    clear_license()
+    set_public_key(_TEST_PUB)
+    yield
+    clear_license()
+    set_public_key(_LICENSE_PUBLIC_KEY_HEX)
+
 
 _EXPECTED_FAR696_TOOLS = (
     "list_teams",
@@ -1182,8 +1224,10 @@ class TestListFeatureFlagsErrorArms(AuthContext):
     ) -> None:
         from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
 
-        # A settings license key short-circuits the org-key probe (has_key True)
-        # and a non-dict feature_overrides blob falls back to registry defaults.
+        # A VERIFIED settings license key short-circuits the org-key probe
+        # (has_key True) and a non-dict feature_overrides blob falls back to
+        # registry defaults. FAR-1733: the key must verify — a bare non-empty
+        # string no longer counts.
         mock_org.return_value = MagicMock(settings_json={"feature_overrides": "not-a-dict"})
         plan_ctx = MagicMock()
         plan_ctx.tier.return_value = "team"
@@ -1199,7 +1243,7 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         _ctx_is_system_admin.set(True)
         try:
             settings = MagicMock()
-            settings.modulo_license_key = "lic-key"
+            settings.modulo_license_key = _valid_license_key()
             settings.modulo_dev_mode = False
             with patch("modulo.api.mcp_server.get_settings", return_value=settings):
                 result = await list_feature_flags()
@@ -1209,6 +1253,101 @@ class TestListFeatureFlagsErrorArms(AuthContext):
         assert "error" not in result
         assert not result["flags"]
         assert result["license"]["has_license_key"] is True
+        assert mock_from_db.call_args.kwargs["has_license_key"] is True
+        assert result["license"]["is_valid"] is True
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_invalid_env_license_key_is_not_counted_and_reports_invalid(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """FAR-1733 prove-the-fix: an env key present but unverifiable must not
+        set has_license_key, and is_valid must report False — the old code
+        counted mere presence AND hardcoded is_valid=True.
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(settings_json={})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "community"
+        registry.has_license_key = False
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(AsyncMock())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = "not-a-valid-key"
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is False
+        assert result["license"]["is_valid"] is False
+
+    @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
+    @patch("modulo.api.mcp_server._session")
+    @patch("modulo.core.license.get_license", return_value=None)
+    @patch("modulo.core.feature_flags.FeatureFlagRegistry.from_db", new_callable=AsyncMock)
+    @patch("modulo.api.mcp_server.resolve_plan_context", new_callable=AsyncMock)
+    @patch("modulo.db.crud.organisation.get_organisation", new_callable=AsyncMock)
+    async def test_invalid_org_license_key_reports_invalid_but_counts_has_key(
+        self,
+        mock_org: AsyncMock,
+        mock_plan: AsyncMock,
+        mock_from_db: AsyncMock,
+        mock_license: MagicMock,
+        mock_session: AsyncMock,
+        mock_validate: AsyncMock,
+    ) -> None:
+        """An org-level key still counts for has_license_key (presence rung),
+        but is_valid requires it to VERIFY (FAR-1733).
+        """
+        from modulo.api.mcp_server import _ctx_is_system_admin, _ctx_role
+
+        mock_org.return_value = MagicMock(settings_json={"license_key": "not-a-valid-key"})
+        plan_ctx = MagicMock()
+        plan_ctx.tier.return_value = "community"
+        mock_plan.return_value = plan_ctx
+        registry = MagicMock()
+        registry.current_tier = "community"
+        registry.has_license_key = True
+        registry.list_flags.return_value = []
+        registry.tier_gap_flags.return_value = []
+        mock_from_db.return_value = registry
+        mock_session.return_value = make_session_context(AsyncMock())
+        _ctx_role.set("admin")
+        _ctx_is_system_admin.set(True)
+        try:
+            settings = MagicMock()
+            settings.modulo_license_key = ""
+            settings.modulo_dev_mode = False
+            with patch("modulo.api.mcp_server.get_settings", return_value=settings):
+                result = await list_feature_flags()
+        finally:
+            _ctx_is_system_admin.set(False)
+
+        assert "error" not in result
+        assert mock_from_db.call_args.kwargs["has_license_key"] is True
+        assert result["license"]["is_valid"] is False
 
     @patch("modulo.api.mcp_server.validate_current_auth", return_value=True)
     @patch("modulo.api.mcp_server._session")

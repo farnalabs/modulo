@@ -985,6 +985,15 @@ elements:
       - testid: collection-create-connector
         type: button
         dynamic_testid: false
+      - testid: collection-update-available
+        type: element
+        dynamic_testid: false
+      - testid: collection-upgrade
+        type: button
+        dynamic_testid: false
+      - testid: collection-upgrade-error
+        type: element
+        dynamic_testid: false
     /accept-invite:
       - testid: accept-invite-missing-token
         type: element
@@ -1994,6 +2003,39 @@ elements:
         type: input
         dynamic_testid: false
       - testid: paramschema-set-save
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-save
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-param
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-add-option
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-set-desc
+        type: input
+        dynamic_testid: false
+      - testid: paramschema-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-confirm
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-delete-set-cancel
+        type: button
+        dynamic_testid: false
+      - testid: paramschema-validate
         type: button
         dynamic_testid: false
     /admin/plugins:
@@ -5608,6 +5650,9 @@ features:
             - "[x] /batch-detail and /export additionally require the audit_viewer feature (no view without the flag); every audit endpoint needs audit.manage"
             - "[x] GET /scan is the server-side scan export companion to /export (same filters, audit_viewer + audit.manage gates, org-scoped RLS): it streams the WHOLE matching event set in ONE response (NDJSON by default, or a Content-Disposition CSV attachment with the scan columns) with no offset/limit pagination — the server keyset-paginates over the stable (created_at ASC, id ASC) order in fixed page-size batches so memory stays bounded for any org size, and an invalid user_id is 422 while pre-stream DB errors surface as a proper status (backend/src/modulo/core/audit_logger/__init__.py stream_export_chain, backend/src/modulo/api/routes/audit.py scan_chain_endpoint, test_audit_scan_route.py, TestScanChain in test_audit.py)"
 
+            # Offline-verifiable evidence (FAR-1697)
+            - "[x] An audit export can be emitted as offline-verifiable evidence: GET /api/v1/admin/audit/evidence-pack (audit_viewer + audit.manage) returns a self-contained pack - the audit events as audit-events.ndjson, a canonical manifest (organisation id, exporter identity, created_at, run ids, per-file SHA-256 + size, and the re-derived chain summary valid/event_count/head_hash/first_gap_index/first_tampered_id/truncated), an Ed25519 signature over the canonical manifest, and the PEM verification key as an artefact - while GET /api/v1/admin/audit/verification-key publishes the org's public key + key_id fingerprint; a party holding ONLY the artefact + the pre-published key verifies authorship, re-derives every file digest and re-derives the embedded audit chain with no Modulo service and no login (the `modulo evidence verify` CLI), and any tampered file, mutated event, falsified chain claim or swapped key fails as valid=false (backend/src/modulo/core/evidence_pack/, backend/src/modulo/api/routes/audit.py evidence_pack_endpoint + verification_key_endpoint, backend/src/modulo/cli/evidence.py, test_evidence_pack.py)"
+
             # Pipeline graph mutation audit (FAR-1471)
             - "[x] Every pipeline graph mutation is ALWAYS audited: each successful replace_pipeline_graph write and each rollback_to_snapshot appends one pipeline.graph_updated event in the SAME transaction as the write (a graph write can never commit without its event), carrying a concise before/after summary — node/edge counts plus the added/removed/agent_commands-changed node IDS ONLY, never node payloads, env_vars, context_files or parameter values, so no masked secret enters the chain; MCP graph writes attribute the event to the caller's account id as changed_by (a session without one records null, never a bogus id), replacing the prior HITL-only audit that left plain writes such as an agent_commands edit unattributable (backend/src/modulo/db/crud/pipeline.py graph_update_audit_payload + GRAPH_UPDATED_EVENT, backend/src/modulo/db/crud/pipeline_snapshot_versioning.py, backend/src/modulo/api/mcp_server.py, test_pipeline_graph_updated_audit.py)"
 
@@ -5624,6 +5669,7 @@ features:
             - "[x] The team-tier audit log view verifies chain integrity, exports CSV and JSONL (client-side pagination over /export into audit-log-<date>.csv / .jsonl), and filters by actor user / date range / target entity type with previous/next pagination and filter reset"
         deferrals:
             - Verification is bounded to VERIFY_MAX_EVENTS=10,000 most-recent events — there is no incremental from-chain-head verify for very long chains
+            - "Evidence-pack signing is instance-scoped with no key rotation or revocation: the published verification key is derived from the single configured MODULO_EVIDENCE_SIGNING_KEY, and per-org keys are not implemented (FAR-1697 out of scope)"
     feat-connectors:
         description: External tool connectors
         status: covered

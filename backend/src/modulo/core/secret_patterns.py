@@ -19,6 +19,11 @@ matching owned by individual read surfaces (``error_codes.py``,
 mask by key rather than by secret value and this leaf module must not pull
 them in.
 
+The canonical trigger-config secret-key VOCABULARY
+(:data:`TRIGGER_CONFIG_SECRET_KEYS`, FAR-1732) also lives here for the same
+cross-contract reason: the API write path, the core rotation service and the
+migration-0305 parity test share one definition instead of three literals.
+
 This module lives in ``modulo.core`` (a leaf with no ``modulo.*`` imports) so
 that core redaction sites can use it without violating the
 ``core-does-not-import-api`` architecture contract. The API-layer
@@ -164,6 +169,18 @@ def is_sensitive_key(key: str) -> bool:
 def is_sensitive_env_key(key: str) -> bool:
     """True when an env-var KEY name is always treated as a credential."""
     return key in _SENSITIVE_ENV_KEYS or is_sensitive_key(key)
+
+
+# The trigger-config keys whose VALUES are secrets encrypted at rest
+# (FAR-1732): the write-path helper
+# (``api.routes.triggers._encrypt_trigger_config_secrets``), the Fernet
+# rotation service (``core.fernet_rotation._rotate_triggers``) and the
+# migration-0305 parity test all pin THIS set. It lives in this leaf module
+# (no ``modulo.*`` imports) so the core rotation service can share the exact
+# write-path vocabulary without breaching the ``core-does-not-import-api``
+# contract — a second copy in either layer is exactly how a future third
+# secret key would silently escape rotation or encryption.
+TRIGGER_CONFIG_SECRET_KEYS: frozenset[str] = frozenset({"hmac_secret", "signing_secret"})
 
 
 def mask_secret_values_in_text(text: str) -> str:

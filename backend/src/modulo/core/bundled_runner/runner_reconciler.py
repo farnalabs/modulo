@@ -528,6 +528,78 @@ async def reconcile_runner_workspaces(
     return {"scanned": scanned, "orphans_destroyed": orphans_destroyed}
 
 
+async def destroy_workspaces_for_run(run_id: str) -> dict[str, int]:
+    """Destroy every labelled workspace whose ``modulo.run.id`` == *run_id*.
+
+    The run-scoped reclamation the RunTeardownSeal destroy leg drives (FAR-1690
+    A3). Provider-neutral, exactly like :func:`reconcile_runner_workspaces`:
+    every applicable tier is listed through its own source and each matching
+    entry destroyed through the same ref-only by-ref primitive. It is NOT the
+    orphan sweep and carries none of its policy — the caller has already
+    established the run is terminal, so there is no grace window, no active-run
+    spare and no destroy-path re-check; a workspace labelled with this run id is
+    destroyed unconditionally.
+
+    Best-effort per workspace: one destroy failure is logged and the loop
+    continues (the seal must never be wedged by a single stubborn workspace),
+    and the failure is reflected in the ``errors`` count. A LISTING failure
+    propagates: a configured-but-unreachable substrate must surface, never be
+    mistaken for "no workspaces".
+
+    Returns ``{"scanned", "destroyed", "errors"}``.
+    """
+    docker_skip = docker_endpoint_skip_reason()
+    kubernetes_skip = await kubernetes_endpoint_skip_reason()
+    e2b_skip = await e2b_endpoint_skip_reason()
+
+    sources: list[tuple[str, _WorkspaceSource]] = []
+    if docker_skip is None:
+        sources.append(("docker", _DockerWorkspaceSource(_resolve_docker_host())))
+    if kubernetes_skip is None:
+        sources.append(("kubernetes", _KubernetesWorkspaceSource()))
+    if e2b_skip is None:
+        sources.append(("e2b", _E2BWorkspaceSource()))
+
+    scanned = 0
+    destroyed = 0
+    errors = 0
+    try:
+        for source_name, source in sources:
+            # A listing failure propagates (fail-loud): the caller records it as
+            # a leg failure rather than reading it as "no workspaces".
+            entries = await source.list_labelled_workspaces()
+            for entry in entries:
+                if entry.run_id != run_id:
+                    continue
+                scanned += 1
+                try:
+                    await source.destroy_by_container_id(entry.id)
+                    destroyed += 1
+                    _log.info(
+                        "runner.teardown.workspace_destroyed source=%s workspace=%s run=%s",
+                        source_name,
+                        entry.id,
+                        run_id,
+                    )
+                except Exception:
+                    errors += 1
+                    _log.exception(
+                        "runner.teardown.workspace_destroy_failed source=%s workspace=%s run=%s",
+                        source_name,
+                        entry.id,
+                        run_id,
+                    )
+    finally:
+        # Best-effort close per source; a close failure must never mask the
+        # counts already achieved (same contract as the orphan sweep).
+        for source_name, source in sources:
+            try:
+                await source.close()
+            except Exception:
+                _log.exception("runner.teardown.source_close_failed source=%s", source_name)
+    return {"scanned": scanned, "destroyed": destroyed, "errors": errors}
+
+
 def _resolve_docker_host() -> str | None:
     # The reconciler uses the same Docker endpoint chain as the provider:
     # MODULO_DOCKER_HOST first, then DOCKER_HOST, else None (the engine's

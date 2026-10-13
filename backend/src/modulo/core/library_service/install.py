@@ -17,8 +17,11 @@ Runnability is computed on read (pure function, not stored) — see
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import inspect as sa_inspect
@@ -32,10 +35,15 @@ from modulo.db.models.agent import Agent
 from modulo.db.models.collection_install import CollectionInstall, CollectionInstallEntity
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.organisation import Organisation
-from modulo.db.models.schema import Schema
+from modulo.db.models.schema import Schema, SchemaVersion
 from modulo.db.rls import set_rls_org
 
-__all__ = ["install_collection"]
+__all__ = [
+    "agent_entity_fingerprint",
+    "compute_entity_fingerprint",
+    "install_collection",
+    "snapshot_entity_fingerprints",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +222,9 @@ async def _resolve_pin(
     version-mismatched primitive.
     """
     for primitive_type in _PIN_TYPE_ORDER:
-        prim = await get_primitive_by_slug(session, org_id, primitive_type, slug, explicit_org_filter=org_id)
+        prim = await get_primitive_by_slug(
+            session, org_id, primitive_type, slug, explicit_org_filter=org_id, version=version
+        )
         if prim is None:
             continue
         if prim.deleted_at is not None:
@@ -641,6 +651,202 @@ def _record_entities(
         )
 
 
+# ---------------------------------------------------------------------------
+# Install-time provenance snapshot (FAR-759) — consumed by upgrade.py
+# ---------------------------------------------------------------------------
+
+
+def _canonical_hash(payload: dict[str, Any]) -> str:
+    """Stable sha256 over a canonical JSON rendering of a content payload."""
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def schema_entity_fingerprint(
+    description: str | None,
+    abstract_name: str | None,
+    definition: dict[str, Any] | None,
+) -> str:
+    """Content fingerprint of an installed schema entity."""
+    return _canonical_hash(
+        {
+            "description": description,
+            "abstract_name": abstract_name,
+            "definition": definition,
+        }
+    )
+
+
+def agent_entity_fingerprint(agent: Agent) -> str:
+    """Content fingerprint of an installed agent entity."""
+    return _canonical_hash(
+        {
+            "name": agent.name,
+            "description": agent.description,
+            "prompt_template": agent.prompt_template,
+            "connector_type_refs": agent.connector_type_refs,
+            "evals": agent.evals,
+            "retry_policy": agent.retry_policy,
+            "token_budget": agent.token_budget,
+            "input_schema_id": str(agent.input_schema_id) if agent.input_schema_id else None,
+            "output_schema_id": str(agent.output_schema_id) if agent.output_schema_id else None,
+            "input_schema_version": agent.input_schema_version,
+            "output_schema_version": agent.output_schema_version,
+        }
+    )
+
+
+async def compute_entity_fingerprint(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    entity_type: str,
+    entity_id: uuid.UUID,
+) -> str | None:
+    """Compute the current content fingerprint of an installed schema/agent.
+
+    Returns None when the entity cannot be fingerprinted (unknown type, row
+    missing, schema with no version row) — callers treat None as "no
+    content-based modification signal".
+    """
+    if entity_type == "schema":
+        schema = await session.get(Schema, entity_id)
+        if schema is None or schema.organisation_id != org_id:
+            return None
+        stmt = (
+            select(SchemaVersion)
+            .where(
+                SchemaVersion.schema_id == entity_id,
+                SchemaVersion.organisation_id == org_id,
+            )
+            .order_by(SchemaVersion.version_number.desc())
+            .limit(1)
+        )
+        version_row = await session.scalar(stmt)
+        definition = version_row.definition_json if version_row is not None else None
+        return schema_entity_fingerprint(schema.description, schema.abstract_name, definition)
+    if entity_type == "agent":
+        agent = await session.get(Agent, entity_id)
+        if agent is None or agent.organisation_id != org_id:
+            return None
+        return agent_entity_fingerprint(agent)
+    return None
+
+
+async def snapshot_entity_fingerprints(
+    session: AsyncSession,
+    org_id: uuid.UUID,
+    entities: list[dict[str, str]],
+) -> dict[str, str]:
+    """Fingerprint every stamped schema/agent entity at install time.
+
+    Pipelines are deliberately excluded: the upgrade flow never rewrites a
+    pipeline graph, so there is no write for a fingerprint to protect.
+    """
+    fingerprints: dict[str, str] = {}
+    for ent in entities:
+        if ent.get("entity_type") not in ("schema", "agent"):
+            continue
+        fp = await compute_entity_fingerprint(session, org_id, ent["entity_type"], uuid.UUID(ent["entity_id"]))
+        if fp is not None:
+            fingerprints[ent["entity_id"]] = fp
+    return fingerprints
+
+
+def _map_embedded_pin_entities(
+    pin: LibraryPrimitive,
+    agent_pool: list[str],
+    schema_pool: list[str],
+    agent_cursor: int,
+    schema_cursor: int,
+    add: Callable[[str, str, str], None],
+) -> tuple[int, int]:
+    """Map one workflow / pipeline_template pin's embedded entities.
+
+    Consumes the id-map pools in bundle order for the embedded agents (and,
+    for a workflow, its embedded schemas), matching how
+    ``_build_bundle_from_pins`` emitted them per pin. Returns the advanced
+    pool cursors.
+    """
+    content = pin.content_json or {}
+    if pin.primitive_type == "workflow":
+        content = content.get("bundle") or content
+        schemas = content.get("schemas") or []
+    else:
+        schemas = []
+    agents = content.get("agents") or []
+    for local_id in agent_pool[agent_cursor : agent_cursor + len(agents)]:
+        add(pin.slug, "agent", str(local_id))
+    agent_cursor += len(agents)
+    for local_id in schema_pool[schema_cursor : schema_cursor + len(schemas)]:
+        add(pin.slug, "schema", str(local_id))
+    schema_cursor += len(schemas)
+    return agent_cursor, schema_cursor
+
+
+def _map_standalone_pin(
+    pin: LibraryPrimitive,
+    schemas_map: dict[str, str],
+    agents_map: dict[str, str],
+    add: Callable[[str, str, str], None],
+) -> None:
+    """Add a standalone schema/agent pin's local entity id when present."""
+    if pin.primitive_type == "schema":
+        local = schemas_map.get(str(pin.id))
+        etype = "schema"
+    else:
+        local = agents_map.get(str(pin.id))
+        etype = "agent"
+    if local:
+        add(pin.slug, etype, str(local))
+
+
+def _pin_embed_pools(
+    resolved_pins: list[LibraryPrimitive],
+    agents_map: dict[str, str],
+    schemas_map: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Embedded id-map pools: map values excluding standalone pin exports."""
+    standalone_agent_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "agent"}
+    standalone_schema_exports = {str(p.id) for p in resolved_pins if p.primitive_type == "schema"}
+    agent_pool = [v for k, v in agents_map.items() if k not in standalone_agent_exports]
+    schema_pool = [v for k, v in schemas_map.items() if k not in standalone_schema_exports]
+    return agent_pool, schema_pool
+
+
+def _map_pin_entity_ids(
+    resolved_pins: list[LibraryPrimitive],
+    result: dict[str, Any],
+) -> dict[str, dict[str, list[str]]]:
+    """Map each manifest pin slug to the local entities its content produced.
+
+    Standalone schema/agent pins resolve through the export id (the pin's
+    primitive id) in ``materialize_import``'s id maps. Workflow / template
+    pins contribute embedded agents (and workflow-embedded schemas) that were
+    materialised under fresh export ids — those are consumed from the id-map
+    pools in bundle order, matching how ``_build_bundle_from_pins`` emitted
+    them per pin.
+    """
+    agents_map: dict[str, str] = result.get("agents", {}) or {}
+    schemas_map: dict[str, str] = result.get("schemas", {}) or {}
+    agent_pool, schema_pool = _pin_embed_pools(resolved_pins, agents_map, schemas_map)
+
+    out: dict[str, dict[str, list[str]]] = {}
+
+    def _add(slug: str, etype: str, local_id: str) -> None:
+        out.setdefault(slug, {}).setdefault(etype, []).append(local_id)
+
+    agent_cursor = 0
+    schema_cursor = 0
+    for pin in resolved_pins:
+        if pin.primitive_type in ("schema", "agent"):
+            _map_standalone_pin(pin, schemas_map, agents_map, _add)
+        elif pin.primitive_type in ("workflow", "pipeline_template"):
+            agent_cursor, schema_cursor = _map_embedded_pin_entities(
+                pin, agent_pool, schema_pool, agent_cursor, schema_cursor, _add
+            )
+    return out
+
+
 def _connector_ref_type_id(ref: Any) -> str:
     """Extract the connector type id from a single connector_type_refs entry.
 
@@ -788,6 +994,13 @@ async def install_collection(
     # 7. Record entities in collection_install_entity
     _record_entities(session, install_id, entities)
 
+    # 7b. FAR-759: install-time provenance snapshot consumed by the upgrade
+    # flow — the resolved pin list (with types), the pin → local entity id
+    # map, and per-entity content fingerprints so a later upgrade can tell
+    # operator-modified entities from unmodified ones.
+    fingerprints = await snapshot_entity_fingerprints(session, org_id, entities)
+    pin_entity_ids = _map_pin_entity_ids(resolved_pins, result)
+
     # 8. Build connector checklist
     connector_checklist = _build_connector_checklist(resolved_pins)
 
@@ -803,6 +1016,10 @@ async def install_collection(
         "agents": result.get("agents", {}),
         "pipeline_id": result.get("pipeline_id"),
         "warnings": warnings,
+        # FAR-759 upgrade snapshot (see step 7b).
+        "pins": [{"slug": p.slug, "version": p.version, "primitive_type": p.primitive_type} for p in resolved_pins],
+        "pin_entity_ids": pin_entity_ids,
+        "entity_fingerprints": fingerprints,
     }
     install.connector_checklist = connector_checklist
     install.installed_entities = entities

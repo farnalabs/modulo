@@ -2250,7 +2250,7 @@ async def test_clear_dispatch_marker_unparseable_org_noop():
 
 
 async def test_mint_run_api_key_unparseable_org_returns_none():
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: _FakeSession(), org_id="bad", run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None
@@ -2271,10 +2271,12 @@ async def test_mint_run_api_key_falls_back_to_first_admin(monkeypatch: pytest.Mo
     minted = AsyncMock(return_value=(MagicMock(), "raw-key"))
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", minted)
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
-    assert value == "raw-key"
+    assert value is not None
+    assert value.secret == "raw-key"
+    assert value.provenance == "modulo_minted"
     assert minted.await_args.kwargs["account_id"] == admin_id
 
 
@@ -2287,7 +2289,7 @@ async def test_mint_run_api_key_no_account_returns_none(monkeypatch: pytest.Monk
     session = _FakeSession(_route)
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock())
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None
@@ -2298,7 +2300,7 @@ async def test_mint_run_api_key_reraises_cancellation(monkeypatch: pytest.Monkey
         "modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(side_effect=asyncio.CancelledError())
     )
     with pytest.raises(asyncio.CancelledError):
-        await nr._sandbox_mint_run_api_key_for_sandbox(
+        await nr._sandbox_issue_run_credential_for_sandbox(
             session_factory=lambda: _FakeSession(),
             org_id=_ORG_ID,
             run_id=_RUN_UUID_STR,
@@ -2316,7 +2318,7 @@ async def test_mint_run_api_key_mint_failure_returns_none(monkeypatch: pytest.Mo
     session = _FakeSession(_route)
     monkeypatch.setattr("modulo.auth.api_key.mint_run_api_key", AsyncMock(return_value=None))
     monkeypatch.setattr("modulo.db.crud.run.get_run_api_key_ttl_seconds", AsyncMock(return_value=900))
-    value = await nr._sandbox_mint_run_api_key_for_sandbox(
+    value = await nr._sandbox_issue_run_credential_for_sandbox(
         session_factory=lambda: session, org_id=_ORG_ID, run_id=_RUN_UUID_STR, node_id="n1", sandbox_timeout=60
     )
     assert value is None

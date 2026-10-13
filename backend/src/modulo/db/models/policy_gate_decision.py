@@ -64,7 +64,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from modulo.db.models.base import OrgScoped
 
 # Valid resolved_action vocabulary — must match the CHECK constraint.
-RESOLVED_ACTION_VALUES = ("continue", "warn", "block")
+RESOLVED_ACTION_VALUES = ("continue", "warn", "block", "escalate")
 
 
 class PolicyGateDecision(OrgScoped):
@@ -84,7 +84,7 @@ class PolicyGateDecision(OrgScoped):
             name="fk_policy_gate_decisions_eval_org",
         ),
         CheckConstraint(
-            "resolved_action IN ('continue', 'warn', 'block')",
+            "resolved_action IN ('continue', 'warn', 'block', 'escalate')",
             name="ck_policy_gate_decisions_resolved_action",
         ),
         # Permanent event-identity key (FAR-1108 chunk 8b). One decision record
