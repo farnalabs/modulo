@@ -1,7 +1,7 @@
 """FAR-1714: runs.dispatch_phase_history + runs.dispatch_phase_write_drops.
 
-Revision ID: 0305_runs_dispatch_phase_history
-Revises: 0304_metrics_staging_recorded_at_index
+Revision ID: 0306_runs_dispatch_phase_history
+Revises: 0305_guardrail_escalate_action
 Create Date: 2026-10-13
 
 Two additive columns on ``runs`` making the dispatch-phase story reconstructable
@@ -45,8 +45,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0305_runs_dispatch_phase_history"
-down_revision: str | None = "0304_metrics_staging_recorded_at_index"
+revision: str = "0306_runs_dispatch_phase_history"
+down_revision: str | None = "0305_guardrail_escalate_action"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 

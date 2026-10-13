@@ -4045,11 +4045,11 @@ def _finalize_args(run_id: uuid.UUID, org_id: uuid.UUID) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_revoke_run_api_key_helper_uses_session_factory():
-    """_revoke_run_api_key opens a session, sets RLS, and calls revoke_run_api_key.
+async def test_seal_run_teardown_helper_calls_seal():
+    """_seal_run_teardown delegates to run_teardown.seal_run_teardown.
 
-    A failure inside the helper is swallowed (failure-isolated) — it never
-    propagates to the caller.
+    The seal itself owns the revoke→destroy→fact ordering (FAR-1690 A3); the
+    executor hook only supplies the session factory and isolates failures.
     """
     session = AsyncMock(spec=AsyncSession)
     session.begin = MagicMock(return_value=_begin_cm())
@@ -4059,20 +4059,26 @@ async def test_revoke_run_api_key_helper_uses_session_factory():
 
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
-    with patch("modulo.auth.api_key.revoke_run_api_key", new=AsyncMock(return_value=1)) as revoke_mock:
-        await executor._revoke_run_api_key(run_id=run_id, org_id=org_id)
+    with patch("modulo.core.run_teardown.seal_run_teardown", new=AsyncMock()) as seal_mock:
+        await executor._seal_run_teardown(run_id=run_id, org_id=org_id)
 
-    revoke_mock.assert_awaited_once()
-    assert revoke_mock.await_args.kwargs["run_id"] == run_id
-    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+    seal_mock.assert_awaited_once()
+    assert seal_mock.await_args.kwargs["run_id"] == run_id
+    assert seal_mock.await_args.kwargs["org_id"] == org_id
+    assert seal_mock.await_args.kwargs["session_factory"] is factory
 
 
 @pytest.mark.asyncio
-async def test_revoke_run_api_key_helper_failure_is_swallowed():
-    """A revocation failure is logged and swallowed — it never propagates."""
+async def test_seal_run_teardown_helper_propagates_for_the_call_site_to_isolate():
+    """_seal_run_teardown does NOT swallow: isolation is the call site's job.
+
+    ``_finalize_run_after_stream`` wraps the hook in try/except (pinned by
+    ``test_finalize_run_after_stream_seal_failure_is_isolated``); keeping the
+    hook itself plain means a seal failure is never silently double-swallowed.
+    """
 
     async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("revoke boom")
+        raise RuntimeError("seal boom")
 
     session = AsyncMock(spec=AsyncSession)
     session.begin = MagicMock(return_value=_begin_cm())
@@ -4080,13 +4086,16 @@ async def test_revoke_run_api_key_helper_failure_is_swallowed():
     executor = PipelineExecutor(MagicMock())
     executor._session_factory = factory  # type: ignore[assignment]
 
-    with patch("modulo.auth.api_key.revoke_run_api_key", new=_raise_boom):
-        await executor._revoke_run_api_key(run_id=uuid.uuid4(), org_id=uuid.uuid4())
+    with (
+        patch("modulo.core.run_teardown.seal_run_teardown", new=_raise_boom),
+        pytest.raises(RuntimeError, match="seal boom"),
+    ):
+        await executor._seal_run_teardown(run_id=uuid.uuid4(), org_id=uuid.uuid4())
 
 
 @pytest.mark.asyncio
-async def test_finalize_run_after_stream_revokes_run_api_key():
-    """Finalization revokes the per-run runner-role API key (FAR-296 Phase 3b)."""
+async def test_finalize_run_after_stream_seals_run_teardown():
+    """Finalization seals the run's teardown (FAR-1690 A3 joint revoke)."""
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
     session = AsyncMock(spec=AsyncSession)
@@ -4098,24 +4107,24 @@ async def test_finalize_run_after_stream_revokes_run_api_key():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()) as revoke_mock,
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()) as seal_mock,
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
         final_run = await executor._finalize_run_after_stream(**_finalize_args(run_id, org_id))
 
     assert final_run is not None
-    revoke_mock.assert_awaited_once()
-    assert revoke_mock.await_args.kwargs["run_id"] == run_id
-    assert revoke_mock.await_args.kwargs["org_id"] == org_id
+    seal_mock.assert_awaited_once()
+    assert seal_mock.await_args.kwargs["run_id"] == run_id
+    assert seal_mock.await_args.kwargs["org_id"] == org_id
 
 
 @pytest.mark.asyncio
-async def test_finalize_run_after_stream_revocation_failure_is_isolated():
-    """A revocation failure never crashes finalization — the run still returns."""
+async def test_finalize_run_after_stream_seal_failure_is_isolated():
+    """A seal failure never crashes finalization — the run still returns."""
 
     async def _raise_boom(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("revoke boom")
+        raise RuntimeError("seal boom")
 
     run_id = uuid.uuid4()
     org_id = uuid.uuid4()
@@ -4128,7 +4137,7 @@ async def test_finalize_run_after_stream_revocation_failure_is_isolated():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=_raise_boom),
+        patch.object(executor, "_seal_run_teardown", new=_raise_boom),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
@@ -4188,7 +4197,7 @@ async def _finalize_with_patched_tail(
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())),
     ):
@@ -4387,7 +4396,7 @@ async def test_finalize_downgrades_stored_telemetry_failure_from_prior_segment_o
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4417,7 +4426,7 @@ async def test_finalize_downgrades_stored_schema_validation_failure():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4457,7 +4466,7 @@ async def test_finalize_keeps_complete_for_failed_status_without_synthetic_marke
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4483,7 +4492,7 @@ async def test_finalize_downgrade_checks_live_and_stored_views_without_clobberin
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4520,7 +4529,7 @@ async def test_finalize_keeps_complete_for_pre_p1b_legacy_row_without_marker():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=stored_run)),
     ):
@@ -4566,7 +4575,7 @@ async def test_finalize_stored_output_read_failure_falls_back_to_live_scan():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()) as mock_finalize,
         patch("modulo.core.pipeline_engine.executor.get_run", new=get_run_mock),
     ):
@@ -4591,7 +4600,7 @@ async def test_finalize_skips_stored_output_read_when_not_complete():
     with (
         patch.object(executor, "_compute_run_work_intact", return_value=None),
         patch.object(executor, "_run_post_terminal_evidence_probes", new=AsyncMock()),
-        patch.object(executor, "_revoke_run_api_key", new=AsyncMock()),
+        patch.object(executor, "_seal_run_teardown", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.finalize_cost", new=AsyncMock()),
         patch("modulo.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=MagicMock())) as get_run_mock,
     ):

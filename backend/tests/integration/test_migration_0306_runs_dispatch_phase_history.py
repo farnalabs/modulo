@@ -6,12 +6,12 @@ Against REAL Postgres (testcontainers, private database per test — the
 * NEGATIVE CONTROL — at ``0304_metrics_staging_recorded_at_index`` (the chain
   head before this change) NEITHER column exists, so the post-migration
   assertions below cannot pass without the real upgrade;
-* the REAL alembic upgrade of ``0305_runs_dispatch_phase_history`` lands both
+* the REAL alembic upgrade of ``0306_runs_dispatch_phase_history`` lands both
   columns with the exact contract (``dispatch_phase_history`` nullable
   ``jsonb``; ``dispatch_phase_write_drops`` ``integer NOT NULL DEFAULT 0``);
 * the DOWNGRADE drops both columns, and the upgrade re-applies cleanly after
   a downgrade;
-* fresh-database path: the whole chain straight to 0305 replays on a
+* fresh-database path: the whole chain straight to 0306 replays on a
   brand-new database.
 
 Plus the composed ROUND-TRIP on the shared migrated database — the actual
@@ -52,8 +52,8 @@ from modulo.core.pipeline_execution import PHASE_LOADING_SETUP, PHASE_STREAMING,
 pytestmark = [pytest.mark.integration]
 
 BACKEND_ROOT = Path(__file__).parents[2]  # backend/
-MIGRATION_REV = "0305_runs_dispatch_phase_history"
-PREV_REV = "0304_metrics_staging_recorded_at_index"
+MIGRATION_REV = "0306_runs_dispatch_phase_history"
+PREV_REV = "0305_guardrail_escalate_action"
 
 _HISTORY_COL = "dispatch_phase_history"
 _DROPS_COL = "dispatch_phase_write_drops"

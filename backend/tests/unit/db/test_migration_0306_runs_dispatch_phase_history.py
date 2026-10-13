@@ -1,9 +1,9 @@
-"""Unit tests for migration 0305_runs_dispatch_phase_history (FAR-1714).
+"""Unit tests for migration 0306_runs_dispatch_phase_history (FAR-1714).
 
 Structural contract (no Postgres needed):
 
-* **Revision chain** — 0305 revises ``0304_metrics_staging_recorded_at_index``;
-  the migrations directory has exactly one head (``0305_runs_dispatch_phase_history``,
+* **Revision chain** — 0306 revises ``0305_guardrail_escalate_action``;
+  the migrations directory has exactly one head (``0306_runs_dispatch_phase_history``,
   pinned by all sibling chain tests), the revision id matches the filename, and
   neither ``branch_labels`` nor ``depends_on`` is set (the pre-commit
   check-migration-heads hook and every ``test_single_head_*`` pin depend on
@@ -33,10 +33,10 @@ from sqlalchemy.dialects import postgresql
 from modulo.db.models.run import Run
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "modulo" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0305_runs_dispatch_phase_history"
+_MIGRATION_NAME = "0306_runs_dispatch_phase_history"
 _MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
-_DOWN_REVISION = "0304_metrics_staging_recorded_at_index"
-_CHAIN_HEAD_MIGRATION = "0305_runs_dispatch_phase_history"
+_DOWN_REVISION = "0305_guardrail_escalate_action"
+_CHAIN_HEAD_MIGRATION = "0306_runs_dispatch_phase_history"
 _HISTORY_COLUMN = "dispatch_phase_history"
 _DROPS_COLUMN = "dispatch_phase_write_drops"
 
@@ -73,11 +73,11 @@ def _migration_calls(entry_point: str) -> list[tuple[str, tuple[Any, ...], dict[
 
 
 class TestChain:
-    def test_single_head_is_0305_runs_dispatch_phase_history(self) -> None:
+    def test_single_head_is_0306_runs_dispatch_phase_history(self) -> None:
         heads = ScriptDirectory(str(_VERSIONS.parent)).get_heads()
         assert heads == [_CHAIN_HEAD_MIGRATION], f"expected a single head, got {heads}"
 
-    def test_down_revision_is_0304_metrics_staging_recorded_at_index(self) -> None:
+    def test_down_revision_is_0305_guardrail_escalate_action(self) -> None:
         assert _load_migration().down_revision == _DOWN_REVISION
 
     def test_revision_id_matches_filename(self) -> None:

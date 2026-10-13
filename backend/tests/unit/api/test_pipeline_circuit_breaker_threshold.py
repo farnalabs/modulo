@@ -127,6 +127,11 @@ class TestThresholdChangeAllowed:
 def _crud_session(pipeline: object | None = None) -> AsyncMock:
     session = AsyncMock()
     session.add = MagicMock()
+    # FAR-1639: the RLS preamble calls ``session.in_transaction()`` with a
+    # SYNC call site; a bare AsyncMock child returns an un-awaited coroutine
+    # that is always truthy, so the active-transaction guard would pass
+    # vacuously — type the sync contract explicitly.
+    session.in_transaction = MagicMock(return_value=True)
     result = MagicMock()
     result.scalar_one_or_none.return_value = pipeline
     session.execute = AsyncMock(return_value=result)
@@ -611,6 +616,15 @@ class TestRestThresholdPermission:
 
 
 def _session_cm(session: AsyncMock) -> AsyncMock:
+    # FAR-1639: the RLS preamble calls ``session.in_transaction()`` with a
+    # SYNC call site; on a bare AsyncMock that returns an un-awaited coroutine
+    # and is always truthy, so the active-transaction guard
+    # (rls._ensure_active_transaction) passes vacuously and a dangling
+    # coroutine leaks on GC. Type it (and the sync ``add``) on every session
+    # handed through this context-manager factory.
+    session.in_transaction = MagicMock(return_value=True)
+    if not isinstance(session.add, MagicMock):
+        session.add = MagicMock()
     cm = AsyncMock()
     cm.__aenter__ = AsyncMock(return_value=session)
     cm.__aexit__ = AsyncMock(return_value=False)
@@ -1051,6 +1065,11 @@ class TestEnforcementRegression:
         monthly_result = MagicMock()
         monthly_result.scalar_one.return_value = Decimal("20.00")
         session = AsyncMock()
+        session.add = MagicMock()
+        # FAR-1639: the breaker path calls ``in_transaction``/``add`` with
+        # SYNC call sites when the real session flow reaches them; a bare
+        # AsyncMock child yields an un-awaited, always-truthy coroutine.
+        session.in_transaction = MagicMock(return_value=True)
         session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result, MagicMock()])
         with (
             patch("modulo.core.cost_controller.set_rls_execution_context", new=AsyncMock()),
@@ -1073,6 +1092,10 @@ class TestEnforcementRegression:
         monthly_result = MagicMock()
         monthly_result.scalar_one.return_value = Decimal("20.00")
         session = AsyncMock()
+        session.add = MagicMock()
+        # FAR-1639: see the tripping test — sync ``in_transaction``/``add``
+        # contract typed explicitly.
+        session.in_transaction = MagicMock(return_value=True)
         session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result])
         with patch("modulo.core.cost_controller.set_rls_execution_context", new=AsyncMock()):
             approved, reason = await check_pipeline_circuit_breaker(

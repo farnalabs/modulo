@@ -264,6 +264,12 @@ def _binding_for(connector: MagicMock) -> list[dict[str, str]]:
 def _enforcement_session(connector: MagicMock) -> AsyncMock:
     """Session double answering the one query the connector team gate issues."""
     session = AsyncMock()
+    # FAR-1639: the RLS preamble calls ``session.in_transaction()`` and write
+    # paths call ``session.add()`` with SYNC call sites; a bare AsyncMock child
+    # returns an un-awaited coroutine that is always truthy, so the
+    # active-transaction guard would pass vacuously — type the sync contract.
+    session.in_transaction = MagicMock(return_value=True)
+    session.add = MagicMock()
     result = MagicMock()
     scalars = MagicMock()
     scalars.all.return_value = [connector]
@@ -364,6 +370,10 @@ class TestConnectorTeamGateAtGraphSave:
         from modulo.core.team_visibility import ConnectorBindingMissingError
 
         session = AsyncMock()
+        # FAR-1639: sync ``in_transaction``/``add`` contract typed explicitly
+        # (see _enforcement_session).
+        session.in_transaction = MagicMock(return_value=True)
+        session.add = MagicMock()
         connector_bindings = [{"node_id": "node-1", "connector_instance_id": str(uuid.uuid4())}]
         missing = ConnectorBindingMissingError([(uuid.uuid4(), "node-1")])
         with (
