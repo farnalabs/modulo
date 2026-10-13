@@ -6,18 +6,49 @@ nodeless router selects with (``cron_helpers._ZERO_PROGRESS_SHAPE_SQL``), the
 SAME Settings knob (``saq_zero_progress_max_age_minutes``), the SAME
 ``executor_stalled`` error_code, a ``status='running'`` guard (double-firing
 with the reconcile path is a no-op) and a per-org row cap.
+
+Pre-PR QA M2: the branch also emits the FAR-714 class signal itself — the
+SHARED stable error message (``cron_helpers._NODELESS_ZOMBIE_STABLE_MESSAGE``)
+via ``_ingest_saq_error`` — so when the sweep wins the race against
+dispatcher_reconcile the Error Dashboard group is still fed.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Self
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import modulo.core.cron_helpers as ch
 import modulo.core.pipeline_execution as pe
 from modulo.core.dispatch_phases import PHASE_FIRST_NODE_DISPATCHED
 from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
+
+
+def _zero_progress_row(
+    run_id: uuid.UUID,
+    *,
+    pipeline_id: uuid.UUID | None = None,
+    trigger_id: uuid.UUID | None = None,
+    claim_count: int = 1,
+    dispatch_phase: str | None = None,
+    dispatch_phase_entered_at: datetime | None = None,
+    started_at: datetime | None = None,
+    dispatched_at: datetime | None = None,
+) -> tuple[Any, ...]:
+    """The UPDATE's RETURNING shape: id + the FAR-714 emission diagnostics."""
+    return (
+        run_id,
+        pipeline_id,
+        trigger_id,
+        claim_count,
+        dispatch_phase,
+        dispatch_phase_entered_at,
+        started_at,
+        dispatched_at,
+    )
 
 
 class _CapturingConn:
@@ -84,8 +115,6 @@ class TestSweepOrgSaqZeroProgressRuns:
         """The UPDATE reuses ``cron_helpers._ZERO_PROGRESS_SHAPE_SQL`` verbatim
         (single definition — no drift from the reconcile router) and keeps the
         ``status='running'`` + ``dispatcher='saq'`` guards + the row cap."""
-        import modulo.core.cron_helpers as ch
-
         conn = _CapturingConn()
         count = await pe._sweep_org_saq_zero_progress_runs(
             conn,
@@ -106,6 +135,9 @@ class TestSweepOrgSaqZeroProgressRuns:
         assert "dispatcher='saq'" in sql
         assert "LIMIT :max_rows" in sql
         assert ":max_age_minutes" in sql
+        # FAR-714 emission diagnostics ride on RETURNING (M2).
+        assert "RETURNING id, pipeline_id, trigger_id, claim_count, dispatch_phase, " in sql
+        assert "dispatch_phase_entered_at, started_at, dispatched_at" in sql
 
     async def test_binds_the_shared_constants_and_knob(self) -> None:
         """final_key / first_node_phase bind the SHARED constants; the age
@@ -161,19 +193,94 @@ class TestSweepOrgSaqZeroProgressRuns:
         facts ride on that list, like the other sweep branches)."""
         run_id = uuid.uuid4()
         org_id = uuid.uuid4()
-        conn = _CapturingConn(zero_progress_rows=[(run_id,)])
+        conn = _CapturingConn(zero_progress_rows=[_zero_progress_row(run_id)])
         terminalised: list[tuple[uuid.UUID, uuid.UUID]] = []
 
-        count = await pe._sweep_org_saq_zero_progress_runs(
-            conn,
-            org_id=org_id,
-            max_age_minutes=135,
-            max_rows=25,
-            terminalised_run_ids=terminalised,
-        )
+        with patch.object(ch, "_ingest_saq_error", new=AsyncMock()):
+            count = await pe._sweep_org_saq_zero_progress_runs(
+                conn,
+                org_id=org_id,
+                max_age_minutes=135,
+                max_rows=25,
+                terminalised_run_ids=terminalised,
+            )
 
         assert count == 1
         assert terminalised == [(run_id, org_id)]
+
+
+class TestSweepEmitsFar714ClassSignal:
+    """Pre-PR QA M2: the sweep feeds the SAME Error Dashboard group the
+    reconcile chokepoint does, when it wins the race."""
+
+    async def test_ingests_the_shared_stable_message_per_terminalised_row(self) -> None:
+        """Each terminalised row emits a ``source='saq'`` ingest carrying the
+        SHARED stable class message (one group with the chokepoint) and
+        ``function='stale_run_recovery'`` naming the writer."""
+        run_id = uuid.uuid4()
+        org_id = uuid.uuid4()
+        started = datetime.now(UTC) - timedelta(minutes=200)
+        conn = _CapturingConn(
+            zero_progress_rows=[
+                _zero_progress_row(
+                    run_id,
+                    claim_count=3,
+                    started_at=started,
+                    dispatched_at=started - timedelta(minutes=2),
+                ),
+            ],
+        )
+        ingest = AsyncMock()
+        with patch.object(ch, "_ingest_saq_error", new=ingest):
+            count = await pe._sweep_org_saq_zero_progress_runs(
+                conn,
+                org_id=org_id,
+                max_age_minutes=135,
+                max_rows=25,
+                terminalised_run_ids=[],
+            )
+
+        assert count == 1
+        assert ingest.await_count == 1
+        call = ingest.await_args
+        assert call.args[1] == org_id
+        assert call.kwargs["function"] == "stale_run_recovery"
+        # The SHARED constant — the fingerprint that merges this writer into
+        # the chokepoint's group. Never a re-spelling.
+        assert call.kwargs["message"] == ch._NODELESS_ZOMBIE_STABLE_MESSAGE
+        assert call.kwargs["message"] == (
+            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
+            "(SAQ claimed the run but no node was ever dispatched)"
+        )
+        context = call.kwargs["context"]
+        assert context["run_id"] == str(run_id)
+        assert context["claim_count"] == 3
+        assert context["zombie_age_minutes"] is not None
+
+    async def test_no_ingest_when_no_rows_match(self) -> None:
+        """Zero rows -> zero ingests (the signal counts the class, it never
+        fires for a no-op sweep)."""
+        conn = _CapturingConn()
+        ingest = AsyncMock()
+        with patch.object(ch, "_ingest_saq_error", new=ingest):
+            count = await pe._sweep_org_saq_zero_progress_runs(
+                conn,
+                org_id=uuid.uuid4(),
+                max_age_minutes=135,
+                max_rows=25,
+                terminalised_run_ids=[],
+            )
+
+        assert count == 0
+        ingest.assert_not_awaited()
+
+    def test_the_reconcile_chokepoint_shares_the_same_constant(self) -> None:
+        """The chokepoint's zero-node arm reads the SAME constant, so the two
+        writers cannot drift into separate groups."""
+        import inspect
+
+        source = inspect.getsource(ch._fail_nodeless_run)
+        assert "_NODELESS_ZOMBIE_STABLE_MESSAGE" in source
 
 
 class TestStaleRunRecoverySweepWiring:
@@ -181,14 +288,18 @@ class TestStaleRunRecoverySweepWiring:
 
     async def test_sweep_runs_the_branch_with_the_knob_and_row_cap(self) -> None:
         """The per-org loop calls the zero-progress branch after the legacy
-        UPDATEs, binding the resolved knob and the module row cap, and reports
-        ``saq_zero_progress_swept`` in the result."""
+        UPDATEs, binding the resolved knob and the row cap resolved from the
+        reconcile terminalize knob, and reports ``saq_zero_progress_swept`` in
+        the result."""
         org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
         conn = _CapturingConn(org_rows=[(org_id,)])
         settings = MagicMock()
         settings.saq_never_dispatched_window = 300
         settings.saq_worker_lost_window = 600
         settings.saq_zero_progress_max_age_minutes = 200
+        # REAL int so _int_setting uses it (a MagicMock attribute coerces to
+        # the coded fallback, which the default-path test below covers).
+        settings.dispatcher_reconcile_terminalize_max_per_tick = 25
         with patch.object(pe, "get_settings", return_value=settings):
             result = await pe.stale_run_recovery_sweep(_CapturingEngine(conn))  # type: ignore[arg-type]
 
@@ -198,6 +309,41 @@ class TestStaleRunRecoverySweepWiring:
         zp_params = [p for p in conn.params if "max_age_minutes" in p and "final_key" in p]
         assert len(zp_params) == 1
         assert zp_params[0]["max_age_minutes"] == 200
+        assert zp_params[0]["max_rows"] == 25
+
+    async def test_sweep_resolves_the_row_cap_from_the_reconcile_knob(self) -> None:
+        """The per-org row cap is the EXISTING reconcile knob — an operator
+        pin flows through to the sweep's LIMIT (one knob, never two)."""
+        org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        conn = _CapturingConn(org_rows=[(org_id,)])
+        settings = MagicMock()
+        settings.saq_never_dispatched_window = 300
+        settings.saq_worker_lost_window = 600
+        settings.saq_zero_progress_max_age_minutes = None
+        settings.dispatcher_reconcile_terminalize_max_per_tick = 7
+        with patch.object(pe, "get_settings", return_value=settings):
+            await pe.stale_run_recovery_sweep(_CapturingEngine(conn))  # type: ignore[arg-type]
+
+        zp_params = [p for p in conn.params if "max_age_minutes" in p and "final_key" in p]
+        assert len(zp_params) == 1
+        assert zp_params[0]["max_rows"] == 7
+
+    async def test_sweep_row_cap_falls_back_to_the_coded_default(self) -> None:
+        """A stand-in settings object without a REAL int knob keeps the
+        protective coded cap (25) — never a MagicMock-coerced 1."""
+        org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
+        conn = _CapturingConn(org_rows=[(org_id,)])
+        settings = MagicMock()
+        settings.saq_never_dispatched_window = 300
+        settings.saq_worker_lost_window = 600
+        settings.saq_zero_progress_max_age_minutes = None
+        # Deliberately leave dispatcher_reconcile_terminalize_max_per_tick as
+        # a MagicMock attribute.
+        with patch.object(pe, "get_settings", return_value=settings):
+            await pe.stale_run_recovery_sweep(_CapturingEngine(conn))  # type: ignore[arg-type]
+
+        zp_params = [p for p in conn.params if "max_age_minutes" in p and "final_key" in p]
+        assert len(zp_params) == 1
         assert zp_params[0]["max_rows"] == pe._SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS
 
     async def test_sweep_falls_back_to_the_historical_bound_when_knob_is_unset(self) -> None:
@@ -220,15 +366,17 @@ class TestStaleRunRecoverySweepWiring:
         """A row selected by the branch lands in the result count."""
         org_id = uuid.UUID("00000000-0000-0000-0000-0000000000aa")
         run_id = uuid.uuid4()
-        conn = _CapturingConn(org_rows=[(org_id,)], zero_progress_rows=[(run_id,)])
+        conn = _CapturingConn(org_rows=[(org_id,)], zero_progress_rows=[_zero_progress_row(run_id)])
         settings = MagicMock()
         settings.saq_never_dispatched_window = 300
         settings.saq_worker_lost_window = 600
         with (
             patch.object(pe, "get_settings", return_value=settings),
             # The post-commit advance machinery is exercised elsewhere; keep
-            # this test on the sweep's own counting/selection behaviour.
+            # this test on the sweep's own counting/selection behaviour. The
+            # M2 class ingest is covered by TestSweepEmitsFar714ClassSignal.
             patch.object(pe, "_advance_terminalised_run", new=AsyncMockNone()),
+            patch.object(ch, "_ingest_saq_error", new=AsyncMock()),
         ):
             result = await pe.stale_run_recovery_sweep(_CapturingEngine(conn))  # type: ignore[arg-type]
 

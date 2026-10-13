@@ -31,6 +31,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from langgraph.errors import NodeCancelledError
@@ -431,9 +432,12 @@ _STRANDED_REDISPATCH_TTL_MINUTES = 12
 # router's) and the SAME Settings knob
 # (``saq_zero_progress_max_age_minutes``). Guarded by ``status='running'`` so
 # double-firing with dispatcher_reconcile is a no-op: whichever path reaches
-# the row first terminalises it, the other then matches nothing. The row cap
-# bounds the per-org UPDATE to a draining cadence, matching
-# ``dispatcher_reconcile_terminalize_max_per_tick``'s default.
+# the row first terminalises it, the other then matches nothing. The per-org
+# row cap resolves the EXISTING
+# ``dispatcher_reconcile_terminalize_max_per_tick`` knob (default 25) at
+# sweep time; this constant is only that knob's CODED fallback for stand-in
+# settings objects, so the draining cadence matches the reconcile
+# terminalisers under every configuration.
 _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS = 25
 # Synthetic detail for the sweep's zero-progress terminalisations (mirrors the
 # reconcile age gate's detail shape): a constant prefix; the per-row
@@ -2535,11 +2539,17 @@ _SAQ_ZERO_PROGRESS_SQL_TEMPLATE = (
     "  SELECT ctid FROM runs "
     "  WHERE status='running' "
     "  AND organisation_id=:oid "
-    "  AND dispatcher='saq' "
+    " AND dispatcher='saq' "
     "  AND started_at < now() - (:max_age_minutes * interval '1 minute') "
     "  AND __ZERO_PROGRESS_SHAPE__ "
     "  LIMIT :max_rows) "
-    "RETURNING id"
+    # FAR-1715 pre-PR QA M2: RETURNING the diagnostic columns the FAR-714
+    # class emission needs (mirror of the chokepoint's per-run context) — the
+    # rows are terminal after this UPDATE, so re-reading them for pipeline /
+    # trigger / claim / phase attribution would cost a second statement for
+    # data this one already touches.
+    "RETURNING id, pipeline_id, trigger_id, claim_count, dispatch_phase, "
+    "dispatch_phase_entered_at, started_at, dispatched_at"
 )
 
 
@@ -2580,6 +2590,21 @@ async def _sweep_org_saq_zero_progress_runs(
     across ticks instead of one unbounded storm; the predicate re-selects the
     remaining rows next tick.
 
+    FAR-714 observability (pre-PR QA M2): when THIS sweep wins the race
+    against dispatcher_reconcile — the exact degraded-fleet scenario it
+    exists to cover — the reconcile chokepoint never fires for the row, so
+    this helper emits the SAME class signal itself: an alert-grade ERROR log
+    plus a ``source='saq'`` error ingest with the SHARED stable message
+    (``cron_helpers._NODELESS_ZOMBIE_STABLE_MESSAGE``), so the run lands in
+    the SAME Error Dashboard group the chokepoint feeds
+    (``context_json.function='stale_run_recovery'`` names the writer). The
+    raw atomic UPDATE is deliberately kept as the terminal write — its
+    ``status='running'`` WHERE-guard is what makes double-firing with the
+    chokepoint a no-op under READ COMMITTED, and routing the write through
+    the ORM chokepoint would trade that atomicity away for no gain. The
+    ingest is fail-open (``_ingest_saq_error`` never raises), same as the
+    chokepoint's.
+
     Runs inside the caller's RLS-scoped transaction (re-issues the org
     ``set_config`` and the hot-``runs`` row-lock bound so the helper is
     self-contained; both are idempotent transaction-scoped statements).
@@ -2588,7 +2613,12 @@ async def _sweep_org_saq_zero_progress_runs(
     compensating daily facts (FAR-143 follow-up / FAR-162 P6'), exactly like
     the other terminal UPDATEs. Returns the number of rows terminalised.
     """
-    from modulo.core.cron_helpers import _ZERO_PROGRESS_SHAPE_SQL, _ZERO_PROGRESS_SHAPE_TOKEN
+    from modulo.core.cron_helpers import (
+        _NODELESS_ZOMBIE_STABLE_MESSAGE,
+        _ZERO_PROGRESS_SHAPE_SQL,
+        _ZERO_PROGRESS_SHAPE_TOKEN,
+        _ingest_saq_error,
+    )
     from modulo.db.models.run_node_outputs import FINAL_ATTEMPT_KEY
 
     await _bound_hot_runs_row_lock(conn)
@@ -2615,12 +2645,76 @@ async def _sweep_org_saq_zero_progress_runs(
     count = len(rows)
     terminalised_run_ids.extend((row[0], org_id) for row in rows)
     if count:
-        _log.warning(
-            "stale_run_recovery: %d zero-progress SAQ run(s) terminal-failed with %s (age bound %d min)",
-            count,
-            EXECUTOR_STALLED_ERROR_CODE,
-            max_age_minutes,
-        )
+        for row in rows:
+            (
+                run_id,
+                pipeline_id,
+                trigger_id,
+                claim_count,
+                dispatch_phase,
+                dispatch_phase_entered_at,
+                started_at,
+                dispatched_at,
+            ) = row
+            completed_at = datetime.now(UTC)
+            zombie_age_minutes: float | None = None
+            if started_at is not None:
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=UTC)
+                zombie_age_minutes = max((completed_at - started_at).total_seconds() / 60, 0.0)
+            saq_queue_wait_seconds: float | None = None
+            if dispatched_at is not None and started_at is not None:
+                if dispatched_at.tzinfo is None:
+                    dispatched_at = dispatched_at.replace(tzinfo=UTC)
+                saq_queue_wait_seconds = max((started_at - dispatched_at).total_seconds(), 0.0)
+            dispatch_phase_elapsed: float | None = None
+            if dispatch_phase_entered_at is not None:
+                if dispatch_phase_entered_at.tzinfo is None:
+                    dispatch_phase_entered_at = dispatch_phase_entered_at.replace(tzinfo=UTC)
+                dispatch_phase_elapsed = max((completed_at - dispatch_phase_entered_at).total_seconds(), 0.0)
+            # Alert-grade, per run — same shape as the chokepoint's log so a
+            # burst is visible with per-run attribution (the aggregate sweep
+            # summary is logged by the caller).
+            _log.error(
+                "stale_run_recovery.claimed_but_never_dispatched run=%s org=%s claim_count=%s "
+                "pipeline=%s trigger=%s dispatch_phase=%s dispatch_phase_elapsed=%s "
+                "zombie_age_minutes=%s saq_queue_wait_seconds=%s — zero-progress SAQ run "
+                "terminal-failed with %s by the stale_run_recovery sweep (age bound %d min)",
+                run_id,
+                org_id,
+                claim_count,
+                pipeline_id,
+                trigger_id,
+                dispatch_phase if dispatch_phase is not None else "unknown",
+                f"{dispatch_phase_elapsed:.1f}s" if dispatch_phase_elapsed is not None else "unknown",
+                f"{zombie_age_minutes:.0f}" if zombie_age_minutes is not None else "unknown",
+                f"{saq_queue_wait_seconds:.0f}" if saq_queue_wait_seconds is not None else "unknown",
+                EXECUTOR_STALLED_ERROR_CODE,
+                max_age_minutes,
+            )
+            await _ingest_saq_error(
+                # Vestigial param (see ``_ingest_saq_error``): the ingest
+                # opens its OWN session/transaction; pass this org
+                # transaction's conn for caller symmetry.
+                conn,
+                org_id,
+                function="stale_run_recovery",
+                # STABLE message (no run id) — the SHARED class constant, so
+                # this writer and the reconcile chokepoint feed ONE group.
+                message=_NODELESS_ZOMBIE_STABLE_MESSAGE,
+                context={
+                    "run_id": str(run_id),
+                    "pipeline_id": str(pipeline_id) if pipeline_id is not None else None,
+                    "trigger_id": str(trigger_id) if trigger_id is not None else None,
+                    "claim_count": claim_count,
+                    "dispatch_phase": dispatch_phase,
+                    "dispatch_phase_elapsed": dispatch_phase_elapsed,
+                    "zombie_age_minutes": zombie_age_minutes,
+                    "saq_queue_wait_seconds": saq_queue_wait_seconds,
+                    "dispatched_at": dispatched_at.isoformat() if dispatched_at is not None else None,
+                    "started_at": started_at.isoformat() if started_at is not None else None,
+                },
+            )
     return count
 
 
@@ -2734,9 +2828,20 @@ async def stale_run_recovery_sweep(
     # in so the knob is read from the SAME object as the legacy windows
     # above. Falls back to the historical ~135m derivation when the settings
     # double lacks the field.
-    from modulo.core.cron_helpers import _saq_zero_progress_max_age_minutes
+    #
+    # The per-org row cap resolves the EXISTING reconcile knob
+    # ``dispatcher_reconcile_terminalize_max_per_tick`` (default 25) so both
+    # age-bound terminalisers drain a backlog at the same capped cadence —
+    # one knob to tune, never two. ``_int_setting``'s coded fallback is this
+    # module's constant (also 25), so a stand-in settings object keeps the
+    # same protective cap and the default behaviour is unchanged.
+    from modulo.core.cron_helpers import _int_setting, _saq_zero_progress_max_age_minutes
 
     zero_progress_max_age = _saq_zero_progress_max_age_minutes(settings)
+    zero_progress_max_rows = _int_setting(
+        getattr(settings, "dispatcher_reconcile_terminalize_max_per_tick", None),
+        _SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS,
+    )
     never_count = 0
     lost_count = 0
     capacity_timeout_count = 0
@@ -2784,7 +2889,7 @@ async def stale_run_recovery_sweep(
                     conn,
                     org_id=org_id,
                     max_age_minutes=zero_progress_max_age,
-                    max_rows=_SAQ_ZERO_PROGRESS_SWEEP_MAX_ROWS,
+                    max_rows=zero_progress_max_rows,
                     terminalised_run_ids=terminalised_run_ids,
                 )
                 never_count += never_delta

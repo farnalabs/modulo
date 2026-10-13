@@ -242,6 +242,22 @@ _NODELESS_ZOMBIE_ERROR_CODE = "executor_stalled"
 # the class is alertable per tick instead of visible only after ~2h of wasted
 # budget.
 
+# FAR-1715: the STABLE zero-node zombie error message — the Error Dashboard
+# groups by fingerprint (message + source), so this exact string is ONE shared
+# constant: the FAR-714 chokepoint (``_fail_nodeless_run``'s zero-node arm)
+# AND the stale_run_recovery zero-progress sweep
+# (``pipeline_execution._sweep_org_saq_zero_progress_runs``) emit into the
+# SAME ``source='saq'`` group. When the sweep wins the race against
+# dispatcher_reconcile (the degraded-fleet scenario it exists to cover) the
+# class signal must not split into a second group or vanish — the sweep
+# imports this constant, never re-spells it. The writer rides in the event's
+# ``context_json.function``, not in the message (a message change would mint a
+# new fingerprint and orphan the group's alert history).
+_NODELESS_ZOMBIE_STABLE_MESSAGE = (
+    "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
+    "(SAQ claimed the run but no node was ever dispatched)"
+)
+
 # ---------------------------------------------------------------------------
 # Durable dispatch recovery (PR dist/runtime-reconcile, B2/B3).
 # dispatch_run now leaves a failed-enqueue run ``pending`` with
@@ -315,8 +331,12 @@ _DISPATCH_FAILED_ERROR_DETAIL = "Run was never dispatched (enqueue/Redis failure
 # stale_run_recovery sweep's independent SAQ zero-progress branch
 # (``pipeline_execution._sweep_org_saq_zero_progress_runs``); an explicit pin
 # is validated at Settings load
-# (``Settings._saq_zero_progress_max_age_invariant``) so it can never sit below
-# the worst-case legitimate pre-node window.
+# (``Settings._saq_zero_progress_max_age_invariant``) so it can never sit
+# below the worst-case legitimate window of ANY consumer — the pre-node
+# window AND this gate's own floor (a run may legitimately execute up to
+# ``SAQ_RUN_TIMEOUT``; a pin in [65, 134] at the shipped defaults would drop
+# this gate under the maximum legitimate run duration and falsely fail a
+# still-progressing run ``no_progress``).
 #
 # FAR-1329 — this is an AGE gate and says so. Its predicate
 # (``status='running' AND dispatcher='saq' AND started_at < now() - age``)
@@ -342,7 +362,9 @@ def _saq_zero_progress_max_age_minutes(settings: Any | None = None) -> int:
     shipped ``SAQ_RUN_TIMEOUT=7200``) — so the default behaviour is unchanged.
     An explicit pin is validated at Settings load
     (``_saq_zero_progress_max_age_invariant``) against the worst-case
-    legitimate pre-node window, so it can never be below ~65 min.
+    legitimate window of EVERY consumer (the pre-node window AND the mid-graph
+    gate's own max-legitimate-run-duration floor), so it can never be below
+    that binding floor (~135 min at the shipped defaults).
 
     *settings* is an optional already-resolved Settings (or settings double)
     — callers that hold one (e.g. ``stale_run_recovery_sweep``, whose tests
@@ -1171,7 +1193,7 @@ async def _log_ongoing_event(
 
 
 async def _ingest_saq_error(
-    _session: AsyncSession,
+    _session: Any,
     org_id: uuid.UUID,
     *,
     function: str,
@@ -1181,12 +1203,15 @@ async def _ingest_saq_error(
     """Ingest an error event with source='saq' (plan F3d/F1 enqueue-failure alert).
 
     Runs in its own session/transaction (the caller's transaction stays intact
-    — ``_session`` is vestigial and kept only for caller symmetry) and never
-    raises — error ingestion must not crash the scheduler tick.
+    — ``_session`` is vestigial and kept only for caller symmetry, so its type
+    is ``Any``: reconcile callers pass their ORM ``AsyncSession``, the
+    stale_run_recovery zero-progress sweep passes its raw ``AsyncConnection``
+    — neither is ever executed on) and never raises — error ingestion must not
+    crash the scheduler tick.
 
     If ``org_id`` is the nil UUID (system error without tenant context), the
-    error is logged and skipped — the ``error_events`` FK constraint requires a
-    real organisation row.
+    error is logged and skipped — the ``error_events`` FK constraint requires
+    a real organisation row.
     """
     if org_id == SYSTEM_ORG_ID:
         _log.error(
@@ -5176,10 +5201,10 @@ async def _fail_nodeless_run(
             "(first node STARTED but no super-step completed within the nodeless window)"
         )
     else:
-        stable_message = (
-            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
-            "(SAQ claimed the run but no node was ever dispatched)"
-        )
+        # FAR-1715: SHARED constant — the stale_run_recovery zero-progress
+        # sweep emits the same message so both writers land in ONE Error
+        # Dashboard group (see ``_NODELESS_ZOMBIE_STABLE_MESSAGE``).
+        stable_message = _NODELESS_ZOMBIE_STABLE_MESSAGE
     await _ingest_saq_error(
         session,
         org_id,
