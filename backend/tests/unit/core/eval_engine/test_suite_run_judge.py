@@ -263,6 +263,56 @@ async def test_build_hub_builds_and_initialises_active_rows(session, monkeypatch
     await hub.__aexit__(None, None, None)
 
 
+async def test_build_hub_tears_down_when_initialise_fails(session, monkeypatch) -> None:
+    """An ``initialise`` failure after ``__aenter__`` must not leak the hub.
+
+    A raise from ``hub.initialise`` (bad credentials, unknown provider, ...)
+    would strand the entered hub's transport resources. The builder must tear
+    the hub down (via the executor's ``_teardown_hub``) before re-raising, and
+    the original exception must still propagate.
+    """
+    org = uuid.uuid4()
+    backend = ModelBackend(
+        organisation_id=org,
+        name="local",
+        display_name="Local",
+        provider="ollama",
+        model_id="llama3",
+        credentials_ciphertext=b"",
+        account_id=org,
+        status="active",
+    )
+    session.add(backend)
+    await session.flush()
+
+    entered: list[ModelBackendHub] = []
+    torn_down: list[Any] = []
+
+    async def _raising_initialise(self: Any, instances: Any, secrets_backend: Any) -> None:
+        raise RuntimeError("backend initialise boom")
+
+    real_aenter = ModelBackendHub.__aenter__
+
+    async def _tracking_aenter(self: ModelBackendHub) -> Any:
+        entered.append(self)
+        return await real_aenter(self)
+
+    async def _fake_teardown(hub: Any) -> None:
+        torn_down.append(hub)
+
+    monkeypatch.setattr(ModelBackendHub, "__aenter__", _tracking_aenter)
+    monkeypatch.setattr(ModelBackendHub, "initialise", _raising_initialise)
+    monkeypatch.setattr("modulo.core.pipeline_engine.executor._teardown_hub", _fake_teardown)
+    monkeypatch.setattr("modulo.core.secrets_backend.create_secrets_backend", lambda **_: object())
+    monkeypatch.setattr("modulo.settings.get_settings", lambda: type("_S", (), {"fernet_key": "k"})())
+
+    with pytest.raises(RuntimeError, match="initialise boom"):
+        await build_org_model_backend_hub(session, org)
+
+    assert len(torn_down) == 1
+    assert torn_down[0] is entered[0]
+
+
 # --------------------------------------------------------------------------- #
 # build_suite_run_llm_judge_callable                                          #
 # --------------------------------------------------------------------------- #

@@ -57,6 +57,12 @@ async def build_org_model_backend_hub(
     (``await hub.__aexit__(None, None, None)``) in a ``finally``. No
     module-global hub is used or set: the SAQ path has no run context (no
     ContextVar), so a hub local to the job is the only correct scope.
+
+    An ``initialise`` failure AFTER ``__aenter__`` succeeded must not leak the
+    entered hub's transport resources, so the pair is wrapped and the hub torn
+    down (cancellation-shielded, via the executor's ``_teardown_hub``) before
+    the error is re-raised - mirroring
+    :meth:`PipelineExecutor._init_model_backend_hub`'s init-failure path.
     """
     rows = list(
         (
@@ -80,7 +86,17 @@ async def build_org_model_backend_hub(
     )
     hub = ModelBackendHub()
     await hub.__aenter__()
-    await hub.initialise(rows, secrets_backend=secrets_backend)
+    try:
+        await hub.initialise(rows, secrets_backend=secrets_backend)
+    except BaseException:
+        # A failure after ``__aenter__`` succeeded (bad credentials, unknown
+        # provider, cancellation mid-init) would otherwise leak the entered
+        # hub. Tear it down (cancellation-shielded) before re-raising, exactly
+        # as the executor does on its init-failure path.
+        from modulo.core.pipeline_engine.executor import _teardown_hub
+
+        await _teardown_hub(hub)
+        raise
     return hub
 
 
