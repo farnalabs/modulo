@@ -283,4 +283,201 @@ describe('ProgressiveAutonomyPanel', () => {
       'Fully autonomous',
     )
   })
+
+  it('renders an unknown level verbatim and ranks it below the ladder floor', () => {
+    const wrapper = mountPanel({ earnedLevel: 'experimental_level', earnedUpdatedAt: null })
+
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'experimental_level',
+    )
+    // Off-ladder levels rank -1: neither direction is selectable from them.
+    expect(
+      wrapper.find('[data-testid="progressive-autonomy-demote"]').attributes('disabled'),
+    ).toBeDefined()
+    expect(
+      wrapper.find('[data-testid="progressive-autonomy-promote"]').attributes('disabled'),
+    ).toBeDefined()
+  })
+
+  it('labels a null level as unknown and blanks an absent earned-at timestamp', () => {
+    const wrapper = mountPanel({ earnedLevel: 'notify_on_complete', earnedUpdatedAt: null })
+    const vm = wrapper.vm as unknown as {
+      levelLabel: (level: string | null) => string
+      formattedEarnedAt: string
+    }
+
+    expect(vm.levelLabel(null)).toContain('Unknown')
+    expect(vm.formattedEarnedAt).toBe('')
+  })
+
+  it('falls back to manual approval when both the default and ceiling are null', () => {
+    const wrapper = mountPanel({ earnedLevel: null, defaultLevel: null, maxLevel: null })
+
+    expect(wrapper.find('[data-testid="progressive-autonomy-default"]').text()).toContain(
+      'Manual approval',
+    )
+    expect(wrapper.find('[data-testid="progressive-autonomy-ceiling"]').text()).toContain(
+      'Inherits the default level',
+    )
+  })
+
+  it('shows the inherited-ceiling label when no max level is stored', () => {
+    const wrapper = mountPanel({ maxLevel: null, defaultLevel: 'notify_on_complete' })
+
+    expect(wrapper.find('[data-testid="progressive-autonomy-default"]').text()).toContain(
+      'Notify on complete',
+    )
+    expect(wrapper.find('[data-testid="progressive-autonomy-ceiling"]').text()).toContain(
+      'Inherits the default level',
+    )
+  })
+
+  it('leaves the earned display to the prop data when no local write happened', async () => {
+    const wrapper = mountPanel()
+    await wrapper.setProps({
+      earnedLevel: 'fully_autonomous',
+      earnedUpdatedAt: '2026-09-05T00:00:00Z',
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Fully autonomous',
+    )
+  })
+
+  it('drops the override once the parent refetch confirms our own write', async () => {
+    apiMocks.post.mockResolvedValue({
+      data: successBody('manual_approval', 'notify_on_complete'),
+      error: undefined,
+      response: { status: 200 },
+    })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('manual_approval')
+    await wrapper.find('[data-testid="progressive-autonomy-demote"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.setProps({
+      earnedLevel: 'manual_approval',
+      earnedUpdatedAt: '2026-09-02T11:22:33Z',
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Manual approval',
+    )
+  })
+
+  it('treats a missing prop timestamp as fresh and drops the override', async () => {
+    apiMocks.post.mockResolvedValue({
+      data: successBody('manual_approval', 'notify_on_complete'),
+      error: undefined,
+      response: { status: 200 },
+    })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('manual_approval')
+    await wrapper.find('[data-testid="progressive-autonomy-demote"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.setProps({ earnedLevel: 'fully_autonomous', earnedUpdatedAt: null })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Fully autonomous',
+    )
+  })
+
+  it('treats a missing override timestamp as stale and accepts the prop write', async () => {
+    apiMocks.post.mockResolvedValue({
+      data: { ...successBody('manual_approval', 'notify_on_complete'), updated_at: null },
+      error: undefined,
+      response: { status: 200 },
+    })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('manual_approval')
+    await wrapper.find('[data-testid="progressive-autonomy-demote"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.setProps({
+      earnedLevel: 'fully_autonomous',
+      earnedUpdatedAt: '2026-09-06T00:00:00Z',
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Fully autonomous',
+    )
+  })
+
+  it('ignores a second apply while one is already pending', async () => {
+    let resolvePost: (value: unknown) => void = () => {}
+    apiMocks.post.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePost = resolve
+        }),
+    )
+    const wrapper = mountPanel()
+    const vm = wrapper.vm as unknown as { apply: (direction: 'demote' | 'promote') => Promise<void> }
+
+    const first = vm.apply('demote')
+    await vm.apply('promote')
+
+    expect(apiMocks.post).toHaveBeenCalledTimes(1)
+
+    resolvePost({
+      data: successBody('manual_approval', 'notify_on_complete'),
+      error: undefined,
+      response: { status: 200 },
+    })
+    await first
+    await flushPromises()
+  })
+
+  it('derives the status from a problem-detail error that carried no response', async () => {
+    apiMocks.post.mockResolvedValue({
+      error: {
+        type: 'urn:problem:modulo:validation_error',
+        title: 'Validation Error',
+        status: 422,
+        detail: 'promotion refused',
+      },
+      response: undefined,
+    })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('fully_autonomous')
+    await wrapper.find('[data-testid="progressive-autonomy-promote"]').trigger('click')
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="progressive-autonomy-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('promotion refused')
+  })
+
+  it('falls back to status zero for a non-problem error with no response', async () => {
+    apiMocks.post.mockResolvedValue({ error: { detail: 'plain failure' }, response: undefined })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('fully_autonomous')
+    await wrapper.find('[data-testid="progressive-autonomy-promote"]').trigger('click')
+    await flushPromises()
+
+    const error = wrapper.find('[data-testid="progressive-autonomy-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('plain failure')
+  })
+
+  it('falls back to the target level when the success body is empty', async () => {
+    apiMocks.post.mockResolvedValue({ data: null, error: undefined, response: { status: 200 } })
+    const wrapper = mountPanel()
+
+    await wrapper.find('[data-testid="progressive-autonomy-target"]').setValue('fully_autonomous')
+    await wrapper.find('[data-testid="progressive-autonomy-promote"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="progressive-autonomy-earned"]').text()).toContain(
+      'Fully autonomous',
+    )
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+  })
 })
