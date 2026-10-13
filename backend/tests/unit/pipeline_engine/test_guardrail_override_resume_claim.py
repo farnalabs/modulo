@@ -346,8 +346,9 @@ class TestRealPostgresResumeClaim:
     ) -> None:
         """M1 (real seam): no root checkpoint -> fail closed with
         ``GuardrailOverrideNoCheckpointError``; the run is left the terminal
-        ``eval_failed``/``eval_blocked`` block it was, so it stays overridable
-        and is never handed to a re-executing resume."""
+        ``eval_failed``/``eval_blocked`` block it was — re-calling the override
+        returns the same 409 (the checkpoint never appears), so the
+        remediation is a NEW run — and it is never handed to a re-executing resume."""
         maker = _session_maker(seeded_engine)
         async with maker() as session:
             run_id = await _node_started_blocked_run(session)

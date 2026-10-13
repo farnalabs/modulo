@@ -340,7 +340,8 @@ async def test_override_node_started_run_without_checkpoint_fails_closed(session
     executor attaches no checkpointer (FAR-432) — is refused with
     ``GuardrailOverrideNoCheckpointError`` and left terminal ``eval_failed`` /
     ``eval_blocked``. Resuming it would silently RE-EXECUTE it from the start
-    (FAR-1649), so fail closed and keep the block overridable."""
+    (FAR-1649), so fail closed: the block stays terminal and the remediation
+    is a NEW run (re-calling the override returns the same 409)."""
     await _seed(session)
     await _seed_guardrail(session)
     run = await _blocked_run(session)

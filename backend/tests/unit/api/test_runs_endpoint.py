@@ -2519,7 +2519,9 @@ def test_guardrail_override_no_checkpoint_conflicts_409(client: TestClient) -> N
     """FAR-1711 (M1) fail-closed: a node-started run with no resumable
     checkpoint is refused with a DISTINCT 409 and never dispatched — routing
     it to ``resume_run`` would silently re-execute it (FAR-1649), so the run
-    is left terminal ``eval_blocked`` (still overridable) rather than burned."""
+    is left terminal ``eval_blocked`` rather than burned. Re-calling the
+    endpoint returns the same 409 (the checkpoint never appears), so the
+    remediation is a NEW run, not another override attempt."""
     with (
         patch("modulo.api.routes.runs.set_rls_org"),
         patch(

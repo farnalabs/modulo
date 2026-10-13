@@ -98,11 +98,13 @@ class GuardrailOverrideNoCheckpointError(GuardrailOverrideError):
     executor attaches no checkpointer at all (FAR-432) and therefore never
     persists one — a resume cannot restore the completed supersteps. Routing
     such a run to ``resume_run`` would silently RE-EXECUTE it from the start
-    (LangGraph seeds a fresh checkpoint and streams every node again — the
-    exact FAR-1649/FAR-1711 sin), so the override is refused instead and the
-    run stays terminal ``eval_failed``/``eval_blocked`` — still overridable
-    once a remediation that does not need the lost progress is possible, and
-    still visible as the block it is. Distinct from
+    (LangGraph seeds a fresh checkpoint and streams every node again —
+    the exact FAR-1649/FAR-1711 sin), so the override is refused instead and
+    the run stays terminal ``eval_failed``/``eval_blocked`` — visible as the
+    block it is. The missing checkpoint never appears later (a
+    ``first_node_dispatched`` thread with no root checkpoint stays that way),
+    so re-calling the override returns the same 409: the true remediation is a
+    NEW run against the pipeline, not another override attempt. Distinct from
     :class:`GuardrailOverrideRejectedError` (supplied input still violates a
     guardrail — 422): this is a mechanism/state refusal (409).
     """
@@ -152,11 +154,30 @@ _JOB_TYPE_EXECUTE = "execute_run"
 # ``resume_run`` job reads ``{"status": "not_claimed"}`` (success to SAQ, no
 # retry), and the run is stranded until the age gate terminal-fails it. The
 # flip therefore stamps the heartbeat back by one full claim-stale window.
-# The extra skew guard covers clock drift: the stamp is computed on the
-# APPLICATION clock while the claim compares it against the DATABASE's
-# ``now()``, so the stamp must stay strictly older than ``now() - stale`` even
-# when this process's clock lags the database. (A ``NULL`` heartbeat is NOT a
-# fix — ``NULL < ...`` is NULL, so the arm never matches.)
+# The extra skew guard covers clock drift in ONE direction: the stamp is
+# computed on the APPLICATION clock while the claim compares it against the
+# DATABASE's ``now()``, so the stamp must stay strictly older than
+# ``now() - stale`` even when this process's clock LEADS (runs AHEAD of) the
+# database — a lead makes the stamp more recent than intended, and the guard
+# holds while the lead is under ``_CLAIM_STALE_SKEW_GUARD_SECONDS``
+# (``app_now - db_now < 60``). A clock that LAGS the database only makes the
+# stamp OLDER — the arm still matches, with extra margin — so lag is NOT the
+# failure mode this guards. (A ``NULL`` heartbeat is NOT a fix — ``NULL < ...``
+# is NULL, so the arm never matches.)
+# SETTINGS INVARIANT (FAR-1728): the stamped depth is
+# ``run_claim_stale_seconds + _CLAIM_STALE_SKEW_GUARD_SECONDS`` — 510 s at the
+# defaults (450 + 60) — and ``slot_reconcile_stale_seconds`` (the
+# ``run_admission.reconcile_pipeline_slots`` staleness window, default 1800)
+# must stay STRICTLY GREATER than that depth. The override flips the run to
+# ``running`` with this ALREADY-stale heartbeat, so a slot window at or below
+# the depth would make the freshly-flipped row sweep-eligible immediately: for
+# an OVER-BUDGET row (``claim_count > heartbeat_stale_retry_budget`` — the
+# sweep's node-started exclusion guards the in-budget RETRY arm only) the slot
+# sweep would terminal-fail it ``heartbeat_stale`` before ``resume_run`` ever
+# claims it, destroying the override resume. Defaults are safe (1800 > 510);
+# ``_immediately_claimable_heartbeat`` WARNs when a deployed config breaks the
+# invariant, and this module owns the stamp — the invariant is documented here
+# rather than as a Settings validator.
 _CLAIM_STALE_SKEW_GUARD_SECONDS = 60
 
 # Root-checkpoint existence probe (FAR-1711 M1). The root namespace
@@ -209,9 +230,10 @@ async def _resolve_override_node_started(
     thread carries no root checkpoint cannot be remediated by
     :func:`guardrail_override` at all. Fail CLOSED here — before the guardrail
     pass and before any state write — so the run stays terminal
-    ``eval_failed``/``eval_blocked`` (still overridable / repairable) rather than
-    being flipped and then silently re-executed by a ``resume_run`` that finds
-    nothing to resume.
+    ``eval_failed``/``eval_blocked`` (re-calling the override returns the same
+    409 — the checkpoint never appears, so the remediation is a NEW run)
+    rather than being flipped and then silently re-executed by a
+    ``resume_run`` that finds nothing to resume.
     """
     node_started = run.dispatch_phase == PHASE_FIRST_NODE_DISPATCHED
     if not node_started:
@@ -232,8 +254,29 @@ def _immediately_claimable_heartbeat() -> datetime:
     """
     from modulo.settings import get_settings
 
-    stale_seconds = int(get_settings().run_claim_stale_seconds)
-    return datetime.now(UTC) - timedelta(seconds=stale_seconds + _CLAIM_STALE_SKEW_GUARD_SECONDS)
+    settings = get_settings()
+    stale_seconds = int(settings.run_claim_stale_seconds)
+    stamp_depth = stale_seconds + _CLAIM_STALE_SKEW_GUARD_SECONDS
+    # FAR-1728 settings invariant (documented at
+    # ``_CLAIM_STALE_SKEW_GUARD_SECONDS``): the slot sweep's window must stay
+    # strictly above the stamp depth or the freshly-flipped run is swept
+    # ``heartbeat_stale`` before ``resume_run`` claims it (over-budget
+    # ``claim_count`` arm). WARN-only and isinstance-guarded (a test-double
+    # Settings without the field skips the check); the shipped defaults
+    # (1800 > 510) never fire it.
+    slot_window = getattr(settings, "slot_reconcile_stale_seconds", None)
+    if isinstance(slot_window, int) and 0 < slot_window <= stamp_depth:
+        _log.warning(
+            "guardrail_override.slot_sweep_window_below_heartbeat_stamp_depth "
+            "(SLOT_RECONCILE_STALE_SECONDS=%s <= RUN_CLAIM_STALE_SECONDS + %s = %s): the override's "
+            "stale-heartbeat stamp is already slot-sweep eligible, so the slot sweep can terminal-fail the "
+            "flipped run before resume_run claims it — raise SLOT_RECONCILE_STALE_SECONDS above %s",
+            slot_window,
+            _CLAIM_STALE_SKEW_GUARD_SECONDS,
+            stamp_depth,
+            stamp_depth,
+        )
+    return datetime.now(UTC) - timedelta(seconds=stamp_depth)
 
 
 def _override_flip_values(node_started: bool) -> tuple[str, dict[str, Any], datetime | None]:
@@ -598,8 +641,11 @@ async def guardrail_override(
     checkpoint to resume from, and a resume would silently re-execute the
     run from the start. Such a run is refused with
     :class:`GuardrailOverrideNoCheckpointError` BEFORE any state is touched —
-    it stays terminal ``eval_failed``/``eval_blocked`` (still overridable /
-    repairable) rather than being burned into an unrecoverable re-execution.
+    it stays terminal ``eval_failed``/``eval_blocked`` rather than being
+    burned into an unrecoverable re-execution. The missing checkpoint never
+    appears later, so re-calling the override returns the same 409: the true
+    remediation is a NEW run against the pipeline, not another override
+    attempt.
 
     Raises:
         GuardrailOverrideError — run is not a guardrail-blocked terminal run,
