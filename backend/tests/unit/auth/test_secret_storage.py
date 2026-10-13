@@ -238,3 +238,36 @@ class TestIsEncryptedSecret:
 
         token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
         assert is_encrypted_secret(token, "a" * 32) is False
+
+
+# ---------------------------------------------------------------------------
+# _is_complete_fernet_token — structural-completeness discriminator (FAR-1735)
+# ---------------------------------------------------------------------------
+
+
+class TestIsCompleteFernetToken:
+    """The discriminator that separates legacy plaintext (accept) from a
+    genuine token no key decrypts (fail loud)."""
+
+    def test_genuine_token_is_complete(self) -> None:
+        from modulo.auth.secret_storage import _is_complete_fernet_token
+
+        token = Fernet(_FERNET_KEY.encode()).encrypt(b"s3cret").decode()
+        assert _is_complete_fernet_token(token) is True
+
+    def test_short_gaaaa_prefixed_plaintext_is_not_complete(self) -> None:
+        """A ``gAAAA``-prefixed plaintext too short to be a token is legacy
+        plaintext — skipped, never fed to the decryptor."""
+        from modulo.auth.secret_storage import _is_complete_fernet_token
+
+        assert _is_complete_fernet_token("gAAAA-short-plaintext") is False
+
+    def test_non_str_and_empty_are_not_complete(self) -> None:
+        """Non-string and empty inputs short-circuit to ``False`` before the
+        base64 decode — never a crash, never a false positive."""
+        from modulo.auth.secret_storage import _is_complete_fernet_token
+
+        assert _is_complete_fernet_token(None) is False
+        assert _is_complete_fernet_token(b"bytes-not-str") is False
+        assert _is_complete_fernet_token(123) is False
+        assert _is_complete_fernet_token("") is False

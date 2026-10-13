@@ -115,6 +115,78 @@ async def _rotate_notification_endpoints(session: AsyncSession, new_fernet: Fern
     return count
 
 
+def _reencrypt_trigger_secret_or_classify(
+    stored: str,
+    *,
+    row_id: Any,
+    key: str,
+    new_fernet: Fernet,
+    old_fernet: Fernet | None,
+    new_key: str,
+    old_key: str,
+) -> str | None:
+    """Classify ONE stored trigger secret and return its re-encrypted token.
+
+    Returns the re-encrypted token when *stored* is ciphertext readable under
+    the new key (or under the rotation window's old key), or ``None`` when it
+    is legacy plaintext — the data migration's job, so rotation SKIPS it. A
+    value the probe cannot decrypt that is nonetheless a structurally complete
+    Fernet token is broken ciphertext: it fails LOUD (:class:`InvalidToken`)
+    rather than being silently left behind.
+    """
+    if is_encrypted_secret(stored, new_key, old_key):
+        return re_encrypt_str(stored, new_fernet, old_fernet)
+    if _is_complete_fernet_token(stored):
+        raise InvalidToken(
+            f"trigger {row_id} config key {key}: stored value is a structurally complete "
+            "Fernet token that neither the new nor the old key can decrypt"
+        )
+    return None
+
+
+def _rotated_trigger_secrets(
+    config: dict[str, Any],
+    *,
+    row_id: Any,
+    new_fernet: Fernet,
+    old_fernet: Fernet | None,
+    new_key: str,
+    old_key: str,
+) -> dict[str, str]:
+    """Return ``{config_key: re-encrypted token}`` for every secret that rotates.
+
+    Iterates the CANONICAL shared key set
+    (:data:`modulo.core.secret_patterns.TRIGGER_CONFIG_SECRET_KEYS`) — never a
+    module-local list — so no secret key can drift out of rotation's reach.
+    Non-secret, non-string, empty and legacy-plaintext values are omitted;
+    broken ciphertext propagates :class:`InvalidToken` via
+    :func:`_reencrypt_trigger_secret_or_classify`.
+    """
+    rotated: dict[str, str] = {}
+    for key in TRIGGER_CONFIG_SECRET_KEYS:
+        stored = config.get(key)
+        if not isinstance(stored, str) or not stored:
+            continue
+        # Decryptability probe + fail-loud arm: a value the probe cannot
+        # decrypt is plaintext UNLESS it is a structurally complete Fernet
+        # token — in that case no configured key reads it and the broken
+        # ciphertext must surface (InvalidToken), never be skipped silently.
+        # A gAAAA-prefixed PLAINTEXT (incomplete token shape) is skipped,
+        # never fed to the decryptor.
+        new_ct = _reencrypt_trigger_secret_or_classify(
+            stored,
+            row_id=row_id,
+            key=key,
+            new_fernet=new_fernet,
+            old_fernet=old_fernet,
+            new_key=new_key,
+            old_key=old_key,
+        )
+        if new_ct is not None:
+            rotated[key] = new_ct
+    return rotated
+
+
 async def _rotate_triggers(
     session: AsyncSession,
     new_fernet: Fernet,
@@ -160,43 +232,32 @@ async def _rotate_triggers(
     rows = (await session.execute(text("SELECT id, config_json FROM triggers"))).all()
     count = 0
     for row in rows:
-        config: dict[str, Any] = row.config_json
-        rotated: dict[str, str] = {}
-        for key in TRIGGER_CONFIG_SECRET_KEYS:
-            stored = config.get(key)
-            if not isinstance(stored, str) or not stored:
-                continue
-            # Decryptability probe + fail-loud arm: a value the probe cannot
-            # decrypt is plaintext UNLESS it is a structurally complete
-            # Fernet token — in that case no configured key reads it and the
-            # broken ciphertext must surface (InvalidToken), never be skipped
-            # silently. A gAAAA-prefixed PLAINTEXT (incomplete token shape)
-            # is skipped, never fed to the decryptor.
-            if not is_encrypted_secret(stored, new_key, old_key):
-                if _is_complete_fernet_token(stored):
-                    raise InvalidToken(
-                        f"trigger {row.id} config key {key}: stored value is a structurally complete "
-                        "Fernet token that neither the new nor the old key can decrypt"
-                    )
-                continue
-            rotated[key] = re_encrypt_str(stored, new_fernet, old_fernet)
-        if rotated:
-            for key, new_ct in rotated.items():
-                # CAST(:ct AS text), NOT :ct::text — SQLAlchemy's bind-param
-                # regex skips a ":name" immediately followed by "::" (it reads
-                # the pair as a cast), leaving ":ct" literal in the SQL and
-                # failing on real Postgres with "syntax error at or near ':'"
-                # (caught by the integration test; the unit-tier SQL-text
-                # assertion cannot see it).
-                await session.execute(
-                    text(
-                        "UPDATE triggers SET config_json = "
-                        "jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(CAST(:ct AS text))) "
-                        "WHERE id = :id"
-                    ),
-                    {"key": key, "ct": new_ct, "id": row.id},
-                )
-            count += 1
+        rotated = _rotated_trigger_secrets(
+            row.config_json,
+            row_id=row.id,
+            new_fernet=new_fernet,
+            old_fernet=old_fernet,
+            new_key=new_key,
+            old_key=old_key,
+        )
+        if not rotated:
+            continue
+        for key, new_ct in rotated.items():
+            # CAST(:ct AS text), NOT :ct::text — SQLAlchemy's bind-param
+            # regex skips a ":name" immediately followed by "::" (it reads
+            # the pair as a cast), leaving ":ct" literal in the SQL and
+            # failing on real Postgres with "syntax error at or near ':'"
+            # (caught by the integration test; the unit-tier SQL-text
+            # assertion cannot see it).
+            await session.execute(
+                text(
+                    "UPDATE triggers SET config_json = "
+                    "jsonb_set(config_json, ARRAY[:key]::text[], to_jsonb(CAST(:ct AS text))) "
+                    "WHERE id = :id"
+                ),
+                {"key": key, "ct": new_ct, "id": row.id},
+            )
+        count += 1
     return count
 
 
