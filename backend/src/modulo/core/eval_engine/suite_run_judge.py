@@ -30,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.eval_engine import EvalDefinition, LLMJudgeCallable
-from modulo.core.model_backend_hub import ModelBackendHub
+from modulo.core.model_backend_hub import BackendNotFoundError, ModelBackendHub
 from modulo.db.models.model_backend import ModelBackend
 
 _log = logging.getLogger(__name__)
@@ -99,8 +99,9 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
     (``{"passed": False, "score": 0.0, "detail": ...}``) with a clear
     configuration message. A MALFORMED id is delegated to
     :func:`~modulo.core.pipeline_engine.llm_judge.build_llm_judge_callable`,
-    which already fails closed with its own malformed-id detail - so the
-    behaviour is identical to the in-pipeline judge path. Neither raises:
+    which already fails closed with its own malformed-id detail. An ABSENT id (a
+    VALID UUID that the hub does not know - deleted, deactivated, or another
+    org's backend) is caught here and fails THAT eval closed too. None raises:
     raising out of the per-case loop would abort every sibling eval and
     terminalise the whole run, when the intended contract is a single failed
     eval with the rest still running.
@@ -126,6 +127,25 @@ def build_suite_run_llm_judge_callable(hub: ModelBackendHub) -> LLMJudgeCallable
         if judge is None:
             judge = build_llm_judge_callable(hub, key)
             cache[key] = judge
-        return judge(output, eval_def)
+        try:
+            return judge(output, eval_def)
+        except BackendNotFoundError:
+            # A VALID-UUID id that the hub does not hold (deleted, deactivated,
+            # or another org's backend) makes ``hub.get`` raise. Letting it
+            # escape would be caught by the runner's per-eval guard, which
+            # EXCLUDES the case (run -> partial) rather than failing it - the
+            # inconsistent behaviour the missing/malformed paths above avoid.
+            # Fail THIS eval closed, exactly as they do, so the case fails and
+            # its siblings still run.
+            detail = (
+                f"llm_judge eval's model_backend_id {key!r} is not an active model "
+                "backend for this organisation; set the eval definition's "
+                "config['model_backend_id'] to an active model backend id"
+            )
+            _log.error(
+                "suite_run_judge.unknown_model_backend_id",
+                extra={"eval_id": str(eval_def.id), "detail": detail},
+            )
+            return {"passed": False, "score": 0.0, "detail": detail}
 
     return _judge

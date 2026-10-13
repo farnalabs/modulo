@@ -1058,13 +1058,14 @@ async def execute_suite_run(ctx: dict[str, Any], *, suite_run_id: str, org_id: s
                 await session.flush()
             finally:
                 if suite_judge_hub is not None:
-                    try:
-                        await suite_judge_hub.__aexit__(None, None, None)
-                    except Exception:
-                        _log.exception(
-                            "SAQ execute_suite_run: judge hub teardown failed for suite_run %s",
-                            rid,
-                        )
+                    # Reuse the executor's cancellation-shielded teardown
+                    # (``_teardown_hub``): a cancellation arriving mid-cleanup
+                    # must not abort the hub's ``__aexit__`` (``asyncio.shield``
+                    # keeps it running to completion), and a teardown failure is
+                    # logged there without ever masking the run result.
+                    from modulo.core.pipeline_engine.executor import _teardown_hub
+
+                    await _teardown_hub(suite_judge_hub)
         _log.info(
             "saq.execute_suite_run.done",
             extra={"suite_run_id": str(rid), "state": stats.get("state"), "org": str(oid)},

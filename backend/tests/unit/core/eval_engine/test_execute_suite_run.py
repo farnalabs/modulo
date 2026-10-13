@@ -21,6 +21,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from modulo.core.eval_engine.execute_suite_run import (
@@ -261,11 +262,7 @@ async def test_execute_suite_run_runs_llm_judge_when_callable_provided(session) 
     assert stats["passed_cases"] == 1
     assert calls == [llm_def.id]
 
-    rows = list(
-        (
-            await session.execute(__import__("sqlalchemy").select(EvalResult).where(EvalResult.suite_run_id == run.id))
-        ).scalars()
-    )
+    rows = list((await session.execute(select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
     # One result per suite definition (the seeded regex def + the judge def).
     assert len(rows) == 2
     judge_rows = [r for r in rows if r.eval_id == llm_def.id]

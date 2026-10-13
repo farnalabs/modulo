@@ -288,6 +288,25 @@ def test_judge_callable_malformed_backend_id_fails_closed() -> None:
     assert "malformed" in result["detail"]
 
 
+def test_judge_callable_absent_backend_id_fails_closed() -> None:
+    """A valid UUID the hub does not hold fails THAT eval closed, not the case.
+
+    A deleted/deactivated/cross-org backend is absent from the hub, so
+    ``hub.get`` raises ``BackendNotFoundError``. Letting it escape would be
+    caught by the runner's per-eval guard, which EXCLUDES the case (run ->
+    partial) - inconsistent with the missing/malformed paths, which fail the
+    eval closed. Pin the fail-closed behaviour.
+    """
+    hub = ModelBackendHub()
+    judge = build_suite_run_llm_judge_callable(hub)
+
+    result = judge({"output": "x"}, _judge_def(uuid.uuid4(), str(uuid.uuid4())))
+
+    assert result["passed"] is False
+    assert result["score"] == 0.0
+    assert "model_backend_id" in result["detail"]
+
+
 def test_judge_callable_dispatches_each_definition_to_its_own_backend() -> None:
     org = uuid.uuid4()
     id_a = uuid.uuid4()
