@@ -841,6 +841,86 @@ async def test_revoke_run_api_key_sweep_org_self_selection_works_with_autobegin_
     assert "organisations" in str(session.executed[0][0])
 
 
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_counts_a_seal_failure_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fail-closed seal stop on ONE run is counted in ``errors`` and the sweep
+    continues to the next run rather than abandoning the org's leak set."""
+    org_id = uuid.uuid4()
+    failing_run = uuid.uuid4()
+    healthy_run = uuid.uuid4()
+    session = _SweepSession([_sweep_keys_result([(uuid.uuid4(), failing_run), (uuid.uuid4(), healthy_run)])])
+    session_factory = MagicMock(return_value=session)
+
+    async def _seal(*, run_id: uuid.UUID, org_id: uuid.UUID, session_factory: Any) -> Any:
+        if run_id == failing_run:
+            raise RuntimeError("revoke unconfirmed")
+        return MagicMock(keys_revoked=2, workspaces_destroyed=1)
+
+    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", _seal)
+
+    result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
+
+    assert result == {"scanned": 2, "revoked": 2, "errors": 1}
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_propagates_a_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation from the seal is a control-flow signal — the sweep
+    re-raises it rather than swallowing it into ``errors``."""
+    import asyncio
+
+    org_id = uuid.uuid4()
+    session = _SweepSession([_sweep_keys_result([(uuid.uuid4(), uuid.uuid4())])])
+    session_factory = MagicMock(return_value=session)
+
+    async def _seal(*, run_id: uuid.UUID, org_id: uuid.UUID, session_factory: Any) -> Any:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", _seal)
+
+    with pytest.raises(asyncio.CancelledError):
+        await revoke_run_api_key_sweep(session_factory, org_ids=[org_id])
+
+
+class _FakeClock:
+    """A monotonic clock that returns a canned sequence (then holds its last value)."""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = values
+
+    def monotonic(self) -> float:
+        return self._values.pop(0) if len(self._values) > 1 else self._values[0]
+
+
+@pytest.mark.asyncio
+async def test_revoke_run_api_key_sweep_stops_at_the_budget_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-run deadline check stops the sweep mid-org once the wall-clock
+    budget is spent — the next run is never scanned let alone sealed.
+
+    The clock is scripted so the per-org check (call 2) is still inside budget
+    while the per-run check (call 3) is past it, exercising the inner break
+    specifically rather than the pre-existing outer one.
+    """
+    org_id = uuid.uuid4()
+    session = _SweepSession([_sweep_keys_result([(uuid.uuid4(), uuid.uuid4())])])
+    session_factory = MagicMock(return_value=session)
+    seal = AsyncMock(return_value=MagicMock(keys_revoked=1, workspaces_destroyed=0))
+    monkeypatch.setattr("modulo.core.run_teardown.seal_run_teardown", seal)
+    # start (deadline) -> 10.0, per-org check -> 10.0, per-run check -> 100.0.
+    monkeypatch.setattr("modulo.auth.api_key.time", _FakeClock([10.0, 10.0, 100.0]))
+
+    result = await revoke_run_api_key_sweep(session_factory, org_ids=[org_id], budget_seconds=30.0)
+
+    assert result == {"scanned": 0, "revoked": 0, "errors": 0}
+    seal.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # revoke_api_key
 # ---------------------------------------------------------------------------

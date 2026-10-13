@@ -9,6 +9,7 @@ destroy leg), the best-effort destroy leg, and the single-fact contract.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock
@@ -214,3 +215,60 @@ async def test_seal_result_survives_a_fact_write_failure(
     assert result.credentials_revoked is True
     assert result.workspaces_destroyed == 1
     assert result.sealed is True
+
+
+@pytest.mark.asyncio
+async def test_seal_propagates_a_cancellation_from_the_revoke_leg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation is a control-flow signal — never folded into ``sealed``."""
+
+    async def _revoke(**_kwargs: Any) -> int:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(run_teardown, "_revoke_credentials", _revoke)
+
+    with pytest.raises(asyncio.CancelledError):
+        await seal_run_teardown(run_id=uuid.uuid4(), org_id=uuid.uuid4(), session_factory=_session_factory)
+
+
+@pytest.mark.asyncio
+async def test_seal_propagates_a_cancellation_from_the_destroy_leg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation during the destroy leg is re-raised, not recorded as a
+    best-effort destroy failure."""
+
+    async def _revoke(**_kwargs: Any) -> int:
+        return 1
+
+    async def _destroy(_run_id: uuid.UUID) -> dict[str, int]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(run_teardown, "_revoke_credentials", _revoke)
+    monkeypatch.setattr(run_teardown, "_destroy_run_workspaces", _destroy)
+
+    with pytest.raises(asyncio.CancelledError):
+        await seal_run_teardown(run_id=uuid.uuid4(), org_id=uuid.uuid4(), session_factory=_session_factory)
+
+
+@pytest.mark.asyncio
+async def test_seal_propagates_a_cancellation_from_the_fact_write(
+    monkeypatch: pytest.MonkeyPatch,
+    seal_fact: AsyncMock,
+) -> None:
+    """A cancellation during the ledger append is re-raised (the fact write is
+    best-effort only for real failures, not for cancellation)."""
+
+    async def _revoke(**_kwargs: Any) -> int:
+        return 1
+
+    async def _destroy(_run_id: uuid.UUID) -> dict[str, int]:
+        return {"scanned": 0, "destroyed": 0, "errors": 0}
+
+    monkeypatch.setattr(run_teardown, "_revoke_credentials", _revoke)
+    monkeypatch.setattr(run_teardown, "_destroy_run_workspaces", _destroy)
+    seal_fact.side_effect = asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await seal_run_teardown(run_id=uuid.uuid4(), org_id=uuid.uuid4(), session_factory=_session_factory)

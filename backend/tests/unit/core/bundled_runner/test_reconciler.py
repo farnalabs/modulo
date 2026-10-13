@@ -1256,3 +1256,40 @@ async def test_destroy_workspaces_for_run_closes_every_source(
     assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
     source.close.assert_awaited_once()
     e2b_source.close.assert_awaited_once()
+
+
+async def test_destroy_workspaces_for_run_sweeps_every_applicable_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The run-scoped destroy is provider-neutral: an applicable Kubernetes tier
+    is built and swept alongside Docker — never a Docker-only path."""
+    docker_source = _fake_source([])
+    k8s_source = _fake_source([_container("target-run", 1.0, "pod-1")])
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: docker_source)
+    monkeypatch.setattr(runner_reconciler, "_KubernetesWorkspaceSource", lambda: k8s_source)
+    monkeypatch.setattr(runner_reconciler, "kubernetes_endpoint_skip_reason", AsyncMock(return_value=None))
+    monkeypatch.setattr(runner_reconciler, "e2b_endpoint_skip_reason", AsyncMock(return_value="e2b-off"))
+
+    result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
+    k8s_source.destroy_by_container_id.assert_has_awaits([(("pod-1",), {})])
+    k8s_source.close.assert_awaited_once()
+
+
+async def test_destroy_workspaces_for_run_logs_a_source_close_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A close() failure on a tier is logged best-effort and never masks the
+    counts already achieved (parity with the orphan sweep's teardown)."""
+    source = _fake_source([_container("target-run", 1.0, "c-1")])
+    source.close = AsyncMock(side_effect=RuntimeError("close boom"))
+    monkeypatch.setattr(runner_reconciler, "_DockerWorkspaceSource", lambda host: source)
+    _docker_only(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        result = await destroy_workspaces_for_run("target-run")
+
+    assert result == {"scanned": 1, "destroyed": 1, "errors": 0}
+    assert "runner.teardown.source_close_failed" in caplog.text

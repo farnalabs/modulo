@@ -138,6 +138,90 @@ async def _write_seal_fact(
         )
 
 
+async def _revoke_leg(
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    session_factory: Callable[..., Any],
+) -> tuple[int, str | None]:
+    """Run the fail-closed credential-revoke leg. Returns ``(keys_revoked, error)``.
+
+    ``error`` is ``None`` on success. A revoke failure is logged and returned
+    (never raised) so the caller records ``sealed=False``; a cancellation is a
+    control-flow signal and is re-raised untouched.
+    """
+    try:
+        keys_revoked = await _revoke_credentials(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=session_factory,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception(
+            "run_teardown.credential_revoke_failed",
+            extra={"run_id": str(run_id), "org_id": str(org_id)},
+        )
+        return 0, f"credential_revoke_failed: {exc}"
+    return keys_revoked, None
+
+
+async def _destroy_leg(
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+) -> tuple[int, int, str | None]:
+    """Run the best-effort workspace-destroy leg. Returns ``(scanned, destroyed, error)``.
+
+    A destroy failure is logged and returned (never raised): destroy is
+    best-effort by design; the compensating sweep / orphan reconciler retries it.
+    """
+    try:
+        outcome = await asyncio.wait_for(
+            _destroy_run_workspaces(run_id),
+            timeout=_DESTROY_LEG_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log.exception(
+            "run_teardown.workspace_destroy_failed",
+            extra={"run_id": str(run_id), "org_id": str(org_id)},
+        )
+        return 0, 0, f"workspace_destroy_failed: {exc}"
+    return int(outcome.get("scanned", 0)), int(outcome.get("destroyed", 0)), None
+
+
+async def _best_effort_write_seal_fact(
+    session_factory: Callable[..., Any],
+    *,
+    run_id: uuid.UUID,
+    org_id: uuid.UUID,
+    payload: dict[str, Any],
+) -> None:
+    """Append the seal fact; a ledger failure is logged, never fatal.
+
+    The fact is the durable evidence of BOTH legs — written even when the
+    revoke failed (``sealed=False``), so a fail-closed stop is never silent.
+    A ledger write failure on an already-completed teardown must not re-run it.
+    """
+    try:
+        await _write_seal_fact(
+            session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            payload=payload,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        _log.exception(
+            "run_teardown.seal_fact_write_failed",
+            extra={"run_id": str(run_id), "org_id": str(org_id)},
+        )
+
+
 async def seal_run_teardown(
     *,
     run_id: uuid.UUID,
@@ -158,42 +242,26 @@ async def seal_run_teardown(
     if session_factory is None:
         error = "no_session_factory: cannot revoke run credentials"
     else:
-        try:
-            keys_revoked = await _revoke_credentials(
-                run_id=run_id,
-                org_id=org_id,
-                session_factory=session_factory,
-            )
-            credentials_revoked = True
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            error = _append_error(error, f"credential_revoke_failed: {exc}")
-            _log.exception(
-                "run_teardown.credential_revoke_failed",
-                extra={"run_id": str(run_id), "org_id": str(org_id)},
-            )
+        keys_revoked, revoke_error = await _revoke_leg(
+            run_id=run_id,
+            org_id=org_id,
+            session_factory=session_factory,
+        )
+        credentials_revoked = revoke_error is None
+        if revoke_error is not None:
+            error = _append_error(error, revoke_error)
 
     workspaces_scanned = 0
     workspaces_destroyed = 0
     # Fail closed: a workspace destroy is NEVER attempted while the credential is
     # still live — the credential outliving the run is the security failure.
     if credentials_revoked:
-        try:
-            outcome = await asyncio.wait_for(
-                _destroy_run_workspaces(run_id),
-                timeout=_DESTROY_LEG_TIMEOUT_SECONDS,
-            )
-            workspaces_scanned = int(outcome.get("scanned", 0))
-            workspaces_destroyed = int(outcome.get("destroyed", 0))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            error = _append_error(error, f"workspace_destroy_failed: {exc}")
-            _log.exception(
-                "run_teardown.workspace_destroy_failed",
-                extra={"run_id": str(run_id), "org_id": str(org_id)},
-            )
+        workspaces_scanned, workspaces_destroyed, destroy_error = await _destroy_leg(
+            run_id=run_id,
+            org_id=org_id,
+        )
+        if destroy_error is not None:
+            error = _append_error(error, destroy_error)
 
     sealed = credentials_revoked and error is None
     result = TeardownSealResult(
@@ -206,31 +274,21 @@ async def seal_run_teardown(
         error=error,
     )
 
-    # The fact is the durable evidence of BOTH legs — written even when the
-    # revoke failed (sealed=False), so a fail-closed stop is never silent.
     if session_factory is not None:
-        try:
-            await _write_seal_fact(
-                session_factory,
-                run_id=run_id,
-                org_id=org_id,
-                payload={
-                    "run_id": str(run_id),
-                    "credentials_revoked": credentials_revoked,
-                    "keys_revoked": keys_revoked,
-                    "workspaces_scanned": workspaces_scanned,
-                    "workspaces_destroyed": workspaces_destroyed,
-                    "sealed": sealed,
-                    "error": error,
-                },
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _log.exception(
-                "run_teardown.seal_fact_write_failed",
-                extra={"run_id": str(run_id), "org_id": str(org_id)},
-            )
+        await _best_effort_write_seal_fact(
+            session_factory,
+            run_id=run_id,
+            org_id=org_id,
+            payload={
+                "run_id": str(run_id),
+                "credentials_revoked": credentials_revoked,
+                "keys_revoked": keys_revoked,
+                "workspaces_scanned": workspaces_scanned,
+                "workspaces_destroyed": workspaces_destroyed,
+                "sealed": sealed,
+                "error": error,
+            },
+        )
 
     if not credentials_revoked:
         raise RunTeardownSealError(
