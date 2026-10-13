@@ -181,6 +181,34 @@ def test_tail_excerpt_is_bounded() -> None:
     assert len(entries[0].excerpt) == LOG_TAIL_EXCERPT_CHARS
 
 
+def test_non_mapping_marker_is_skipped() -> None:
+    """A malformed marker value (not a mapping) carries no log content."""
+    markers: dict[str, Any] = {f"run:{_RUN_ID}:node:{_NODE_ID}:1": "not-a-mapping"}
+    entries = correlate_run_logs(markers=markers)
+    assert not entries
+
+
+def test_non_mapping_telemetry_node_is_skipped() -> None:
+    """A malformed telemetry value (not a mapping) carries no log content."""
+    telemetry: dict[str, Any] = {_NODE_ID: "not-a-mapping"}
+    entries = correlate_run_logs(telemetry=telemetry)
+    assert not entries
+
+
+def test_telemetry_without_content_is_skipped() -> None:
+    """A node neither reported/witnessed nor carrying a tail yields no entry."""
+    telemetry = {_NODE_ID: {"status": "running"}}
+    entries = correlate_run_logs(telemetry=telemetry)
+    assert not entries
+
+
+def test_non_mapping_event_is_skipped() -> None:
+    """A malformed structured event (not a mapping) carries no log content."""
+    events: list[Any] = ["not-a-mapping"]
+    entries = correlate_run_logs(events=events)
+    assert not entries
+
+
 # ---------------------------------------------------------------------------
 # Route
 # ---------------------------------------------------------------------------

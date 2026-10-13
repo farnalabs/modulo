@@ -2545,12 +2545,9 @@ async def get_run_logs(
     run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
     tail); no raw payload is added.
     """
-    try:
-        async with session.begin():
-            await set_rls_org(session, principal.organisation_id)
-            entries = await _do_get_run_logs(session, principal, run_id)
-    except HTTPException:
-        raise
+    async with session.begin():
+        await set_rls_org(session, principal.organisation_id)
+        entries = await _do_get_run_logs(session, principal, run_id)
     return RunLogsResponse(
         run_id=run_id,
         entries=[
