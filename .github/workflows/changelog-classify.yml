@@ -51,8 +51,12 @@
 #     single synthetic check run ("changelog-classified") keyed on the head
 #     SHA — never POSTed as a new row per run. The step claims the slot early
 #     (POSTs an in_progress row when none exists, so a near-simultaneous
-#     duplicate converges on the same row) and completes it at the end
-#     (PATCH every row with that name on the SHA to the computed conclusion).
+#     duplicate converges on the same row) and completes it at the end by
+#     RE-LISTING every row with that name on the SHA and PATCHing each one
+#     to the computed conclusion — the re-list is taken at publish time (not
+#     at claim time), so even a true-simultaneity double-POST (two runs that
+#     both saw an empty claim-time list) converges within the same run
+#     rather than waiting for a later same-SHA event.
 #   * Last-writer-wins is a FEATURE: a later run that sees the changelog:*
 #     label overwrites an earlier failure with success on the SAME row, so a
 #     superseded verdict can no longer block a PR (the #1285 false-red class
@@ -236,9 +240,12 @@ jobs:
       # own check run is NOT the gate verdict: this step exits 0 even when the
       # gate fails, so a duplicate run cannot pile up a second red job check
       # run, and a later run's success PATCHES OVER an earlier failure on the
-      # same row (last-writer-wins self-healing). A failure to create or
-      # complete the verdict row fails the JOB (fail-closed) — a gate that
-      # cannot publish its verdict never passes silently.
+      # same row (last-writer-wins self-healing). The verdict is published by
+      # re-listing every "changelog-classified" row on the SHA at publish
+      # time and PATCHing each one, so a double-POST race converges within
+      # the same run. A failure to create or complete the verdict row fails
+      # the JOB (fail-closed) — a gate that cannot publish its verdict never
+      # passes silently.
       - name: Require a changelog:* label on user-facing changes
         id: changelog-gate
         shell: bash
@@ -311,9 +318,6 @@ jobs:
               exit 1
             fi
             CREATED_IDS="$NEW_ID"
-            VERDICT_IDS="$NEW_ID"
-          else
-            VERDICT_IDS="$EXISTING_IDS"
           fi
 
           # Resolve the diff base the same way ci.yml's integration-changed
@@ -385,12 +389,37 @@ jobs:
             fi
           fi
 
-          # FAR-1738: publish the verdict by UPSERT — PATCH every
-          # "changelog-classified" row on the head SHA (there is normally
-          # exactly one; a rare true-simultaneity double-POST converges on
-          # subsequent runs). Last-writer-wins means a later run that sees a
-          # freshly-applied changelog:* label overwrites an earlier failure
-          # on the same row — a superseded verdict can no longer block a PR.
+          # FAR-1738: publish the verdict by UPSERT — RE-LIST every
+          # "changelog-classified" row on the head SHA at publish time and
+          # PATCH each one to the computed conclusion. Re-listing here (not
+          # reusing the claim-time EXISTING_IDS) closes the double-POST
+          # race: two near-simultaneous runs that both saw an empty
+          # claim-time list each POST their own row, so each run's
+          # claim-time view holds only its own id — the publish-time
+          # re-list sees BOTH rows and converges them to the same verdict
+          # within the same run. Without it, diverging rows sit on the SHA
+          # until a later same-SHA event reconciles them, and if no event
+          # comes one red row can block the PR. Last-writer-wins still
+          # holds across runs: a later run that sees a freshly-applied
+          # changelog:* label overwrites an earlier failure — a superseded
+          # verdict can no longer block a PR.
+          rc=0
+          VERDICT_IDS="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100&filter=all&check_name=${CHECK_NAME}" \
+            --jq '.check_runs[] | select(.name == "'"${CHECK_NAME}"'") | .id')" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::changelog-gate: could not re-list '${CHECK_NAME}' check runs on ${HEAD_SHA} at publish time (rc=${rc}); failing closed."
+            exit 1
+          fi
+          # Belt-and-braces: a row this run just POSTed must never be
+          # dropped by a stale re-list response; union it back in.
+          if [ -n "${CREATED_IDS:-}" ]; then
+            VERDICT_IDS="$(printf '%s\n%s\n' "$VERDICT_IDS" "$CREATED_IDS" | sort -u)"
+          fi
+          if [ -z "$VERDICT_IDS" ]; then
+            echo "::error::changelog-gate: no '${CHECK_NAME}' check run found on ${HEAD_SHA} to publish the verdict onto; failing closed."
+            exit 1
+          fi
           BODY=$(jq -n \
             --arg conclusion "$VERDICT" \
             --arg title "$TITLE" \
