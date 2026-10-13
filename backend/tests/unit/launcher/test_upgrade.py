@@ -373,114 +373,19 @@ def test_dumped_snapshot_restores_end_to_end(tmp_path: Path, monkeypatch: pytest
 
 # ---------------------------------------------------------------------------
 # FAR-675 - the full `modulo upgrade` flow walkthrough tests.
-# Every helper uses function-local imports (no mid-file module-level imports).
+# Shared helpers (release fixture, fetch/dump seams, seeds) live in
+# test_launcher_shared and are imported below; boot seams stay local.
 # ---------------------------------------------------------------------------
 
 from modulo.launcher import upgrade as upgrade_module  # noqa: E402 (appended flow tests)
-
-_UPGRADE_SIGNING_KEY_HEX = "101acdeda0cd35fdb51f4dae6eff9838b2d07c97641e41a09deb72a2a1a2254d"
-
-
-def _upgrade_release_fixture(staging, target_version="1.2.0"):
-    """A staged target release: tarball + SIGNED manifest + the dev-key .sig."""
-    import hashlib
-    import json as json_module
-    import tarfile as tarfile_module
-    from types import SimpleNamespace
-
-    from modulo.launcher import manifest as manifest_module
-
-    bundle_root = staging / f"modulo-{target_version}-linux-amd64"
-    (bundle_root / "backend" / "src" / "modulo" / "db" / "migrations").mkdir(parents=True)
-    (bundle_root / "VERSION").write_text(f"bundle-v{target_version}\n", encoding="utf-8")
-    (bundle_root / "launcher").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    for extra in ("pg/bin/postgres", "redis/redis-server"):
-        extra_path = bundle_root / extra
-        extra_path.parent.mkdir(parents=True, exist_ok=True)
-        extra_path.write_bytes(b"bundled binary bytes\n")
-    artifact_names = ("launcher", "VERSION", "pg/bin/postgres", "redis/redis-server")
-    (bundle_root / "SHA256SUMS").write_text("", encoding="utf-8")
-    digests = {
-        artifact: hashlib.sha256((bundle_root / artifact).read_bytes()).hexdigest() for artifact in artifact_names
-    }
-    sums_payload = "".join(f"{digest}  {artifact}\n" for artifact, digest in digests.items())
-    (bundle_root / "SHA256SUMS").write_text(sums_payload, encoding="utf-8")
-    tarball_path = staging / f"modulo-{target_version}-linux-amd64.tar.gz"
-    with tarfile_module.open(tarball_path, "w:gz") as archive:
-        archive.add(str(bundle_root), arcname=bundle_root.name)
-    manifest_body = {
-        "manifest_version": 1,
-        "release": f"bundle-v{target_version}",
-        "platform": "linux-amd64",
-        "generated_at": "2026-09-10T00:00:00Z",
-        "components": {"postgres": "16.10.1", "redis": "8.4.0", "python": "3.12.11"},
-        "artifacts": [
-            {
-                "name": tarball_path.name,
-                "sha256": hashlib.sha256(tarball_path.read_bytes()).hexdigest(),
-                "version": target_version,
-            },
-            {
-                "name": "pg/bin/postgres",
-                "sha256": digests["pg/bin/postgres"],
-                "version": "16.10.1",
-            },
-            {
-                "name": "redis/redis-server",
-                "sha256": digests["redis/redis-server"],
-                "version": "8.4.0",
-            },
-        ],
-    }
-    manifest_payload = json_module.dumps(manifest_body, indent=2, sort_keys=True).encode("utf-8")
-    manifest_path = staging / "RELEASE_MANIFEST.json"
-    manifest_path.write_bytes(manifest_payload)
-    signature = manifest_module.sign_release_bytes(
-        manifest_payload, key_id=manifest_module._KEY_ID_CURRENT, private_key_hex=_UPGRADE_SIGNING_KEY_HEX
-    )
-    signature_path = staging / (manifest_module.MANIFEST_NAME + manifest_module.SIGNATURE_SUFFIX)
-    signature_path.write_text(json.dumps(signature), encoding="utf-8")
-    return SimpleNamespace(tarball=tarball_path, manifest=manifest_path, signature=signature_path)
-
-
-def _upgrade_fetch_seam(release_fixture):
-    """The flow's fetch seam (the staged release copies to the download paths)."""
-    import shutil
-
-    def _fetch(url, target):
-        mapping = {
-            release_fixture.tarball.name: release_fixture.tarball,
-            release_fixture.manifest.name: release_fixture.manifest,
-            "RELEASE_MANIFEST.json.sig": release_fixture.signature,
-        }
-        shutil.copyfile(mapping[url.rsplit("/", 1)[-1]], target)
-
-    return _fetch
-
-
-def _upgrade_dump_seam(data_dir, *, recorded_heads=None):
-    """The ENFORCED pre-upgrade dump seam (a verified, non-empty snapshot)."""
-    import json as json_module
-
-    from modulo.launcher.upgrade import PreUpgradeSnapshot
-
-    def _dump(data_dir, *, bin_dir=None):
-        snapshot_dir = data_dir / "pre-upgrade-dump-fake-1"
-        snapshot_dir.mkdir()
-        (snapshot_dir / "database.sql").write_bytes(b"-- the enforced dump\n")
-        (snapshot_dir / "manifest.json").write_text(json_module.dumps({"dump_bytes": 19}), encoding="utf-8")
-        (snapshot_dir / "backup-info.json").write_text(
-            json_module.dumps({"schema_versions": recorded_heads or ["3ab2c1d"], "dump_bytes": 19}),
-            encoding="utf-8",
-        )
-        return PreUpgradeSnapshot(
-            directory=snapshot_dir,
-            dump_path=snapshot_dir / "database.sql",
-            bytes=19,
-            created_at="fake-dump-epoch",
-        )
-
-    return _dump
+from tests.unit.launcher.test_launcher_shared import (  # noqa: E402 (appended flow tests)
+    _UPGRADE_SIGNING_KEY_HEX,
+    _upgrade_dump_seam,
+    _upgrade_fetch_seam,
+    _upgrade_release_fixture,
+    _upgrade_seed_data_dir,
+    _upgrade_seed_install_root,
+)
 
 
 def _upgrade_boot_seam(record):
@@ -516,42 +421,6 @@ def _upgrade_restore_head(text):
                 if subsequent.strip():
                     return subsequent.strip()
     raise ValueError("no restore command found in refusal text")
-
-
-def _upgrade_seed_install_root(install_root, previous_version="1.1.0"):
-    """An existing install: versions/<previous> + a resolvable `current` link."""
-    previous_dir = install_root / "versions" / previous_version
-    (previous_dir / "pg" / "bin").mkdir(parents=True)
-    (previous_dir / "launcher").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (install_root / "current").symlink_to(f"versions/{previous_version}")
-
-
-def _upgrade_seed_data_dir(data_dir):
-    """A bootstrapped-shaped data dir (state.json + secrets + pgdata)."""
-    import json as json_module
-
-    from modulo.launcher.state import LauncherState, save_state
-
-    hmac_key = bytes(range(32))
-    data_dir.mkdir()
-    (data_dir / "secrets.json").write_text(
-        json_module.dumps(
-            {
-                "postgres_password": "pw",
-                "redis_password": "rw",
-                "state_hmac_key": hmac_key.hex(),
-            }
-        ),
-        encoding="utf-8",
-    )
-    save_state(
-        LauncherState(postgres_port=15432, redis_port=16379, api_port=18000),
-        data_dir / "state.json",
-        hmac_key,
-    )
-    pgdata = data_dir / "pgdata"
-    pgdata.mkdir()
-    (pgdata / "PG_VERSION").write_text("16\n", encoding="utf-8")
 
 
 @pytest.fixture

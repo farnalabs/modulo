@@ -227,7 +227,7 @@ def _upgrade_dump_seam(data_dir: Path, *, recorded_heads: list[str] | None = Non
 
     from modulo.launcher.upgrade import PreUpgradeSnapshot
 
-    def _dump(_data_dir: Path, *, bin_dir: Any = None) -> PreUpgradeSnapshot:
+    def _dump(data_dir, *, bin_dir=None):
         snapshot_dir = data_dir / "pre-upgrade-dump-fake-1"
         snapshot_dir.mkdir()
         (snapshot_dir / "database.sql").write_bytes(b"-- the enforced dump\n")

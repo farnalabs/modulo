@@ -38,6 +38,7 @@ from modulo.launcher.doctor import (
 )
 from modulo.launcher.secrets_file import LauncherSecrets
 from modulo.launcher.state import LauncherState, save_state
+from tests.unit.launcher.test_launcher_shared import minimal_probes
 
 
 def _state() -> LauncherState:
@@ -311,22 +312,9 @@ def test_state_problem_kind_missing_when_secrets_present_but_state_absent(tmp_pa
 
 
 def _probes_with(**overrides: object) -> DoctorProbes:
-    probes = DoctorProbes(
-        disk_free_bytes=lambda _r: 40 * 1024 * 1024 * 1024,
-        assert_writable=lambda _r: None,
-        listening_on=lambda _p: ["127.0.0.1"],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=lambda: True,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _u: "op",
-        file_owner=lambda _p: "op",
-        launcher_running=lambda: True,
-    )
-    for key, value in overrides.items():
-        setattr(probes, key, value)
-    return probes
+    """Only the ten required probes carry all-pass values — the
+    behavior-identical canonical factory lives in the shared module."""
+    return minimal_probes(**overrides)
 
 
 def test_postgres_role_posture_probe_raising_becomes_failed_check(tmp_path: Path) -> None:
@@ -354,22 +342,15 @@ def test_migrations_probe_raising_becomes_failed_check(tmp_path: Path) -> None:
     def boom() -> bool:
         raise RuntimeError("migration audit down")
 
-    from modulo.launcher.doctor import DoctorProbes
-
-    probes = DoctorProbes(
-        disk_free_bytes=lambda _r: 1,
-        assert_writable=lambda _r: None,
-        listening_on=lambda _p: [],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=boom,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _u: "op",
-        file_owner=lambda _p: "op",
-        launcher_running=lambda: True,
+    result = check_migrations(
+        tmp_path,
+        _state(),
+        minimal_probes(
+            migrations_at_head=boom,
+            disk_free_bytes=lambda _r: 1,
+            listening_on=lambda _p: [],
+        ),
     )
-    result = check_migrations(tmp_path, _state(), probes)
     assert result.ok is False
     assert "migration probe failed" in result.detail
 
