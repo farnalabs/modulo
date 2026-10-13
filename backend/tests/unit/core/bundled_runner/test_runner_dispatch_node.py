@@ -40,6 +40,7 @@ from modulo.core.bundled_runner.runner_dispatch import (
     _source_contains_sentinel,
     _write_file_via_exec,
 )
+from modulo.core.credential_issuer import IssuedRunCredential
 from modulo.core.pipeline_engine.node_runner import (
     SandboxNodeFailedError as _RealSandboxNodeFailedError,
 )
@@ -118,7 +119,9 @@ def _patch_node_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         "_sandbox_acquire_dispatch_marker": AsyncMock(return_value="attempt-key"),
         "_sandbox_clear_dispatch_marker": AsyncMock(),
-        "_sandbox_mint_run_api_key_for_sandbox": AsyncMock(return_value="apikey"),
+        "_sandbox_issue_run_credential_for_sandbox": AsyncMock(
+            return_value=IssuedRunCredential(run_id=uuid.uuid4(), node_id="node-1", secret="apikey")
+        ),
         "_sandbox_resolve_secret_ref": AsyncMock(return_value="secret"),
         "_sandbox_store_dispatch_marker_sandbox": AsyncMock(),
         "_sandbox_store_script_lease": AsyncMock(),
@@ -273,6 +276,32 @@ async def test_run_script_mode_happy_path(patch_node_runner) -> None:
     out = await runner_dispatch.run_bundled_runner_node(_state(), _config(), _route(provider))
     assert out["envelope"] is True
     assert provider.created  # workspace was provisioned
+
+
+async def test_resolve_sandbox_envs_fail_open_when_credential_issuance_returns_none(
+    patch_node_runner, monkeypatch
+) -> None:
+    """FAR-1690 A1: a failed (``None``) issuance leaves the key and provenance absent."""
+    import modulo.core.pipeline_engine.node_runner as nrm
+
+    monkeypatch.setattr(nrm, "_sandbox_issue_run_credential_for_sandbox", AsyncMock(return_value=None))
+    envs, _claimed = await runner_dispatch._resolve_sandbox_envs_with_script_setup(
+        node_def={"node_id": "node-1", "capability_scope": {}},
+        run_id="run-1",
+        pipeline_id="pipe-1",
+        org_id=str(uuid.uuid4()),
+        sandbox_mode="llm",
+        state={},
+        session_factory=lambda: _session_cm(),
+        wallclock_budget_seconds=None,
+        start_time=0.0,
+        attempt_key="attempt-key",
+        sandbox_timeout=60,
+        input_json="{}",
+        provider="runner_docker",
+    )
+    assert "MODULO_API_KEY" not in envs
+    assert "MODULO_CREDENTIAL_PROVENANCE" not in envs
 
 
 async def test_run_llm_mode_happy_path(patch_node_runner) -> None:

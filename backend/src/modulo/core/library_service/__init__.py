@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,7 @@ from modulo.db.crud.library_primitive import (
     list_primitives_by_version_group,
     update_library_primitive,
 )
+from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.rls import set_rls_org, set_rls_user_context
 from modulo.util import sanitise_log_value as _sanitise_log_value
@@ -328,6 +329,7 @@ async def get_primitive_by_slug(
     slug: str,
     *,
     explicit_org_filter: uuid.UUID | None = None,
+    version: str | None = None,
 ) -> LibraryPrimitive | None:
     """Return a primitive visible to org_id by type and slug, or None.
 
@@ -337,6 +339,11 @@ async def get_primitive_by_slug(
     in-code sources are visible to EVERY organisation and carry no DB row in
     the org's RLS slice, so callers must not assume a returned primitive is
     DB-persisted.
+
+    A slug may have MULTIPLE version rows in one organisation (FAR-759
+    collection versioning). When ``version`` is given the lookup is exact;
+    without it the NEWEST visible row wins (deterministic, never raises on
+    multiples).
 
     Supports being called within an existing transaction or starting its own.
 
@@ -355,8 +362,13 @@ async def get_primitive_by_slug(
         )
         if explicit_org_filter is not None:
             stmt = stmt.where(LibraryPrimitive.organisation_id == explicit_org_filter)
+        if version is not None:
+            stmt = stmt.where(LibraryPrimitive.version == version)
+        # Deterministic pick when several versions of the slug coexist:
+        # newest row first (created_at desc), limit 1.
+        stmt = stmt.order_by(LibraryPrimitive.created_at.desc()).limit(1)
         result = await s.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     try:
         item = await _scoped_execute(session, org_id, _lookup)
@@ -376,7 +388,10 @@ async def get_primitive_by_slug(
         raise
     if item is not None:
         return item
-    return _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    builtin = _MODULO_BY_SLUG.get((primitive_type, slug)) or _COMMUNITY_BY_SLUG.get((primitive_type, slug))
+    if builtin is not None and version is not None and builtin.version != version:
+        return None
+    return builtin
 
 
 # ---------------------------------------------------------------------------
@@ -897,20 +912,38 @@ async def list_contribution_versions(
     return sorted(results, key=lambda p: _parse_version_key(p.version), reverse=True)
 
 
-async def _mark_fork_copies(s: AsyncSession, prim: LibraryPrimitive) -> None:
-    """Back-propagate the new version id to every auto-update fork copy."""
+async def _mark_update_recipients(s: AsyncSession, prim: LibraryPrimitive) -> None:
+    """Back-propagate the new version id to every auto-update recipient.
+
+    Two recipient classes (FAR-759): fork copies (``forked_from`` pointing at
+    any version in this version group) and INSTALLED collection rows
+    (``collection_install.collection_id`` referencing a version in the group)
+    — the latter is how an installed collection surfaces "update available".
+    Both are gated on the recipient row's ``auto_update`` flag; the stamp is
+    a notification only, applying it remains an operator-initiated upgrade.
+    """
     group_id = prim.version_group_id
     if group_id is None:
         return
 
-    stmt = select(LibraryPrimitive).where(
+    fork_stmt = select(LibraryPrimitive).where(
         LibraryPrimitive.forked_from.in_(
             select(LibraryPrimitive.id).where(LibraryPrimitive.version_group_id == group_id)
         )
     )
-    result = await s.execute(stmt)
+    installed_stmt = select(LibraryPrimitive).where(
+        LibraryPrimitive.id.in_(select(CollectionInstall.collection_id)),
+        or_(
+            LibraryPrimitive.version_group_id == group_id,
+            LibraryPrimitive.id == group_id,
+        ),
+    )
 
-    for copy in result.scalars():
+    recipients: list[LibraryPrimitive] = []
+    recipients.extend((await s.execute(fork_stmt)).scalars())
+    recipients.extend((await s.execute(installed_stmt)).scalars())
+
+    for copy in recipients:
         if not copy.auto_update:
             continue
         try:
@@ -931,8 +964,9 @@ async def notify_importers_of_update(
     """Mark library entries that forked from this primitive as having an update.
 
     Finds all primitives that were copied (``forked_from``) from any version
-    in the same version group and sets their ``update_available_version_id``
-    to the newly published version.
+    in the same version group, plus installed-collection rows referencing a
+    version in the group, and sets their ``update_available_version_id`` to
+    the newly published version.
     """
     try:
         async with session.begin():
@@ -942,7 +976,7 @@ async def notify_importers_of_update(
             if prim is None:
                 return
 
-            await _mark_fork_copies(session, prim)
+            await _mark_update_recipients(session, prim)
     except ProgrammingError:
         logger.warning("notify_importers_of_update failed (DB not migrated): %s", primitive_id)
     except asyncio.CancelledError:

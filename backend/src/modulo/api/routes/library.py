@@ -29,12 +29,14 @@ from modulo.core.library_service import (
     CommunityPrimitiveReadOnlyError,
     ContributionInvalidTransitionError,
     ContributionNotFoundError,
+    _bump_version,
     contribute_primitive,
     copy_to_adapt,
     get_primitive,
     get_primitive_by_slug,
     list_org_contributions,
     list_primitives,
+    notify_importers_of_update,
     publish_contribution,
 )
 from modulo.core.library_service.grant import (
@@ -62,6 +64,14 @@ from modulo.core.library_service.uninstall import (
     InstallNotFoundError,
     UninstallError,
     uninstall_collection,
+)
+from modulo.core.library_service.upgrade import (
+    CollectionUpgradeError,
+    NoUpdateAvailableError,
+    UpgradeInstallNotFoundError,
+    detect_collection_update,
+    find_newer_version,
+    upgrade_collection,
 )
 from modulo.core.lifecycle_map.import_export import (
     PRIMITIVE_TYPE as LIFECYCLE_MAP_PRIMITIVE_TYPE,
@@ -115,6 +125,7 @@ from modulo.db.crud.rating import (
     submit_rating,
     update_primitive_ratings_aggregate,
 )
+from modulo.db.models.collection_install import CollectionInstall
 from modulo.db.models.library_primitive import LibraryPrimitive
 from modulo.db.models.pipeline_edge import PipelineEdge
 from modulo.db.models.team import Team
@@ -504,6 +515,7 @@ class CollectionResponse(BaseModel):
     slug: str
     description: str | None
     status: str | None
+    version: str | None = None
     manifest_pins: list[dict[str, Any]] | None
     trust_header: dict[str, Any] | None
     created_at: datetime
@@ -590,6 +602,7 @@ def _collection_response(prim: LibraryPrimitive) -> CollectionResponse:
         slug=prim.slug,
         description=prim.description,
         status=prim.status,
+        version=prim.version,
         manifest_pins=prim.manifest_pins,
         trust_header=prim.trust_header,
         created_at=prim.created_at,
@@ -2329,6 +2342,12 @@ async def publish_collection_endpoint(
         raise_session_contract_error(exc, "library.publish_collection_endpoint")
         _log.exception("publish_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
+
+    # FAR-759: back-propagate the published version to installed orgs and fork
+    # copies via the existing update machinery (no-op when the collection has
+    # no version group). Runs OUTSIDE the route transaction — the notifier
+    # opens its own, and fails open with a log.
+    await notify_importers_of_update(session, org_id, prim.id)
     return _collection_response(prim)
 
 
@@ -2353,6 +2372,10 @@ class CollectionInstallResponse(BaseModel):
     connector_checklist: list[dict[str, Any]] | None = None
     installed_entities: list[dict[str, Any]] | None = None
     runnable: bool = False
+    # FAR-759: cheap update-available surfacing (full delta on the
+    # ``.../update`` endpoint).
+    update_available: bool = False
+    available_version: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -2367,6 +2390,108 @@ class CollectionUninstallResponse(BaseModel):
     deleted: list[dict[str, str]]
     detached: list[dict[str, str]]
     blocked: list[dict[str, str]] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Collection version-upgrade / "update available" flow (FAR-759)
+# ---------------------------------------------------------------------------
+
+
+class CollectionUpdateEntity(BaseModel):
+    """One installed entity a delta entry maps to."""
+
+    entity_type: str
+    entity_id: uuid.UUID
+    modified: bool
+
+
+class CollectionDeltaEntry(BaseModel):
+    """Per-pin delta entry, grouped under the entity type it affects."""
+
+    entity_type: str
+    slug: str | None
+    from_version: str | None
+    to_version: str | None
+    change: Literal["added", "changed", "unchanged", "removed"]
+    action: Literal["upgrade", "unchanged", "report", "manual"]
+    entities: list[CollectionUpdateEntity] = Field(default_factory=list)
+
+
+class CollectionUpdateDelta(BaseModel):
+    schemas: list[CollectionDeltaEntry] = Field(default_factory=list)
+    agents: list[CollectionDeltaEntry] = Field(default_factory=list)
+    pipelines: list[CollectionDeltaEntry] = Field(default_factory=list)
+
+
+class CollectionUpdateResponse(BaseModel):
+    update_available: bool
+    current_version: str | None
+    available_version: str | None
+    available_version_id: uuid.UUID | None
+    delta: CollectionUpdateDelta | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CollectionUpgradeReconciledItem(BaseModel):
+    slug: str
+    entity_type: str
+    entity_id: str
+
+
+class CollectionUpgradePreservedItem(BaseModel):
+    slug: str
+    entity_type: str
+    entity_id: str
+    reason: str = "modified"
+
+
+class CollectionUpgradeReportedItem(BaseModel):
+    slug: str
+    change: str
+    entity_type: str
+
+
+class CollectionUpgradeResponse(BaseModel):
+    install_id: str
+    from_version: str | None
+    to_version: str
+    reconciled: list[CollectionUpgradeReconciledItem] = Field(default_factory=list)
+    preserved: list[CollectionUpgradePreservedItem] = Field(default_factory=list)
+    reported: list[CollectionUpgradeReportedItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+async def _update_info(session: AsyncSession, install: CollectionInstall) -> tuple[bool, str | None]:
+    """Cheap update-available check for install responses (no full delta)."""
+    collection = await session.get(LibraryPrimitive, install.collection_id)
+    if collection is None:
+        return False, None
+    newer = await find_newer_version(session, install, collection)
+    if newer is None:
+        return False, None
+    return True, newer.version
+
+
+async def _install_response(session: AsyncSession, install: CollectionInstall) -> CollectionInstallResponse:
+    """Build the standard install response (runnability + update surfacing)."""
+    runnable = await compute_runnable(session, install.install_id)
+    update_available, available_version = await _update_info(session, install)
+    return CollectionInstallResponse(
+        install_id=install.install_id,
+        collection_id=install.collection_id,
+        collection_version=install.collection_version,
+        organisation_id=install.organisation_id,
+        status=install.status,
+        community_sourced=install.community_sourced,
+        agents_granted=install.agents_granted,
+        resolved_manifest=install.resolved_manifest,
+        connector_checklist=install.connector_checklist,
+        installed_entities=install.installed_entities,
+        runnable=runnable,
+        update_available=update_available,
+        available_version=available_version,
+        created_at=install.created_at,
+    )
 
 
 @router.post(
@@ -2453,23 +2578,8 @@ async def install_collection_endpoint(
         _log.exception("library.install_collection_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    # Compute runnability on read
-    runnable = await compute_runnable(session, install.install_id)
-
-    return CollectionInstallResponse(
-        install_id=install.install_id,
-        collection_id=install.collection_id,
-        collection_version=install.collection_version,
-        organisation_id=install.organisation_id,
-        status=install.status,
-        community_sourced=install.community_sourced,
-        agents_granted=install.agents_granted,
-        resolved_manifest=install.resolved_manifest,
-        connector_checklist=install.connector_checklist,
-        installed_entities=install.installed_entities,
-        runnable=runnable,
-        created_at=install.created_at,
-    )
+    # Compute runnability on read + update-available surfacing (FAR-759).
+    return await _install_response(session, install)
 
 
 @router.post(
@@ -2562,25 +2672,7 @@ async def list_collection_installs_endpoint(
         _log.exception("library.list_collection_installs_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    items: list[CollectionInstallResponse] = []
-    for install in installs:
-        runnable = await compute_runnable(session, install.install_id)
-        items.append(
-            CollectionInstallResponse(
-                install_id=install.install_id,
-                collection_id=install.collection_id,
-                collection_version=install.collection_version,
-                organisation_id=install.organisation_id,
-                status=install.status,
-                community_sourced=install.community_sourced,
-                agents_granted=install.agents_granted,
-                resolved_manifest=install.resolved_manifest,
-                connector_checklist=install.connector_checklist,
-                installed_entities=install.installed_entities,
-                runnable=runnable,
-                created_at=install.created_at,
-            )
-        )
+    items: list[CollectionInstallResponse] = [await _install_response(session, install) for install in installs]
 
     return CollectionInstallListResponse(items=items)
 
@@ -2649,22 +2741,7 @@ async def grant_collection_agents_endpoint(
         _log.exception("library.grant_collection_agents_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    runnable = await compute_runnable(session, install.install_id)
-
-    return CollectionInstallResponse(
-        install_id=install.install_id,
-        collection_id=install.collection_id,
-        collection_version=install.collection_version,
-        organisation_id=install.organisation_id,
-        status=install.status,
-        community_sourced=install.community_sourced,
-        agents_granted=install.agents_granted,
-        resolved_manifest=install.resolved_manifest,
-        connector_checklist=install.connector_checklist,
-        installed_entities=install.installed_entities,
-        runnable=runnable,
-        created_at=install.created_at,
-    )
+    return await _install_response(session, install)
 
 
 @router.get(
@@ -2699,19 +2776,245 @@ async def get_collection_install_endpoint(
         _log.exception("library.get_collection_install_endpoint: SQLAlchemyError")
         raise _unavailable_error() from None
 
-    runnable = await compute_runnable(session, install.install_id)
+    return await _install_response(session, install)
 
-    return CollectionInstallResponse(
-        install_id=install.install_id,
-        collection_id=install.collection_id,
-        collection_version=install.collection_version,
-        organisation_id=install.organisation_id,
-        status=install.status,
-        community_sourced=install.community_sourced,
-        agents_granted=install.agents_granted,
-        resolved_manifest=install.resolved_manifest,
-        connector_checklist=install.connector_checklist,
-        installed_entities=install.installed_entities,
-        runnable=runnable,
-        created_at=install.created_at,
+
+# ---------------------------------------------------------------------------
+# Collection version-upgrade endpoints (FAR-759)
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/collections/{primitive_id}/versions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            audited("library_collection_version_created", "library_collection", principal_dep=get_current_tenant_user)
+        )
+    ],
+)
+@handle_db_errors("library.create_collection_version_endpoint")
+async def create_collection_version_endpoint(
+    primitive_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_WRITE),
+) -> CollectionResponse:
+    """Create the next draft version of a published, org-owned collection.
+
+    Copies the manifest pins and links both rows through ``version_group_id``
+    (the library's existing version machinery). The draft must then be
+    published via the existing publish endpoint, which back-propagates
+    ``update_available_version_id`` to installed orgs (FAR-759).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            prim = await get_primitive(session, org_id, primitive_id)
+            if prim is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Primitive {primitive_id} not found",
+                )
+            if prim.primitive_type != "library_collection":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Not a collection primitive",
+                )
+            if prim.organisation_id != org_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Only org-owned collections can be versioned",
+                )
+            if prim.status != "published":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Cannot version a collection with status '{prim.status}'",
+                )
+
+            # One draft sibling at a time — publish it before versioning again.
+            draft_stmt = select(LibraryPrimitive).where(
+                LibraryPrimitive.organisation_id == org_id,
+                LibraryPrimitive.primitive_type == "library_collection",
+                LibraryPrimitive.slug == prim.slug,
+                LibraryPrimitive.status == "draft",
+                LibraryPrimitive.deleted_at.is_(None),
+            )
+            if (await session.execute(draft_stmt)).scalars().first() is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Collection '{prim.slug}' already has a draft version — publish it before creating another",
+                )
+
+            # Seed the version group on the current row when missing, so both
+            # rows link through version_group_id (library version machinery).
+            group_id = prim.version_group_id or prim.id
+            if prim.version_group_id is None:
+                prim.version_group_id = group_id
+
+            new_prim = LibraryPrimitive(
+                organisation_id=org_id,
+                source=prim.source,
+                primitive_type="library_collection",
+                name=prim.name,
+                slug=prim.slug,
+                description=prim.description,
+                author=prim.author,
+                version=_bump_version(prim.version),
+                tags=list(prim.tags) if prim.tags else [],
+                content_json=copy.deepcopy(prim.content_json or {}),
+                source_url=None,
+                forked_from=None,
+                checksum=None,
+                ed25519_signature=None,
+                verified=None,
+                download_count=None,
+                average_rating=None,
+                review_count=None,
+                owner_team_id=prim.owner_team_id,
+                visibility=prim.visibility,
+                account_id=prim.account_id,
+                auto_update=prim.auto_update,
+                tier=prim.tier,
+                status="draft",
+                version_group_id=group_id,
+                manifest_pins=copy.deepcopy(prim.manifest_pins or []),
+            )
+            session.add(new_prim)
+            await session.flush()
+    except HTTPException:
+        raise
+    except IntegrityError:
+        _log.exception("library.create_collection_version_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.create_collection_version_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("create_collection_version_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+    return _collection_response(new_prim)
+
+
+@router.get(
+    "/collections/{primitive_id}/installs/{install_id}/update",
+)
+@handle_db_errors("library.get_collection_update_endpoint")
+async def get_collection_update_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_SEARCH),
+) -> CollectionUpdateResponse:
+    """Surface the update-available state and per-entity delta for an install.
+
+    The delta is grouped per entity type (schemas / agents / pipelines) and
+    classifies every manifest pin as added / changed / unchanged / removed,
+    with the installed entities each pin maps to and whether each entity was
+    operator-modified (preserved on upgrade).
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await detect_collection_update(
+                session,
+                org_id=org_id,
+                install_id=install_id,
+                collection_id=primitive_id,
+            )
+    except UpgradeInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except ProgrammingError:
+        _log.exception("library.get_collection_update_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.get_collection_update_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    delta: CollectionUpdateDelta | None = None
+    if report["delta"] is not None:
+        delta = CollectionUpdateDelta(**report["delta"])
+    return CollectionUpdateResponse(
+        update_available=report["update_available"],
+        current_version=report["current_version"],
+        available_version=report["available_version"],
+        available_version_id=report["available_version_id"],
+        delta=delta,
+        warnings=report["warnings"],
+    )
+
+
+@router.post(
+    "/collections/{primitive_id}/installs/{install_id}/upgrade",
+    status_code=status.HTTP_200_OK,
+    dependencies=[
+        Depends(audited("library_collection_upgraded", "library_collection", principal_dep=get_current_tenant_user))
+    ],
+)
+@handle_db_errors("library.upgrade_collection_endpoint")
+async def upgrade_collection_endpoint(
+    primitive_id: uuid.UUID,
+    install_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_LIBRARY_MANAGE),
+) -> CollectionUpgradeResponse:
+    """Upgrade an installed collection to its newest published version.
+
+    Operator-initiated only (no auto-updates). Unmodified entities whose pin
+    changed are reconciled in place; operator-modified entities are preserved
+    and reported; added/removed pins and structural pipeline-graph changes are
+    reported without action. The install record then points at the new
+    version row.
+    """
+    org_id = _require_organisation_id(principal)
+    await _require_library_collection_flag(org_id)
+    try:
+        async with session.begin():
+            await _set_rls_context(session, principal)
+            report = await upgrade_collection(
+                session,
+                org_id=org_id,
+                created_by=principal.account_id,
+                install_id=install_id,
+                collection_id=primitive_id,
+            )
+    except UpgradeInstallNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from None
+    except NoUpdateAvailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from None
+    except CollectionUpgradeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from None
+    except IntegrityError:
+        _log.exception("library.upgrade_collection_endpoint")
+        raise _conflict_error() from None
+    except ProgrammingError:
+        _log.exception("library.upgrade_collection_endpoint")
+        raise _not_implemented_error() from None
+    except SQLAlchemyError:
+        _log.exception("library.upgrade_collection_endpoint: SQLAlchemyError")
+        raise _unavailable_error() from None
+
+    return CollectionUpgradeResponse(
+        install_id=report["install_id"],
+        from_version=report["from_version"],
+        to_version=report["to_version"],
+        reconciled=[CollectionUpgradeReconciledItem(**item) for item in report["reconciled"]],
+        preserved=[CollectionUpgradePreservedItem(**item) for item in report["preserved"]],
+        reported=[CollectionUpgradeReportedItem(**item) for item in report["reported"]],
+        warnings=report["warnings"],
     )

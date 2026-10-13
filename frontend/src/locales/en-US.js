@@ -151,6 +151,9 @@ export default {
       "create_connector": "Create",
       "runnable": "Ready to run",
       "not_runnable": "Not yet runnable — configure required connectors",
+      "update_available": "Update available: v{version}",
+      "upgrade": "Upgrade",
+      "upgrading": "Upgrading...",
     },
     "AdminAssistantView": {
       "configure_assistant_ai_assistant_behaviour_access_and_skills": "Configure the Modulo assistant behaviour, access, and skills",

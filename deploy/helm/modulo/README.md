@@ -187,6 +187,52 @@ The full setup — provider env vars, the least-privilege Role/RoleBinding, and
 the workspace-pod ServiceAccount — is in the
 [Kubernetes guide](https://modulo.run/docs/kubernetes).
 
+### Workspace Egress NetworkPolicy (FAR-1690)
+
+On the Kubernetes (T3) tier the runtime provider runs agent workspaces as pods
+and **deliberately does not enforce egress inside them** — the pod's network is
+owned by the cluster CNI, and an in-pod `deny_all`/`selected` request is
+refused with a typed error naming NetworkPolicy as the remediation. The chart
+closes that loop by **authoring** the policy: an optional, namespace-scoped
+`NetworkPolicy` selecting the workspace pods (`modulo.provider: kubernetes`)
+with a deny-by-default egress rule plus an exact-target (CIDR + port) allowlist.
+
+```yaml
+workspaceNetworkPolicy:
+  enabled: true                # off by default
+  allowDns: true               # permit cluster DNS (UDP/TCP 53)
+  dnsNamespace: ""             # narrow the DNS rule to one namespace when set
+  egressAllowlist:
+    - cidr: 10.0.0.0/8
+      ports:
+        - protocol: TCP
+          port: 5432
+    - cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+```
+
+| Value | Default | Meaning |
+|---|---|---|
+| `workspaceNetworkPolicy.enabled` | `false` | Render the workspace egress NetworkPolicy |
+| `workspaceNetworkPolicy.allowDns` | `true` | Permit UDP/TCP 53 so deny-by-default does not break DNS |
+| `workspaceNetworkPolicy.dnsNamespace` | `""` | Namespace holding cluster DNS; when set the DNS rule's `namespaceSelector` is narrowed to it, otherwise left cluster-wide (`{}`) |
+| `workspaceNetworkPolicy.egressAllowlist` | `[]` | Exact-target egress entries: `{cidr, ports: [{protocol, port}]}` |
+
+Allowlist entries are validated at render: `protocol` must be TCP/UDP/SCTP
+(case-insensitive) and `port` must be in 1-65535, so typos fail fast instead of
+being silently rejected by the API server.
+
+**Posture and prerequisites.** Modulo authors the manifest and the cluster CNI
+enforces it; Modulo records that as a **`declared`** egress posture (never an
+observation — Modulo does not see network traffic). This requires a CNI that
+enforces NetworkPolicy (e.g. Calico, Cilium); `kindnet` (kind's default) does
+not, so a policy applied there proves nothing. A NetworkPolicy cannot express a
+hostname — resolve targets to CIDRs before listing them — and some CNIs silently
+drop fragmented traffic under NetworkPolicy, a CNI limitation this manifest
+cannot express.
+
 ## EKS Deployment
 
 See `values.eks.example.yaml` for a validated EKS configuration using AWS managed services (RDS, ElastiCache, ALB).
@@ -286,4 +332,3 @@ kubectl delete namespace modulo  # If namespace.create=true
 - **FAR-1053:** Live kind validation (EKS done — see Validation Status)
 - CI `helm lint` job (requires `workflow`-scoped token)
 - Redis persistence (PVC) for embedded mode
-- NetworkPolicy templates
