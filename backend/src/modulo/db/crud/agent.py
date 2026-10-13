@@ -15,8 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modulo.db.crud.base import PageResult, apply_updates
 from modulo.db.crud.pagination import CursorPaginator
 from modulo.db.models.agent import Agent
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
+from modulo.db.soft_delete import include_soft_deleted
 from modulo.util.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
@@ -284,6 +285,16 @@ async def get_eval_results_with_defs(
 
     Returns (eval_results_list, eval_definitions_map) where definitions map
     is keyed by eval_id (as string).
+
+    FAR-1725: definitions are read from ``evals`` (the current storage) rather
+    than the frozen ``eval_definitions`` snapshot. A post-cutover ``eval_id``
+    resolves to NO legacy row, so the guardrail filter below would see an empty
+    map entry and let inverted-semantics guardrail rows into the optimizer feed.
+    ``include_soft_deleted`` keeps soft-deleted definitions resolvable for the
+    same reason the exclusion clause needs them: soft-deleting a guardrail must
+    not un-exclude its stored results. The map carries no ``failure_behaviour``
+    key — ``evals`` has no such column (it lives on ``policy_gates``) and the
+    sole consumer, ``PromptOptimizer``, reads only name/eval_type/config_json.
     """
     try:
         er_result = await session.execute(
@@ -300,9 +311,9 @@ async def get_eval_results_with_defs(
 
     eval_def_ids = list({er.eval_id for er in eval_results})
     try:
-        ed_result = await session.execute(select(EvalDefinition).where(EvalDefinition.id.in_(eval_def_ids)))
+        ed_result = await session.execute(include_soft_deleted(select(Eval).where(Eval.id.in_(eval_def_ids))))
     except ProgrammingError:
-        _log.warning("EvalDefinition table not found — returning empty definitions", exc_info=True)
+        _log.warning("Eval table not found — returning empty definitions", exc_info=True)
         return [], {}
     definitions: dict[str, Any] = {}
     for ed in ed_result.scalars().all():
@@ -311,7 +322,6 @@ async def get_eval_results_with_defs(
             "name": ed.name,
             "eval_type": ed.eval_type,
             "config_json": ed.config_json,
-            "failure_behaviour": ed.failure_behaviour,
         }
 
     # FAR-223 item 11 §4d — the eval_results consumer contract: even though the

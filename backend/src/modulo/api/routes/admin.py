@@ -111,6 +111,7 @@ from modulo.db.crud.token_family import blacklist_family, list_families_for_acco
 from modulo.db.models.account import KIND_HUMAN, Account
 from modulo.db.models.api_key import OrgApiKey
 from modulo.db.models.connector_instance import ConnectorInstance
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_definition import EvalDefinition
 from modulo.db.models.eval_result import EvalResult
 from modulo.db.models.invitation import Invitation
@@ -2974,24 +2975,27 @@ async def _eval_trend(session: AsyncSession, org_id: uuid.UUID) -> list[TrendBuc
 
 
 async def _eval_by_type(session: AsyncSession, org_id: uuid.UUID) -> list[TypeBreakdown]:
+    # FAR-1725: sourced from ``evals`` (the current storage), not the frozen
+    # ``eval_definitions`` snapshot — otherwise post-cutover definitions never
+    # appear in the breakdown and the guardrail exclusion matches nothing.
     by_type_q = (
         select(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
             func.count(EvalResult.id).label("total"),
             func.sum(case((EvalResult.passed, 1), else_=0)).label("passed"),
             func.sum(case((EvalResult.passed.is_(False), 1), else_=0)).label("failed"),
         )
-        .outerjoin(EvalResult, EvalResult.eval_id == EvalDefinition.id)
+        .outerjoin(EvalResult, EvalResult.eval_id == Eval.id)
         .where(
-            EvalDefinition.organisation_id == org_id,
-            EvalDefinition.eval_type != "guardrail",
-            EvalDefinition.deleted_at.is_(None),
+            Eval.organisation_id == org_id,
+            Eval.eval_type != "guardrail",
+            Eval.deleted_at.is_(None),
         )
         .group_by(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
         )
         .order_by(
-            EvalDefinition.eval_type,
+            Eval.eval_type,
         )
     )
     by_type_rows = (await session.execute(by_type_q)).all()
@@ -3043,6 +3047,9 @@ async def _eval_coverage_gaps(session: AsyncSession, org_id: uuid.UUID) -> list[
 
 
 async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list[RecentEvalResult]:
+    # FAR-1725: join ``evals`` — the source ``eval_results.eval_id`` actually
+    # references. Joining the frozen ``eval_definitions`` snapshot silently
+    # drops every post-cutover result and makes the guardrail exclusion a no-op.
     recent_q = text("""
         SELECT
             er.id,
@@ -3054,7 +3061,7 @@ async def _eval_recent_results(session: AsyncSession, org_id: uuid.UUID) -> list
             er.detail,
             er.evaluated_at
         FROM eval_results er
-        JOIN eval_definitions ed ON ed.id = er.eval_id
+        JOIN evals ed ON ed.id = er.eval_id
         WHERE er.organisation_id = :org_id
           AND ed.eval_type != 'guardrail'
         ORDER BY er.evaluated_at DESC

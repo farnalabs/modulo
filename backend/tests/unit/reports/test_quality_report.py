@@ -32,7 +32,7 @@ from modulo.core.reports.quality_report import (
 )
 from modulo.db.models.base import Base
 from modulo.db.models.daily_run_count import OrgDailyRunCount
-from modulo.db.models.eval_definition import EvalDefinition
+from modulo.db.models.eval import Eval
 from modulo.db.models.eval_result import EvalResult
 from tests.unit.reports.helpers import (
     SLACK_URL,
@@ -956,7 +956,7 @@ class TestDailyTrendOrgLevelScope:
                     tables=[
                         OrgDailyRunCount.__table__,
                         EvalResult.__table__,
-                        EvalDefinition.__table__,
+                        Eval.__table__,
                     ],
                 )
             )
