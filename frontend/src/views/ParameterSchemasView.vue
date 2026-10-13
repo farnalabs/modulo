@@ -383,10 +383,9 @@
             </Button>
           </header>
 
-          <div
+          <output
             v-if="setsLoading"
-            class="space-y-2"
-            role="status"
+            class="block space-y-2"
             aria-busy="true"
             :aria-label="$t('views.ParameterSchemasView.loading_sets')"
           >
@@ -401,7 +400,7 @@
               </div>
               <SkeletonBlock height-class="h-6 w-24" />
             </div>
-          </div>
+          </output>
           <ErrorAlert v-else-if="setsError" :message="setsError" :on-retry="loadSets" />
 
           <div v-else-if="sets.length === 0" class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -599,10 +598,9 @@
 
         <!-- References Tab -->
         <TabPanel value="references" class="space-y-4 pt-4">
-          <div
+          <output
             v-if="refsLoading"
-            class="space-y-4"
-            role="status"
+            class="block space-y-4"
             aria-busy="true"
             :aria-label="$t('views.ParameterSchemasView.loading_references')"
           >
@@ -615,7 +613,7 @@
               <SkeletonBlock height-class="h-4 w-56" />
               <SkeletonBlock height-class="h-4 w-64" />
             </div>
-          </div>
+          </output>
           <ErrorAlert v-else-if="refsError" :message="refsError" :on-retry="loadReferences" />
 
           <template v-else>

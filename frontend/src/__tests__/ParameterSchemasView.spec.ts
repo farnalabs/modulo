@@ -328,9 +328,12 @@ describe('ParameterSchemasView — editor', () => {
     }
 
     // string: the parameter card renders two checkboxes — Required first,
-    // then Multiline (only visible for string params).
+    // then Multiline (only visible for string params). The seeded parameter
+    // starts required, so toggle it OFF to exercise the v-model setter.
     const checkboxes = wrapper.findAll('input[type="checkbox"]')
     expect(checkboxes).toHaveLength(2)
+    await checkboxes[0].setValue(false)
+    expect(vm.schemaForm.parameters[0].required).toBe(false)
     await checkboxes[1].setValue(true)
     expect(vm.schemaForm.parameters[0].multiline).toBe(true)
 
@@ -457,8 +460,11 @@ describe('ParameterSchemasView — parameter sets tab', () => {
     await wrapper.find('tbody tr').trigger('click')
     await flush()
     await switchTab(wrapper, 'Parameter Sets')
-    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    // <output> carries the implicit ARIA status role natively (SonarCloud
+    // Web:S6819) — assert the native element rather than a redundant role.
+    const skeleton = wrapper.find('output[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
     expect(skeleton.attributes('aria-label')).toBe('Loading parameter sets...')
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
     expect(wrapper.text()).not.toContain('No parameter sets yet.')
@@ -630,8 +636,11 @@ describe('ParameterSchemasView — references tab', () => {
     await wrapper.find('tbody tr').trigger('click')
     await flush()
     await switchTab(wrapper, 'References')
-    const skeleton = wrapper.find('[role="status"][aria-busy="true"]')
+    // <output> carries the implicit ARIA status role natively (SonarCloud
+    // Web:S6819) — assert the native element rather than a redundant role.
+    const skeleton = wrapper.find('output[aria-busy="true"]')
     expect(skeleton.exists()).toBe(true)
+    expect(skeleton.element.tagName).toBe('OUTPUT')
     expect(skeleton.attributes('aria-label')).toBe('Loading schema references...')
     expect(skeleton.findAll('.animate-pulse').length).toBeGreaterThan(0)
     expect(wrapper.text()).not.toContain('Agents Using This Schema')
