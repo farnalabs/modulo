@@ -10161,6 +10161,13 @@ async def _sandbox_agent_impl(  # NOSONAR S3776 - sandbox root dispatch; delegat
             raise SandboxTierRefusedError(
                 f"Node '{node_id}' egress refused on {_egress_tier} tier: {_egress_resolved.refusal}"
             )
+        # FAR-1690: record the TYPED egress posture on the workspace, never a
+        # boolean. The posture names HOW the resolved policy is established
+        # (enforced_by_substrate / declared / metadata_only / none) so a
+        # permissive tier can never be read as an enforcement it does not
+        # perform. It rides the same provider-neutral workspace_metadata
+        # carrier as the allowlist below.
+        _metadata["modulo.egress.posture"] = _egress_resolved.posture.value
         if _egress_resolved.policy == "selected" and _egress_resolved.allowlist:
             _metadata["egress_allowlist"] = json.dumps(_egress_resolved.allowlist)
         # FAR-1051 (qa-iterate): run/org/node attribution rides the spec's

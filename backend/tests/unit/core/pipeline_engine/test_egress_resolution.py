@@ -12,6 +12,7 @@ import pytest
 
 import modulo.core.pipeline_engine.egress as egress_mod
 from modulo.core.pipeline_engine.egress import (
+    EgressPosture,
     EgressResolution,
     resolve_egress,
     spec_egress_for_canonical,
@@ -673,3 +674,153 @@ def test_other_tiers_keep_their_historical_refusal_message() -> None:
     assert result.refusal is not None
     assert "NetworkPolicy" not in result.refusal
     assert "available enforcement on this tier" in result.refusal
+
+
+# --- FAR-1690: typed egress posture (never a boolean) ------------------------
+
+
+def test_egress_posture_vocabulary_is_the_four_typed_values() -> None:
+    """The posture vocabulary is exactly the FAR-1690 enum — four typed values."""
+    assert {p.value for p in EgressPosture} == {
+        "enforced_by_substrate",
+        "declared",
+        "metadata_only",
+        "none",
+    }
+
+
+def test_egress_posture_is_a_string_enum_not_a_boolean() -> None:
+    """Posture is a typed enum whose members are strings — never a bool.
+
+    The OWASP control set requires the posture to be TYPED; a boolean cannot
+    distinguish "the substrate enforces it" from "Modulo only declared it".
+    """
+    assert issubclass(EgressPosture, str)
+    posture = resolve_egress(
+        node_egress_policy="deny_all",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="e2b",
+    ).posture
+    assert isinstance(posture, EgressPosture)
+    assert not isinstance(posture, bool)
+
+
+def test_egress_resolution_defaults_to_no_posture() -> None:
+    """An externally-constructed EgressResolution asserts no posture by default.
+
+    NONE is the honest default: a resolution built without a posture did not
+    establish one, and must never read as an enforcement.
+    """
+    r = EgressResolution(policy=None, allowlist=None, refusal=None)
+    assert r.posture is EgressPosture.NONE
+
+
+def test_e2b_restrictive_policy_is_enforced_by_substrate() -> None:
+    """E2B enforces in-sandbox on the ADR 040 refusal-contract path."""
+    result = resolve_egress(
+        node_egress_policy="deny_all",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="e2b",
+    )
+    assert result.refusal is None
+    assert result.posture is EgressPosture.ENFORCED_BY_SUBSTRATE
+
+
+def test_docker_deny_all_is_enforced_by_substrate() -> None:
+    """Docker deny_all is enforced host-side (network mode none)."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="none",
+        tier="docker",
+    )
+    assert result.refusal is None
+    assert result.posture is EgressPosture.ENFORCED_BY_SUBSTRATE
+
+
+def test_t3_restrictive_policy_is_declared_not_enforced_by_modulo() -> None:
+    """On T3 Modulo authors the NetworkPolicy (declared); it never claims to
+    enforce it itself and never observes the substrate's traffic."""
+    result = resolve_egress(
+        node_egress_policy="deny_all",
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="t3",
+    )
+    assert result.refusal is None
+    assert result.posture is EgressPosture.DECLARED
+
+
+def test_provider_default_posture_asserts_no_posture() -> None:
+    """The unrestricted provider default (None) establishes no posture."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy=None,
+        tier="e2b",
+    )
+    assert result.policy is None
+    assert result.posture is EgressPosture.NONE
+
+
+def test_refused_dispatch_asserts_no_posture() -> None:
+    """A refused dispatch has nothing in effect, so its posture is NONE — a
+    refusal is never dressed up as an enforcement."""
+    result = resolve_egress(
+        node_egress_policy=None,
+        node_egress_allowlist=None,
+        profile_network_policy="selected",
+        tier="docker",
+    )
+    assert result.refusal is not None
+    assert result.posture is EgressPosture.NONE
+
+
+def test_kubernetes_tier_restrictive_posture_target_is_declared() -> None:
+    """The Kubernetes tier's restrictive-posture target is DECLARED.
+
+    Today the resolver still REFUSES a restrictive Kubernetes policy (the
+    provider performs no in-pod enforcement); the FAR-1690 K8s-authoring
+    slice flips this to a declared resolution once the Helm-rendered
+    NetworkPolicy is the recognised authoring path. The mapping is pinned
+    so that flip is a one-line change and the vocabulary cannot silently
+    drift.
+    """
+    assert egress_mod._TIER_RESTRICTIVE_POSTURE["kubernetes"] is EgressPosture.DECLARED
+    assert egress_mod._TIER_RESTRICTIVE_POSTURE["t3"] is EgressPosture.DECLARED
+    assert egress_mod._TIER_RESTRICTIVE_POSTURE["e2b"] is EgressPosture.ENFORCED_BY_SUBSTRATE
+    assert egress_mod._TIER_RESTRICTIVE_POSTURE["docker"] is EgressPosture.ENFORCED_BY_SUBSTRATE
+
+
+def _expected_posture(tier: str, expected_policy: str | None, expect_refusal: bool) -> EgressPosture:
+    """The posture a case must yield: NONE unless a restrictive policy resolves."""
+    if expect_refusal or expected_policy is None:
+        return EgressPosture.NONE
+    return egress_mod._TIER_RESTRICTIVE_POSTURE[tier]
+
+
+@pytest.mark.parametrize(
+    ("node_raw", "profile_raw", "tier", "has_allowlist", "expected_policy", "expect_refusal", "description"),
+    _EGRESS_CASES,
+    ids=[c[6] for c in _EGRESS_CASES],
+)
+def test_resolve_egress_posture_table(
+    node_raw: str | None,
+    profile_raw: str | None,
+    tier: str,
+    has_allowlist: bool,
+    expected_policy: str | None,
+    expect_refusal: bool,
+    description: str,
+) -> None:
+    """Every (node x profile x tier) case carries the typed posture."""
+    result = resolve_egress(
+        node_egress_policy=_node_policy(node_raw),
+        node_egress_allowlist=(_SAMPLE_ALLOWLIST if has_allowlist else None),
+        profile_network_policy=_profile_policy(profile_raw),
+        tier=tier,
+    )
+    expected = _expected_posture(tier, expected_policy, expect_refusal)
+    assert result.posture is expected, f"{description}: expected posture {expected!r}, got {result.posture!r}"

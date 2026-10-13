@@ -60,6 +60,37 @@ podSecurity:
   audit: restricted
   warn: restricted
 
+# -- Workspace egress NetworkPolicy (FAR-1690) ------------------------------
+# The Kubernetes (T3) runtime provider runs agent workspaces as pods and
+# deliberately does NOT enforce egress inside them — bounded egress is the
+# cluster CNI's job. This optional manifest is how Modulo AUTHORS that
+# posture: it renders one namespace-scoped NetworkPolicy selecting the
+# workspace pods (label `modulo.provider: kubernetes`) with a deny-by-default
+# egress policy plus an exact-target (CIDR + port) allowlist.
+#
+# Off by default. Requires a CNI that enforces NetworkPolicy (e.g. Calico,
+# Cilium) — kindnet does not. Modulo records this posture as `declared` (it
+# authors the policy; it never observes network traffic).
+workspaceNetworkPolicy:
+  enabled: false
+  # Permit cluster DNS (UDP/TCP 53) so deny-by-default does not break name
+  # resolution. Set false only if your DNS is covered by an allowlist entry.
+  allowDns: true
+  # Exact-target egress allowlist. Each entry is a CIDR plus the ports allowed
+  # to it. A NetworkPolicy cannot express a hostname — resolve to CIDRs first.
+  #
+  # Example:
+  #   egressAllowlist:
+  #     - cidr: 10.0.0.0/8
+  #       ports:
+  #         - protocol: TCP
+  #           port: 5432
+  #     - cidr: 0.0.0.0/0
+  #       ports:
+  #         - protocol: TCP
+  #           port: 443
+  egressAllowlist: []
+
 # -- Service Account --------------------------------------------------------
 serviceAccount:
   create: true

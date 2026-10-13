@@ -1,0 +1,66 @@
+{{- if .Values.workspaceNetworkPolicy.enabled }}
+{{/*
+  Workspace egress NetworkPolicy (FAR-1690, substrate-authoring posture).
+
+  On the Kubernetes (T3) tier bounded egress is NOT enforced inside the
+  workspace pod — the pod's network is owned by the cluster CNI, and the
+  K8s runtime provider deliberately refuses an in-pod deny-all/allowlist
+  request (naming NetworkPolicy as the remediation). This template is that
+  remediation: Modulo AUTHORS the policy as a Helm-rendered manifest and the
+  customer's CNI enforces it. The egress posture Modulo records for this is
+  `declared` (see `EgressPosture` in
+  backend/src/modulo/core/pipeline_engine/egress.py) — Modulo declares the
+  policy; it never observes the substrate's traffic.
+
+  Scope:
+    - selects the workspace pods via the label the runtime provider stamps
+      (`modulo.provider: kubernetes`, see core/runtime_provider/k8s.py);
+    - governs EGRESS only;
+    - exact-target allowlist entries are CIDR + port (a NetworkPolicy cannot
+      express a hostname — resolve names upstream if that is required);
+    - cluster DNS is permitted by default so a deny-by-default policy does
+      not break name resolution.
+
+  This does NOT create a per-CNI policy-dialect matrix and performs NO
+  policy pre-assertion/validation — it is one vanilla networking.k8s.io/v1
+  manifest, off by default. Enabling it asserts a deny-by-default egress
+  posture for workspace pods, so confirm your CNI enforces NetworkPolicy.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "modulo.fullname" . }}-workspace-egress
+  namespace: {{ include "modulo.namespace" . }}
+  labels:
+    {{- include "modulo.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workspace-egress
+spec:
+  podSelector:
+    matchLabels:
+      modulo.provider: kubernetes
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.workspaceNetworkPolicy.allowDns }}
+    # Cluster DNS is permitted unconditionally so a deny-by-default policy
+    # never breaks service/name resolution. Narrow the namespaceSelector to
+    # your DNS namespace(s) if your cluster does not use kube-system.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.workspaceNetworkPolicy.egressAllowlist }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "workspaceNetworkPolicy.egressAllowlist[].cidr is required" .cidr | quote }}
+      ports:
+        {{- range .ports }}
+        - protocol: {{ .protocol | default "TCP" }}
+          port: {{ required "workspaceNetworkPolicy.egressAllowlist[].ports[].port is required" .port }}
+        {{- end }}
+    {{- end }}
+{{- end }}

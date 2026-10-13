@@ -536,6 +536,14 @@ def _workspace_spec_for_dispatch(
             f"Node '{node_id}' egress refused on {_tier.capitalize()} tier: {egress_resolved.refusal}"
         )
 
+    # FAR-1690: record the TYPED egress posture on the workspace, never a
+    # boolean. On this route the reachable tiers (docker, kubernetes) yield
+    # ``enforced_by_substrate`` for a restrictive docker policy and ``none``
+    # for the unrestricted default; the value names HOW the posture is
+    # established so a permissive tier is never read as an enforcement it
+    # does not perform.
+    metadata["modulo.egress.posture"] = egress_resolved.posture.value
+
     # Map canonical policy to WorkspaceSpec egress_policy vocabulary
     # LOSSLESSLY (FAR-1050): the shared helper is the single owner of this
     # mapping — identical to the profile-path mapper in
