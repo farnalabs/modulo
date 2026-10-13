@@ -38,6 +38,7 @@ from modulo.db.models.evidence import PRODUCER_TYPES
         ("system_state", "sandbox_region"),
         ("system_state", "capability_reasoning"),
         ("run", "node_has_work"),
+        ("derived", "changed_set_evaluated"),
     ],
 )
 def test_w1_authorised_write_accepted(producer_type: str, key: str) -> None:
@@ -96,8 +97,15 @@ def test_w2_boundary_exact_key_without_suffix_is_rejected() -> None:
 
 @pytest.mark.parametrize("producer_type", ["policy_gate", "derived"])
 def test_w2_reserved_producers_write_nothing(producer_type: str) -> None:
-    """Reserved producers have an empty namespace: any key is unauthorised."""
-    assert not KEY_NAMESPACE_OWNERSHIP[producer_type]
+    """A producer writes nothing outside the namespace it owns.
+
+    ``policy_gate`` is still reserved-empty (owns no keys); ``derived`` owns
+    the ``changed_set_`` prefix (FAR-1691). Both reject a key outside their
+    namespace; the ``derived`` positive case is covered by
+    ``test_w1_authorised_write_accepted``.
+    """
+    owned = {"policy_gate": set(), "derived": {"changed_set_"}}[producer_type]
+    assert KEY_NAMESPACE_OWNERSHIP[producer_type] == owned
     with pytest.raises(EvidenceWriteAuthorisationError):
         assert_write_authorisation(producer_type, "eval_passed")
 
