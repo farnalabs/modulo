@@ -304,6 +304,28 @@ def test_judge_callable_dispatches_each_definition_to_its_own_backend() -> None:
     assert result_b["score"] == pytest.approx(0.87)
 
 
+def test_judge_callable_caches_each_built_backend_across_calls() -> None:
+    """A second call for the same backend id reuses the cached judge.
+
+    The suite runner hands ONE callable to every case x definition, so the
+    per-backend cache must serve the repeat key without rebuilding the judge.
+    """
+    org = uuid.uuid4()
+    backend_id = uuid.uuid4()
+    hub = ModelBackendHub()
+    adapter = _FixedJudgeAdapter('{"passed": true, "score": 0.5, "detail": "cached"}')
+    hub.register(backend_id, adapter)
+    judge = build_suite_run_llm_judge_callable(hub)
+    definition = _judge_def(org, str(backend_id))
+
+    first = judge({"output": "x"}, definition)
+    second = judge({"output": "x"}, definition)
+
+    assert first["score"] == pytest.approx(0.5)
+    assert second["score"] == pytest.approx(0.5)
+    assert len(adapter.calls) == 2
+
+
 # --------------------------------------------------------------------------- #
 # _maybe_wire_suite_judge                                                     #
 # --------------------------------------------------------------------------- #
@@ -486,6 +508,52 @@ async def test_saq_job_missing_backend_id_fails_eval_closed_and_suite_completes(
     assert len(rows) == 1
     assert rows[0].passed is False
     assert "model_backend_id" in (rows[0].detail or "")
+
+    await engine.dispose()
+
+
+async def test_saq_job_logs_and_continues_when_hub_teardown_fails(monkeypatch) -> None:
+    """A hub teardown failure is logged and must never mask the run result.
+
+    ``execute_suite_run`` tears the judge hub down in a ``finally``; a failure
+    there is swallowed with a log so the terminal stats are still returned.
+    Pin that guard so a raising ``__aexit__`` cannot turn a completed run into
+    an orchestration failure.
+    """
+    import modulo.core.saq_worker as sw
+    from modulo.core.eval_engine import suite_run_judge
+
+    org = uuid.uuid4()
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all, tables=_tables())
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with factory() as s, s.begin():
+        suite, dataset, backend = await _seed_suite(s, org)
+        # No model_backend_id: the callable fails the eval closed without ever
+        # dereferencing the (stub) hub, so only teardown remains to exercise.
+        await _add_judge_def(s, org, suite, {"field": "output"})
+        await _add_case(s, org, dataset, {"text": "hello"})
+        run = await build_suite_run(
+            s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
+        )
+        rid, oid = str(run.id), str(org)
+
+    class _RaisingTeardownHub:
+        async def __aexit__(self, *exc: object) -> None:
+            raise RuntimeError("hub teardown boom")
+
+    async def _fake_build(session_: Any, org_: uuid.UUID) -> Any:
+        return _RaisingTeardownHub()
+
+    monkeypatch.setattr(suite_run_judge, "build_org_model_backend_hub", _fake_build)
+    monkeypatch.setattr(sw, "_make_session_factory", lambda: factory)
+
+    stats = await sw.execute_suite_run({}, suite_run_id=rid, org_id=oid)
+
+    assert stats["state"] == SuiteRunState.COMPLETED.value
+    assert stats["failed_cases"] == 1
 
     await engine.dispose()
 
