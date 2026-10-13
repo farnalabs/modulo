@@ -5655,6 +5655,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/audit/evidence-pack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Evidence Pack Endpoint
+         * @description Build and sign the offline-verifiable evidence pack for the org's chain.
+         *
+         *     The response is a self-contained artefact (signed manifest + Ed25519
+         *     signature + published verification key + file bytes) that a third party can
+         *     verify with nothing but this body and the pre-published public key.
+         */
+        get: operations["evidence_pack_endpoint_api_v1_admin_audit_evidence_pack_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/audit/verification-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verification Key Endpoint
+         * @description Publish the org's Ed25519 evidence verification key (public, not secret).
+         *
+         *     An external auditor can fetch this once and verify any evidence pack the
+         *     org exports; the key is also embedded in every pack as an artefact.
+         */
+        get: operations["verification_key_endpoint_api_v1_admin_audit_verification_key_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/libraries": {
         parameters: {
             query?: never;
@@ -33240,6 +33287,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    evidence_pack_endpoint_api_v1_admin_audit_evidence_pack_get: {
+        parameters: {
+            query?: {
+                /** @description Optional run id to name in the pack manifest */
+                run_id?: string | null;
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    verification_key_endpoint_api_v1_admin_audit_verification_key_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
