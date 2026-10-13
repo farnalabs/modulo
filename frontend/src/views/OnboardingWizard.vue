@@ -460,6 +460,8 @@ import type { components } from '../lib/api/client'
 import PageHeader from '../components/shared/PageHeader.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import Button from 'primevue/button'
 import Select from '../components/shared/AppSelect.vue'
 
@@ -485,6 +487,8 @@ const steps = computed(() => [
 ])
 
 const currentStep = ref(0)
+
+const { track } = useProductAnalytics()
 
 const wizardState = reactive({
   connectorId: '',
@@ -726,10 +730,11 @@ async function createPipeline() {
       },
     })
     if (err) {
-      pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}${formatApiError(err)}`
+      pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')} ${formatApiError(err)}`
     } else if (data) {
       wizardState.createdPipelineId = data.id
       wizardState.createdPipelineName = data.name
+      track(ANALYTICS_EVENTS.PIPELINE_CREATED, { pipeline_id: data.id })
     }
   } catch (e) {
     pipelineCreateError.value = `${t('views.OnboardingWizard.failed_to_create_pipeline')}${formatApiError(e)}`

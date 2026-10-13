@@ -36,10 +36,6 @@ bdd/steps/test_alpha_connectors.py:the milestone is created successfully
 bdd/steps/test_alpha_connectors.py:the operation returns a "not_found" error
 bdd/steps/test_alpha_connectors.py:the reaction is posted successfully
 bdd/steps/test_alpha_connectors.py:the result includes the files in the directory
-bdd/steps/test_alpha_errors.py:an audit event exists for run failure
-bdd/steps/test_alpha_errors.py:node {node:d} error is available
-bdd/steps/test_alpha_errors.py:node {node:d} has no output
-bdd/steps/test_alpha_errors.py:node {node:d} output is available
 bdd/steps/test_alpha_mcp.py:But invoking any tool returns 401
 bdd/steps/test_alpha_mcp.py:the "{tool}" tool description explains how to {action}
 bdd/steps/test_alpha_mcp.py:the client receives a tools/list response

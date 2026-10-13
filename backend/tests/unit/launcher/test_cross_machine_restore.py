@@ -31,6 +31,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from tests.unit.launcher.test_launcher_shared import launcher_state_reset
+
 requires_posix = pytest.mark.skipif(sys.platform == "win32", reason="restore takes the POSIX flock data-dir lock")
 
 
@@ -48,14 +50,7 @@ requires_cli_env = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def _reset_launcher_state() -> Iterator[None]:
     """Restore the module-level pin, guard, and the get_settings cache."""
-    import modulo.settings as settings_module
-    from modulo.settings import get_settings
-
-    get_settings.cache_clear()
-    yield
-    settings_module._pinned_env_file = None
-    settings_module._first_boot_guard = None
-    get_settings.cache_clear()
+    yield from launcher_state_reset()
 
 
 _FERNET_KEY = "9u9GToDRLOtSKkZGkZlFnXlJpNdIay2y5vUsVC5J0Bk="

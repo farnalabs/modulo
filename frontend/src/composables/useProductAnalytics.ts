@@ -7,15 +7,17 @@ import type { AnalyticsEventType } from './productAnalyticsEvents'
  *
  * Curated frontend events are buffered in memory and flushed to
  * `POST /api/v1/metrics/events` on interval (30s) or buffer full (50 events).
+ * The backend stages them in `metrics_staging`; the daily metrics dump
+ * aggregates them into the vendor payload and purges consumed rows (FAR-1717).
  *
  * Consent gate: the composable checks a configurable consent function before
  * capturing. When `level=off`, `track()` silently returns — no buffer, no API
- * call. Wire the consent function to `productAnalyticsStore.isOptedIn` once
- * that store is implemented (FAR-360).
+ * call. `initProductAnalytics` is called from `App.vue` with
+ * `productAnalyticsStore.isOptedIn` as the consent function (FAR-1718).
  *
- * **page_view is NOT captured here** — it is a server-side daily counter
- * (Redis INCR, flushed once per dump window), consent-gated server-side
- * before increment. No per-route data is captured client-side.
+ * No `page_view` event is captured: no per-route data is collected, client or
+ * server side. The captured set is exactly the curated list in
+ * `productAnalyticsEvents.ts`.
  *
  * No PII is captured: no names, emails, user IDs, IPs, URLs, query strings.
  * `event_id` is deterministic counter-based (not random UUID). The backend

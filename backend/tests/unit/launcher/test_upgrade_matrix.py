@@ -27,7 +27,6 @@ and fetch seams are synchronous doubles, so every test is deterministic.
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -41,56 +40,22 @@ from modulo.launcher.doctor import (
     DoctorProbes,
     run_doctor,
 )
-from tests.unit.launcher.test_upgrade import (
+from tests.unit.launcher.test_launcher_shared import (
+    _UPGRADE_SIGNING_KEY_HEX,
     _upgrade_fetch_seam,
     _upgrade_release_fixture,
     _upgrade_restore_head,
     _upgrade_seed_data_dir,
     _upgrade_seed_install_root,
+    upgrade_matrix_probes,
 )
-
-_UPGRADE_SIGNING_KEY_HEX = "101acdeda0cd35fdb51f4dae6eff9838b2d07c97641e41a09deb72a2a1a2254d"
 
 requires_posix = pytest.mark.skipif(os.name != "posix", reason="posix symlinks only (TODO(P3) windows seam)")
 
 
 def _matrix_probes() -> DoctorProbes:
-    """All-pass injected probes (the doctor checks that read REAL data-dir
-    files â€” state-integrity, secrets-unreadable â€” stay real)."""
-    return DoctorProbes(
-        disk_free_bytes=lambda _root: 40 * 1024 * 1024 * 1024,
-        assert_writable=lambda _root: None,
-        listening_on=lambda _port: ["127.0.0.1"],
-        probe_postgres=lambda: None,
-        role_violations=list,
-        probe_redis=lambda: None,
-        migrations_at_head=lambda: True,
-        effective_uid=lambda: 1000,
-        username_of_uid=lambda _uid: "operator",
-        file_owner=lambda _path: "operator",
-        secrets_mode=lambda _data_dir: 0o600,
-        ambient_env_names=list,
-        env_value=lambda _name: None,
-        service_installed=lambda: False,
-        service_enabled=lambda: False,
-        service_linger=lambda: False,
-        available_memory_bytes=lambda: 8 * 1024 * 1024 * 1024,
-        data_dir_pg_version=lambda: "16",
-        bundle_pg_version=lambda: "16",
-        installed_bundle_pg_version=lambda: "16",
-        bundled_binaries=list,
-        port_owner_description=lambda _port: None,
-        second_install_hint=lambda: None,
-        modulo_on_path=lambda: None,
-        install_root=lambda: None,
-        degraded_reason=lambda: None,
-        last_backup_at=lambda: time.time(),
-        tls_expiry=lambda: time.time() + 400 * 86400,
-        cloud_sync_hit=lambda _root: None,
-        cwd_env_file=None,
-        env_file_pinned=lambda: True,
-        launcher_running=lambda: False,
-    )
+    """The matrix delta variant — the canonical factory (shared module)."""
+    return upgrade_matrix_probes()
 
 
 def _boot_strap_matrix(tmp_path: Any, monkeypatch: Any, *, recorded_heads: list[str] | None = None) -> dict[str, Any]:

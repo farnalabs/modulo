@@ -31,10 +31,12 @@ from modulo.launcher.manifest import (
     _KEY_ID_CURRENT,
     _KEY_ID_NEXT,
     ManifestSecurityError,
+    ReleaseManifest,
     read_signature_file,
     sign_release_bytes,
     verify_artifacts,
     verify_manifest,
+    verify_release_from_files,
     verify_signature,
 )
 
@@ -169,6 +171,109 @@ def test_malformed_signature_file_refuses(tmp_path: Path) -> None:
         read_signature_file(garbled)
 
 
+def _json_bytes(value: Any) -> bytes:
+    """Helper for the byte-shaped cases in the refusal matrix below."""
+    return value if isinstance(value, bytes) else json.dumps(value, indent=2, sort_keys=True).encode("utf-8")
+
+
+# (case-id, tamper(bytes-or-dict) -> bytes or dict, expected message)
+PAYLOAD_REFUSALS = [
+    ("not-json", lambda _body: b"no json here", "not valid JSON"),
+    ("non-object", lambda _body: b"[]", "must be a JSON object"),
+    (
+        "missing-fields",
+        lambda body: {k: v for k, v in body.items() if k != "components"},
+        "missing field(s): components",
+    ),
+    ("bad-schema-version", lambda body: {**body, "manifest_version": 99}, "unsupported manifest_version"),
+    (
+        "components-not-object",
+        lambda body: {**body, "components": ["16.10.1"]},
+        "'components' must be an object and 'artifacts' a list",
+    ),
+    (
+        "artifacts-not-list",
+        lambda body: {**body, "artifacts": {}},
+        "'components' must be an object and 'artifacts' a list",
+    ),
+    (
+        "artifact-entry-not-object",
+        lambda body: {**body, "artifacts": ["x"]},
+        "every artifact entry must be an object",
+    ),
+    (
+        "artifact-entry-missing-keys",
+        lambda body: {**body, "artifacts": [{"name": "a.tar.gz", "sha256": "0" * 64}]},
+        "every artifact entry must be an object",
+    ),
+    (
+        "malformed-sha256",
+        lambda body: {**body, "artifacts": [{**body["artifacts"][0], "sha256": "0" * 63}, *body["artifacts"][1:]]},
+        "malformed sha256",
+    ),
+    ("zero-artifacts", lambda body: {**body, "artifacts": []}, "covers zero artifacts"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case_id", "tamper", "pattern"),
+    PAYLOAD_REFUSALS,
+    ids=[case[0] for case in PAYLOAD_REFUSALS],
+)
+def test_manifest_payload_refusal_matrix(
+    tmp_path: Path,
+    test_trust_store: dict,
+    test_signing_keys: dict,
+    case_id: str,
+    tamper: Any,
+    pattern: str,
+) -> None:
+    """Every _parse_manifest_payload refusal branch refuses with its message.
+
+    The tampered payload is RE-SIGNED with a trusted key so the signature
+    stage passes — each refusal must come from the PAYLOAD validation, not
+    from signature mistrust (the signature refusal variants are the matrix
+    below).
+    """
+    _ = case_id
+    _ = tmp_path
+    body = tamper(_manifest_body(artifact_count=2))
+    payload = _json_bytes(body)
+    signature = sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=test_signing_keys[_KEY_ID_CURRENT])
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        verify_manifest(payload, signature, trust_store=test_trust_store)
+
+
+SIGNATURE_REFUSALS = [
+    ("not-a-dict", lambda sig: ["nope"], "signature must be an object"),
+    ("wrong-length", lambda sig: {**sig, "signature": "ab" * 20}, "128 hex characters"),
+    ("not-hex", lambda sig: {**sig, "signature": "z" * 128}, "signature is not valid hex"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case_id", "tamper", "pattern"),
+    SIGNATURE_REFUSALS,
+    ids=[case[0] for case in SIGNATURE_REFUSALS],
+)
+def test_manifest_signature_refusal_matrix(
+    tmp_path: Path,
+    test_trust_store: dict,
+    test_signing_keys: dict,
+    case_id: str,
+    tamper: Any,
+    pattern: str,
+) -> None:
+    """The verify_signature shape checks refuse each malformed envelope."""
+    _ = case_id
+    _seed_artifacts(tmp_path, _manifest_body(artifact_count=2))
+    body = _manifest_body(artifact_count=2)
+    payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
+    sig = tamper({"key_id": _KEY_ID_CURRENT, "signature": "0" * 128})
+    with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
+        verify_manifest(payload, sig, trust_store=test_trust_store)
+
+
 def test_missing_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     body = _manifest_body(artifact_count=2)
     manifest_path, signature_path = _write_release_files(
@@ -216,6 +321,122 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
     )
     with pytest.raises(ManifestSecurityError, match="escapes the bundle root"):
         verify_artifacts(tmp_path, verified)
+
+
+# ---------------------------------------------------------------------------
+# --from-file path: verify_release_from_files (offline/corporate installs)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_release_from_files_verifies_a_named_subset(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """The pre-extraction tarball check: one named artifact is verified."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    name = body["artifacts"][0]["name"]
+    verified = verify_release_from_files(
+        manifest_path=manifest_path,
+        signature_path=signature_path,
+        artifacts_root=tmp_path,
+        artifact_names=[name],
+        trust_store=test_trust_store,
+    )
+    assert isinstance(verified, ReleaseManifest)
+    assert verified.release == "bundle-v1.2.0"
+    assert verified.checksum_for(name) == body["artifacts"][0]["sha256"]
+
+
+def test_verify_release_from_files_tampered_named_artifact_refuses(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    body = _manifest_body(artifact_count=1)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    name = body["artifacts"][0]["name"]
+    (tmp_path / name).write_text("tampered bytes", encoding="utf-8")
+    with pytest.raises(ManifestSecurityError, match="sha256 MISMATCH"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=[name],
+            trust_store=test_trust_store,
+        )
+
+
+def test_verify_release_from_files_uncovered_artifact_refuses(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """An artifact the manifest does not describe is refused outright."""
+    body = _manifest_body(artifact_count=1)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    with pytest.raises(ManifestSecurityError, match="does not cover"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=["not-in-the-manifest.tgz"],
+            trust_store=test_trust_store,
+        )
+
+
+def test_verify_release_from_files_none_verifies_every_artifact(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """artifact_names=None verifies every artifact the manifest covers."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    verified = verify_release_from_files(
+        manifest_path=manifest_path,
+        signature_path=signature_path,
+        artifacts_root=tmp_path,
+        artifact_names=None,
+        trust_store=test_trust_store,
+    )
+    assert verified.release == "bundle-v1.2.0"
+
+
+def test_verify_release_from_files_none_refuses_missing_artifact(
+    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
+) -> None:
+    """artifact_names=None: a listed artifact missing from disk is a hard failure."""
+    body = _manifest_body(artifact_count=2)
+    manifest_path, signature_path = _write_release_files(
+        tmp_path,
+        body,
+        key_hex=test_signing_keys[_KEY_ID_CURRENT],
+        key_id=_KEY_ID_CURRENT,
+    )
+    missing = body["artifacts"][1]["name"]
+    (tmp_path / missing).unlink()
+    with pytest.raises(ManifestSecurityError, match="missing from the bundle"):
+        verify_release_from_files(
+            manifest_path=manifest_path,
+            signature_path=signature_path,
+            artifacts_root=tmp_path,
+            artifact_names=None,
+            trust_store=test_trust_store,
+        )
 
 
 # ---------------------------------------------------------------------------

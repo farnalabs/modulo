@@ -47,7 +47,7 @@
   </template>
 </Select>
           <div v-if="nodesLoading" class="mt-1 text-xs text-muted-foreground">{{ $t('views.EvalEditorView.loading_nodes') }}</div>
-          <div v-if="nodesError" class="mt-1 text-xs text-destructive">{{ nodesError }}</div>
+          <ErrorAlert v-if="nodesError" :message="nodesError" :on-retry="loadNodes" compact class="mt-1" />
         </div>
       </div>
 
@@ -73,7 +73,7 @@
                 <Select
   :aria-label="$t('views.EvalEditorView.eval_type_aria')"
   v-model="form.eval_type"
-  placeholder="llm_judge"
+  :placeholder="$t('views.EvalEditorView.llm_judge')"
   data-testid="eval-editor-eval-type"
   class="w-full"
   :options="[{ value: 'llm_judge', label: $t('views.EvalEditorView.llm_judge') }, { value: 'regex', label: $t('views.EvalEditorView.regex') }, { value: 'json_schema', label: $t('views.EvalEditorView.json_schema') }, { value: 'custom_function', label: $t('views.EvalEditorView.custom_function') }]"
@@ -258,6 +258,7 @@
                         </button>
                         <button
                           type="button"
+                          data-testid="policy-gate-cancel-delete"
                           class="rounded px-2 py-0.5 text-xs font-medium hover:bg-accent"
                           @click="cancelGateDelete"
                         >
@@ -344,14 +345,17 @@
         <div class="lg:col-span-2">
           <h2 class="mb-4 text-base font-semibold">{{ $t('views.EvalEditorView.existing_evals') }}</h2>
 
-          <div v-if="evalsError" class="mb-2 text-sm text-destructive">{{ evalsError }}</div>
+          <ErrorAlert v-if="evalsError" :message="evalsError" :on-retry="loadEvals" compact class="mb-2" />
 
           <div v-if="!selectedPipelineId" class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">
             {{ $t('views.EvalEditorView.prompt_select_pipeline') }}
           </div>
 
-          <div v-else-if="evalsLoading" class="flex items-center justify-center py-8">
-            <div class="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <div v-else-if="evalsLoading" class="space-y-2" data-testid="eval-editor-loading-skeleton">
+            <div v-for="n in 3" :key="`eval-editor-skeleton-${n}`" class="rounded-lg border bg-card p-4">
+              <SkeletonBlock height-class="h-5 w-1/3" />
+              <SkeletonBlock class="mt-2" height-class="h-4 w-2/3" />
+            </div>
           </div>
 
           <EmptyState
@@ -446,7 +450,10 @@ import LoadingSpinner from '../components/shared/LoadingSpinner.vue'
 import ErrorAlert from '../components/shared/ErrorAlert.vue'
 import { shortId } from '../utils/format'
 import { formatApiError } from '../lib/api/formatError'
+import { useProductAnalytics } from '../composables/useProductAnalytics'
+import { ANALYTICS_EVENTS } from '../composables/productAnalyticsEvents'
 import EmptyState from '../components/shared/EmptyState.vue'
+import SkeletonBlock from '../components/shared/SkeletonBlock.vue'
 import { usePlanStore } from '../stores/planStore'
 import FeatureGate from '../components/FeatureGate.vue'
 import PageHeader from '../components/shared/PageHeader.vue'
@@ -458,6 +465,7 @@ import { api } from '../lib/api/client'
 const { t } = useI18n()
 
 const planStore = usePlanStore()
+const { track } = useProductAnalytics()
 
 interface PipelineItem {
   id: string
@@ -768,6 +776,9 @@ async function saveEval() {
     } else {
       const { data: created } = await api.POST('/api/v1/evals', { body })
       savedEvalId = (created as any)?.id ?? null
+      if (savedEvalId) {
+        track(ANALYTICS_EVENTS.EVAL_CREATED, { eval_id: savedEvalId })
+      }
     }
   } catch (e: unknown) {
     formError.value = formatApiError(e)

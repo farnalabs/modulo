@@ -1,3 +1,8 @@
+"""Modulo package root.
+
+Exports the package version and build tag for runtime inspection.
+"""
+
 import os
 
 from modulo.version import get_version

@@ -50,7 +50,8 @@ Feature: Pipeline Error Recovery
   Scenario: Output rejected by injection filter
     Given a running pipeline with output injection filter enabled
     When a node produces output containing "ignore all previous instructions"
-    Then the run status becomes "output_rejected"
+    Then the run status becomes "failed"
+    And the error_code is "output_rejected"
 
   Scenario: Run can be resumed from checkpoint after server restart
     Given a run that checkpointed after node 1 of 3

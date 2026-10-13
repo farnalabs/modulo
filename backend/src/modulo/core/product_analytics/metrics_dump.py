@@ -3,8 +3,14 @@
 The SAQ cron ticks every 10 minutes; a per-instance jitter offset (aligned to
 the 10-minute grid, spread across a 6-hour window) opens a 10-minute execution
 window so each instance actually performs its (daily) dump on exactly one tick.
-Builds an aggregate payload from all consenting orgs and POSTs it to the vendor
-endpoint.  Watermark advances only on full success.
+Builds an aggregate payload from all consenting orgs -- including the curated
+frontend events aggregated out of ``metrics_staging`` (FAR-1717) -- and POSTs it
+to the vendor endpoint.  Watermark advances only on full success.
+
+Every tick also purges ``metrics_staging`` (FAR-1717): rows already covered by a
+successful dump (watermark passed their date) and rows older than the retention
+bound are deleted, so the staging table cannot grow unbounded even when a dump
+gate skips (instance switch off, no consenting orgs, persistent vendor failure).
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modulo.core.cost_controller.system_config import (
@@ -31,6 +37,10 @@ from modulo.core.product_analytics.constants import (
     DUMP_WATERMARK_KEY,
     coerce_dump_count,
 )
+from modulo.core.product_analytics.license_enforcement import (
+    is_enforcement_active,
+    should_degrade_to_community,
+)
 from modulo.core.product_analytics.vendor_client import VendorClient
 
 _log = logging.getLogger(__name__)
@@ -38,10 +48,16 @@ _log = logging.getLogger(__name__)
 __all__ = ["DUMP_COUNT_KEY", "DUMP_WATERMARK_KEY", "coerce_dump_count", "metrics_dump"]
 
 # Schema version -- bumped when the payload shape changes.
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 # Backfill cap (design doc section 8).
 _BACKFILL_MAX_DAYS = 14
+
+# ``metrics_staging`` retention bound (FAR-1717). Consumed rows are purged as
+# soon as the watermark passes their date; this cap additionally bounds rows
+# that were NEVER consumed (instance switch off, no consenting orgs, vendor
+# endpoint failing) so the staging table cannot grow without bound.
+_STAGING_RETENTION_DAYS = 30
 
 # Jitter constants — each instance picks a random offset within a 6-hour
 # window so that multiple instances don't all dump at the same minute.
@@ -129,6 +145,50 @@ async def _should_dump_now(factory: Any, now: datetime | None = None) -> bool:
     return offset <= current_minute_of_day < offset + _DUMP_EXECUTION_WINDOW_MINUTES
 
 
+async def _purge_staging(factory: Any, *, now: datetime | None = None) -> int:
+    """Purge consumed and expired ``metrics_staging`` rows (FAR-1717).
+
+    Called on EVERY ``metrics_dump`` tick (the cron fires every 10 minutes)
+    before the jitter gate, so the staging table is bounded even when a dump
+    gate skips. One DELETE bounds both classes of row:
+
+    * **Consumed** — a row dated ``D`` was included in the payload for ``D``
+      once the dump for ``D`` succeeded (the watermark never rewinds, so dates
+      ``<= watermark`` are never re-dumped). The cutoff is
+      ``start_of_day(min(watermark + 1 day, today))``: when the watermark is
+      behind today, every date through it is fully dumped and purgeable; when
+      the watermark IS today, rows dated today are held back (cap at ``today``)
+      because events staged AFTER today's dump moment have not been delivered
+      and must not be deleted by their own dump day.
+    * **Expired** — rows older than ``_STAGING_RETENTION_DAYS`` are dropped even
+      if never consumed (instance switch off, no consenting orgs, vendor
+      endpoint failing), which is what makes retention bounded rather than
+      "until the next successful dump".
+
+    ``now`` is injectable for testing; defaults to ``datetime.now(UTC)``.
+    Returns the number of rows deleted (0 when nothing matched).
+    """
+    from modulo.db.models.metrics_staging import MetricsStaging
+
+    if now is None:
+        now = datetime.now(UTC)
+
+    cutoff = now - timedelta(days=_STAGING_RETENTION_DAYS)
+    async with factory() as session, session.begin():
+        watermark = await read_system_config(session, DUMP_WATERMARK_KEY)
+        if watermark is not None:
+            watermark_date = _parse_iso_date(str(watermark))
+            consumed_through = min(watermark_date + timedelta(days=1), now.date())
+            consumed_cutoff = datetime.combine(consumed_through, datetime.min.time(), tzinfo=UTC)
+            cutoff = max(cutoff, consumed_cutoff)
+        result = await session.execute(delete(MetricsStaging).where(MetricsStaging.recorded_at < cutoff))
+        deleted = max(int(result.rowcount or 0), 0)
+
+    if deleted:
+        _log.info("product_analytics.staging_purged", extra={"rows": deleted, "cutoff": cutoff.isoformat()})
+    return deleted
+
+
 async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     """SAQ system-cron job -- daily metrics dump.
 
@@ -137,6 +197,10 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     dump runs on exactly one tick per day, spread across a 6-hour window.
     unique=True, system session factory.
     Skips when: no consenting orgs or instance switch off.
+
+    Every tick FIRST purges ``metrics_staging`` (``_purge_staging``: consumed
+    rows plus the retention bound), so staged events are bounded even on ticks
+    where the jitter/consent/vendor gates below skip the actual dump.
     """
     from modulo.core.saq_worker import _make_system_session_factory
     from modulo.settings import get_settings
@@ -152,36 +216,43 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     # swap to _make_session_factory.
     factory = _make_system_session_factory()
 
+    # Staging purge runs on EVERY tick, before the jitter gate — a gate that
+    # skips must not leave consumed/expired rows behind (FAR-1717).
+    staging_purged = await _purge_staging(factory)
+
     # Jitter gate — each instance has a random offset within a 6-hour window.
     if not await _should_dump_now(factory):
         _log.debug("product_analytics.jitter_skip")
-        return {"skipped": "jitter_skip"}
+        return {"skipped": "jitter_skip", "staging_purged": staging_purged}
 
     # Instance-level gate (design doc section 5).
     if not await _check_instance_switch(factory):
         _log.info("product_analytics.instance_switch_off")
-        return {"skipped": "instance_switch_off"}
+        return {"skipped": "instance_switch_off", "staging_purged": staging_purged}
 
-    # Find consenting orgs.
+    # Check license enforcement status (partner carve-out) and find consenting
+    # orgs in ONE session: the enforcement flag feeds the org filter, so they
+    # share a transaction instead of opening two back-to-back sessions.
     async with factory() as session, session.begin():
-        orgs = await _get_consenting_orgs(session)
+        enforcement_active = await is_enforcement_active(session)
+        orgs = await _get_consenting_orgs(session, enforcement_active)
     if not orgs:
         _log.info("product_analytics.no_consenting_orgs")
-        return {"skipped": "no_consenting_orgs"}
+        return {"skipped": "no_consenting_orgs", "staging_purged": staging_purged}
 
     # Determine the dump window from the watermark and consent dates.
     dump_date = datetime.now(UTC).date()
     start_date, last_dumped = await _resolve_start_date(factory, orgs, dump_date)
     if start_date > dump_date:
         _log.info("product_analytics.up_to_date", extra={"last_dumped": str(last_dumped)})
-        return {"skipped": "up_to_date", "last_dumped": str(last_dumped)}
+        return {"skipped": "up_to_date", "last_dumped": str(last_dumped), "staging_purged": staging_purged}
 
     # Build and send per-day payloads.
     endpoint_url = settings.product_analytics_endpoint_url
     instance_secret = settings.product_analytics_instance_secret
     if not endpoint_url or not instance_secret:
         _log.warning("product_analytics.missing_vendor_config")
-        return {"skipped": "missing_vendor_config"}
+        return {"skipped": "missing_vendor_config", "staging_purged": staging_purged}
 
     succeeded_dates = await _dump_date_range(factory, orgs, start_date, dump_date, endpoint_url, instance_secret)
 
@@ -196,6 +267,7 @@ async def metrics_dump(_ctx: dict[str, Any]) -> dict[str, Any]:
     return {
         "dumped_dates": [str(d) for d in succeeded_dates],
         "org_count": len(orgs),
+        "staging_purged": staging_purged,
     }
 
 
@@ -298,7 +370,7 @@ async def _check_instance_switch(factory: Any) -> bool:
         return await is_instance_analytics_enabled(session)
 
 
-async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
+async def _get_consenting_orgs(session: AsyncSession, enforcement_active: bool) -> list[dict[str, Any]]:
     from modulo.db.models.organisation import Organisation
 
     result = await session.execute(
@@ -310,6 +382,14 @@ async def _get_consenting_orgs(session: AsyncSession) -> list[dict[str, Any]]:
         # consent set and the transparency endpoint's reported posture cannot
         # drift (both call ``consent.is_org_consenting``).
         if not is_org_consenting(row.settings_json):
+            continue
+        # Apply license enforcement: partner licenses with product_analytics_required
+        # claim degrade orgs that haven't opted in to "all" (FAR-1636 / design §6).
+        if enforcement_active and should_degrade_to_community(row, enforcement_active):
+            _log.debug(
+                "product_analytics.license_degrade_skip",
+                extra={"org_id": str(row.id)},
+            )
             continue
         pa = (row.settings_json or {}).get("product_analytics", {})
         level_changed_at = pa.get("level_changed_at")
@@ -330,6 +410,7 @@ async def _build_payload(
         entity_counts = await _count_entities(session, org_ids)
         run_stats = await _aggregate_run_stats(session, org_ids, target_date)
         error_stats = await _aggregate_error_stats(session, org_ids, target_date)
+        staged_event_counts = await _aggregate_staged_events(session, org_ids, target_date)
         integration_inventory = await _build_integration_inventory(session, org_ids)
 
     return {
@@ -341,6 +422,7 @@ async def _build_payload(
         "entity_counts": entity_counts,
         "run_stats": run_stats,
         "error_stats": error_stats,
+        "event_counts": staged_event_counts,
         "integration_inventory": integration_inventory,
         "instance_metadata": _build_instance_metadata(factory),
     }
@@ -473,6 +555,35 @@ async def _aggregate_error_stats(
         by_level[row.level_peak] = count
         total += count
     return {"total": total, "by_level": by_level}
+
+
+async def _aggregate_staged_events(
+    session: AsyncSession,
+    org_ids: list[uuid.UUID],
+    target_date: date,
+) -> dict[str, int]:
+    """Aggregate ``metrics_staging`` events for *target_date* by event type.
+
+    This is the dump's staged-event consumer (FAR-1717): curated frontend
+    events staged by ``POST /api/v1/metrics/events`` are folded into the daily
+    payload's ``event_counts`` section. Scope matches the other daily
+    aggregates: the consenting ``org_ids`` for the payload date, one UTC day
+    (``[target_date 00:00, target_date + 1 00:00)``).
+    """
+    from modulo.db.models.metrics_staging import MetricsStaging
+
+    day_start = datetime.combine(target_date, datetime.min.time(), tzinfo=UTC)
+    day_end = day_start + timedelta(days=1)
+    result = await session.execute(
+        select(MetricsStaging.event_type, func.count().label("count"))
+        .where(
+            MetricsStaging.organisation_id.in_(org_ids),
+            MetricsStaging.recorded_at >= day_start,
+            MetricsStaging.recorded_at < day_end,
+        )
+        .group_by(MetricsStaging.event_type)
+    )
+    return {str(row[0]): int(row[1]) for row in result}
 
 
 async def _build_integration_inventory(session: AsyncSession, org_ids: list[uuid.UUID]) -> dict[str, Any]:

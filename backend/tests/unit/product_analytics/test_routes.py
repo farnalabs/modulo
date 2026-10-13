@@ -173,3 +173,55 @@ class TestUpdateLevelEndpoint:
         # The pydantic Literal validation rejects an invalid level before the
         # handler runs, so FastAPI returns 422 Unprocessable Entity.
         assert resp.status_code == 422, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Staging purge on consent withdrawal (FAR-1717)
+# ---------------------------------------------------------------------------
+
+
+class TestStagingPurgeOnOptOut:
+    """Landing on level=off must purge the org's ``metrics_staging`` rows.
+
+    Before FAR-1717 the PUT handler's docstring deferred this to FAR-355 and
+    nothing deleted staged rows on withdrawal. These tests fail against that
+    code: no DELETE statement on ``metrics_staging`` is ever executed.
+    """
+
+    @staticmethod
+    def _staging_deletes(session: AsyncMock) -> list:
+        from sqlalchemy.sql.dml import Delete
+
+        return [
+            call.args[0]
+            for call in session.execute.await_args_list
+            if call.args and isinstance(call.args[0], Delete) and call.args[0].table.name == "metrics_staging"
+        ]
+
+    def test_put_level_off_purges_staged_events(self, env) -> None:
+        session, _org = env
+        client = _client()
+        resp = client.put(_PRODUCT_ANALYTICS_URL, json={"level": "off"})
+        assert resp.status_code == 200, resp.text
+        assert self._staging_deletes(session), "PUT level=off must DELETE the org's staged events"
+
+    def test_put_level_all_does_not_purge(self, env) -> None:
+        session, _org = env
+        client = _client()
+        resp = client.put(_PRODUCT_ANALYTICS_URL, json={"level": "all"})
+        assert resp.status_code == 200, resp.text
+        assert not self._staging_deletes(session), "PUT level=all must not purge staged events"
+
+    def test_consent_decline_purges_staged_events(self, env) -> None:
+        session, _org = env
+        client = _client()
+        resp = client.post(_CONSENT_URL, json={"action": "decline"})
+        assert resp.status_code == 200, resp.text
+        assert self._staging_deletes(session), "declining consent must DELETE the org's staged events"
+
+    def test_consent_accept_does_not_purge(self, env) -> None:
+        session, _org = env
+        client = _client()
+        resp = client.post(_CONSENT_URL, json={"action": "accept"})
+        assert resp.status_code == 200, resp.text
+        assert not self._staging_deletes(session), "accepting consent must not purge staged events"

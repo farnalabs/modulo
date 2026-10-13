@@ -6,15 +6,25 @@ code:
   - backend/src/modulo/api/routes/product_analytics.py
   - backend/src/modulo/api/routes/product_analytics_identity.py
   - backend/src/modulo/api/routes/product_analytics_transparency.py
+  - backend/src/modulo/api/routes/metrics_ingest.py
   - backend/src/modulo/core/product_analytics
+  - frontend/src/composables/useProductAnalytics.ts
+  - frontend/src/composables/productAnalyticsEvents.ts
+  - frontend/src/stores/productAnalyticsStore.ts
+  - frontend/src/views/AdminProductAnalyticsView.vue
 unit-tests:
   - backend/tests/unit/product_analytics/test_consent.py
   - backend/tests/unit/product_analytics/test_instance_identity.py
   - backend/tests/unit/product_analytics/test_license_enforcement.py
   - backend/tests/unit/product_analytics/test_metrics_dump.py
   - backend/tests/unit/product_analytics/test_metrics_ingest.py
+  - backend/tests/unit/product_analytics/test_metrics_staging_consumer.py
   - backend/tests/unit/product_analytics/test_routes.py
   - backend/tests/unit/api/routes/test_product_analytics_transparency.py
+  - backend/tests/unit/api/test_product_analytics_identity_hardening.py
+  - backend/tests/integration/test_product_analytics_identity.py
+  - frontend/src/__tests__/composables/useProductAnalytics.spec.ts
+  - frontend/src/__tests__/AdminProductAnalyticsView.spec.ts
 bdd:
   - backend/tests/bdd/features/product_analytics/metrics_ingest.feature
   - backend/tests/bdd/features/personas/marcus-ciso.feature
@@ -53,13 +63,21 @@ an eligible tier.
       `consent.is_instance_analytics_enabled`, `core/product_analytics/consent.py`;
       the transparency endpoint now delegates to the same helper, so the reported
       switch and the dump gate cannot disagree)
-- [ ] License/plan eligibility gating is not wired in production: every function
-      in `core/product_analytics/license_enforcement.py`
-      (`check_product_analytics_requirement`, `is_enforcement_active`,
-      `should_degrade_to_community`) plus `consent.partner_license_requires_analytics`
-      / `is_partner_carve_out_active` has no production call site (unit tests only),
-      so neither a route nor the dump applies the partner `product_analytics_required`
-      carve-out. Feature completion, not a QA fix — tracked for a follow-up ticket.
+- [x] The daily dump applies the partner `product_analytics_required` carve-out:
+      `metrics_dump` reads the enforcement kill switch once per run
+      (`license_enforcement.is_enforcement_active`, fail-safe enforced) and
+      `_get_consenting_orgs` excludes orgs where
+      `should_degrade_to_community` fires, so a degraded org can never appear
+      in a vendor payload even if the consent predicate ever widens beyond
+      `all` (`core/product_analytics/metrics_dump.py`,
+      `tests/unit/product_analytics/test_metrics_dump.py`
+      `TestGetConsentingOrgsLicenseEnforcement`)
+- [ ] License/plan eligibility gating is not wired into request-time routes: the
+      effective-plan resolution (`core/feature_flags.py` `resolve_plan_context` /
+      `require_feature`) never consults `should_degrade_to_community`, so a
+      degraded org keeps its paid tier on API routes until that half lands.
+      The dump half above is done; the route half remains feature completion,
+      not a QA fix — tracked for a follow-up ticket.
 - [x] Identity and transparency endpoints disclose collection state and allow opt-out
       (`api/routes/product_analytics_identity.py`, `product_analytics_transparency.py`)
 - [x] The transparency endpoint reports the instance's REAL product-analytics
@@ -88,6 +106,38 @@ an eligible tier.
       transparency surface (`personas/marcus-ciso.feature`,
       `api/routes/product_analytics_transparency.py`,
       `tests/unit/api/routes/test_product_analytics_transparency.py`)
+- [x] The event-ingest endpoint `POST /api/v1/metrics/events` stages consent-gated
+      curated frontend events into `metrics_staging`: an org-scoped insert with
+      `UNIQUE(organisation_id, event_id)` dedup (`ON CONFLICT DO NOTHING`), an
+      `api_error` daily cap, and route-template sanitisation so raw paths never
+      reach the table; it is best-effort (always 204) and consent-gated through the
+      shared `consent.is_org_consenting` predicate
+      (`api/routes/metrics_ingest.py`,
+      `tests/unit/product_analytics/test_metrics_ingest.py`,
+      `tests/bdd/features/product_analytics/metrics_ingest.feature`)
+- [x] Staged frontend events are consumed and purged end to end (FAR-1717): the
+      daily dump's `_aggregate_staged_events` folds each UTC day's
+      `metrics_staging` rows into the payload's `event_counts` section, and
+      `_purge_staging` runs on EVERY `metrics_dump` cron tick before the jitter
+      gate — deleting consumed rows (the watermark has passed their date) plus
+      anything older than the 30-day retention bound, so the table cannot grow
+      unbounded even when a dump gate skips; the supporting plain index
+      `ix_metrics_staging_recorded_at` (migration 0304) serves the purge's
+      `recorded_at < :cutoff` DELETE. Turning the org's level off — admin PUT or
+      prompt decline — purges its staged rows immediately in the same
+      transaction (`api/routes/product_analytics.py`)
+      (`tests/unit/product_analytics/test_metrics_staging_consumer.py`,
+      `test_routes.py`)
+- [x] The frontend event-capture composable is initialised in the app root
+      (FAR-1718): `App.vue` calls `initProductAnalytics` with
+      `productAnalyticsStore.isOptedIn` as the live consent function, and
+      curated `track()` call sites ship with pipeline create / run start,
+      schema create, connector add, model-backend add, trigger create, eval
+      create and HITL claim/approve/reject. No `page_view` event exists — the
+      stale docstring claim of a server-side Redis counter was removed; no
+      per-route data is captured, client or server side
+      (`frontend/src/App.vue`,
+      `frontend/src/composables/useProductAnalytics.ts`)
 
 ## Consent scoping (FAR-1635)
 
@@ -122,8 +172,64 @@ intentional, not an open question:
   fields, which now reflect real state. An in-product analytics export/administration
   surface (self-serve downloads, configurable schedule, or a self-hosted warehouse)
   remains unshipped (warehouse scope sits under `feat-analytics`).
+- Events staged AFTER the daily dump moment on dump day are not delivered: the
+  dump is a point-in-time snapshot and the watermark advances to dump day, so
+  the next dump starts the following day; such rows are held back by the purge
+  (never deleted by their own dump day) and drop out via the 30-day retention
+  bound. Closing this would require the watermark to lag a full closed day —
+  which makes the vendor receive two payloads for the current date — i.e. a
+  payload-dedup contract change on the vendor side, not taken in FAR-1717.
 
 ## QA History
+- 2026-10-12: **Improve Architecture product-map walk** — wired the partner
+  `product_analytics_required` carve-out into the daily metrics dump (the dump
+  half of the license-gating behaviour): `metrics_dump` now reads
+  `is_enforcement_active` once per run and `_get_consenting_orgs` drops orgs
+  where `should_degrade_to_community` fires, in the same system session (one
+  transaction, not two back-to-back sessions). Fixed the 10-test breakage the
+  first cut left behind (the enforcement seam was patched at the defining
+  module instead of the `metrics_dump` import site, so every `metrics_dump`
+  caller hit the real DB read). Added `TestGetConsentingOrgsLicenseEnforcement`
+  (degraded-consenting excluded, non-degraded kept, enforcement-off short
+  circuit). The request-time route half (`resolve_plan_context` /
+  `require_feature` degrading the effective plan) is still open and stays
+  tracked as the remaining unchecked behaviour.
+- 2026-10-12: **FAR-1717 + FAR-1718 (staging consumer + capture init)** — closed
+  both unwired halves of the frontend ingest path. Backend: `_build_payload`
+  now folds `metrics_staging` into the payload (`_aggregate_staged_events` →
+  the new `event_counts` section; `SCHEMA_VERSION` bumped 1 → 2 per the module
+  contract that it changes when the payload shape changes); every
+  `metrics_dump` tick purges consumed + expired staging rows (`_purge_staging`,
+  bounded by the watermark and a 30-day retention cap) with the supporting
+  plain index `ix_metrics_staging_recorded_at` (migration 0304 — a *partial*
+  index is impossible here: the purge cutoff is a moving bind parameter and
+  Postgres requires IMMUTABLE index predicates); the admin PUT and the consent
+  decline path purge the org's staged rows in the same transaction, replacing
+  the "will be implemented in FAR-355" docstring on the level-update route.
+  Frontend: `App.vue` initialises `initProductAnalytics` with the store's live
+  `isOptedIn` as the consent function, curated `track()` call sites landed in
+  the same change (so captured events have a consumer), and the non-existent
+  `page_view` Redis-counter docstring claim was dropped. Evidence: the new
+  real-SQLite suite `test_metrics_staging_consumer.py` (aggregation, payload
+  section, purge cutoffs, jitter-skip wiring) and `test_routes.py::TestStagingPurgeOnOptOut`
+  both fail against the pre-change code (missing functions / no DELETE executed).
+- 2026-10-12: **Improve Architecture product-map walk** — documented the
+  event-ingest path and found its two unwired halves (both feature completion, not
+  QA fixes). (1) `POST /api/v1/metrics/events` → `metrics_staging` has no consumer
+  and no purge: `metrics_dump._build_payload` reads only aggregate tables
+  (`RunDailyFact`, `ErrorGroup`, entity counts) and never `MetricsStaging`, while
+  `db/models/metrics_staging.py` and migration 0121 both claim the dump consumes
+  and purges the rows. (2) `initProductAnalytics` / `useProductAnalytics` has no
+  production call site, so the client never captures or posts an event; its
+  `page_view` Redis-counter docstring describes a mechanism that does not exist.
+  Also corrected the entry's frontmatter: added `api/routes/metrics_ingest.py`, the
+  capture composable / event list / store / view to `code:`, and the identity-route
+  hardening tests + the new frontend specs to `unit-tests:`. Verified the linked
+  code read paths and re-ran the product analytics unit suites (all green); the
+  multi-org soft-delete filter audit (Lens 4) was falsified by direct observation
+  (the global `with_loader_criteria` filter DOES apply to the core-style
+  `select(func.count()).select_from(Model)` counts, so the counts exclude
+  soft-deleted rows).
 - 2026-10-10: **FAR-1635 (consent scope)** — replaced the transparency
   endpoint's hardcoded `off` fallback with an instance-level posture. Per-org
   consent remains the primary source; when the caller org cannot be resolved

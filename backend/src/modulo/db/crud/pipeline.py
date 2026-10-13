@@ -1073,6 +1073,30 @@ async def _clone_edges(
     return len(edges)
 
 
+def _warn_policy_gate_pins_dropped(
+    source_pins: list[dict[str, Any]] | None,
+    *,
+    pipeline_id: uuid.UUID,
+    snapshot_version: int,
+) -> None:
+    """Disclose a clone's dropped policy-gate pin pair, loudly (FAR-1698).
+
+    A clone cannot carry the source's policy-gate pins: the clone has no gate
+    rows (evals and gates are never cloned), so the pins would reference the
+    source's gates and declare a pinned universe that suppresses the clone's
+    own gates. Never a silent drop — mirrors the FAR-1666 declared-gate strip
+    warning. No-op when the source carried no pins.
+    """
+    if not source_pins:
+        return
+    _log.warning(
+        "policy_gate pin(s) dropped on clone of pipeline %s (evals/gates are not cloned): %d pin(s) on snapshot v%s",
+        _sanitise_log_value(pipeline_id),
+        len(source_pins),
+        snapshot_version,
+    )
+
+
 async def _clone_snapshots(
     session: AsyncSession,
     snapshots: list[dict[str, Any]],
@@ -1086,7 +1110,8 @@ async def _clone_snapshots(
     Returns the number of snapshots copied. The JSON blobs are deep-copied so
     the cloned snapshots are fully independent of the source. A declared
     ``policy_gate`` block in a snapshot's graph is stripped with a recorded
-    warning (FAR-1666) — see the inline comment below.
+    warning (FAR-1666), and the policy-gate pin pair is STRIPPED (NULL) — a
+    clone has no gate rows to pin (FAR-1698). See the inline comments below.
     """
     _log.info("Copying snapshots for pipeline %s -> %s", source_id, cloned_id)
     snap_count = 0
@@ -1111,6 +1136,21 @@ async def _clone_snapshots(
                 _sanitise_log_value(str(source_id)),
                 "; ".join(dropped_policy_gates),
             )
+        # FAR-1698 — policy-gate pins are the exception to the FAR-967 F10
+        # carry rule. A clone has NO gate rows (evals and gates are never
+        # cloned; declared gate blocks are stripped per FAR-1666), and
+        # ``_build_policy_gate_pins`` stores only the SOURCE's
+        # ``policy_gate_id`` / ``eval_id`` / ``action`` / ``node_id``. Carrying
+        # them would pin foreign gates AND — worse — declare a "pinned
+        # universe" in ``_build_eval_defs_by_node``, under which the clone's
+        # OWN gates are unpinned and every clone gate block is silently
+        # downgraded to warn. Strip the pair to NULL so the clone falls back to
+        # its own live gates; disclose the drop, never silently.
+        _warn_policy_gate_pins_dropped(
+            snap.get("policy_gate_pins_json"),
+            pipeline_id=source_id,
+            snapshot_version=snap["snapshot_version"],
+        )
         cloned_snap = PipelineSnapshot(
             organisation_id=org_id,
             pipeline_id=cloned_id,
@@ -1124,14 +1164,17 @@ async def _clone_snapshots(
             model_backend_pins_json=copy.deepcopy(snap["model_backend_pins_json"]),
             composite_bindings_json=copy.deepcopy(snap["composite_bindings_json"]),
             parameter_bindings_json=copy.deepcopy(snap["parameter_bindings_json"]),
-            # Pin pairs the clone must carry verbatim (FAR-967 F10): a
-            # cloned snapshot with NULL pin columns would silently run the
-            # clone's runs UNPINNED (falling back to live gates/guardrails),
-            # dropping the snapshot-integrity guarantee the source had.
+            # Guardrail pins are carried through clone verbatim (FAR-967 F10):
+            # a cloned snapshot with NULL guardrail pin columns would silently
+            # run the clone's runs UNPINNED (falling back to live guardrails),
+            # dropping the snapshot-integrity guarantee the source had. They
+            # are self-contained serialised definitions — rebuilt from the pin
+            # alone by ``to_engine_definition_from_pin`` — so the clone needs
+            # nothing from the source to evaluate them.
             guardrail_pins_json=copy.deepcopy(snap.get("guardrail_pins_json")),
             guardrail_pins_fingerprint=snap.get("guardrail_pins_fingerprint"),
-            policy_gate_pins_json=copy.deepcopy(snap.get("policy_gate_pins_json")),
-            policy_gate_pins_fingerprint=snap.get("policy_gate_pins_fingerprint"),
+            policy_gate_pins_json=None,
+            policy_gate_pins_fingerprint=None,
             tag=snap["tag"],
             notes=snap["notes"],
             default_autonomy_level=snap["default_autonomy_level"],
@@ -1185,6 +1228,15 @@ def _snapshot_pin_to_dict(p: SnapshotSchemaPin) -> dict[str, Any]:
 def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dict[str, Any]:
     """Flatten a ``PipelineSnapshot`` row into plain data, deep-copying its JSON
     blobs so the clone never shares references with the source."""
+    # FAR-1698: strip the policy-gate pin pair at the read flatten too, not only
+    # at the clone writer — the intermediate dict must never carry the source's
+    # gates. Disclose the drop here (this is where the source value is still
+    # visible); ``_clone_snapshots`` re-strips defensively.
+    _warn_policy_gate_pins_dropped(
+        snap.policy_gate_pins_json,
+        pipeline_id=snap.pipeline_id,
+        snapshot_version=snap.snapshot_version,
+    )
     return {
         "snapshot_version": snap.snapshot_version,
         "account_id": snap.account_id,
@@ -1196,11 +1248,15 @@ def _snapshot_to_dict(snap: PipelineSnapshot, pins: list[dict[str, Any]]) -> dic
         "model_backend_pins_json": copy.deepcopy(snap.model_backend_pins_json),
         "composite_bindings_json": copy.deepcopy(snap.composite_bindings_json),
         "parameter_bindings_json": copy.deepcopy(snap.parameter_bindings_json),
-        # Pin pairs carried through clone (FAR-967 F10) — see _clone_snapshots.
+        # Guardrail pins are carried through clone verbatim (FAR-967 F10) — see
+        # _clone_snapshots — they are self-contained serialised definitions.
+        # FAR-1698: policy-gate pins are NULLed here AND in _clone_snapshots —
+        # a clone has no gate rows, so the source's pins could only pin foreign
+        # gates and suppress the clone's own.
         "guardrail_pins_json": copy.deepcopy(snap.guardrail_pins_json),
         "guardrail_pins_fingerprint": snap.guardrail_pins_fingerprint,
-        "policy_gate_pins_json": copy.deepcopy(snap.policy_gate_pins_json),
-        "policy_gate_pins_fingerprint": snap.policy_gate_pins_fingerprint,
+        "policy_gate_pins_json": None,
+        "policy_gate_pins_fingerprint": None,
         "tag": snap.tag,
         "notes": snap.notes,
         "default_autonomy_level": snap.default_autonomy_level,

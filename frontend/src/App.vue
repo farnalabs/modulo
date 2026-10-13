@@ -26,6 +26,8 @@ import AppLayout from './components/AppLayout.vue'
 import ForceChangePasswordView from './views/ForceChangePasswordView.vue'
 import AssistantOnlyView from './views/AssistantOnlyView.vue'
 import { useWebVitals } from './composables/useWebVitals'
+import { initProductAnalytics } from './composables/useProductAnalytics'
+import { useProductAnalyticsStore } from './stores/productAnalyticsStore'
 
 const router = useRouter()
 const route = useRoute()
@@ -55,6 +57,15 @@ const showsPublicRouteView = computed(
 )
 
 useWebVitals()
+
+// FAR-1718: initialise product-analytics event capture. The consent function
+// reads the store's live `isOptedIn` at each track() call: the consent prompt
+// (mounted in AppLayout for every authenticated session) fetches consent on
+// mount, so capture stays silent until the org has opted in (level=all) and
+// activates as soon as it has. Fail-closed: with no consent state loaded the
+// store defaults to level=off and nothing is buffered.
+const productAnalytics = useProductAnalyticsStore()
+initProductAnalytics(() => productAnalytics.isOptedIn)
 
 // Tracks the previous auth state so the authenticated→cleared transition can
 // be detected — that is the trigger for the auto-login recovery path below.

@@ -163,6 +163,45 @@ def test_invalid_port_refused(tmp_path: Path) -> None:
         load_state(path, _key())
 
 
+def _valid_payload() -> dict[str, object]:
+    """A structurally valid from_payload input; one field varies per case."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "postgres_port": 15432,
+        "redis_port": 16379,
+        "api_port": 18000,
+    }
+
+
+def test_from_payload_missing_required_field_refused() -> None:
+    """A payload lost a required port key: refuse, never KeyError halfway in."""
+    payload = _valid_payload()
+    payload.pop("redis_port")
+    with pytest.raises(StateIntegrityError, match="missing field"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_non_string_backup_timestamp_refused() -> None:
+    payload = _valid_payload()
+    payload["last_backup_at"] = 123
+    with pytest.raises(StateIntegrityError, match="not a valid timestamp"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_empty_backup_timestamp_refused() -> None:
+    payload = _valid_payload()
+    payload["last_backup_at"] = ""
+    with pytest.raises(StateIntegrityError, match="not a valid timestamp"):
+        LauncherState.from_payload(payload)
+
+
+def test_from_payload_non_integer_schema_version_refused() -> None:
+    payload = _valid_payload()
+    payload["schema_version"] = "1"
+    with pytest.raises(StateIntegrityError, match="not an integer"):
+        LauncherState.from_payload(payload)
+
+
 def test_save_is_atomic_no_tmp_leftovers(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     save_state(_state(), path, _key())
@@ -259,6 +298,51 @@ def test_find_free_port_bumps_when_taken(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(state_module.socket, "socket", _FakeSocket)
     result = find_free_port(15432)
     assert result == 15433
+
+
+def test_find_free_port_raises_when_nothing_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exhausting the port range surfaces StateIntegrityError, not a hang."""
+    import modulo.launcher.state as state_module
+
+    class _DeadSocket:
+        def __init__(self, _family: int, _type: int) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def bind(self, _addr: tuple[str, int]) -> None:
+            raise OSError("address already in use")
+
+    monkeypatch.setattr(state_module.socket, "socket", _DeadSocket)
+    with pytest.raises(StateIntegrityError, match="No free port found at or above 15432"):
+        find_free_port(15432)
+
+
+def test_find_free_port_raises_when_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The exclude set can drain the whole remaining range on its own."""
+    import modulo.launcher.state as state_module
+
+    class _FreeSocket:
+        def __init__(self, _family: int, _type: int) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+        def bind(self, _addr: tuple[str, int]) -> None:
+            return None
+
+    monkeypatch.setattr(state_module.socket, "socket", _FreeSocket)
+    everything = frozenset(range(1024, 65536))
+    with pytest.raises(StateIntegrityError, match="No free port found at or above 15432"):
+        find_free_port(15432, exclude=everything)
 
 
 def test_find_free_port_returns_preferred_when_free(monkeypatch: pytest.MonkeyPatch) -> None:

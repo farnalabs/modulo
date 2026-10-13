@@ -27,7 +27,7 @@ import modulo.settings as settings_module
 from modulo.launcher.entry import BootError, default_data_dir, resolve_bin_dir, run_start
 from modulo.launcher.env_safety import AmbientEnvironmentError
 from modulo.launcher.supervisor import DataDirLockError
-from modulo.settings import get_settings
+from tests.unit.launcher.test_launcher_shared import bypass_platform_seams, launcher_state_reset
 
 FERNET_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 SECRET_KEY = "a" * 32
@@ -35,22 +35,19 @@ SECRET_KEY = "a" * 32
 
 @pytest.fixture(autouse=True)
 def _reset_launcher_state() -> Iterator[None]:
-    """Snapshot + restore the module-level pin/guard and the get_settings cache."""
-    get_settings.cache_clear()
-    yield
-    settings_module._pinned_env_file = None
-    settings_module._first_boot_guard = None
-    get_settings.cache_clear()
+    """The shared snapshot/restore body lives in the launcher-test module."""
+    yield from launcher_state_reset()
 
 
 @pytest.fixture(autouse=True)
 def _bypass_platform_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logic tests run on any OS: bypass the Windows-refusal seams."""
-    if sys.platform == "win32":
-        monkeypatch.setattr(secrets_file_module, "assert_supported_platform", lambda: None)
-        import modulo.launcher.initdb as initdb_module
-
-        monkeypatch.setattr(initdb_module, "assert_supported_platform", lambda: None)
+    bypass_platform_seams(
+        monkeypatch,
+        "modulo.launcher.secrets_file",
+        "modulo.launcher.initdb",
+        "modulo.launcher.entry",
+    )
 
 
 def _raise_boot_error(message: str) -> Path:
@@ -80,6 +77,11 @@ def _top_level_modulo_imports(tree: ast.Module) -> list[str]:
 def test_entry_first_modulo_import_is_env_safety() -> None:
     tree = _entry_tree()
     imports = _top_level_modulo_imports(tree)
+    # Pins BOTH halves of the module docstring's import-order contract:
+    # env_safety must be the FIRST top-level modulo import AND no other
+    # top-level modulo import may appear (the exact set). The forbidden-prefix
+    # policy (settings/cli/api/db) is owned separately by
+    # test_entry_has_no_top_level_settings_or_cli_imports.
     assert imports == ["modulo.launcher.env_safety"]
 
 
@@ -1246,18 +1248,32 @@ def test_upgrade_context_provider_no_snapshot_string(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_serve_watch_already_exiting() -> None:
-    class FakeServer:
-        def __init__(self):
-            self.should_exit = True
+def test_serve_watch_already_exiting_returns_without_touching_force_exit() -> None:
+    class WriteCountingServer:
+        """``should_exit`` counts writes so the early return is observable."""
+
+        def __init__(self) -> None:
+            self._should_exit = True
+            self.should_exit_writes = 0
+            self.force_exit = False
+
+        @property
+        def should_exit(self) -> bool:
+            return self._should_exit
+
+        @should_exit.setter
+        def should_exit(self, value: bool) -> None:
+            self.should_exit_writes += 1
+            self._should_exit = value
 
     stop = threading.Event()
     force = threading.Event()
     stop.set()
-    server = FakeServer()
+    server = WriteCountingServer()
     entry_module._serve_watch(server, stop, force)
-    # Should return immediately since server.should_exit is already True
-    assert server.should_exit is True
+    # Early return: should_exit was already True so it must NOT be reassigned
+    # (write count stays 0) and force_exit must never be touched.
+    assert server.should_exit_writes == 0
     assert force.is_set() is False
 
 

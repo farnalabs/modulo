@@ -69,12 +69,14 @@ from modulo.core.pipeline_engine.event_broker import get_registry
 from modulo.core.pipeline_engine.recovery import (
     ConcurrentRecoveryError,
     GuardrailOverrideError,
+    GuardrailOverrideNoCheckpointError,
     GuardrailOverrideRejectedError,
     GuardrailOverrideRequiredError,
     NodeAlreadyCompletedError,
     NodeNotFoundInGraphError,
     RecoveryNotAllowedError,
     guardrail_override,
+    guardrail_override_job_type,
     recover_node,
 )
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
@@ -3028,9 +3030,20 @@ async def guardrail_override_run(
     override is the ONLY remediation: it re-runs the guardrail pass on the
     supplied ``input_data`` (re-block safe default — a still-violating input is
     refused with 422 and the run stays terminal), persists the post-redaction
-    payload, flips the run to ``pending`` with ``is_replay=True``, and
-    re-dispatches it from run start (execute_run — the blocked run never
-    executed, so there is no checkpoint to resume).
+    payload, flips the run with ``is_replay=True``, and re-dispatches it. The
+    flip target and job type branch on node progress (FAR-1711): a node-
+    STARTED run (durable ``first_node_dispatched`` phase — a node-scoped
+    ``block`` eval terminalizes from a completed node) flips to ``running``
+    and is re-dispatched as ``resume_run`` (checkpoint resume — FAR-1649:
+    never re-execute a node-started run); the genuine zero-node block (run-
+    level interception at creation, NULL / pre-node phase) flips to
+    ``pending`` and is re-dispatched from run start (execute_run).
+
+    A node-started run is refused with 409 when its thread carries no
+    resumable checkpoint (``GuardrailOverrideNoCheckpointError``, FAR-1711
+    M1 — the reachable case is a non-interactive pipeline, which never
+    persists one): resuming it would silently re-execute it, so the run is
+    left terminal ``eval_blocked`` rather than burned.
 
     Requires operator or admin role.
     """
@@ -3068,6 +3081,13 @@ async def guardrail_override_run(
                 # run stays terminal eval_failed; 422 = the supplied input is
                 # unprocessable for this run.
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)[:200]) from exc
+            except GuardrailOverrideNoCheckpointError as exc:
+                # FAR-1711 (M1) fail-closed: the run started a node but has no
+                # resumable checkpoint, so a ``resume_run`` would re-execute it
+                # (FAR-1649). The run stays terminal eval_blocked — still
+                # overridable / repairable — and the operator gets a distinct
+                # 409 rather than a silently-burned run.
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
             except GuardrailOverrideError as exc:
                 # Not a guardrail-blocked terminal run — nothing to override.
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)[:200]) from exc
@@ -3103,14 +3123,21 @@ async def guardrail_override_run(
             detail=MSG_UNEXPECTED_ERROR,
         ) from None
 
-    # Re-dispatch the pending run from run start (execute_run). The blocked run
-    # never executed, so there is no checkpoint to resume from — dispatch_run
-    # enqueues the default execute_run job with no resume data.
+    # FAR-1711: the re-dispatch job type is the ONE shared predicate
+    # ``guardrail_override`` owns (it also chose the flip target), so the
+    # route never re-derives it from a magic status string. A node-STARTED
+    # eval-blocked run was left ``running`` (the recover-node lock status)
+    # and must be re-dispatched as ``resume_run`` — checkpoint resume, never
+    # re-execution (FAR-1649). The genuine zero-node block stays ``pending``
+    # and is re-dispatched from run start (execute_run) with no resume data —
+    # no node ever ran, so there is nothing to resume.
+    job_type = guardrail_override_job_type(run)
     try:
         outcome, _job_id = await dispatch_run(
             str(run_id),
             str(principal.organisation_id),
             queue="runs",
+            job_type=job_type,
         )
     except Exception as exc:
         _log.exception("run.guardrail_override_dispatch_failed")
