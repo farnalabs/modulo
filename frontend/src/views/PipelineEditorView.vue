@@ -475,6 +475,18 @@
              renders it - and never issues the admin-only GET. In-flow under the
              toolbar so it never covers the canvas. -->
         <SnapshotLockCard v-if="isSystemAdmin" :pipeline-id="pipelineId" />
+        <!-- FAR-1696 slice (b): progressive-autonomy visibility + manual
+             promote/demote over the FAR-1175 earned-autonomy state. Sits with
+             the toolbar's autonomy-ceiling control; an unset earned level
+             renders its explicit "using pipeline default" fallback. -->
+        <ProgressiveAutonomyPanel
+          :pipeline-id="pipelineId"
+          :default-level="pipeline?.default_autonomy_level ?? null"
+          :max-level="pipeline?.max_autonomy_level ?? null"
+          :earned-level="pipeline?.earned_autonomy_level ?? null"
+          :earned-updated-at="pipeline?.earned_autonomy_updated_at ?? null"
+          @changed="loadPipeline"
+        />
         <!-- FAR-688: legacy HITL gates whose descriptions predate the
              minimum (reads never hard-fail on them) — surface WHICH gates
              need descriptions so the user can find and fix them. -->
@@ -1495,6 +1507,7 @@ import FlowControls from '../components/shared/FlowControls.vue'
 import PipelineSnapshotTimeline from '../components/pipeline/PipelineSnapshotTimeline.vue'
 import SandboxCommandsEditor from '../components/pipeline/SandboxCommandsEditor.vue'
 import SnapshotLockCard from '../components/pipeline/SnapshotLockCard.vue'
+import ProgressiveAutonomyPanel from '../components/pipeline/ProgressiveAutonomyPanel.vue'
 import AgentRunnerBindings from '../components/agent/AgentRunnerBindings.vue'
 import { shortId } from '../utils/format'
 import { CANVAS_EDGE_STROKE } from '../constants/canvas'

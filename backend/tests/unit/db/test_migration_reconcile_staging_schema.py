@@ -138,8 +138,11 @@ _HEAD_MIGRATION = "0120_org_fk_hardening"
 # 0301_oauth_consent_state_preauth_rls chains off 0300_benign_facts_repair,
 # 0302_runs_run_grouping chains off 0301_oauth_consent_state_preauth_rls, and
 # 0303_feedback_records_lookup_indexes chains off 0302_runs_run_grouping, and
-# 0307_hitl_claims_decision_sweep chains off 0306_trigger_secret_encryption as the chain head.
-_CHAIN_HEAD_MIGRATION = "0307_hitl_claims_decision_sweep"
+# 0305_guardrail_escalate_action chains off 0304_metrics_staging_recorded_at_index, and
+# 0306_trigger_secret_encryption chains off 0305_guardrail_escalate_action, and
+# 0307_runs_guardrail_override_resume_pending chains off 0306_trigger_secret_encryption, and
+# 0308_hitl_claims_decision_sweep chains off 0307_runs_guardrail_override_resume_pending as the chain head.
+_CHAIN_HEAD_MIGRATION = "0308_hitl_claims_decision_sweep"
 
 
 def _source(name: str) -> str:

@@ -51,7 +51,10 @@ KEY_NAMESPACE_OWNERSHIP: dict[str, set[str]] = {
     "system_state": {"connector_", "sandbox_", "capability_"},
     "run": {"node_"},
     "policy_gate": set(),  # reserved, empty in chunk 7
-    "derived": set(),  # reserved, empty in chunk 7
+    # FAR-1691: the ``derived`` producer owns the changed-set facts — the
+    # resolved set is DERIVED from the platform-observed and agent-reported
+    # sets (see ``modulo.core.eval_engine.changed_sets``).
+    "derived": {"changed_set_"},
 }
 
 

@@ -185,6 +185,7 @@ class TestFunctionsWiring:
             "connector_health_checks",
             "health_readiness_alert",
             "memory_monitor_cron",
+            "run_kill_switch_drill",
         }
         # fire_due_triggers: every 60s (croniter parses 5-field cron), timeout=300, retries=3 (F1).
         fdt = jobs["fire_due_triggers"]

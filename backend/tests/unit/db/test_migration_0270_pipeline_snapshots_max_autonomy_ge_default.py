@@ -43,7 +43,10 @@ Lenses:
     0301_oauth_consent_state_preauth_rls chains onto 0300_benign_facts_repair,
     0302_runs_run_grouping chains onto 0301_oauth_consent_state_preauth_rls, and
     0303_feedback_records_lookup_indexes chains onto 0302_runs_run_grouping, and
-    0307_hitl_claims_decision_sweep chains onto 0306_trigger_secret_encryption as the
+    0305_guardrail_escalate_action chains onto 0304_metrics_staging_recorded_at_index, and
+    0306_trigger_secret_encryption chains onto 0305_guardrail_escalate_action, and
+    0307_runs_guardrail_override_resume_pending chains onto 0306_trigger_secret_encryption, and
+    0308_hitl_claims_decision_sweep chains onto 0307_runs_guardrail_override_resume_pending as the
     single linear head. This migration was originally numbered 0268; main landed
   ``0268_webhook_lookup_expiry_indexes`` and
   ``0269_webhook_dedup_check_constraints`` in the meantime, claiming that slot,
@@ -86,7 +89,7 @@ from modulo.db.models.pipeline_snapshot import PipelineSnapshot
 
 _MIGRATION_REVISION = "0270_pipeline_snapshots_max_autonomy_ge_default"
 _MIGRATION_DOWN_REVISION = "0269_webhook_dedup_check_constraints"
-_HEAD_MIGRATION = "0307_hitl_claims_decision_sweep"
+_HEAD_MIGRATION = "0308_hitl_claims_decision_sweep"
 _CONSTRAINT = "ck_pipeline_snapshots_max_autonomy_ge_default"
 _VOCABULARY = ("manual_approval", "notify_on_complete", "fully_autonomous")
 #: The existence gates must name the TABLE, not just the constraint - 0264
