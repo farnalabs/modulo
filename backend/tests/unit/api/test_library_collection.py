@@ -2076,3 +2076,148 @@ class TestAllBundlePinsResolve:
             coll = _MODULO_BY_SLUG[("library_collection", slug)]
             trust = coll.content_json.get("trust_header")
             assert trust == {"source": "modulo", "verified": True}, f"Collection '{slug}' missing or wrong trust_header"
+
+
+# ---------------------------------------------------------------------------
+# FAR-759 coverage: list-install success, version-group, DB-error arms
+# ---------------------------------------------------------------------------
+
+
+def _scalars_result(values: list) -> MagicMock:
+    res = MagicMock()
+    it = MagicMock()
+    it.__iter__ = MagicMock(return_value=iter(values))
+    it.first = MagicMock(return_value=values[0] if values else None)
+    res.scalars = MagicMock(return_value=it)
+    return res
+
+
+class TestListInstallsSuccess:
+    def test_list_installs_no_update(self, client: TestClient) -> None:
+        install = _make_install_record()
+        client.mock_session.execute = AsyncMock(return_value=_scalars_result([install]))
+        client.mock_session.get = AsyncMock(return_value=None)  # collection not visible
+        with patch(
+            "modulo.api.routes.library.compute_runnable",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{install.collection_id}/installs",
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["items"]) == 1
+        assert data["items"][0]["update_available"] is False
+
+    def test_list_installs_update_available(self, client: TestClient) -> None:
+        install = _make_install_record()
+        newer = MagicMock()
+        newer.version = "1.1"
+        client.mock_session.execute = AsyncMock(return_value=_scalars_result([install]))
+        client.mock_session.get = AsyncMock(return_value=MagicMock())
+        with (
+            patch(
+                "modulo.api.routes.library.compute_runnable",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "modulo.api.routes.library.find_newer_version",
+                new_callable=AsyncMock,
+                return_value=newer,
+            ),
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{install.collection_id}/installs",
+            )
+        assert resp.status_code == 200, resp.text
+        item = resp.json()["items"][0]
+        assert item["update_available"] is True
+        assert item["available_version"] == "1.1"
+
+
+class TestCreateCollectionVersionSeededGroup:
+    def test_version_group_already_seeded(self, client: TestClient) -> None:
+        group = uuid.uuid4()
+        coll = _make_published_collection(version_group_id=group)
+        mock_session = client.mock_session
+        mock_session.execute = AsyncMock(return_value=_no_rows_execute_result())
+
+        def _stamp_added_row(*_args: object, **_kwargs: object) -> None:
+            row = mock_session.add.call_args.args[0]
+            row.id = uuid.uuid4()
+            row.created_at = _NOW
+            row.updated_at = _NOW
+
+        mock_session.flush = AsyncMock(side_effect=_stamp_added_row)
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            return_value=coll,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{coll.id}/versions")
+        assert resp.status_code == 201, resp.text
+        assert coll.version_group_id == group
+        added = mock_session.add.call_args.args[0]
+        assert added.version_group_id == group
+
+
+class TestCreateCollectionVersionDbErrors:
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (IntegrityError("stmt", {}, RuntimeError("conflict")), 409),
+            (ProgrammingError("stmt", {}, RuntimeError("missing table")), 501),
+            (SQLAlchemyError("db down"), 503),
+        ],
+    )
+    def test_create_version_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
+        with patch(
+            "modulo.api.routes.library.get_primitive",
+            new_callable=AsyncMock,
+            side_effect=exc,
+        ):
+            resp = client.post(f"/api/v1/libraries/collections/{uuid.uuid4()}/versions")
+        assert resp.status_code == expected
+
+
+class TestCollectionUpdateDbErrors:
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (ProgrammingError("stmt", {}, RuntimeError("missing table")), 501),
+            (SQLAlchemyError("db down"), 503),
+        ],
+    )
+    def test_update_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
+        with patch(
+            "modulo.api.routes.library.detect_collection_update",
+            new_callable=AsyncMock,
+            side_effect=exc,
+        ):
+            resp = client.get(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/update",
+            )
+        assert resp.status_code == expected
+
+
+class TestUpgradeCollectionDbErrors:
+    @pytest.mark.parametrize(
+        ("exc", "expected"),
+        [
+            (IntegrityError("stmt", {}, RuntimeError("conflict")), 409),
+            (ProgrammingError("stmt", {}, RuntimeError("missing table")), 501),
+            (SQLAlchemyError("db down"), 503),
+        ],
+    )
+    def test_upgrade_db_error_arms(self, client: TestClient, exc: Exception, expected: int) -> None:
+        with patch(
+            "modulo.api.routes.library.upgrade_collection",
+            new_callable=AsyncMock,
+            side_effect=exc,
+        ):
+            resp = client.post(
+                f"/api/v1/libraries/collections/{uuid.uuid4()}/installs/{uuid.uuid4()}/upgrade",
+            )
+        assert resp.status_code == expected

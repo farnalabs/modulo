@@ -634,4 +634,50 @@ describe('CollectionDetailView update-available flow (FAR-759)', () => {
 
     expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
   })
+
+  it('shows the upgrade error box when the upgrade API returns an error payload', async () => {
+    mockPublishedCollectionWithUpdate(true)
+    vi.mocked(api.POST).mockResolvedValueOnce({
+      data: undefined,
+      error: 'Forbidden',
+    } as never)
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    await wrapper.find('[data-testid="collection-upgrade"]').trigger('click')
+    await nextTick()
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="collection-upgrade-error"]').exists()).toBe(true)
+  })
+
+  it('renders a placeholder version when the update has no available version', async () => {
+    getMock.mockImplementation(async (path: string) => {
+      if (String(path).includes('/installs')) {
+        return {
+          items: [
+            {
+              ...makeInstall(),
+              update_available: true,
+              available_version: null,
+            },
+          ],
+        }
+      }
+      return makeCollection({ status: 'published' })
+    })
+    router.push('/library/collections/col-1')
+    await router.isReady()
+    const wrapper = mount(CollectionDetailView, { global: { plugins: [router] } })
+    await nextTick()
+    await nextTick()
+
+    const badge = wrapper.find('[data-testid="collection-update-available"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('?')
+  })
 })
