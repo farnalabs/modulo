@@ -406,7 +406,9 @@ class TestPendingLegRedispatchesTheFencedResetRow:
         # FAR-1728: the phase constant is now bound TWICE — once by the single
         # EXCLUSION leg above (the running stale-heartbeat leg, pinned at
         # exactly one "IS NULL") and once by the guardrail-override resume
-        # leg's POSITIVE match (``dispatch_phase = ...`` + ``is_replay``).
+        # leg's POSITIVE match (``dispatch_phase = ...`` + the flip's
+        # ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` sentinel in ``error_detail`` —
+        # NOT ``is_replay``, which webhook/manual replay also set).
         # A third binding would mean another leg started binding the phase —
         # inspect before relaxing this.
         assert len(phase_params) == 2

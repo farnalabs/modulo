@@ -279,6 +279,33 @@ def _immediately_claimable_heartbeat() -> datetime:
     return datetime.now(UTC) - timedelta(seconds=stamp_depth)
 
 
+# FAR-1728: the ONE durable discriminator for the guardrail-override resume
+# self-heal leg in ``core.cron_helpers`` — written by EXACTLY one site
+# (:func:`guardrail_override`'s flip, into ``runs.error_detail``) and read by
+# exactly one leg (the reconcile's override-resume selection + its row-side
+# recheck).
+#
+# ``runs.is_replay`` CANNOT be that discriminator, even though the flip also
+# sets it: ``is_replay`` is written by webhook replay
+# (``trigger_engine._create_webhook_run(..., is_replay=True)``) and by
+# ``create_run`` for a manual replay, so a ``running`` +
+# ``first_node_dispatched`` + ``is_replay`` row is NOT necessarily the
+# guardrail-override flip. Selecting the leg on ``is_replay`` lifts the
+# FAR-1649 node-started belt for EVERY replay-shaped row — a wedged
+# webhook-replay run would be auto-resumed from checkpoint, re-executing an
+# in-progress, possibly non-idempotent super-step (the exact hazard the belt
+# guards). A sentinel string in ``error_detail`` has a single write site, so
+# ``git grep GUARDRAIL_OVERRIDE_RESUME_MARKER`` IS the uniqueness proof.
+#
+# ``error_code`` stays ``None`` on the flip (unchanged), so no failure surface
+# renders the sentinel: the run-detail error block requires ``status == 'failed'``
+# and the runs-list ``RunErrorTag`` requires ``error_code`` — a
+# detail-without-code row is presentationally inert. The sentinel text is
+# provenance ("the override was applied"), never a transient condition, so it
+# stays truthful for the row's whole life.
+GUARDRAIL_OVERRIDE_RESUME_MARKER = "guardrail override applied (FAR-1728 resume self-heal marker)"
+
+
 def _override_flip_values(node_started: bool) -> tuple[str, dict[str, Any], datetime | None]:
     """Status UPDATE values for a guardrail override (FAR-1711).
 
@@ -617,7 +644,10 @@ async def guardrail_override(
        :class:`GuardrailOverrideRejectedError` and the run STAYS terminal.
     3. On clean input the run flips off ``eval_failed`` with the POST-redaction
        payload persisted, ``is_replay=True`` (so lifecycle-map
-       journeys increment EXACTLY ONCE on the re-dispatch), and a
+       journeys increment EXACTLY ONCE on the re-dispatch), a
+       ``GUARDRAIL_OVERRIDE_RESUME_MARKER`` sentinel in ``error_detail``
+       (FAR-1728: the reconcile self-heal leg's discriminator — see the
+       constant's note on why ``is_replay`` cannot serve), and a
        ``guardrail.override`` audit event. The flip target branches on node
        progress (FAR-1711): a node-STARTED run — the durable
        ``first_node_dispatched`` phase (FAR-1422) that a node-scoped ``block``
@@ -782,7 +812,16 @@ async def guardrail_override(
         # Keep the in-session row consistent with the atomic UPDATE above.
         run.heartbeat_at = stale_heartbeat
     run.error_code = None
-    run.error_detail = None
+    # FAR-1728: NOT ``None`` — this is the self-heal leg's discriminator. The
+    # flip is the sentinel's ONLY production write site (see
+    # ``GUARDRAIL_OVERRIDE_RESUME_MARKER``), and ``error_code`` stays ``None``
+    # so no failure surface renders the detail (the run-detail error block
+    # needs ``status == 'failed'``, the runs-list error tag needs ``error_code``).
+    # A lost ``resume_run`` job is then re-dispatched by the reconcile leg that
+    # selects on this exact value — and by that leg alone: ``is_replay`` (also
+    # set below) is shared with webhook/manual replay, so it can never
+    # discriminate the flip.
+    run.error_detail = GUARDRAIL_OVERRIDE_RESUME_MARKER
     run.input_payload = outcome.payload
     # The stored payload changed on override, so the persisted ``input_hash``
     # (computed from the original blocked payload at create) must be recomputed
