@@ -27,9 +27,10 @@ The provenance is stamped where the run actually reads its credential — the
 reserved-env-var denylist) — in addition to riding on the returned credential
 handle.
 
-Dependency-light by design: stdlib + typing only at import time; the DB / auth
-modules are imported lazily inside the provider methods so this module can be
-imported from the dependency-light dispatch path without pulling them in.
+Dependency-light by design: stdlib, typing, and the dependency-free
+``modulo.util`` leaf at import time; the DB / auth modules are imported lazily
+inside the provider methods so this module can be imported from the
+dependency-light dispatch path without pulling them in.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
+
+from modulo.util.uuid import coerce_uuid
 
 _log = logging.getLogger(__name__)
 
@@ -132,18 +135,6 @@ class CredentialIssuer(Protocol):
         ...  # pragma: no cover - Protocol stub body, never executed
 
 
-def _coerce_uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
-    """Coerce a (possibly string) identifier to a UUID, or None when invalid."""
-    if isinstance(value, uuid.UUID):
-        return value
-    if not value:
-        return None
-    try:
-        return uuid.UUID(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
 class ModuloCredentialIssuer:
     """Default provider: a Modulo-minted, run-scoped runner-role API key.
 
@@ -174,15 +165,13 @@ class ModuloCredentialIssuer:
         """
         if session_factory is None:
             return None
-        org_uuid = _coerce_uuid(org_id)
+        org_uuid = coerce_uuid(org_id)
         if org_uuid is None:
             return None
-        run_uuid = _coerce_uuid(run_id)
+        run_uuid = coerce_uuid(run_id)
         if run_uuid is None:
             return None
         try:
-            from sqlalchemy import text as _sql_text
-
             from modulo.auth.api_key import mint_run_api_key
             from modulo.db.crud.run import get_run_api_key_ttl_seconds
             from modulo.db.rls import set_rls_execution_context, set_rls_org
@@ -191,7 +180,7 @@ class ModuloCredentialIssuer:
             async with session_factory() as session, session.begin():
                 await set_rls_org(session, org_uuid)
                 await set_rls_execution_context(session)
-                account_id = await self._resolve_account_id(session, run_uuid, org_uuid, _sql_text)
+                account_id = await self._resolve_account_id(session, run_uuid, org_uuid)
                 if account_id is None:
                     return None
                 minted = await mint_run_api_key(
@@ -228,7 +217,6 @@ class ModuloCredentialIssuer:
         session: Any,
         run_uuid: uuid.UUID,
         org_uuid: uuid.UUID,
-        sql_text: Callable[[str], Any],
     ) -> uuid.UUID | None:
         """Resolve the run's triggering account; fall back to the first active admin.
 
@@ -237,6 +225,8 @@ class ModuloCredentialIssuer:
         back to the org's first active admin — still a REAL account row, never
         a fabricated identity. Returns None when neither exists.
         """
+        from sqlalchemy import text as sql_text
+
         row = (
             await session.execute(
                 sql_text("SELECT account_id FROM runs WHERE id=:rid AND organisation_id=:oid"),

@@ -20,9 +20,9 @@ from modulo.core.credential_issuer import (
     ISSUANCE_PROVENANCE_MODULO_MINTED,
     IssuedRunCredential,
     ModuloCredentialIssuer,
-    _coerce_uuid,
     default_credential_issuer,
 )
+from modulo.util.uuid import coerce_uuid
 from tests.unit.api.mock_session import configure_rls_preamble
 
 _ORG_ID = "11111111-1111-1111-1111-111111111111"
@@ -87,19 +87,31 @@ class TestIssuedRunCredentialProvenance:
 
 
 class TestCoerceUuid:
+    """The issuer coerces identifiers via ``modulo.util.uuid.coerce_uuid``.
+
+    The module must NOT re-implement its own UUID coercion (the shared helper
+    is dependency-free and strictly more capable); these cases pin both the
+    reuse and the coercion contract the issuer relies on.
+    """
+
+    def test_issuer_reuses_the_shared_helper(self) -> None:
+        import modulo.core.credential_issuer as credential_issuer
+
+        assert credential_issuer.coerce_uuid is coerce_uuid
+
     def test_uuid_instance_is_returned_unchanged(self) -> None:
         value = uuid.UUID(_RUN_ID)
-        assert _coerce_uuid(value) is value
+        assert coerce_uuid(value) is value
 
     def test_none_and_empty_string_return_none(self) -> None:
-        assert _coerce_uuid(None) is None
-        assert _coerce_uuid("") is None
+        assert coerce_uuid(None) is None
+        assert coerce_uuid("") is None
 
     def test_valid_string_is_parsed(self) -> None:
-        assert _coerce_uuid(_ORG_ID) == uuid.UUID(_ORG_ID)
+        assert coerce_uuid(_ORG_ID) == uuid.UUID(_ORG_ID)
 
     def test_invalid_string_returns_none(self) -> None:
-        assert _coerce_uuid("not-a-uuid") is None
+        assert coerce_uuid("not-a-uuid") is None
 
 
 class TestModuloCredentialIssuer:
