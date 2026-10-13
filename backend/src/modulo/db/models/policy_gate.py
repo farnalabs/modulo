@@ -30,7 +30,7 @@ class PolicyGate(SoftDeleteMixin, OrgScoped):
     __tablename__ = "policy_gates"
     __table_args__ = (
         CheckConstraint(
-            "action IN ('warn', 'block')",
+            "action IN ('warn', 'block', 'escalate')",
             name="ck_policy_gates_action",
         ),
         # FAR-967 chunk 10 (§4.3) — symmetric operator-control CHECK, shipped
