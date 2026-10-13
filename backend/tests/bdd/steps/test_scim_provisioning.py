@@ -129,6 +129,27 @@ def _make_scim_settings() -> Settings:
     )
 
 
+def _make_sync_result() -> MagicMock:
+    """Shape the sync ``Result``-object contract for awaited session reads.
+
+    The SCIM CRUD readers (``crud/scim.py`` -> ``crud/account.py`` /
+    ``crud/team_membership.py`` / ``crud/org_membership.py``) all
+    ``await session.execute(...)`` and then touch the returned ``Result``
+    with SYNC methods (``scalar_one_or_none()``/``first()``/``all()``). The
+    awaited call on a bare ``AsyncMock`` returns another AsyncMock, so those
+    sync reads came back as un-awaited coroutines (FAR-1639).
+
+    Returns None for the optional readers (no row yet) and an empty list for
+    the collection readers — they may be overridden per-test.
+    """
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = None
+    result.scalar.return_value = None
+    result.first.return_value = None
+    result.all.return_value = []
+    return result
+
+
 def _make_mock_session() -> AsyncMock:
     session = AsyncMock()
     # FAR-1639 (FAR-1629 sweep): in_transaction() and add() are SYNC
@@ -137,6 +158,9 @@ def _make_mock_session() -> AsyncMock:
     # vacuously (an unawaited coroutine is truthy).
     session.in_transaction = MagicMock(return_value=True)
     session.add = MagicMock()
+    # FAR-1639: seed the default sync-result contract on the awaited reads
+    # (see _make_sync_result) so the CRUD readers do not leak coroutines.
+    session.execute = AsyncMock(return_value=_make_sync_result())
     begin_cm = AsyncMock()
     begin_cm.__aenter__ = AsyncMock(return_value=None)
     begin_cm.__aexit__ = AsyncMock(return_value=False)
@@ -434,6 +458,7 @@ def _when_delete_user(user_id: str, scim_client: Any, request: Any, ctx: dict[st
     """DELETE /scim/v2/Users/{user_id} to deprovision a SCIM user."""
     resolved = _resolve_id(user_id)
     with (
+        patch("modulo.api.routes.scim.scim_get_user", return_value=_MOCK_USER),
         patch("modulo.api.routes.scim.scim_delete_user_by_id", return_value=MagicMock()),
         patch("modulo.api.routes.scim.assert_not_last_admin", new_callable=AsyncMock),
         patch(
