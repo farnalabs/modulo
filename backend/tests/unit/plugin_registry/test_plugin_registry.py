@@ -922,6 +922,26 @@ def test_discover_plugins_entry_point_no_dist():
     assert "metadata" in health["c1"].detail
 
 
+def test_discover_plugins_entry_point_dist_metadata_none():
+    """An entry point whose dist.metadata is None is registered as unhealthy, never skipped."""
+    registry = PluginRegistry()
+    no_metadata = _make_mock_entry_point("modulo.connectors", "c1", dist_name="pkg-x")
+    no_metadata.dist.metadata = None  # type: ignore[attr-defined]
+    with patch(
+        "modulo.core.plugin_registry.importlib.metadata.entry_points",
+        return_value=[no_metadata],
+    ):
+        discovered = registry.discover_plugins()
+    assert discovered == []
+
+    # The entry point has a dist but no metadata, so it is surfaced as a broken
+    # plugin instead of raising AttributeError on dist.metadata.get().
+    assert "c1" in registry.list_plugins()
+    health = registry.health_check("c1")
+    assert health["c1"].ok is False
+    assert "metadata" in health["c1"].detail
+
+
 def test_discover_plugins_entry_point_load_failure():
     """If an entry point's load() raises, the plugin is marked unhealthy and skipped."""
     registry = PluginRegistry()

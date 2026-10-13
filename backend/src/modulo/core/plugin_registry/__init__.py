@@ -172,7 +172,7 @@ class PluginRegistry:
         Returns a ``PluginManifest`` or ``None`` if the module could not be imported.
         """
         dist = ep.dist
-        if dist is None:
+        if dist is None or dist.metadata is None:
             detail = _HLTH_MISSING_METADATA
             plugin_id = ep.name
             with self._lock:
