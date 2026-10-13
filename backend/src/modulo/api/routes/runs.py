@@ -81,6 +81,7 @@ from modulo.core.pipeline_engine.recovery import (
 )
 from modulo.core.pipeline_engine.workspace_input_audit import AUDIT_NODE_ID
 from modulo.core.rate_limiter import TokenBucketRegistry
+from modulo.core.run_log_correlation import RunLogEntry, correlate_run_logs
 from modulo.core.run_provenance import run_provenance_fields
 from modulo.core.secret_patterns import mask_secret_values_in_text
 from modulo.core.trigger_engine import TriggerEngine
@@ -110,6 +111,7 @@ from modulo.db.crud.run_node_outputs import (
     RunBlobs,
     read_run_blobs,
     read_run_markers,
+    read_run_telemetry,
 )
 from modulo.db.models.account import Account
 from modulo.db.models.agent import Agent
@@ -142,6 +144,7 @@ _CODE_RUNS_GET_RUN_IO_ENDPOINT = "runs.get_run_io_endpoint"
 _CODE_RUNS_GET_RUN_WORK_ITEM_ENRICHMENT = "runs.get_run_work_item_enrichment"
 _CODE_RUNS_EXPORT_RUN_FIXTURE = "runs.export_run_fixture"
 _CODE_RUNS_GET_RUN_WORKSPACE_EVENTS = "runs.get_run_workspace_events"
+_CODE_RUNS_GET_RUN_LOGS = "runs.get_run_logs"
 _CODE_RUNS_GET_RUN_NODE_OUTPUT = "runs.get_run_node_output"
 _CODE_RUNS_RECOVER_RUN_NODE = "runs.recover_run_node"
 _CODE_RUNS_DIFF_NODE_OUTPUT = "runs.diff_node_output"
@@ -2449,6 +2452,123 @@ async def get_run_workspace_events(
         }
         for evt in events
     ]
+
+
+# ---------------------------------------------------------------------------
+# Run-correlated logs (FAR-1690 A4)
+# ---------------------------------------------------------------------------
+
+
+class RunLogEntryModel(BaseModel):
+    """One provenance-typed entry in the run-keyed log correlation view (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    node_id: str | None = None
+    attempt_key: str | None = None
+    source: str
+    provenance: str
+    witnessed_via: str | None = None
+    provider: str | None = None
+    provider_ref: str | None = None
+    recorded_at: str | None = None
+    excerpt: str
+
+
+class RunLogsResponse(BaseModel):
+    """The run-keyed log correlation projection (FAR-1690 A4)."""
+
+    run_id: uuid.UUID
+    entries: list[RunLogEntryModel]
+
+
+async def _do_get_run_logs(
+    session: AsyncSession,
+    principal: TenantPrincipal,
+    run_id: uuid.UUID,
+) -> list[RunLogEntry]:
+    """Compose the run's provenance-typed log entries from existing stores.
+
+    Three sources, all keyed by ``run_id`` and none new (A4 adds no store):
+    the run's ``audit_events`` (attested), the retained workspace log tail
+    (observed — captured by ``read_log_tail`` and persisted on markers /
+    telemetry), and a dispatched node's folded-back telemetry (reported, with
+    its ``witnessed_via`` channel stamp). Runs inside the caller's transaction
+    (RLS already set); a foreign-org run id raises 404 before any source read.
+    """
+    from modulo.db.models.audit_event import AuditEvent
+
+    run = await get_run(session, run_id, organisation_id=principal.organisation_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_MSG_RUN_NOT_FOUND)
+    event_rows = (
+        (
+            await session.execute(
+                select(AuditEvent)
+                .where(
+                    AuditEvent.organisation_id == principal.organisation_id,
+                    AuditEvent.resource_id == run_id,
+                    AuditEvent.resource_type.in_(("run", "workspace")),
+                )
+                .order_by(AuditEvent.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    markers = await read_run_markers(session, run_id=run_id, organisation_id=principal.organisation_id)
+    telemetry = await read_run_telemetry(session, run_id=run_id, organisation_id=principal.organisation_id)
+    events = [
+        {
+            "event_type": row.event_type,
+            "detail": sanitize_error_text(str((row.payload_json or {}).get("detail", ""))),
+            "recorded_at": row.created_at,
+        }
+        for row in event_rows
+    ]
+    return correlate_run_logs(events=events, markers=markers, telemetry=telemetry)
+
+
+@router.get("/{run_id}/logs")
+@handle_db_errors(_CODE_RUNS_GET_RUN_LOGS)
+async def get_run_logs(
+    run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db_session),
+    principal: TenantPrincipal = require_permission(_CODE_RUN_OUTPUT),
+) -> RunLogsResponse:
+    """Return a run's correlated, provenance-typed log view (FAR-1690 A4).
+
+    A single read endpoint joining the run's structured events, retained
+    workspace log tail (captured via the runtime provider's ``read_log_tail``),
+    and any dispatch-origin substrate entries — each stamped with its governed
+    class (``observed`` / ``reported`` / ``attested``). Unlike the FAR-704
+    ``deadline_triage`` surface, the workspace tail is available for **every**
+    run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
+    tail); no raw payload is added.
+    """
+    try:
+        async with session.begin():
+            await set_rls_org(session, principal.organisation_id)
+            entries = await _do_get_run_logs(session, principal, run_id)
+    except HTTPException:
+        raise
+    return RunLogsResponse(
+        run_id=run_id,
+        entries=[
+            RunLogEntryModel(
+                run_id=run_id,
+                node_id=entry.node_id,
+                attempt_key=entry.attempt_key,
+                source=entry.source,
+                provenance=entry.provenance,
+                witnessed_via=entry.witnessed_via,
+                provider=entry.provider,
+                provider_ref=entry.provider_ref,
+                recorded_at=entry.recorded_at.isoformat() if entry.recorded_at is not None else None,
+                excerpt=entry.excerpt,
+            )
+            for entry in entries
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

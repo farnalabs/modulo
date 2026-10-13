@@ -4547,6 +4547,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runs/{run_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run Logs
+         * @description Return a run's correlated, provenance-typed log view (FAR-1690 A4).
+         *
+         *     A single read endpoint joining the run's structured events, retained
+         *     workspace log tail (captured via the runtime provider's ``read_log_tail``),
+         *     and any dispatch-origin substrate entries — each stamped with its governed
+         *     class (``observed`` / ``reported`` / ``attested``). Unlike the FAR-704
+         *     ``deadline_triage`` surface, the workspace tail is available for **every**
+         *     run, not only a deadline-killed one. Display excerpts stay bounded (6 KB
+         *     tail); no raw payload is added.
+         */
+        get: operations["get_run_logs_api_v1_runs__run_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}/nodes/{node_id}/output": {
         parameters: {
             query?: never;
@@ -17793,6 +17821,48 @@ export interface components {
              */
             stderr_total_length: number;
         };
+        /**
+         * RunLogEntryModel
+         * @description One provenance-typed entry in the run-keyed log correlation view (FAR-1690 A4).
+         */
+        RunLogEntryModel: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Node Id */
+            node_id?: string | null;
+            /** Attempt Key */
+            attempt_key?: string | null;
+            /** Source */
+            source: string;
+            /** Provenance */
+            provenance: string;
+            /** Witnessed Via */
+            witnessed_via?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Provider Ref */
+            provider_ref?: string | null;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Excerpt */
+            excerpt: string;
+        };
+        /**
+         * RunLogsResponse
+         * @description The run-keyed log correlation projection (FAR-1690 A4).
+         */
+        RunLogsResponse: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Entries */
+            entries: components["schemas"]["RunLogEntryModel"][];
+        };
         /** RunResponse */
         RunResponse: {
             /**
@@ -30883,6 +30953,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_run_logs_api_v1_runs__run_id__logs_get: {
+        parameters: {
+            query?: {
+                _fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunLogsResponse"];
                 };
             };
             /** @description Validation Error */
