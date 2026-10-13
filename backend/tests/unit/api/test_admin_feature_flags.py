@@ -1374,6 +1374,22 @@ class TestLicenseIsValid:
         ):
             assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
 
+    async def test_org_missing_reports_invalid(self) -> None:
+        """An org id whose read returns None has no key to verify — reports False."""
+        session = _session()
+        org_id = uuid.uuid4()
+        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=None):
+            assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
+
+    async def test_org_settings_not_a_dict_reports_invalid(self) -> None:
+        """A non-dict settings_json means the org rung carries no licence key."""
+        org = MagicMock()
+        org.settings_json = ["not", "a", "dict"]
+        session = _session()
+        org_id = uuid.uuid4()
+        with patch("modulo.api.routes.admin_feature_flags.get_organisation", new_callable=AsyncMock, return_value=org):
+            assert await _license_is_valid(_settings_with_key(""), session, org_id) is False
+
 
 # ---------------------------------------------------------------------------
 # _enforce_team_tier_gate — org-level enable/disable asymmetry
